@@ -21,7 +21,7 @@ eml_io: eml_rt eml_tls
 eml_lir: eml_extern
 eml_native: eml_cabi eml_extern eml_lir eml_nrt eml_rt
 eml_nrt: eml_extern eml_rows eml_rt eml_sched
-eml_rows: eml_extern eml_gui eml_rt eml_sched eml_tls
+eml_rows: eml_cabi eml_extern eml_gui eml_rt eml_sched eml_tls
 eml_rt:
 eml_sched: eml_io eml_rt
 eml_syntax: eml_diagnostics
@@ -77,6 +77,7 @@ crates/eml_nrt/src/lib.rs: pub use eml_rt as __rt;
 crates/eml_nrt/src/lib.rs: pub use eml_rt::HostRef;
 crates/eml_nrt/src/lib.rs: pub use eml_sched::config::{Finished, RunConfig};
 crates/eml_nrt/src/lib.rs: pub use eml_sched::error::{RunFault, RuntimeError};
+crates/eml_rows/src/ffi.rs: pub use eml_cabi::Dtor;
 crates/eml_rows/src/gui.rs: pub use eml_gui::{Backend, Script};
 crates/eml_sched/src/lib.rs: pub use eml_rt::{Control, HostRef, Limits, Stop};
 crates/eml_vm/src/lib.rs: pub use eml_cabi::Linked;

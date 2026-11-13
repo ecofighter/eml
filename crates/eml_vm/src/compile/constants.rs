@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use eml_lir::FloatBits;
-use eml_rows::constants::{immortal_big_int, immortal_float};
+use eml_rows::constants::{empty_mut_array, immortal_big_int, immortal_float};
 use eml_rt::{Control, Frozen, Heap, Mode, Word};
 use rustc_hash::FxHashMap;
 
@@ -113,7 +113,7 @@ impl<'c, M: Mode> Constants<'c, M> {
         if let Some(index) = *self.empty_mut_array {
             return index;
         }
-        let w = self.heap().alloc_array_immortal(true);
+        let w = empty_mut_array(self.heap());
         let index = self.push(w);
         *self.empty_mut_array = Some(index);
         index

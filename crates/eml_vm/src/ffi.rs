@@ -2,12 +2,12 @@
 //! ここだけが受け持つ (docs/spec/vm.md の「C の関数の命令」、docs/spec/vm.md の「`blocking` の呼び出し」)。
 
 use std::any::Any;
-use std::ffi::c_void;
 use std::ptr;
 use std::sync::Arc;
 
-use eml_cabi::{CCall, Dtor};
-use eml_extern::{CFunction, CInt, CParam, CRet, ExternEffect, Purity};
+use eml_cabi::CCall;
+use eml_extern::{CFunction, CParam, CRet, ExternEffect, Purity};
+use eml_rows::ffi::{CHandle, HandleCell, Raise, handle_new};
 use eml_rt::externs::{Fault, Raised};
 use eml_rt::{Ctx, Kind, Mode, PagePin, Word};
 
@@ -16,56 +16,6 @@ use crate::code::CodeBase;
 use crate::error::RunFault;
 use crate::op::Slot;
 use crate::vm::{Exec, PANICKED, Task, abort_to, failed, io_kind};
-
-/// `extern "C" data`の物体の中身。
-pub(crate) struct CHandle {
-    cell: Arc<HandleCell>,
-}
-
-/// `extern "C" data`の物体のCのポインタと、その型のdtor。物体の`CHandle`と、それを渡したどの`blocking`の
-/// 呼び出しもこのセルを共有するので、dtorはその最後の1つが放したときに走る。ふつうは物体を解放するworkerで、
-/// 見捨てた呼び出しが物体より長く生きるときは、Cが戻った直後のプールのスレッドである。
-struct HandleCell {
-    /// Cの側の値の位置。VMは参照外しせず、Cに返すだけなので、来歴を持たない。
-    ptr: *mut c_void,
-    dtor: Option<Dtor>,
-}
-
-// SAFETY: VMは`ptr`を参照外ししない。dtorは最後の参照を落としたスレッドでちょうど1回走り、どのスレッドかは
-// 決めない (docs/spec/declarations.md の「`extern "C"`」)。
-unsafe impl Send for HandleCell {}
-// SAFETY: `HandleCell`は内側の可変性を持たず、`&self`は`ptr`と`dtor`を読むだけである
-unsafe impl Sync for HandleCell {}
-
-impl Drop for HandleCell {
-    fn drop(&mut self) {
-        if let Some(dtor) = self.dtor {
-            // SAFETY: `ptr`は、この型を返すCの関数が返したnullでない値で、セルが落ちるのはこの1回だけである
-            unsafe { dtor(self.ptr) }
-        }
-    }
-}
-
-/// C の関数の呼び出しが上げる `Panic` の理由。
-pub(crate) enum Raise {
-    /// 狭める `Int as` の引数が範囲の外にある。`arg` は 1 から数える。
-    Narrowing { arg: usize, int: CInt, value: i64 },
-    /// ハンドルを返す関数が null を返した。
-    NullHandle,
-}
-
-impl Raise {
-    pub(crate) fn text(&self, function: &CFunction) -> String {
-        let name = &function.name;
-        match *self {
-            Raise::Narrowing { arg, int, value } => format!(
-                "argument {arg} of `{name}` does not fit in C `{}`: {value}",
-                int.c_name()
-            ),
-            Raise::NullHandle => format!("`{name}` returned a null handle"),
-        }
-    }
-}
 
 /// C の関数の結果を戻した値。
 pub(crate) enum Out {
@@ -120,7 +70,7 @@ fn marshal<M: Mode>(
                 CParam::UnboxedArray => heap.unboxed_ptr(w)?.expose_provenance() as u64,
                 CParam::MutUnboxedArray => heap.unboxed_ptr_mut(w)?.expose_provenance() as u64,
                 CParam::Text => heap.text_payload(w)?.expose_provenance() as u64,
-                CParam::Handle(_) => (&*heap.foreign::<CHandle>(w)?).cell.ptr.addr() as u64,
+                CParam::Handle(_) => (&*heap.foreign::<CHandle>(w)?).ptr().addr() as u64,
                 CParam::NoArg => continue,
             }
         };
@@ -156,7 +106,7 @@ impl Arg {
             Arg::MutArray(elements) => elements.as_mut_ptr().expose_provenance() as u64,
             Arg::Text(bytes) => bytes.as_ptr().expose_provenance() as u64,
             Arg::Lent(at, _) => *at,
-            Arg::Handle(cell) => cell.ptr.addr() as u64,
+            Arg::Handle(cell) => cell.ptr().addr() as u64,
         }
     }
 }
@@ -219,7 +169,7 @@ fn job_args<M: Mode>(
                         }
                     }
                 }
-                CParam::Handle(_) => Arg::Handle(Arc::clone(&(&*heap.foreign::<CHandle>(w)?).cell)),
+                CParam::Handle(_) => Arg::Handle((&*heap.foreign::<CHandle>(w)?).cell()),
                 CParam::NoArg => continue,
             }
         };
@@ -237,8 +187,8 @@ unsafe fn elements(at: *const u64, n: usize) -> Box<[u64]> {
     Box::from(unsafe { std::slice::from_raw_parts(at, n) })
 }
 
-/// 橋渡しの結果の語を値に戻す。null のハンドルは何も確保せずに `Raise` を返す。`function` のハンドルの型の番号は
-/// `code` の番号である。
+/// 橋渡しの結果の語を値に戻す。nullのハンドルは何も確保せずに`Raise`を返す。`function`のハンドルの型の番号は
+/// `code`の番号である。`ret`は`function`の呼び出しの結果である。
 pub(crate) fn unmarshal<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -249,16 +199,18 @@ pub(crate) fn unmarshal<M: Mode>(
         CRet::Void => Out::Word(Word::UNIT),
         // 橋渡しは `int32_t` の結果の符号を広げて返し、`size_t` の結果は読み替えたままにする
         CRet::Int(_) | CRet::Float => Out::Raw(ret as i64),
-        CRet::Handle(_) if ret == 0 => return Ok(Err(Raise::NullHandle)),
         CRet::Handle(id) => {
-            let handle = CHandle {
-                cell: Arc::new(HandleCell {
-                    ptr: ptr::without_provenance_mut(ret as usize),
-                    dtor: code.c_handles[id.0 as usize].dtor,
-                }),
-            };
-            // SAFETY: 物体を1つ作るだけで、`Ctx` の持つ語に触れない
-            Out::Word(unsafe { ctx.heap_mut() }.alloc_foreign(handle, true))
+            let dtor = code.c_handles[id.0 as usize].dtor;
+            // SAFETY: `load`が宣言を`fits`で比べ、`c_links`が`id`を付け直したので、`dtor`はこのハンドルの型の
+            // `Linked::dtors()`の要素で、`Linked::new`の約束により宣言が名指すdtorであり、プロセスが終わるまで有効で
+            // ある。`ret`は、宣言した結果がこの型である`function`について橋渡しが返した値なので (呼び手はどちらもその
+            // 呼び出しの結果を渡す)、`extern "C"`の宣言は、dtorをそれに対してどのスレッドでも1回走らせてよいことを
+            // 約束する (docs/spec/declarations.mdの「`extern "C"`」)。この結果からほかのセルは作らない。物体を1つ
+            // 作るだけで、`Ctx`の持つ語に触れない
+            match unsafe { handle_new(ctx, ret as i64, dtor) } {
+                Some(w) => Out::Word(w),
+                None => return Ok(Err(Raise::NullHandle)),
+            }
         }
     }))
 }
@@ -397,10 +349,11 @@ pub(crate) fn take<R: Exec>(
             if let (CRet::Handle(h), Ok(r)) = (function.ret, result)
                 && r != 0
             {
-                drop(HandleCell {
-                    ptr: ptr::without_provenance_mut(r as usize),
-                    dtor: code.c_handles[h.0 as usize].dtor,
-                });
+                let dtor = code.c_handles[h.0 as usize].dtor;
+                // SAFETY: `unmarshal`と同じく、`dtor`は`fits`の後のこの型の`Linked::dtors()`の要素で、`r`はこの関数の
+                // 仕事のnullでない結果であり (`taken.from`は上で確かめた)、どの物体もほかのセルも持たない。物体は
+                // 作らない
+                drop(unsafe { CHandle::new(ptr::without_provenance_mut(r as usize), dtor) });
             }
             let fault = Fault::Raised(Box::new(Raised {
                 kind: cells::IO_CANCELLED,
@@ -462,7 +415,7 @@ fn raise<R: Exec>(
     function: &CFunction,
     why: Raise,
 ) -> Result<(), RunFault> {
-    let text = why.text(function);
+    let text = why.text(&function.name);
     if abort_to::<R, _>(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |ctx| {
         [ctx.fresh_string(&text)]
     })? {

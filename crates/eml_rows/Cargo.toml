@@ -21,6 +21,7 @@ gui-native = ["gui", "eml_gui/native"]
 # コンパイラとエンジン (eml_lir、eml_core_ir、eml_vm、eml_native、eml_clink) とCraneliftには依存しない
 # (docs/implementation/architecture.md の「crate の依存関係」)
 [dependencies]
+eml_cabi.workspace = true
 eml_extern.workspace = true
 eml_gui = { workspace = true, optional = true }
 eml_rt.workspace = true

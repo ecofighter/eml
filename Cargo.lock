@@ -708,6 +708,7 @@ dependencies = [
 name = "eml_rows"
 version = "0.1.0"
 dependencies = [
+ "eml_cabi",
  "eml_extern",
  "eml_gui",
  "eml_rt",

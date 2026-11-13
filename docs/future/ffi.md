@@ -99,7 +99,7 @@ matmul n a b =
 ## VM からの呼び出し
 
 - 橋渡しの関数の型は `unsafe extern "C" fn(callee: *const (), args: *const u64) -> u64` である。C の型の並び `CSignature` (要素は `I32`、`I64`、`F64`) ごとに1つ作り、呼ぶ C の関数のアドレスを最初の引数で受ける。`Ctx`、ヒープの配置、スレッドに局所的な変数を参照しないので、プールのスレッドとネイティブのコードも同じ記述を使える ([VM](../spec/vm.md) の「橋渡しの関数」)
-- crate の依存は `eml_extern` ← `eml_cabi` ← {`eml_vm`、`eml_clink`} である。`Bridge`、`Dtor`、`CCall`、`Linked` は葉の crate `eml_cabi` に置き、`eml_clink` は `eml_extern`、`eml_cabi`、Cranelift、libloading に依存する。`eml_vm` は Cranelift に依存しない ([コンパイラの構成](../implementation/architecture.md) の「crate の依存関係」)
+- crateの依存は`eml_extern` ← `eml_cabi` ← {`eml_vm`、`eml_clink`、`eml_rows`} である。`Bridge`、`Dtor`、`CCall`、`Linked`は葉のcrate `eml_cabi`に置き、`eml_clink`は`eml_extern`、`eml_cabi`、Cranelift、libloadingに依存する。`eml_vm`はCraneliftに依存しない ([コンパイラの構成](../implementation/architecture.md)の「crate の依存関係」)
 - つなぐ作業を受け持つのは `eml_clink` の `Linker` の1つで、呼ぶのは `eml run`、REPL、テストの道具の3つである。3つとも読み込みの前にプログラムを持っているので、境目は trait でなく結果の値 `Linked` で足りる。VM は linker も、それを作る関数も持たず、`load` が `Linked` を受け取る
 - ライブラリを閉じず、橋渡しのコードも解放しないので、`CCall` と dtor のポインタはプロセスの間ずっと有効である。`Linker` や `Machine` の寿命とつなぐ必要がない
 - 命令 `Op::Ffi` は、`load` が名前で振った `CodeBase` の C の関数の番号を指す。追記で作り直したコードを名前で比べる確かめに乗せるためである。行の番号のような生の番号を operand にすると、追記のたびに番号がずれる ([VM](../spec/vm.md) の「C の関数の命令」)
@@ -116,7 +116,7 @@ matmul n a b =
 
 ## C のハンドル
 
-- `extern "C" data`の型の値は、`eml_vm`の`Foreign`の包み`CHandle`で、`Lin`である。`CHandle`は、Cのポインタと型のdtor (`drop`に書いたCの関数) を持つ`HandleCell`への共有の参照 (`Arc`) を持ち、dtorは最後の参照が消えたときに1回走る ([VM](../spec/vm.md)の「C の関数の呼び出し」)。`CHandle` を `eml_rt` に置かないのは、検証の核に C の後始末を持たせないためである。ほかの `Foreign` と同じく回収できない
+- `extern "C" data`の型の値は、`eml_rows::ffi`の`Foreign`の包み`CHandle`で、`Lin`である。`CHandle`は、Cのポインタと型のdtor (`drop`に書いたCの関数) を持つ`HandleCell`への共有の参照 (`Arc`) を持ち、dtorは最後の参照が消えたときに1回走る ([VM](../spec/vm.md)の「C の関数の呼び出し」)。`CHandle`を`eml_rt`に置かないのは、検証の核にCの後始末を持たせないためである。ほかの`Foreign`と同じく回収できない
 - 中身のポインタは null にならない。NULL を返した C の関数は、物体を作らずに `Panic` を上げるためである
 - ヒープの外の物体や、動かない物体の型 (OCaml の Bigarray) は作らない。借りたポインタは呼び出しの間だけ有効で、それで足りるためである。呼び出しより長く生きるポインタが要るとき (mmap、C が持つ buffer、共有メモリ) か、2^32 語を超える大きさが要るときに見直す。そのときは新しい中身の種類でなく、`CHandle` のような `Foreign` の包みにする。物体を動かす仕組みを入れるときは、FFI の呼び出しの間の固定が要る
 

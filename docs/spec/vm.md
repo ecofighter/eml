@@ -241,7 +241,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 基本操作と extern
 
-- `prim` は、基本操作ごとの命令で、`Ctx` の同じ名前のメソッドを呼ぶ。`dummy` は `Heap::dummy` である。`empty_mut_array` は、`lin` ビットを立てた長さ 0 の配列 (`alloc_array_immortal(true)`。ほかの配列と同じく数の語 0 を持つ) を凍結した領域の定数として持ち、`LoadConst` でその語を写す。長さが 0 なので、添字を確かめて読み書きする所はこの物体を書き換えない。`var` の取り出しは経路ごとに1回なので、`freeze` されることもなく、RC の命令は領域の物体に何もしない ([オブジェクトモデル](object-model.md) の「凍結した領域」)。即値 (エフェクトの番号、操作の番号) と `ev_new` の操作の数は、コード生成の時点で命令か `operands` に書く。`evv_mask` の項目の並びは `mask_lists` に置く。逆アセンブラは項目を Core IR のテキストと同じ書き方で、エフェクトを番号にして書く (`evv_mask s3, [0@1, 1] s2`)。結果が `unit` の基本操作は、結果のスロットに `()` を書く
+- `prim`は、基本操作ごとの命令で、`Ctx`の同じ名前のメソッドを呼ぶ。`dummy`は`Heap::dummy`である。`empty_mut_array`は、`lin`ビットを立てた長さ0の配列 (`eml_rows::constants::empty_mut_array`が`alloc_array_immortal(true)`で作る。ほかの配列と同じく数の語0を持つ) を凍結した領域の定数として持ち、`LoadConst`でその語を写す。長さが0なので、添字を確かめて読み書きする所はこの物体を書き換えない。`var`の取り出しは経路ごとに1回なので、`freeze`されることもなく、RCの命令は領域の物体に何もしない ([オブジェクトモデル](object-model.md)の「凍結した領域」)。即値 (エフェクトの番号、操作の番号) と`ev_new`の操作の数は、コード生成の時点で命令か`operands`に書く。`evv_mask`の項目の並びは`mask_lists`に置く。逆アセンブラは項目をCore IRのテキストと同じ書き方で、エフェクトを番号にして書く (`evv_mask s3, [0@1, 1] s2`)。結果が`unit`の基本操作は、結果のスロットに`()`を書く
 - エフェクトの番号は 65535 より小さくなければならない。evidence の tag はエフェクトの番号 + 1 だからである ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめない。コード生成は、これをコンパイラの内部の不変条件として panic で確かめ、`CompileError` にはしない
 - 算術と比較のexternは、それぞれ専用の命令にする。`Int`の13個 (`+ - * / % negate`、比較6つと`compare`) は`IntAdd`、`IntCompare`など、`Float`の12個 (`+ - * / % negate`と比較6つ) は`FloatAdd`、`FloatNeg`、`FloatLt`など、`Bool`の`==`と`!=`は`BoolEq`と`BoolNe`である。命令は行の`#[inline]`の関数 (下の専用の命令の項) を呼び、その関数は`eml_rt::externs`の`#[inline]`の関数を呼ぶので、どちらも命令の中に展開される。結果は生のビット列でスロットに書く。`Float`の命令は誤りを返さないので、`Panic`へ中断する道 (「`IO` と `Panic` への中断」) を通らない
 - `Char` の行には命令を足さない。今ある命令がその行の結果をそのまま計算するときだけその命令に写し、ほかの行は汎用の `Op::Extern` で動かす。規則を1つにして、VM の命令の面 (`op.rs`、`vm.rs`、逆アセンブラ、コード生成) を広げないためである。`Char` の比較の7行 (`==`、`!=`、`compare`、`<`、`<=`、`>`、`>=`) は、語が `Int` と同じ `int` なので、`Int` の同じ命令に写す。`Std.Char.to_int` と `Std.Char.of_byte` は語を変えないので、`Move` に写す。`Std.Char.of_int` と `Show Char` の2行は汎用の extern で動かす。`of_int` は `eml_rt::externs::char_of_int` を呼び、スカラー値でなければ `Panic` へ中断する
@@ -1062,6 +1062,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
   - 各 dtor は、宣言が dtor を持つときに限りあり、その dtor の記号を解決した `void f(void*)` として呼べる関数である
   - どのポインタも、プロセスが終わるまで有効なコードを指す
 - `fits` は、持っている宣言とプログラムの C の関数の表、ハンドルの型の表を `==` で比べる。ハンドルの型の番号は表の位置なので、`load` が番号を付け直す前の表と比べる。読み込む側はこれで、ポインタを保証した宣言が読み込むプログラムの宣言と同じことを確かめる (「C の関数の命令」)
+- ハンドルの物体を作るのは`eml_rows::ffi::handle_new`だけで、VMはこれを呼ぶ。これは`unsafe fn`で、呼び手は`Ctx::heap_mut`の約束に加えて、nullでないポインタに対してdtorをいつでも、どのスレッドでも1回呼んでよいことを約束する。VMはこれを`extern "C"`の宣言の約束 (dtorは、そのハンドルの型の関数が返した値に対して、どのスレッドでも1回走らせてよい。[宣言](declarations.md)の「`extern "C"`」) で満たす。渡すのは、`fits`が成り立った後の`Linked::dtors()`のdtorと、宣言した結果がそのハンドルの型である関数の結果である
 
 ### ライブラリと記号
 
@@ -1106,7 +1107,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - 結果は、void を `()` に、`Int` と `Float` を生の語に、ハンドルを `CHandle` を持つ `Foreign` の物体にする。`int32_t` の結果は橋渡しが符号を広げ、`size_t` の結果は読み替えたままにする。ハンドルを返す関数が null を返したら、何も確保せずに `` `{name}` returned a null handle `` の `Panic` を上げる
 - 2つの `Panic` は `abort_to` で最も近い `try_panic` に届け、なければその文言の実行時エラー (`RunFault::Panicked`) にする。位置は呼び出しの `Loc` である。どちらの `Panic` も起こしうる C の行は巻き戻しの地点を持つので ([LIR](lir.md) の「巻き戻しの地点」)、借りていた引数は巻き戻しの表が手放す。この2つは extern の誤りの振り分け (`failed`) を通さない
 - C の行は引数を借り、消費しない。`MutUnboxedArray` とハンドルの引数は呼び手のスロットに残り、translate がそれを結果と組にして返す ([Core IR](core-ir.md) の「組を返す extern」)
-- `CHandle`は`lin`の印の`Foreign`の物体の中身で、Cのポインタとその型のdtorを持つ`HandleCell`への共有の参照 (`Arc`) を持つ。VMはポインタを参照外ししないので、来歴を持たせない (`without_provenance_mut`)。ハンドルを引数に取る`blocking`の呼び出しは、それぞれCが戻るまでセルへの参照を持つ。dtorは最後の参照が消えたときに1回だけ呼ぶ。ふつうは物体を解放したworkerのスレッドで呼び、`blocking`の呼び出しが物体より長く生きるときは、Cが戻った直後のプールのスレッドで呼ぶ。dtorのない型では何も呼ばない
+- `CHandle`は`lin`の印の`Foreign`の物体の中身で、Cのポインタとその型のdtorを持つ`HandleCell`への共有の参照 (`Arc`) を持つ。ポインタは参照外ししないので、`eml_rows::ffi::handle_new`が来歴を持たせずに作る (`without_provenance_mut`)。ハンドルを引数に取る`blocking`の呼び出しは、それぞれCが戻るまでセルへの参照を持つ。dtorは最後の参照が消えたときに1回だけ呼ぶ。ふつうは物体を解放したworkerのスレッドで呼び、`blocking`の呼び出しが物体より長く生きるときは、Cが戻った直後のプールのスレッドで呼ぶ。dtorのない型では何も呼ばない
 
 ### `blocking` の呼び出し
 
