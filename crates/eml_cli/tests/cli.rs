@@ -1980,3 +1980,61 @@ fn native_exit_code_is_the_low_byte() {
     assert!(output.stderr.is_empty(), "{output:?}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// emlが始まるときに塞がれて保留になっていたSIGINTは、既定の動作でプロセスを終わらせず、ハンドラを入れた後で受ける。
+/// runは最初の安全点で止まり、130で終わる。塞ぎと保留のシグナルはどちらもexecを越えて残るので、テストはexecの前の子で
+/// SIGINTを塞いで自分に送る (docs/spec/vm.mdの「上限と割り込み」)。
+#[cfg(unix)]
+#[test]
+fn a_signal_pending_at_start_is_handled() {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let text = "\
+spin : Int -> <Panic> Int
+spin n = spin (n + 1)
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (spin 0))
+";
+    let dir = temp_project("cli-pending-sigint", &[("main.em", text)]);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eml"));
+    command.args(["run", "main.em"]).current_dir(&dir);
+    // SAFETY: forkの後で呼ぶのは、async-signal-safeな`sigemptyset`、`sigaddset`、`pthread_sigmask`、`raise`だけである
+    unsafe {
+        command.pre_exec(|| {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGINT);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+            libc::raise(libc::SIGINT);
+            Ok(())
+        });
+    }
+    let mut child = command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + DEADLINE;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not stop");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{status:?} {stderr}");
+    assert!(stderr.starts_with("runtime error: interrupted"), "{stderr}");
+}

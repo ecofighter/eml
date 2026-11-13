@@ -15,7 +15,24 @@ pub(super) fn register(mode: Mode) -> io::Result<()> {
     if matches!(mode, Mode::Run) {
         set(libc::SIGTERM, on_sigterm)?;
     }
+    // 塞ぎはハンドラを入れた後で最後に外す。execの前から保留だったシグナルは、既定の動作でなく、ここでハンドラが受ける
+    unblock();
     Ok(())
+}
+
+/// 呼んだスレッドでSIGINTとSIGTERMの塞ぎを外す。親のプロセスは塞ぎを子に受け継がせるので、emlは2つを塞いだまま
+/// 始まりうる。そのままでは、どのスレッドもCtrl-Cを受けない。どのスレッドもできる前にメインスレッドで呼ぶので、emlが
+/// 作るスレッドはどれも塞いでいない集合から始まる (docs/spec/vm.md の「上限と割り込み」)。
+fn unblock() {
+    // SAFETY: 集合はこの関数の局所変数で、`pthread_sigmask`は渡した集合を読むだけである。正しい引数では失敗しない
+    let status = unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGINT);
+        libc::sigaddset(&mut set, libc::SIGTERM);
+        libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut())
+    };
+    debug_assert_eq!(status, 0);
 }
 
 /// `SA_RESTART`を入れないので、ハンドラの後で待っている読みが`EINTR`で戻る。`SA_NODEFER`を入れるので、ハンドラが
@@ -91,6 +108,37 @@ mod tests {
             }
             depth.set(depth.get() - 1);
         });
+    }
+
+    fn blocked(signal: libc::c_int) -> bool {
+        // SAFETY: 集合はこの関数の局所変数で、`pthread_sigmask`は書くだけである
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            assert_eq!(
+                libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), &mut set),
+                0
+            );
+            libc::sigismember(&set, signal) == 1
+        }
+    }
+
+    /// 塞いだまま始まったスレッドでも、`unblock`の後は2つのシグナルを受けられる。
+    #[test]
+    fn unblock_clears_an_inherited_block() {
+        // SAFETY: 集合はこの関数の局所変数である
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGINT);
+            libc::sigaddset(&mut set, libc::SIGTERM);
+            assert_eq!(
+                libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut()),
+                0
+            );
+        }
+        assert!(blocked(libc::SIGINT) && blocked(libc::SIGTERM));
+        unblock();
+        assert!(!blocked(libc::SIGINT) && !blocked(libc::SIGTERM));
     }
 
     /// ハンドラの中で届いたシグナルは、入れ子にならず、ハンドラの後で扱う。
