@@ -93,6 +93,17 @@
           systemLinker = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
             CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS = "-Clinker-features=-lld";
           };
+          basePackages = [
+            devToolchain
+            pkgs.cargo-about
+            pkgs.cargo-insta
+            pkgs.cargo-nextest
+          ]
+          # LinuxではnativeのGUIのbackendがQt 6の開発用のファイルを要る (docs/implementation/testing.mdの「CI」)
+          ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+            pkgs.qt6.qtbase
+            pkgs.pkg-config
+          ];
           # cargo は外部サブコマンドを PATH より先に $CARGO_HOME/bin から探す。rustup が入っていると
           # ~/.cargo/bin の cargo-clippy や cargo-miri (rustup のプロキシ) が fenix のものより先に当たるので、
           # どの devShell も rustup のない CARGO_HOME を使う
@@ -141,21 +152,19 @@
 
           devShells = {
             default = pkgs.mkShell {
-              packages = [
-                devToolchain
-                pkgs.cargo-about
-                pkgs.cargo-insta
-                pkgs.cargo-nextest
-              ]
-              # LinuxではnativeのGUIのbackendがQt 6の開発用のファイルを要る (docs/implementation/testing.mdの「CI」)
-              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-                pkgs.qt6.qtbase
-                pkgs.pkg-config
-              ]
-              ++ pkgs.lib.optionals hasVerus [
-                verus
-                verusfmt
-              ];
+              packages =
+                basePackages
+                ++ pkgs.lib.optionals hasVerus [
+                  verus
+                  verusfmt
+                ];
+              env = systemLinker;
+              inherit shellHook;
+            };
+            # VerusとverusfmtのないdevShell。Verusのreleaseのzip (約490 MB) はflakeのinputで、それを使うshellに入るときだけ取るので、
+            # Verusを使わないCIのジョブはこのshellを通す (docs/implementation/testing.mdの「CI」)
+            base = pkgs.mkShell {
+              packages = basePackages;
               env = systemLinker;
               inherit shellHook;
             };

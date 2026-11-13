@@ -18,6 +18,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # CIは変数の単位のdebug情報を使わないので、devプロファイルのdebug情報を行の表だけにしてビルドを軽くする。
+  # panicのbacktraceはファイルと行を保つ (docs/implementation/testing.md の「CI」)
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 defaults:
   run:
@@ -153,19 +156,33 @@ jobs:
           fallback: none
       - name: cargo clippy --features gui-native
         id: clippy
-        run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo clippy --all-targets --features eml_cli/gui-native -- -D warnings
+        run: ${{ runner.os == 'Linux' && 'nix develop .#base -c' || '' }} cargo clippy --all-targets --features eml_cli/gui-native -- -D warnings
       - name: cargo nextest run --features gui-native
         if: ${{ !cancelled() && steps.clippy.outcome != 'skipped' }}
-        run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo nextest run --features eml_cli/gui-native --failure-output immediate-final
+        run: ${{ runner.os == 'Linux' && 'nix develop .#base -c' || '' }} cargo nextest run --features eml_cli/gui-native --failure-output immediate-final
       # bootstrapのテストがskipしたかをログに出す。--no-captureはテストを1つずつ流すので、このテストにだけ付ける
       - name: WinUI bootstrap test with its output
         if: ${{ runner.os == 'Windows' && !cancelled() && steps.clippy.outcome != 'skipped' }}
         run: cargo nextest run --features eml_cli/gui-native --no-capture -E 'test(=winui::tests::bootstrap_names_the_download_page_when_the_runtime_is_missing)'
+
+  # nix buildはgui-nativeを足したemlを組み、組み立ての中でテストを流す。10分を超えるので、ほかのジョブと並べて
+  # 自分のジョブで流す。-Lは組み立ての出力をログに出し、組み立てと検査の段の時間を分けて見られるようにする
+  # (docs/implementation/testing.md の「CI」)
+  nix-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: nix build
+        run: nix build -L
       # Qtは動的にリンクし、配るものにQtとWindows App SDKのファイルを含めない (docs/implementation/distribution.md)
       - name: nix build links Qt dynamically
-        if: ${{ runner.os == 'Linux' && !cancelled() && steps.clippy.outcome != 'skipped' }}
         run: |
-          nix build
           readelf -d result/bin/.eml-wrapped | grep -q 'libQt6Widgets.so.6'
           test "$(find -L result \( -name 'libQt6*' -o -name '*.dll' -o -name '*.msix' \) | wc -l)" -eq 0
 
@@ -199,7 +216,8 @@ jobs:
           nix develop -c verusfmt --verus-only --check "${files[@]}"
 
   # eml と一緒に配る THIRD-PARTY-LICENSES.md が、Cargo.lock と about.toml から生成した結果と同じことを確かめる。
-  # cargo-about のバージョンを flake.lock で固め、出力を変えないよう、ふだんの devShell を通す (docs/implementation/testing.md の「CI」)
+  # cargo-aboutのバージョンをflake.lockで固め、出力を変えないよう、ふだんのdevShellと同じcargo-aboutを持ちVerusを持たない
+  # devShell `.#base`を通す (docs/implementation/testing.md の「CI」)
   licenses:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -211,13 +229,17 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: THIRD-PARTY-LICENSES.md is up to date
-        run: nix develop -c nix/third-party-licenses.sh --check
+        run: nix develop .#base -c nix/third-party-licenses.sh --check
 
+  # eml_vmのmiri::が一番長いので、借用の規則ごとにジョブを2つに分けて並べる。eml_vmの組はeml_vmの2つの段を、restの組は
+  # ほかの段を流す。後の段は、組の最初の段が流れたときだけ流す (docs/implementation/testing.md の「CI」)
   miri:
-    name: miri (${{ matrix.borrows }} borrows)
+    name: miri (${{ matrix.borrows }} borrows, ${{ matrix.part }})
     strategy:
       fail-fast: false
       matrix:
+        borrows: [stacked, tree]
+        part: [eml_vm, rest]
         include:
           - borrows: stacked
             miriflags: -Zmiri-strict-provenance
@@ -234,22 +256,24 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: "cargo miri test -p eml_rt trusted::"
-        id: rt
-        run: |
-          nix develop .#miri -c cargo miri test -p eml_rt trusted::
       - name: "cargo miri test -p eml_vm --test integration miri::"
-        if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
+        id: vm
+        if: ${{ matrix.part == 'eml_vm' }}
         run: |
           nix develop .#miri -c cargo miri test -p eml_vm --test integration miri::
+      - name: "cargo miri test -p eml_vm --lib -- counters::"
+        if: ${{ !cancelled() && steps.vm.outcome != 'skipped' }}
+        run: |
+          nix develop .#miri -c cargo miri test -p eml_vm --lib -- counters::
+      - name: "cargo miri test -p eml_rt trusted::"
+        id: rt
+        if: ${{ matrix.part == 'rest' }}
+        run: |
+          nix develop .#miri -c cargo miri test -p eml_rt trusted::
       - name: "cargo miri test -p eml_sched --lib -- cells::a_read cells::a_write"
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
           nix develop .#miri -c cargo miri test -p eml_sched --lib -- cells::a_read cells::a_write
-      - name: "cargo miri test -p eml_vm --lib -- counters::"
-        if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
-        run: |
-          nix develop .#miri -c cargo miri test -p eml_vm --lib -- counters::
       - name: "cargo miri test -p eml_io --lib -- driver::tests::"
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
