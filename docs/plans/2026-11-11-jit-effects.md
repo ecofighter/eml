@@ -58,6 +58,8 @@ IDは付録05のものをそのまま使う。全文は付録05にあり、食�
 
 N-18の一覧 (付録05の§5.1):
 - `after_unwind_point` (`Call`の場合)
+- `eml$apply$m`の`n < m`の腕にある`Call`の確かめのインラインの写し (`lower/apply.rs`の`define_apply`、jit-apply)。最後でない部分では中断だけが起きることに頼り、`target != UNIT`を中断として扱うので、`after_unwind_point`と一緒に変える
+- `apply::arity` (`clause.is_none()`のassert)、`ClosureEntries::id` (どのエントリも`uniform(n)`で宣言する)、`define_closure_entry` (`lower/apply.rs`、jit-apply): 節の関数の型の付いたエントリ`c<k>:<g>` (D-3)
 - `eml$raise`の本体。`eml_nrt_failed`のシグネチャ (`out`を足す) と本体。新しい`eml_nrt_landed`と`eml_nrt_raise_arg`
 - データのシンボル`e:<effect>`と`m:<mask>`、その`DatumRow`の種類 (C-6。付録05の「`Image`の行`effects`、`masks`」はこれに置き換わる)
 - `Unsupported`から`Form::Prim` (`ChildAbort`を除く)、`Form::Clause`、`Form::Prompt`を消す
@@ -68,7 +70,7 @@ N-18の一覧 (付録05の§5.1):
 
 - 新しいテスト: `eml$raise`が戻った後に`Faults`と`Never`の地点の後始末を流す実行時のテスト (3節のjit-coreの残した確かめ)、handlerを外す地点の後始末が状態を手放すことを、runの終わる前に確かめるテスト (代役のthunkを通して、状態に入れた物体が地点を抜けた直後にもう生きていないことを`Heap::live_objects`で見る。runの終わりのcensusでは見分けられない)。単位5〜9のコード生成のテスト (`crates/eml_native/tests`。LIRの文 → JIT → `eml_enter` → 結果とcensus)、CLIFの固定`a_yield_point_call`、eml_rtの構築子の`trusted::`のテスト
 - 種類(1): 見込みはない
-- 種類(2): `crates/eml_native/tests/placement.rs`の`placement::indirect_calls_are_only_in_bridge_and_thunk`の期待するファイルに、節の呼び出し (D-3の`call_indirect`と`return_call_indirect`) を下ろすファイルを足す。`docs/implementation/architecture.md`の「`eml_native` の内部」の`call_indirect`の規則も同じコミットで直す。節の関数は呼ぶ先が実行時の値だからである
+- 種類(2): `crates/eml_native/tests/placement.rs`の`placement::indirect_calls_are_only_in_bridge_apply_and_thunk`の期待するファイルに、節の呼び出し (D-3の`call_indirect`と`return_call_indirect`) を下ろすファイルを足す。`docs/implementation/architecture.md`の「`eml_native` の内部」の`call_indirect`の規則も同じコミットで直す。節の関数は呼ぶ先が実行時の値だからである
 - 種類(2): ネイティブのUIの2つのsnapshot (流した数、断った数、ヒストグラム)。付録03の数から`prim`、`clause`、`prompt`を引いた見込みは、断られる`run`のファイルが約150、受け入れられるものが約479である。下限ではなく、書き直すときに測る。`effects/`、`unwind/`、`panic/`で断られるものは0
 - 種類(3): eml_vmを共有の構築子に通し直すこと (期待値はすべてバイト単位で同じ)
 

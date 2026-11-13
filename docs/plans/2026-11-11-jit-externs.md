@@ -86,7 +86,7 @@
 8. stdの行のネイティブの下ろし (D-13、D-19): `Form::StdRow`を消す。`Const::EmptyMutArray`、`fail_io`の`Never`の道、どのテストも届かない行の族のagreeのテスト、スナップショット (種類(2))、spec/native.mdの「extern の行」
 9. ネイティブのユーザーのC (D-17): import、`c_signature`、inlineの狭めの確かめ、6つのエントリ、`Form::CRow`を消す、Cのコード生成のテスト、1つのCLIFのpin、スナップショット (種類(2))、spec/native.mdの「C の関数の呼び出し」
 10. ネイティブの測定 (N-39): `bench/scripts.sh`にネイティブの行を足す。`bench/native.sh`は新しく受け入れたプログラムをひとりでに拾う
-11. `Close jit-externs`: 文書、benchmarks.mdの「今の数値」と「ネイティブの数値」、ロードマップの「進め方」の手順、このファイルを消す
+11. `Close jit-externs`: 文書、benchmarks.mdの「今の数値」と「ネイティブの数値」、ロードマップの「進め方」の手順、このファイルを消す。`apply_int`と`apply_float`が`Std.Env.arg`の行で動くようになるので、ロードマップの「関数の値と`apply`の道のほかの形」の見直す条件から、それらがまだ断られるという文を消す
 
 ## 6. 既存のコードの変更と費用
 
