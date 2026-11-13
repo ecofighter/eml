@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use eml_cli::{
-    Clock, Control, Engine, Finished, FsProvider, Limits, LinkError, Linker, RunConfig, Sched,
-    Session, default_limits, execute_on, script_host,
+    Clock, Control, Engine, Finished, FsProvider, Limits, LinkError, Linker, Masked, RunConfig,
+    Sched, Session, default_limits, execute_on, script_host,
 };
 use eml_diagnostics::{has_errors, render};
 
@@ -149,7 +149,14 @@ fn main() -> ExitCode {
             let Some(program) = compiled.program else {
                 return ExitCode::from(1);
             };
-            let linked = match link_program(&program, &compiled.link_keys, link) {
+            // Cのライブラリは、SIGINTとSIGTERMを塞いで開く。ライブラリの初期化が始めるスレッドは塞ぎを受け継ぎ、
+            // 2つのシグナルはworker 0だけに届く。その間に来たシグナルは、このスレッドが塞ぎを外したときに受ける
+            // (docs/spec/vm.md の「上限と割り込み」)
+            let linked = {
+                let _blocked = Masked::new();
+                link_program(&program, &compiled.link_keys, link)
+            };
+            let linked = match linked {
                 Ok(linked) => linked,
                 Err(error) => {
                     eprintln!("link error: {error}");

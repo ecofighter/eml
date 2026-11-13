@@ -159,6 +159,11 @@ pub struct Options {
     pub census: Census,
     /// workerのスタックに予約するバイト数。
     pub stack: usize,
+    /// 呼んだスレッドでSIGINTとSIGTERMを塞いだまま`body`を動かすフック。`body`を1回呼ぶ。既定は何も塞がない。
+    /// `run`はこの中でworker 0の門を開けてjoinするので、worker 0は呼んだスレッドが塞ぐまでコードを動かさない
+    /// (docs/spec/native.md の「実行の始めと終わり」)。塞ぐことは呼ぶ側に任せ、`eml_nrt`はOSのシグナルの関数を
+    /// 呼ばない。
+    pub masked: fn(&mut dyn FnMut()),
 }
 
 impl Default for Options {
@@ -166,8 +171,13 @@ impl Default for Options {
         Options {
             census: Census::Skip,
             stack: WORKER_STACK,
+            masked: unmasked,
         }
     }
+}
+
+fn unmasked(body: &mut dyn FnMut()) {
+    body();
 }
 
 pub const ACTION_CONTINUE: i64 = 0;

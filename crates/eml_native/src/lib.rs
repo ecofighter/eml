@@ -22,6 +22,7 @@ mod unsupported;
 
 pub use bridge::Bridges;
 pub use eml_nrt::SUPPORTED;
+pub use eml_nrt::image::Options;
 pub use error::LinkError;
 pub use jit::{Arg, LoadError, Loaded, NativeMachine, Symbol, execute};
 pub use library::{candidates, running_os};

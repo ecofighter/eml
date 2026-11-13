@@ -1025,8 +1025,7 @@ main () = println (show (Env.get \"BAD\"))
 /// 子のプロセスを待つ間にSIGINTが来ると、子が終わった後で止まり、終了コード130で終わる。OSは端末のCtrl-Cをグループの
 /// プロセスごとに別々に届け、emlが受け取る前に子が終わるとrunは自分の終了コードで終わることがあるので、emlに送ってから
 /// 子に送る。子もSIGINTで終わるので、emlは待ちから戻る。子が標準エラーに書いたプロセスの番号を読んで、子が動いてから送る
-/// (docs/spec/stdlib.mdの「`Proc`」)。並列の重い負荷の下では、emlがスレッドでシグナルを塞ぐ形の知られた不具合のため、
-/// まれに失敗する (2000回のうち4回。docs/future/roadmap.mdの「マルチコア対応」)。
+/// (docs/spec/stdlib.mdの「`Proc`」)。
 #[cfg(unix)]
 #[test]
 fn an_interrupt_stops_a_program_waiting_for_a_child_with_130() {
@@ -1071,6 +1070,47 @@ main () = println (show (Proc.run `sh -c 'echo $$ >&2; exec sleep 30'`))
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130), "{rest}");
     assert!(rest.starts_with("runtime error: interrupted\n"), "{rest}");
+}
+
+/// workerが2つのとき、`Async.start`のタスク (worker 1) と`Async.start_on_main`のタスク (メインのworker) が始めた子は、
+/// SIGTERMを塞がずに始まるので、自分にSIGTERMを送るシェルは143で終わり、何も書かない。`eml run`のHost
+/// (`script_host`) が子を作るフックで塞ぎを外す道を通る (docs/spec/stdlib.mdの「`Proc`」)。
+#[cfg(unix)]
+#[test]
+fn children_of_tasks_off_worker_0_start_with_signals_unblocked() {
+    let text = "\
+import Async (Async)
+import Async
+import Exec
+import Proc
+
+report : String -> Unit -> <IO, Async> Unit
+report name () =
+  let (out, code) = Proc.output `sh -c 'kill -TERM $$; echo survived'`
+  println \"\\{name} Proc: \\{show out} exit \\{show code}\"
+  let (out, code) = Exec.output `sh -c 'kill -TERM $$; echo survived'`
+  println \"\\{name} Exec: \\{show out} exit \\{show code}\"
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  Async.await (Async.start (report \"started\"))
+  Async.await (Async.start_on_main (report \"main-worker\"))
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+";
+    let dir = temp_project("cli-child-signals", &[("main.em", text)]);
+    let output = eml_in(&dir, &["run", "--workers", "2", "main.em"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "started Proc: \"\" exit 143\n\
+started Exec: \"\" exit 143\n\
+main-worker Proc: \"\" exit 143\n\
+main-worker Exec: \"\" exit 143\n",
+        "{output:?}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
 }
 
 /// `Exec.wait` で待つプログラムは、SIGINT を eml だけに送っても、次の安全点で止まり、終了コード 130 で終わる。待ちは
@@ -1939,4 +1979,62 @@ fn native_exit_code_is_the_low_byte() {
     assert_eq!(output.status.code(), Some(44), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// emlが始まるときに塞がれて保留になっていたSIGINTは、既定の動作でプロセスを終わらせず、ハンドラを入れた後で受ける。
+/// runは最初の安全点で止まり、130で終わる。塞ぎと保留のシグナルはどちらもexecを越えて残るので、テストはexecの前の子で
+/// SIGINTを塞いで自分に送る (docs/spec/vm.mdの「上限と割り込み」)。
+#[cfg(unix)]
+#[test]
+fn a_signal_pending_at_start_is_handled() {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let text = "\
+spin : Int -> <Panic> Int
+spin n = spin (n + 1)
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (spin 0))
+";
+    let dir = temp_project("cli-pending-sigint", &[("main.em", text)]);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eml"));
+    command.args(["run", "main.em"]).current_dir(&dir);
+    // SAFETY: forkの後で呼ぶのは、async-signal-safeな`sigemptyset`、`sigaddset`、`pthread_sigmask`、`raise`だけである
+    unsafe {
+        command.pre_exec(|| {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGINT);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+            libc::raise(libc::SIGINT);
+            Ok(())
+        });
+    }
+    let mut child = command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + DEADLINE;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not stop");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{status:?} {stderr}");
+    assert!(stderr.starts_with("runtime error: interrupted"), "{stderr}");
 }

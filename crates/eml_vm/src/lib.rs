@@ -42,6 +42,7 @@ pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
 /// GUIのtoolkitの層。`eml run`はここのbackendと筋書きでGUIの`Park`を作る (docs/spec/vm.mdの「GUIのPark」)。
 #[cfg(feature = "gui")]
 pub use eml_gui;
+pub use eml_io::Masked;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use eml_sched::config::{Finished, RunConfig, RunStats};
 pub(crate) use eml_sched::{cells, doorbell, driver, error, park};
@@ -875,7 +876,12 @@ fn run_scheduled<M: Mode, P: Policy>(
         let builder = thread::Builder::new()
             .name("eml-worker-0".into())
             .stack_size(WORKER_STACK);
+        // worker 0は、呼んだスレッドが2つのシグナルを塞ぐまで何も動かさない。作る前に塞ぐと、新しいスレッドは作った
+        // スレッドの塞ぎを受け継ぐのでworker 0も塞がれる。動き出してから塞ぐと、worker 0がプログラムを動かす間に
+        // シグナルがこのスレッドへ行きうる (docs/spec/vm.md の「上限と割り込み」)
+        let (open, gate) = std::sync::mpsc::channel::<()>();
         let spawned = builder.spawn_scoped(scope, move || {
+            let _ = gate.recv();
             let (mut body, driver) = entry_body(
                 code,
                 worker_ctx,
@@ -896,9 +902,9 @@ fn run_scheduled<M: Mode, P: Policy>(
                 return (Err(error), None);
             }
         };
-        // 塞ぐのは作った後である。新しいスレッドは作ったスレッドの塞ぎを受け継ぐので、先に塞ぐと worker 0 も塞がれる
-        // (docs/spec/vm.md の「上限と割り込み」)
         let _blocked = eml_io::Masked::new();
+        // 門を開ける。送り手を落とすとworker 0の待ちが終わる。このスレッドのpanicでも落ちる
+        drop(open);
         let main = workers::run_main::<M, P>(
             code,
             main_policy,

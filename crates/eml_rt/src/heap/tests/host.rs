@@ -651,6 +651,70 @@ mod std_host {
         );
     }
 
+    /// `with_around_spawn`のフックは、段ごとに`Command::spawn`の呼び出しを1回包む。クロージャを呼ばないフックでは、
+    /// 子を作らずに起動の誤りになる。2回呼ぶフックでも、2つ目の子は作らない。
+    #[cfg(unix)]
+    #[test]
+    fn the_spawn_hook_wraps_each_stage() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use crate::{Spawn, Stage, StderrSpec, StdinSpec, StdoutSpec};
+        static WRAPPED: AtomicUsize = AtomicUsize::new(0);
+        fn counting(body: &mut dyn FnMut()) {
+            WRAPPED.fetch_add(1, Ordering::SeqCst);
+            body();
+        }
+        fn refusing(_: &mut dyn FnMut()) {}
+        let stage = || Stage {
+            program: "true",
+            args: &[],
+            env: &[],
+            cwd: None,
+            stderr: StderrSpec::Null,
+        };
+        let spawn = || Spawn {
+            stages: vec![stage(), stage()],
+            stdin: StdinSpec::Null,
+            stdout: StdoutSpec::Null,
+        };
+        let (host, _, _) = std_host(Buffering::Block);
+        let mut child = host.with_around_spawn(counting).spawn(spawn()).unwrap();
+        for process in &mut child.processes {
+            assert_eq!(process.wait().unwrap(), 0);
+        }
+        assert_eq!(WRAPPED.load(Ordering::SeqCst), 2);
+        let (host, _, _) = std_host(Buffering::Block);
+        let refused = host.with_around_spawn(refusing).spawn(spawn());
+        assert_eq!(refused.err().map(|e| e.kind()), Some(io::ErrorKind::Other));
+        // 2回呼ぶフックでも、段ごとに子は1つだけである。子は書いたファイルに1行ずつ足す
+        fn twice(body: &mut dyn FnMut()) {
+            body();
+            body();
+        }
+        let file = std::env::temp_dir().join(format!("eml_rt-twice-{}", std::process::id()));
+        let script = format!("echo x >> '{}'", file.display());
+        let appending = Stage {
+            program: "sh",
+            args: &["-c", &script],
+            env: &[],
+            cwd: None,
+            stderr: StderrSpec::Null,
+        };
+        let (host, _, _) = std_host(Buffering::Block);
+        let mut child = host
+            .with_around_spawn(twice)
+            .spawn(Spawn {
+                stages: vec![appending],
+                stdin: StdinSpec::Null,
+                stdout: StdoutSpec::Null,
+            })
+            .unwrap();
+        assert_eq!(child.processes.len(), 1);
+        assert_eq!(child.processes[0].wait().unwrap(), 0);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "x\n");
+        std::fs::remove_file(&file).unwrap();
+    }
+
     /// 作業ディレクトリは `file_root` につなぎ、`/` を含む相対のプログラムはそこに対して解決する。環境変数は上書き
     /// する。
     #[cfg(unix)]

@@ -117,14 +117,14 @@
 - `PapRow { rest, code }`は、`rest`個の引数を待つPAPのアダプタ1つのコードである (「関数の値」)
 - slotを書いた後、`Image`は読むだけになる。だから`Image`は`Sync`で、呼ぶ側が待っている間にworkerのスレッドがそれを読む
 - `Start { thunk, entry, argv, result_rc }`は、runがコードに入る所である。`eml_enter`の引数と、エントリの結果がrunの手放す数える語かどうかを持つ
-- `Options { census, stack }`。`census`は`Census::Skip`か`Census::Check`で、`stack`はworkerのスタックに予約するバイト数である。既定は`Skip`と`WORKER_STACK`である
+- `Options { census, stack, masked }`。`census`は`Census::Skip`か`Census::Check`で、`stack`はworkerのスタックに予約するバイト数である。`masked`は、呼んだスレッドでSIGINTとSIGTERMを塞いだまま、渡したクロージャを1回動かすフックである。既定は`Skip`と`WORKER_STACK`と何も塞がないフックで、`eml_cli::execute_on`は`eml_io::Masked`で塞ぐフックを渡す ([VM](vm.md)の「上限と割り込み」)。`eml_nrt`は自分ではOSのシグナルの関数を呼ばない
 
 ## 実行の始めと終わり
 
 `eml_nrt::run::run(image, start, config, host, options) -> Result<Finished, RuntimeError>`がプログラムを走らせる。これは`unsafe fn`で、呼ぶ側は、`image`の表が呼び出しの間生きていること、どのslotもほかの誰も使わない語であること、`start`が`image`のためにコンパイルしたコードへの正しい呼び出しであることを約束する。手順は次のとおりである。
 
 1. `config.control.begin_run()`で終わりの欄を開く ([VM](vm.md)の「誤り、止めること、終わり」)
-2. `options.stack`を予約したworkerのスレッド`eml-worker-0`を作り、それを待つ
+2. `options.stack`を予約したworkerのスレッド`eml-worker-0`を作る。workerは何かを動かす前に門で待つ。呼んだスレッドは`options.masked`の中で門を開けてworkerを待つので、workerは呼んだスレッドが2つのシグナルを塞ぐまでコードを動かさない。フックがクロージャを呼ばなければ、workerは何も動かさず、runは内部の誤り`the run's hook did not start the worker`で終わる
 3. そのスレッドの上で、`Ctx::<Fast>::for_worker(control, host, 0)`で`Ctx`を作り、`stack_limit`を置き (下の「安全点」)、読み込み時の値を作ってslotを書き (上の「`Image`」)、workerの構造体を`ctx.runtime`の後ろに置く。それから`Ctx`への生のポインタだけを持って`enter(ctx, start.thunk, start.entry, start.argv)`を呼ぶ (「`eml_enter`」の入り直しの規則)。戻ったら`ctx.runtime`をnullに戻すので、`Ctx`はどの`eml_enter`の外にもある
 4. `enter`がふつうに戻ったとき
    - 中断の途中 (`ctx.yielding() != 0`) で、workerの構造体が`exit`の終了コードを持っていれば、巻き戻しがどのフレームも片付けてある。`yield_finish`で中断を終え、`evv`を空に戻し、`control.exit(code)`で終了コードを書く。先に書いた者がいれば、その終了コードが勝つ (VMと同じ)。終了コードのない中断は内部の誤り`an abort reached the bottom of the task`である。中断の途中でなく、`start.result_rc`が真なら、`argv[0]`の結果を手放す

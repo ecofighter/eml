@@ -3,7 +3,7 @@
 #![allow(unsafe_code)]
 
 use std::panic::resume_unwind;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 
 use eml_rt::{Control, Ctx, Fast, HostRef, Word};
 use eml_sched::config::{Finished, RunConfig, RunStats};
@@ -55,17 +55,38 @@ pub unsafe fn run(
     // 終わりの欄はrunごとに開く (docs/spec/vm.md の「誤り、止めること、終わり」)
     control.begin_run();
     std::thread::scope(|scope| {
+        // worker 0は、呼んだスレッドが`options.masked`の中で門を開けるまで何も動かさない (docs/spec/native.md の
+        // 「実行の始めと終わり」)
+        let (open, gate) = mpsc::channel::<()>();
         let worker = std::thread::Builder::new()
             .name("eml-worker-0".to_string())
             .stack_size(options.stack)
-            // SAFETY: 呼ぶ側の約束
-            .spawn_scoped(scope, || unsafe {
-                on_worker(image, start, control, host, options)
+            .spawn_scoped(scope, move || {
+                if gate.recv().is_err() {
+                    return Err(fault(RunFault::Internal(
+                        "the run's hook did not start the worker",
+                    )));
+                }
+                // SAFETY: 呼ぶ側の約束
+                unsafe { on_worker(image, start, control, host, options) }
             })
             .map_err(|_| fault(RunFault::Internal("the worker thread cannot be started")))?;
-        worker
-            .join()
-            .unwrap_or_else(|payload| resume_unwind(payload))
+        let mut parts = Some((open, worker));
+        let mut joined = None;
+        (options.masked)(&mut || {
+            if let Some((open, worker)) = parts.take() {
+                let _ = open.send(());
+                joined = Some(worker.join());
+            }
+        });
+        // フックが`body`を呼ばなければ、ここで送り手を落とし、worker 0はコードを動かさずに終わる
+        drop(parts);
+        match joined {
+            Some(joined) => joined.unwrap_or_else(|payload| resume_unwind(payload)),
+            None => Err(fault(RunFault::Internal(
+                "the run's hook did not start the worker",
+            ))),
+        }
     })
 }
 
