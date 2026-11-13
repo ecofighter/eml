@@ -42,6 +42,9 @@ macro_rules! __kind {
     (ptr) => {
         $crate::Kind::I64
     };
+    (dtor) => {
+        $crate::Kind::I64
+    };
     (int) => {
         $crate::Kind::I64
     };
@@ -56,8 +59,9 @@ macro_rules! __kind {
 /// 引数と結果のRustの型。`i64`と`f64`のほかに、行の表が書くReprの名前も受ける。ほかのトークンはコンパイルの誤りになる。
 /// 機械の型はどの引数も`i64`か`f64`だが、物体の語 (`obj`、`tobj`、`token`) のRustの型は`Word`である。`Word`は
 /// `repr(transparent)`のポインタなので、どの対象でも`i64`と同じ渡し方で、語のprovenanceが入口をまたいで残る。引数の
-/// `ptr`は語の並びへのポインタで、Rustの型は`*const Word`なので、それを通して読む語もprovenanceを保つ
-/// (docs/spec/native.md の「エントリのABI」)。
+/// `ptr`は語の並びへのポインタで、Rustの型は`*const Word`なので、それを通して読む語もprovenanceを保つ。引数の`dtor`は
+/// ハンドルの型のdtorかなしで、Rustの型は`Option<eml_rows::ffi::Dtor>`である。関数ポインタの`Option`はポインタと同じ
+/// ABIを持ち、nullが`None`なので、語はキャストなしにABIだけで関数ポインタになる (docs/spec/native.md の「エントリのABI」)。
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __ty {
@@ -88,6 +92,9 @@ macro_rules! __ty {
     (ptr) => {
         *const $crate::__rt::Word
     };
+    (dtor) => {
+        Option<::eml_rows::ffi::Dtor>
+    };
     (unit) => {
         i64
     };
@@ -113,6 +120,9 @@ macro_rules! __result {
     };
     (ptr) => {
         compile_error!("`ptr` is a token of the argument position")
+    };
+    (dtor) => {
+        compile_error!("`dtor` is a token of the argument position")
     };
     ($t:tt) => {
         Some($crate::__kind!($t))
@@ -197,7 +207,10 @@ macro_rules! entries {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use eml_extern::CInt;
+    use eml_rows::ffi::{Dtor, Raise};
     use eml_rt::{
         ArithFault, Buffering, Control, Ctx, Fast, Fault, HostRef, Kind as ObjectKind, Limits,
         StdHost, Word, layout,
@@ -955,6 +968,210 @@ mod tests {
             );
             assert_eq!(live(&mut *c), []);
         }
+    }
+
+    /// 引数を読まないので、どの番地に対しても`CHandle::new`の約束が成り立つdtor。走った回数を数える。
+    unsafe extern "C" fn count_once(_: *mut std::ffi::c_void) {
+        ONCE_DTORS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// `count_once`と同じだが、nullのハンドルのテストだけが渡す。
+    unsafe extern "C" fn count_null(_: *mut std::ffi::c_void) {
+        NULL_DTORS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    static ONCE_DTORS: AtomicUsize = AtomicUsize::new(0);
+    static NULL_DTORS: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn x_c_narrow_parks_the_narrowing_panic() {
+        use crate::c::eml_x_c_narrow;
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        let value = 1i64 << 40;
+        // SAFETY: 上と同じ。workerの構造体は`with_worker`が置き、その前提を満たす。`park_panic`は失敗せず、呼び出しは
+        // 致命的な誤りの道を通らないので、`enter`の中でなくてよい。エントリは名前を借りるだけなので、テストが手放す
+        unsafe {
+            let name = (*c).fresh_string("Lib.f");
+            let parked = with_worker(c, |worker| {
+                eml_x_c_narrow(c, name, 2, CInt::I32.code(), value);
+                (*worker).panic.take()
+            });
+            assert_eq!((*c).take_fault(), Some(Fault::Engine));
+            let expected = Raise::Narrowing {
+                arg: 2,
+                int: CInt::I32,
+                value,
+            }
+            .text("Lib.f");
+            let message = parked.expect("a parked message");
+            assert_eq!((*c).copy_string(message, usize::MAX), Ok(expected));
+            assert_eq!((*c).copy_string(name, usize::MAX), Ok("Lib.f".to_string()));
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn x_c_handle_new_runs_the_dtor_once() {
+        use crate::c::eml_x_c_handle_new;
+        use crate::heap::eml_rt_decref;
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。`count_once`は引数を読まないので、番地8に対して`handle_new`の約束が成り立つ。nullでない
+        // ポインタではworkerの構造体を使わない
+        unsafe {
+            let name = (*c).fresh_string("Lib.open");
+            let handle = eml_x_c_handle_new(c, name, Some(count_once), 8);
+            assert_eq!((*c).take_fault(), None);
+            assert_eq!(
+                (*c).heap().meta(handle).unwrap().kind(),
+                ObjectKind::Foreign
+            );
+            assert_eq!(ONCE_DTORS.load(Ordering::SeqCst), 0);
+            eml_rt_decref(c, handle);
+            assert_eq!(ONCE_DTORS.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                (*c).copy_string(name, usize::MAX),
+                Ok("Lib.open".to_string())
+            );
+            assert_eq!(live(&mut *c), []);
+            assert_eq!(ONCE_DTORS.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn x_c_handle_new_of_null_parks_the_null_handle_panic() {
+        use crate::c::eml_x_c_handle_new;
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。nullのポインタには何も作らないので、`handle_new`の約束は`Ctx`のものだけである
+        unsafe {
+            let name = (*c).fresh_string("Lib.open");
+            let (handle, parked) = with_worker(c, |worker| {
+                let handle = eml_x_c_handle_new(c, name, Some(count_null), 0);
+                (handle, (*worker).panic.take())
+            });
+            assert_eq!(handle, Word::UNIT);
+            assert_eq!((*c).take_fault(), Some(Fault::Engine));
+            let message = parked.expect("a parked message");
+            assert_eq!(
+                (*c).copy_string(message, usize::MAX),
+                Ok(Raise::NullHandle.text("Lib.open"))
+            );
+            assert_eq!(NULL_DTORS.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                (*c).copy_string(name, usize::MAX),
+                Ok("Lib.open".to_string())
+            );
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn x_c_handle_ptr_reads_the_pointer() {
+        use crate::c::eml_x_c_handle_ptr;
+        use crate::heap::{eml_rt_decref, eml_rt_is_last};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。dtorがないので、番地0x40に対して`handle_new`の約束が成り立つ。読み出しが成功すれば
+        // workerの構造体を使わない
+        unsafe {
+            let handle = eml_rows::ffi::handle_new(&mut *c, 0x40, None).expect("a handle");
+            assert_eq!(eml_x_c_handle_ptr(c, handle), 0x40);
+            assert_eq!((*c).take_fault(), None);
+            assert_eq!(eml_rt_is_last(c, handle), 1);
+            eml_rt_decref(c, handle);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn rt_text_payload_points_at_the_bytes() {
+        use crate::heap::{eml_rt_decref, eml_rt_is_last, eml_rt_text_payload};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。エントリは物体を借りるだけなので、テストが手放す
+        unsafe {
+            let string = (*c).fresh_string("abc");
+            let bytes = (*c).heap_mut().alloc_bytes(b"xyz");
+            let heap = (*c).heap();
+            let string_at = (*heap.string(string).unwrap()).as_ptr().addr();
+            let bytes_at = (*heap.bytes(bytes).unwrap()).as_ptr().addr();
+            assert_eq!(eml_rt_text_payload(c, string) as usize, string_at);
+            assert_eq!(eml_rt_text_payload(c, bytes) as usize, bytes_at);
+            assert_eq!((*c).take_fault(), None);
+            assert_eq!(
+                (eml_rt_is_last(c, string), eml_rt_is_last(c, bytes)),
+                (1, 1)
+            );
+            assert_eq!((*c).copy_string(string, usize::MAX), Ok("abc".to_string()));
+            eml_rt_decref(c, bytes);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    /// `n`個の要素`0, 1, ..`を持つ`UnboxedArray`を作り、その要素0の位置の番地を返す。
+    ///
+    /// # Safety
+    /// `c`は生きている`Ctx`である。
+    unsafe fn unboxed(c: *mut Ctx<Fast>, n: usize) -> (Word, usize) {
+        // SAFETY: 呼ぶ側の約束。新しい物体は一意で、今のworkerが持つ
+        unsafe {
+            let heap = (*c).heap_mut();
+            let w = heap.alloc_unboxed(n, 0, false);
+            let at = heap.unboxed_ptr_mut(w).unwrap();
+            for i in 0..n {
+                at.add(i).write(i as u64);
+            }
+            assert_eq!(heap.unboxed_ptr(w).unwrap().add(n - 1).read(), n as u64 - 1);
+            (w, at.addr())
+        }
+    }
+
+    #[test]
+    fn rt_unboxed_ptr_points_at_the_elements() {
+        use crate::heap::{eml_rt_decref, eml_rt_is_last, eml_rt_unboxed_ptr};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。エントリは物体を借りるだけなので、テストが手放す
+        unsafe {
+            let (w, at) = unboxed(c, 3);
+            assert_eq!(eml_rt_unboxed_ptr(c, w) as usize, at);
+            assert_eq!((*c).take_fault(), None);
+            assert_eq!(eml_rt_is_last(c, w), 1);
+            eml_rt_decref(c, w);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn rt_unboxed_ptr_mut_points_at_the_elements() {
+        use crate::heap::{eml_rt_decref, eml_rt_is_last, eml_rt_unboxed_ptr_mut};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。配列は一意で今のworkerが持つ。エントリは物体を借りるだけなので、テストが手放す
+        unsafe {
+            let (w, at) = unboxed(c, 3);
+            assert_eq!(eml_rt_unboxed_ptr_mut(c, w) as usize, at);
+            assert_eq!((*c).take_fault(), None);
+            assert_eq!(eml_rt_is_last(c, w), 1);
+            eml_rt_decref(c, w);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn entries_take_a_dtor_kind() {
+        let entry = crate::entries()
+            .find(|e| e.symbol == "eml_x_c_handle_new")
+            .expect("the entry");
+        assert_eq!(
+            (entry.params, entry.result),
+            (&[Kind::I64, Kind::I64, Kind::I64][..], Some(Kind::I64))
+        );
+        // `dtor`のRustの型は`Option<Dtor>`で、整数でない
+        let _: unsafe extern "C" fn(*mut Ctx<Fast>, Word, Option<Dtor>, i64) -> Word =
+            crate::c::eml_x_c_handle_new;
     }
 
     #[test]

@@ -56,6 +56,22 @@ impl CInt {
         }
     }
 
+    /// ネイティブのコードがこの幅を`eml_x_c_narrow`に渡すときの番号。
+    pub fn code(self) -> i64 {
+        match self {
+            CInt::I64 => 0,
+            CInt::I32 => 1,
+            CInt::SizeT => 2,
+        }
+    }
+
+    /// `code`の逆。どの幅の番号でもなければ`None`を返す。
+    pub fn from_code(code: i64) -> Option<CInt> {
+        [CInt::I64, CInt::I32, CInt::SizeT]
+            .into_iter()
+            .find(|int| int.code() == code)
+    }
+
     /// 渡す前に範囲を確かめる必要があり、外れると実行時に中断する幅。
     pub fn narrows(self) -> bool {
         matches!(self, CInt::I32 | CInt::SizeT)

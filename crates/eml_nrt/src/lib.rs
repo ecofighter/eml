@@ -3,6 +3,7 @@
 #![deny(unsafe_code)]
 
 mod arch;
+mod c;
 mod census;
 mod closures;
 mod constants;
@@ -40,6 +41,7 @@ const TABLES: &[&[Entry]] = &[
     heap::HEAP,
     rows::ROWS,
     closures::CLOSURES,
+    c::C,
 ];
 
 /// 生成したコードが呼べるすべてのエントリ。

@@ -123,6 +123,39 @@ crate::entries! {
         Ok::<(), HeapError>(())
     }
 
+    /// 文字列かバイト列の先頭のバイトの位置。来歴を公開した番地で返す。生成したコードは、これをCの関数に貸す。読むだけで、
+    /// 確保も解放もせず、参照の数も変えない。
+    ///
+    /// # Safety
+    /// `Heap::text_payload`と同じ。`w`は呼ぶ側が借りている。
+    pub(crate) shim fn eml_rt_text_payload(ctx, w: obj) -> i64 {
+        // SAFETY: 呼ぶ側の約束
+        let at = unsafe { ctx.heap().text_payload(w) }?;
+        Ok::<i64, HeapError>(at.expose_provenance() as i64)
+    }
+
+    /// `UnboxedArray`の要素0の位置。来歴を公開した番地で返す。生成したコードは、これを読むだけのCの関数に貸す。読むだけで、
+    /// 確保も解放もせず、参照の数も変えない。
+    ///
+    /// # Safety
+    /// `Heap::unboxed_ptr`と同じ。`w`は呼ぶ側が借りている。
+    pub(crate) shim fn eml_rt_unboxed_ptr(ctx, w: obj) -> i64 {
+        // SAFETY: 呼ぶ側の約束
+        let at = unsafe { ctx.heap().unboxed_ptr(w) }?;
+        Ok::<i64, HeapError>(at.expose_provenance() as i64)
+    }
+
+    /// `MutUnboxedArray`の要素0の位置。来歴を公開した番地で返す。生成したコードは、これを要素を書いてよいCの関数に貸す。
+    /// 読むだけで、確保も解放もせず、参照の数も変えない。
+    ///
+    /// # Safety
+    /// `Heap::unboxed_ptr_mut`と同じ。`w`は呼ぶ側が借りている。
+    pub(crate) shim fn eml_rt_unboxed_ptr_mut(ctx, w: obj) -> i64 {
+        // SAFETY: 呼ぶ側の約束
+        let at = unsafe { ctx.heap().unboxed_ptr_mut(w) }?;
+        Ok::<i64, HeapError>(at.expose_provenance() as i64)
+    }
+
     /// 算術の失敗を`Ctx`に置く。種類は`ARITH_*`である。置いた失敗は、生成したコードが呼び出しの後で確かめる。
     pub(crate) shim fn eml_rt_fault_arith(ctx, kind: i64) {
         let fault = match kind {

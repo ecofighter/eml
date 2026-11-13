@@ -306,3 +306,18 @@ fn a_blocking_row_splits_into_submit_and_take() {
     let sync = function(vec![CParam::MutUnboxedArray], CRet::Void);
     assert!(sync.submit_row().is_none() && sync.take_row().is_none());
 }
+
+#[test]
+fn cint_codes_round_trip() {
+    let codes: Vec<i64> = [CInt::I64, CInt::I32, CInt::SizeT]
+        .into_iter()
+        .map(CInt::code)
+        .collect();
+    assert_eq!(codes, [0, 1, 2]);
+    for int in [CInt::I64, CInt::I32, CInt::SizeT] {
+        assert_eq!(CInt::from_code(int.code()), Some(int));
+    }
+    for code in [-1, 3, i64::MAX] {
+        assert_eq!(CInt::from_code(code), None);
+    }
+}

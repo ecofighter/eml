@@ -1,5 +1,5 @@
 //! 利用者のCの関数の呼び出しの部品。ハンドルの物体の中身、呼び出しが上げる`Panic`の理由、ハンドルを作る関数を持ち、
-//! VMが使う (docs/spec/vm.mdの「C の関数の呼び出し」)。
+//! VMとネイティブの実行系が使う (docs/spec/vm.mdの「C の関数の呼び出し」、docs/spec/native.mdの「externの失敗」)。
 
 use std::ffi::c_void;
 use std::ptr;

@@ -12,16 +12,16 @@
 
 - 呼び出し規約は、対象のCの既定の規約 (`extern "C"`) である
 - 最初の引数は`ctx: *mut Ctx<Fast>`で、コードが動いているworkerの`Ctx`である。ネイティブのコードは速いモードだけを使う
-- ほかの引数は、機械の型ではどれも`i64`か`f64`である。語のABIの語 (物体、即値、Unit、列挙のタグ) は`i64`で、`Float`は`f64`で渡す。Rustのシグネチャでは、物体の語 (`obj`、`tobj`、`token`) の型は`Word`である。`Word`は`repr(transparent)`のポインタで、対象のどのABIでも`i64`と同じ渡し方なので、語のprovenanceが入口をまたいで残り、エントリは整数からポインタを作らない
+- ほかの引数は、機械の型ではどれも`i64`か`f64`である。語のABIの語 (物体、即値、Unit、列挙のタグ) は`i64`で、`Float`は`f64`で渡す。Rustのシグネチャでは、物体の語 (`obj`、`tobj`、`token`) の型は`Word`である。`Word`は`repr(transparent)`のポインタで、対象のどのABIでも`i64`と同じ渡し方なので、語のprovenanceが入口をまたいで残り、エントリは整数からポインタを作らない。ハンドルの型のdtorを受ける引数 (`dtor`) の型は`Option<eml_rows::ffi::Dtor>`である。関数ポインタの`Option`はポインタと同じABIを持ち、nullが`None`なので、語はキャストも`transmute`もなしに、ABIだけで関数ポインタになる
 - 結果は、`i64`か`f64`が高々1つか、結果なしか、戻らない (`!`) かである
 - 構造体を値で渡すことも返すことも、狭い整数の型を使うこともしない。だからどの対象でも、引数は同じ規則で1つのレジスタか1つのスタックの枠に入る
-- 記号の名前は接頭辞で分ける。`eml_rt_*`は共有の実行系の操作、`eml_x_*`はstdのexternの行、`eml_nrt_*`はネイティブの実行系のサービスである。接頭辞のない記号は`eml_enter`、`eml_fatal`、`eml_run_pending`だけである。`eml_nrt`の外で宣言するテストだけのエントリは`eml_t_*`にする。エントリの記号はその関数の識別子そのもので、上書きする手はない
+- 記号の名前は接頭辞で分ける。`eml_rt_*`は共有の実行系の操作、`eml_x_*`はstdのexternの行と利用者のCの関数の呼び出しの補助 (`eml_x_c_*`)、`eml_nrt_*`はネイティブの実行系のサービスである。接頭辞のない記号は`eml_enter`、`eml_fatal`、`eml_run_pending`だけである。`eml_nrt`の外で宣言するテストだけのエントリは`eml_t_*`にする。エントリの記号はその関数の識別子そのもので、上書きする手はない
 
 ### 記述子の表
 
 - `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`const NAME = "接頭辞";`の形では、エントリの記号は接頭辞に関数の識別子を続けたものになり、`const NAME;`の形では識別子そのものになる。`Entry`の欄は、`symbol` (記号)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
-- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`のRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`も受ける。その`Kind`は`I64`で、Rustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
-- エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は5つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`closures.rs`の`CLOSURES`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
+- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`のRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`と、ハンドルの型のdtor`dtor`も受ける。どちらも`Kind`は`I64`である。`ptr`のRustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。`dtor`のRustの型は`Option<eml_rows::ffi::Dtor>`である (「エントリのABI」)。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
+- エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は6つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`closures.rs`の`CLOSURES`、`c.rs`の`C`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
 - 生成したコードは、エントリを記号で取り込み、呼び出しの型を行だけから作る。宣言が1つなので、関数と呼び出しの型が食い違うことはない
 - エントリに`#[no_mangle]`は付けない。JITはアドレスを記号の名前で登録する
 
@@ -59,10 +59,14 @@
 | `eml_rt_con_at` | `token, tag, scanned, raw, lin` -> 語 | `Heap::con_at` (語の数は`scanned + raw`) |
 | `eml_rt_drop_token` | `token` -> なし | `Heap::drop_token` |
 | `eml_rt_fault_arith` | `kind` -> なし | `Ctx::set_fault(Fault::Arith(..))` |
+| `eml_rt_text_payload` | `w` -> 番地 | `Heap::text_payload` |
+| `eml_rt_unboxed_ptr` | `w` -> 番地 | `Heap::unboxed_ptr` |
+| `eml_rt_unboxed_ptr_mut` | `w` -> 番地 | `Heap::unboxed_ptr_mut` |
 
 - どのエントリも、包む関数の前提をそのまま持ち、生成したコードがそれを守る。`eml_rt_con_at`の`scanned`は、`Data`の`meta`が数の語を要しない範囲にある (`eml_rt_alloc_data`は数の語を持つ物体も作れる)。debugのビルドでは、`tag`が16ビットに収まることと、`scanned`、`raw`が負でないこと、`eml_rt_con_at`の`scanned`が上の範囲にあることを確かめる
 - `eml_rt_con_at`と`eml_rt_drop_token`が受けるtokenは、生成したコードが一意な箱の語をそのまま移した語か、空の語である。速いモードのtokenは箱の語なので、これは`Heap::into_token`が返す語と同じである ([オブジェクトモデル](object-model.md)の「検査モードの token」)
 - `eml_rt_fault_arith`だけは、失敗を`Ctx`に置いて戻る。生成したコードは、呼び出しの後で無条件に`eml$raise`へ進み、faultの語は確かめない。`kind`は`eml_nrt::image`の`ARITH_DIVISION_BY_ZERO` (0) か`ARITH_INTEGER_OVERFLOW` (1) で、ほかの値は内部の誤りである
+- `eml_rt_text_payload`、`eml_rt_unboxed_ptr`、`eml_rt_unboxed_ptr_mut`は、利用者のCの関数に貸す位置を、来歴を公開した番地 (`expose_provenance`) で返す。VMが橋渡しのslotに入れる番地と同じである ([VM](vm.md)の「C の関数の命令」)。どれも借りた物体を`Heap`から1度読むだけで、確保も解放もせず、参照の数も変えない
 
 ### `eml_enter`
 
@@ -210,6 +214,13 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - 行のエントリは、サービスと同じく、`run`が入ったコードからだけ呼ぶ
 - 生成したコードは、`Called`の行 (「行の下ろし方」) をどれも`eml_x_<Variant>(ctx, 引数...)`の呼び出しに下ろし、各引数を行の引数のReprで作る。戻る`faults`の行の後には「巻き戻しの地点」の`Faults`のコードを、`faults`のない行の後には何も出さない。結果が`never`の行の後には`Never`のコードを出す。`eml_x_Exit`の後は何も上げずに後始末へ進み、`eml_x_Panic`の後は行の純粋さで上げる。`eml_x_Panic`に渡したメッセージは、行が消費するので地点の所有に入らず、後始末はそれを手放さない
 
+利用者のCの関数の呼び出しの補助`eml_x_c_narrow`、`eml_x_c_handle_ptr`、`eml_x_c_handle_new`は、接頭辞のない`eml_nrt/src/c.rs`の表`C`にある。ネイティブのコードは、利用者のCの関数の呼び出しの前後でこれらを呼ぶ。externの行の一覧の行ではなく、どの表も読まない。関数の名前を受ける補助は、それを読み込み時の値の文字列 (`s:<名前>`。「値と定数」) の語で受けて借り、何も手放さない。どれも`run`が入ったコードからだけ呼ぶ。
+
+- `eml_x_c_narrow(ctx, name: obj, arg: int, int: int, value: int) -> never`は、関数`name`についての`eml_rows::ffi::Raise::Narrowing { arg, int, value }`の文言を`worker::park_panic`で置いて戻る。だから、`eml_x_Panic`の後と同じくfaultは`Fault::Engine`になる。`arg`は、VMと同じく、引数のない関数のUnitの引数も含めて関数の引数を1から数える。`int`はCの幅の番号 (`CInt::code`。`I64`は0、`I32`は1、`SizeT`は2) である
+- `eml_x_c_handle_ptr(ctx, handle: obj) -> i64`は、借りたハンドルの物体が持つCのポインタ (`Heap::foreign::<CHandle>`) を返す。読むだけで、確保も解放もせず、参照の数も変えない
+- `eml_x_c_handle_new(ctx, name: obj, dtor: dtor, ptr: i64) -> obj`は、VMも呼ぶ`eml_rows::ffi::handle_new`でハンドルの物体を作る。`ptr`がnullなら何も作らず、`Raise::NullHandle`の文言を`worker::park_panic`で置いて、仮の値としてUnitの語を返す。生成したコードは、呼び出しのすぐ後でfaultの語を確かめる。`ptr`と`dtor`については`handle_new`の約束を持つ`unsafe`のエントリで、生成したコードは、宣言した結果がそのハンドルの型である関数の呼び出しの結果と、その型のdtorかnullを渡す
+- 文言はVMも呼ぶ`Raise::text`が作るので、どちらのエンジンも同じpanicを上げる。生成したコードはそれを、Cの関数の行の純粋さで上げる。ほかの`Err`は、行のエントリと同じく内部の類で、`worker::record`で記録する
+
 行が`ctx`に置いた失敗は、生成したコードがサービス`eml_nrt_failed(ctx, function, site, purity) -> action`で上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の`FnRow.sites`の中の地点の添字 (関数の入口なら`ENTRY_SITE`)、`purity`は失敗した行の純粋さである。`purity`の語は`PURITY_PURE` (0)、`PURITY_PANICS` (1)、`PURITY_EFFECTFUL` (2) で、`eml_extern::Purity`の宣言の順である。3つの定数は`ACTION_*`と同じく`eml_nrt::image`にある。debugのビルドでは、サービスは`purity`がこのどれかであることと、`site`が`ENTRY_SITE`か32ビットに収まる添字であることを確かめる。
 
 - サービスは置いたfaultを`ctx.take_fault()`で取り出す。だからサービスの後のfaultの語は0である
@@ -220,7 +231,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## 行の下ろし方
 
-`eml_rows::rows`の一覧`extern_rows!`の組`rows`の変種は、どれもエントリ`eml_x_<Variant>`を持つ (「externの失敗」)。手で書く`eml_x_Exit`と`eml_x_Panic`と合わせて、エントリは232あり、タスクの行でも`Par`でもない行ごとに1つである。`Par`とタスクの行はエントリを持たず、行のエントリのほかに`eml_x_`で始まる記号はない。一覧は、ネイティブのコードが行をどう下ろすかの印を持たない。eml_nativeの`rows::lowering(ext)`が規則で決める。`rows::INLINE` (「断る形」) の45の行は`Inline`、タスクの行でも`Par`でもないほかの187の行は`Called`、タスクの行と`Par`は`None`である。`Inline`の行もエントリを持つが、生成したコードはそれを呼ばない。どのエントリも、記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、行の関数も一覧も再エクスポートしない。eml_nativeのテストは、dev-dependencyの`eml_rows`からこれらを読む。
+`eml_rows::rows`の一覧`extern_rows!`の組`rows`の変種は、どれもエントリ`eml_x_<Variant>`を持つ (「externの失敗」)。手で書く`eml_x_Exit`と`eml_x_Panic`と合わせて、エントリは232あり、タスクの行でも`Par`でもない行ごとに1つである。`Par`とタスクの行はエントリを持たず、行のエントリと、利用者のCの関数の呼び出しの補助`eml_x_c_narrow`、`eml_x_c_handle_ptr`、`eml_x_c_handle_new` (「externの失敗」) のほかに`eml_x_`で始まる記号はない。一覧は、ネイティブのコードが行をどう下ろすかの印を持たない。eml_nativeの`rows::lowering(ext)`が規則で決める。`rows::INLINE` (「断る形」) の45の行は`Inline`、タスクの行でも`Par`でもないほかの187の行は`Called`、タスクの行と`Par`は`None`である。`Inline`の行もエントリを持つが、生成したコードはそれを呼ばない。どのエントリも、記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、行の関数も一覧も再エクスポートしない。eml_nativeのテストは、dev-dependencyの`eml_rows`からこれらを読む。
 
 生成したコードは、`rows::INLINE`の行を、その文の位置でCLIFの命令に展開する。結果は、行の共有の関数 (`eml_rows::rows`の関数) の結果とビット単位で等しい。
 

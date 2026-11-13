@@ -118,6 +118,13 @@ eml_nrt::entries! {
         -2.5
     }
 
+    plain fn eml_t_echo_iiii(ctx, a: i64, b: i64, c: i64, d: i64) {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        for (i, v) in [a, b, c, d].into_iter().enumerate() {
+            unsafe { *out.add(i) = v as u64 };
+        }
+    }
+
     plain fn eml_t_echo_iiii_i(ctx, a: i64, b: i64, c: i64, d: i64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         for (i, v) in [a, b, c, d].into_iter().enumerate() {
