@@ -1,5 +1,7 @@
 # Appendix 04: jit-externs (design level)
 
+Superseded by appendices 06 and 07 (2026-11-13 refresh); kept as the record of the earlier design.
+
 (Where this file and 00-decisions.md differ, 00-decisions.md wins.)
 
 Section C of 00-decisions.md is folded into this text; 00 remains the record.

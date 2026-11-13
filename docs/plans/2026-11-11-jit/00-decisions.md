@@ -1,6 +1,6 @@
 # Appendix 00: decisions that override the other appendices
 
-Read this first. The other appendices are the designers' final texts (01 contract, 02 jit-rt + sched-split, 03 jit-core + jit-apply, 04 jit-externs, 05 jit-effects + jit-tasks + jit-repl). Where one of them differs from this file, this file wins. Paths of the form `scratch-*` or `S2b-work.*` in "Additional checks" sections refer to throwaway experiments that no longer exist; their results are stated as facts there.
+Read this first. The other appendices are the designers' final texts (01 contract, 02 jit-rt + sched-split, 03 jit-core + jit-apply, 04 jit-externs (superseded by 06 and 07), 05 jit-effects + jit-tasks + jit-repl, 06 the extern / C-call boundary and 07 the workspace crate graph from the jit-externs refresh). Where one of them differs from this file, this file wins. Paths of the form `scratch-*` or `S2b-work.*` in "Additional checks" sections refer to throwaway experiments that no longer exist; their results are stated as facts there.
 
 ## A. User decisions (settled)
 
@@ -45,7 +45,7 @@ R-1 entry identifiers: `extern_rows!` spells each variant's entry identifier (`f
 
 ## D. Placement of the plan files
 
-Each stage has its own plan file under docs/plans/, committed as that stage's first commit (roadmap 「進め方」). The design-level plans of the later stages and this shared appendix directory are committed with jit-rt's plan, so every stage reads the same decisions; each stage's Close deletes its own plan file, and the Close of jit-repl (the last stage) deletes this appendix directory. When a later stage starts, its design-level plan is refreshed into an executable plan (by the planning process) and replaces its file in that stage's first commit.
+Each stage has its own plan file under docs/plans/, committed as that stage's first commit (roadmap 「進め方」). The design-level plans of the later stages and this shared appendix directory are committed with jit-rt's plan, so every stage reads the same decisions; each stage's Close deletes its own plan file, and the Close of jit-repl (the last stage) deletes this appendix directory. When a later stage starts, its design-level plan is refreshed into an executable plan (by the planning process) and replaces its file in that stage's first commit. A refresh may add appendices to this directory in that first commit: jit-externs' first commit (`Start jit-externs`) adds 06 (the extern / C-call boundary) and 07 (the workspace crate graph), and section F below records their decisions.
 
 ## E. Gaps for the later stages' refresh (advisor review r1, I-8)
 
@@ -62,3 +62,64 @@ Each item is settled when the named stage's design-level plan is refreshed into 
 | E-7 | jit-externs' test "no `eml_x_` symbol outside the list" and `Listed.entry == None` for task rows change when jit-tasks gives the task rows entries; jit-tasks lists these test changes | jit-tasks |
 | E-8 | jit-core and jit-externs' plans must list the jit-core tests that pin the seed subset and are replaced in jit-externs (kind 1) | jit-externs |
 
+
+## F. Decisions of the jit-externs refresh (2026-11-13)
+
+The refresh of jit-externs at main fddd44f2 redesigned the extern / C-call boundary (appendix 06) and the workspace crate graph (appendix 07). **Appendices 06 and 07 supersede appendix 04, and override 01 and 05 where they differ**; 07 overrides 06 on placement. This section overrides all of them. The executable plan `docs/plans/2026-11-11-jit-externs.md` carries the units.
+
+### F.1 User decisions (2026-11-13)
+
+| ID | Decision |
+|---|---|
+| U-A | "If redesigning the architecture overall makes it elegant, do so aggressively. Let Fable do the redesign." A Fable designer redesigned the extern / C boundary (appendix 06); the unit designs were cut on its result. |
+| U-B | The slow and failing test `tls::a_real_socket_handshake_rejects_the_expired_fixtures` is caused by about 448k stale files in `target/debug/deps` (macOS `SecPolicyCreateSSL` scans the executable's directory). Run `cargo clean --profile dev` + `cargo build --all-targets` in the stage's first unit, then verify the test runs in under 1 s. Write the explanatory paragraph in docs/implementation/testing.md 「性能のテスト」 in its own commit. |
+| U-C | Approved 06's M-1 (entries for all 232 non-async rows except `Par`, including the 45 inline rows; the default of 06's U-1) and amendments M-2..M-7 as written in 06 §5.11. |
+| U-D | "Also aggressively redesign cross-crate dependencies and splits, aiming for an elegant design." A Fable designer redesigned the workspace crate graph (appendix 07). |
+| U-E | "Organize dependencies with a particular focus on licensing and portability during native app generation, speed and size." Added to 07 as its primary criterion. |
+| U-F | Approved 07's AM-1..AM-13 including AM-12b; the graph units G-a..G-d run at the head of jit-externs (07 U-1 default); 07 U-3 = (a): the `tls` variant of a shipped app's runtime library is chosen by import (`Std.Tls` or `Std.Http` in the module graph), the `gui` axis by profile, so AM-12 applies under (a). Recorded for native-aot (docs/future and roadmap edits in jit-externs' U4 and Close). |
+| U-G | The plan document of jit-externs may be written in English (no PLaMo translation of `docs/plans/2026-11-11-jit-externs.md`). docs/, code comments and CLAUDE.md edits stay as CLAUDE.md requires. |
+
+### F.2 Amended criteria of 01 (one line each; full old / new text in 06 §5.11 and 07 §5.9)
+
+| Criterion | Amendment | New text |
+|---|---|---|
+| N-1 | AM-3 | Crates and edges are those of 07 §5.1: native runtime code goes to eml_nrt; the task layer and the run interface to eml_sched; row bodies and the values of built-ins to eml_rows; OS-facing code a shipped app needs to eml_io; linking of user C to eml_clink. |
+| N-2 | AM-4 | CI step `crate graph` runs `nix/crate-graph.sh --check`, which holds every pattern of the old step `dependency edges of eml_native` plus the direct-edge table, the feature tables, the re-export list and the closure checks of 07 G-C3, G-C10..G-C13. |
+| N-7 | M-4, AM-6 | Besides entries, the only imports are a user C function (`eml_c$<canonical eml name>`, default cc, signature from `eml_clink::c_signature`, which the bridges also use) and a handle type's dtor (`eml_cd$<handle type name>`, signature `(i64)`, address only); `Linkage::Import` appears in one function, `eml_native::abi::declare_import`. |
+| N-13 | AM-5 | `JITModule` is named only in the JIT host file; no `bridge.rs` clause (the bridges are eml_clink's). |
+| N-15 | AM-5 | `ins().load|store` in eml_native only in the memory module and the thunk builder; no `bridge.rs` clause. |
+| N-21 | M-1 | Every non-async row except `Par` has exactly one entry `eml_x_<Variant>` whose descriptor equals the row's Reprs (232: 230 generated from the list, `Exit` and `Panic` by hand); the lowering table marks 45 `Inline` (their entries are not called by generated code) and 187 `Called`; `Par` has none; no other `eml_x_` symbol except `eml_x_c_*`. 01 §1.2 gains: row entries are generated from the list, one per row with a shared body, and are the exception to "no entry ahead of a caller". |
+| N-22 | M-2, AM-7 | A row's implementation exists once, as the row function the `extern_rows!` list in eml_rows defines; the VM's generic extern instruction calls `eml_rows::rows::call`, dedicated handlers call the row function. Check: `call` has no wildcard; the `SHARED` test; `run_extern` names only `Panic` and `Exit`. |
+| N-23 | AM-7 | Unchanged: `RuntimeError` and its `Display` stay in eml_sched. |
+| N-30 | AM-7 | The grep covers `crates/eml_nrt crates/eml_native crates/eml_sched crates/eml_rows crates/eml_clink`; `placement::code_cites_only_spec_and_implementation` scans eml_rows (from G-a) and eml_clink (from G-b) too. |
+| N-34 | AM-5 | `settings::builder` in eml_native only in `abi.rs`; the bridges' own constructor is in eml_clink, outside this rule. |
+| N-37 | AM-5 | `call_indirect` in eml_native only in `lower/apply.rs` and `thunk.rs`; no `bridge.rs` exemption. |
+| N-41 | AM-8 | Adds: the features `tls`, `gui`, `gui-native` move from eml_vm to eml_rows in jit-externs; that is a move, not a new feature. The `eml_sched.*testing` check moves into `nix/crate-graph.sh`. |
+
+Also amended: 01 §1.1's graph, table and "Features" (AM-1, AM-2: eml_rows defines the three features, nothing forwards them, eml_cli names `eml_rows/<f>` and `eml_io/tls`); 01 §5.3's rows for jit-externs and jit-tasks and 05 D-7, D-8, D-13, D-21 (AM-9: Tls / Gui, async row bodies and C submit / take go to eml_rows; `GateHost` is deleted when `WorkerCore` moves to eml_sched); 04 D-8 / A-5 and 05's use of it (M-7: C callees and dtors are registered with `JITBuilder::symbol` in `load` after `Linked::fits`; jit-repl replaces this registration when loads repeat). No soundness criterion is dropped: N-9, N-10, N-12, N-13 (beyond its `bridge.rs` clause) and U-13 stand.
+
+### F.3 Amended entries of this file
+
+| Entry | Amendment | New text |
+|---|---|---|
+| R-1 | M-3 | No `as` identifier: an entry's symbol is its table's prefix (`eml_x_`) followed by the variant name, derived inside `entries!`. |
+| R-4 | M-3, M-1 | No `inline fn` mark: the 45 inline rows are ordinary list lines with entries; eml_native's `INLINE` table alone decides `Inline`; the "marked set" test is deleted. |
+| C-1 | M-3 | Superseded: no inline mark; jit-externs lists all 230 rows with a shared body in one line form. |
+| C-3 | M-3, AM-11, 07 rule 3 | eml_nrt re-exports nothing of the list (`shared_rows`, `LISTED` deleted); eml_native's tests reach `eml_rows::rows` through a dev-dependency; no normal edge eml_native → eml_sched or eml_rows. |
+| C-4 | M-3 | `LISTED`, `Listed`, `Section` are deleted; `eml_rows::rows::SHARED` and `call` replace them. |
+| C-6 | M-5 | jit-externs adds `a:mut` (the empty `MutArray`). jit-tasks adds `c:<Module.f>` with its first reader, the `CSubmit` / `CTake` wrappers; its contents point at that function's row of the `Image`'s C table. |
+| E-7 | M-6 | jit-tasks changes the async clause of the partition test `rows::the_rows_are_partitioned` when task rows get entries. |
+
+### F.4 Resolutions of the refresh's cross-checks (orchestrator; they win over 06 and 07)
+
+| Topic | Resolution |
+|---|---|
+| 06 G-1, G-24 | G-1: "at stage close `extern_rows!` has exactly the sections `rows`, `engine`, `lir`, `task`". G-24: "every commit of the stage passes `cargo nextest run`; transitional groups (`pending` in the list, `NOT_YET_NATIVE` in `unsupported.rs`) exist only between their opening and closing commits, each listed in the plan; while `pending` exists, the list is total over `Extern::ALL` through it". |
+| 06 G-12 | The ordering is held by the structure of `lend_and_call`; the window-scan test also asserts that no lending call precedes a narrowing `brif` of the same C call. |
+| 06 5.2 (Float unboxed lines) | The VM never calls the Float unboxed lines; the unit test `rows::tests::unboxed_float_rows_keep_their_bits` in eml_rows stands in for a VM call of them. |
+| 06 U-3, G-19, G-20 | The residue of the unlowered list is 31 rows: the 10 non-async `Tls*` rows, the 15 non-async `Gui*` rows, `AsyncJobCell`, `ChanToCell`, `ShowBytesLength`, `ShowBytesGet`, `ProcStageCount`, `ProcWaitStage`. Exact counts: `run` 320 / `run-fail` 41 after the std-row unit, 326 + new files / 43 at close; 323 / 42 stay the floors. |
+| 07 G-C13 | No CI cross job: the "no C build crates" half is in `nix/crate-graph.sh`; the cross-compile half runs locally in the `.#cross` shell. |
+| 07 section 8 and 5.1 | The errata F-1..F-6 of 07's last section apply (the comment-dropping grep of G-C9; `cargo nextest run -p eml_rows --features tls`; `eml_test_support` gains `eml_clink`, `eml_sched`, `eml_rt` and no `eml_io`; `eml_vm`'s gui re-exports leave with the Gui move; the placement test reads `[dependencies]` only; `eml_vm` re-exports exactly `Linked`, `RunConfig`, `HostRef`, `Finished`, `RuntimeError`). |
+| Docs | architecture.md and CLAUDE.md change in the commit that changes the structure; the Close commit only checks them. The roadmap items for jit-tasks, jit-repl and native-aot and the AOT texts (AM-12, AM-12b) are written by the graph and Gui units, not by Close. |
+| Checkpoints | CI runs on pushes after the Gui move (the first push), after the shared C pieces, after the import test `abi::an_import_gives_its_address` (its own push, before any C lowering), after the UI files of the std rows, and after Close. |
+| 01, 05 | Not edited by the refresh: this section and appendices 06 and 07 override them. |
