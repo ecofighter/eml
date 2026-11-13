@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/files/read_bytes_in_pieces.em
+---
+--- stdout ---
+chunk True
+line 5
+rest 17
+end
+--- stderr ---

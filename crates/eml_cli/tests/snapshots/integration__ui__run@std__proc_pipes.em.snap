@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/proc_pipes.em
+---
+--- stdout ---
+got ab
+bytes 6
+tail 13
+exit 0
+--- stderr ---
