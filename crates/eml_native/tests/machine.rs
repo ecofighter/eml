@@ -202,6 +202,105 @@ fn symbols_cover_every_function() {
     fresh.close();
 }
 
+/// 関数の値のエントリと`apply`の補助の関数も記号を持つ。`main`は`&make`を3つの引数に適用するので、moduleは
+/// `eml$apply$1`から`eml$apply$3`を定義する。値として使う関数`make`と`add`は、それぞれ`c0`のエントリを持つ。
+#[test]
+fn symbols_cover_adapters_and_helpers() {
+    let text = "\
+fn make(x.0: tobj) -> tobj {
+  decref x.0
+  return &add
+}
+fn add(s.0: obj, b.1: tobj) -> unit {
+  decref s.0
+  decref b.1
+  return ()
+}
+fn entry$main() -> unit {
+  let s.0: obj = const \"s\"
+  let a.1: tobj = box 1
+  let b.2: tobj = box 2
+  dup s.0
+  let u.3: unit = apply &make(a.1, s.0, b.2)
+  let c.4: tobj = closure add(s.0)
+  let d.5: tobj = box 3
+  let v.6: unit = apply c.4(d.5)
+  return v.6
+}
+";
+    // プログラムの関数、thunk、`eml$raise`のほかに定義する記号。後のエントリと補助の関数も、ここに名前を足す
+    let adapters = [(0, "make"), (0, "add"), (1, "add")];
+    // 関数の値が待つ引数の数の最大は`&add`の2なので、PAPのアダプタは`eml$pap$1`だけである
+    let helpers = ["eml$apply$1", "eml$apply$2", "eml$apply$3", "eml$pap$1"];
+    let mut expected: Vec<String> = adapters
+        .iter()
+        .map(|(captures, name)| format!("c{captures}:{name}"))
+        .chain(helpers.iter().map(|name| name.to_string()))
+        .collect();
+    expected.sort();
+
+    let mut m = machine();
+    m.load(&program(text), &Linked::default()).unwrap();
+    let symbols = m.symbols();
+    let mut others: Vec<String> = symbols
+        .iter()
+        .map(|s| s.name.clone())
+        .filter(|name| !name.starts_with("f:") && name != "eml$raise")
+        .collect();
+    others.sort();
+    assert_eq!(others, expected);
+    assert!(symbols.iter().all(|s| s.size > 0));
+    let mut ranges: Vec<(usize, usize)> = symbols
+        .iter()
+        .map(|s| (s.address.addr(), s.address.addr() + s.size as usize))
+        .collect();
+    ranges.sort();
+    for pair in ranges.windows(2) {
+        assert!(pair[0].1 <= pair[1].0, "symbols overlap: {pair:?}");
+    }
+    // 静的なクロージャのコードの語は、その関数の`c0`のエントリの始めである
+    let image = m.image().unwrap();
+    // SAFETY: マシンが生きている間、`Image`の表は生きていて変わらない
+    let (rows, data) = unsafe { (image.functions.as_slice(), image.data.as_slice()) };
+    let valued: Vec<_> = rows.iter().filter(|row| !row.value.is_null()).collect();
+    assert_eq!(
+        valued.len(),
+        adapters
+            .iter()
+            .filter(|(captures, _)| *captures == 0)
+            .count()
+    );
+    for row in valued {
+        // SAFETY: 上と同じ
+        let name = unsafe { row.name.as_str() };
+        let datum = data
+            .iter()
+            .find(|datum| datum.slot == row.value)
+            .unwrap_or_else(|| panic!("no datum for `{name}`"));
+        let adapter = symbols
+            .iter()
+            .find(|s| s.name == format!("c0:{name}"))
+            .unwrap_or_else(|| panic!("no adapter for `{name}`"));
+        assert_eq!(datum.code, adapter.address, "{name}");
+    }
+    // `Image.paps`の行は、PAPのアダプタの記号ごとに1つで、そのコードを指す
+    // SAFETY: 上と同じ
+    let paps = unsafe { image.paps.as_slice() };
+    let mut rows: Vec<(String, *const u8)> = paps
+        .iter()
+        .map(|row| (format!("eml$pap${}", row.rest), row.code))
+        .collect();
+    rows.sort();
+    let mut pap_symbols: Vec<(String, *const u8)> = symbols
+        .iter()
+        .filter(|s| s.name.starts_with("eml$pap$"))
+        .map(|s| (s.name.clone(), s.address))
+        .collect();
+    pap_symbols.sort();
+    assert_eq!(rows, pap_symbols);
+    m.close();
+}
+
 #[test]
 fn a_function_without_calls_agrees_with_the_vm() {
     agree("fn entry$main() -> unit {\n  return ()\n}\n");

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use eml_extern::ExternRef;
-use eml_lir::{Atom, Call, LirFn, Program, Rhs, Stmt, Term};
+use eml_lir::{Call, LirFn, Program, Rhs, Stmt, Term};
 
 use crate::lower::rows;
 
@@ -19,9 +19,6 @@ pub enum Form {
     Prompt,
     StdRow,
     CRow,
-    Closure,
-    FnValue,
-    Apply,
 }
 
 impl Form {
@@ -35,9 +32,6 @@ impl Form {
             Form::Prompt => "prompt",
             Form::StdRow => "std row",
             Form::CRow => "c row",
-            Form::Closure => "closure",
-            Form::FnValue => "fn value",
-            Form::Apply => "apply",
         }
     }
 }
@@ -72,14 +66,13 @@ fn each_form(function: &LirFn, note: &mut impl FnMut(Form, Option<&'static str>)
     }
     for block in &function.blocks {
         for stmt in &block.stmts {
-            stmt.for_each_atom(|atom| fn_value(atom, note));
             match stmt {
                 Stmt::Let { var: _, rhs } => match rhs {
                     Rhs::Call(call) => call_form(call, note),
-                    Rhs::MakeClosure(..) => note(Form::Closure, None),
                     Rhs::Extern { ext, .. } => extern_form(*ext, note),
                     Rhs::Prim(..) => note(Form::Prim, None),
-                    Rhs::ConstString(_)
+                    Rhs::MakeClosure(..)
+                    | Rhs::ConstString(_)
                     | Rhs::Con { .. }
                     | Rhs::Drop(_)
                     | Rhs::Box(_)
@@ -94,16 +87,9 @@ fn each_form(function: &LirFn, note: &mut impl FnMut(Form, Option<&'static str>)
                 | Stmt::DropToken(_) => {}
             }
         }
-        block.term.for_each_atom(|atom| fn_value(atom, note));
         if let Term::TailCall(call) = &block.term {
             call_form(call, note);
         }
-    }
-}
-
-fn fn_value(atom: Atom, note: &mut impl FnMut(Form, Option<&'static str>)) {
-    if let Atom::Fn(_) = atom {
-        note(Form::FnValue, None);
     }
 }
 
@@ -114,7 +100,6 @@ fn call_form(call: &Call, note: &mut impl FnMut(Form, Option<&'static str>)) {
             if prompt.is_some() {
                 note(Form::Prompt, None);
             }
-            note(Form::Apply, None);
         }
         Call::Clause { .. } => note(Form::Clause, None),
         Call::Par { .. } => note(Form::Par, None),

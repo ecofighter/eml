@@ -1,5 +1,6 @@
 mod abi;
 mod abort;
+mod apply;
 mod bridge;
 mod calls;
 mod clif;

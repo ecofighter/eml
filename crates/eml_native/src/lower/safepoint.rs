@@ -19,9 +19,7 @@ impl<M: Module> FnLower<'_, '_, M> {
         let bits = mem::stop_bits(&mut self.b, self.ctx);
         let zero = self.b.ins().iconst(types::I32, 0);
         let stopping = self.b.ins().icmp(IntCC::NotEqual, bits, zero);
-        let sp = self.b.ins().get_stack_pointer(types::I64);
-        let limit = mem::stack_limit(&mut self.b, self.ctx);
-        let deep = self.b.ins().icmp(IntCC::UnsignedLessThan, sp, limit);
+        let deep = mem::below_stack_limit(&mut self.b, self.ctx);
         let asked = self.b.ins().bor(stopping, deep);
         self.b.ins().brif(asked, slow, &[], body, &[]);
 

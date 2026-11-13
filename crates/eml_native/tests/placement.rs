@@ -417,11 +417,11 @@ fn flags_are_built_only_in_abi_and_bridge() {
 }
 
 #[test]
-fn indirect_calls_are_only_in_bridge_and_thunk() {
+fn indirect_calls_are_only_in_bridge_apply_and_thunk() {
     assert_eq!(
         files_with(&native(), "call_indirect", false),
-        ["bridge.rs", "thunk.rs"],
-        "call_indirect appears only in bridge.rs and thunk.rs ({NATIVE})"
+        ["bridge.rs", "lower/apply.rs", "thunk.rs"],
+        "call_indirect appears only in bridge.rs, lower/apply.rs and thunk.rs ({NATIVE})"
     );
 }
 

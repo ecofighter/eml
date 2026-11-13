@@ -1,5 +1,7 @@
-//! LIRをCLIFに下ろす。どの関数を定義するよりも前にすべての関数を宣言するので、本体はプログラムのどの関数も名指せる
-//! (docs/spec/native.md の「関数の形」)。
+//! LIRをCLIFに下ろす。どの関数を定義するよりも前にプログラムのすべての関数と`apply`の補助の関数を宣言するので、本体は
+//! それらのどれも名指せる。クロージャのエントリは、データの記号と同じく本体が初めて使うときに宣言し、本体の後で定義する。
+//! PAPのアダプタはコードが名指さず、`Image.paps`だけが指すので、最後に宣言して定義する (docs/spec/native.md の「関数の形」)。
+mod apply;
 mod call;
 pub mod consts;
 mod data;
@@ -22,6 +24,7 @@ use eml_lir::{FnIdx, LirFn, Program, Repr};
 use eml_nrt::Kind;
 use eml_nrt::image::SiteRow;
 
+use self::apply::{ClosureEntries, ClosureEntry};
 use self::consts::{Data, Datum};
 use crate::abi::{Built, declare_entry, tail_signature};
 
@@ -38,13 +41,21 @@ pub struct Defined {
 pub struct Lowered {
     pub functions: Vec<Defined>,
     pub raise: Defined,
+    /// クロージャのエントリ`c<k>:<f>`と、その値の待つ引数の数。最初に使った順である。
+    pub closures: Vec<(ClosureEntry, u16, Defined)>,
+    /// `eml$apply$<m>`。添字が`m - 1`である。
+    pub applies: Vec<Defined>,
+    /// PAPのアダプタ`eml$pap$<r>`と、その`r`。
+    pub paps: Vec<(u32, Defined)>,
     pub data: Vec<(Datum, DataId)>,
 }
 
-/// 下ろしたコードが名指す、プログラムによらない関数。
+/// 下ろしたコードが名指す、プログラムの関数でない関数。コードは名前と形だけで決まる。
 struct Imports {
     entries: HashMap<&'static str, FuncId>,
     raise: FuncId,
+    /// `eml$apply$<m>`。添字が`m - 1`である。
+    applies: Vec<FuncId>,
 }
 
 impl Imports {
@@ -53,6 +64,10 @@ impl Imports {
             .entries
             .get(symbol)
             .unwrap_or_else(|| panic!("no runtime entry `{symbol}`"))
+    }
+
+    fn apply(&self, args: usize) -> FuncId {
+        self.applies[args - 1]
     }
 }
 
@@ -103,7 +118,19 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     }
     let raise =
         module.declare_function(names::RAISE, Linkage::Local, &unwind::raise_signature())?;
-    let imports = Imports { entries, raise };
+    let mut applies = Vec::new();
+    for args in 1..=apply::largest_apply(program) {
+        applies.push(module.declare_function(
+            &names::apply(args),
+            Linkage::Local,
+            &apply::uniform(args),
+        )?);
+    }
+    let imports = Imports {
+        entries,
+        raise,
+        applies,
+    };
     let mut ids = Vec::with_capacity(program.functions.len());
     for function in &program.functions {
         ids.push(module.declare_function(
@@ -117,6 +144,7 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     let mut fctx = FunctionBuilderContext::new();
     let mut functions = Vec::with_capacity(ids.len());
     let mut data = Data::default();
+    let mut closure_entries = ClosureEntries::default();
     let callees = Callees { program, ids };
     for ((function, &id), unwinds) in program.functions.iter().zip(&callees.ids).zip(unwinds) {
         let unwinds = match unwinds.expect("every function's unwind points are asked for") {
@@ -127,7 +155,15 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
         ctx.func.name = UserFuncName::testcase(names::function(&function.name));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
         let sites = function::lower(
-            b, module, &mut data, &imports, &callees, id, function, &unwinds,
+            b,
+            module,
+            &mut data,
+            &mut closure_entries,
+            &imports,
+            &callees,
+            id,
+            function,
+            &unwinds,
         );
         functions.push(define(module, &mut ctx, id, keep_clif, sites)?);
     }
@@ -136,10 +172,55 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
     unwind::define_raise(b, module, &imports);
     let raise = define(module, &mut ctx, raise, keep_clif, Vec::new())?;
+    let mut closures = Vec::new();
+    // どの関数の値もクロージャのエントリを持つので、エントリの待つ引数の数の最大が、関数の値の待ちうる数の最大である
+    let mut largest = 0;
+    for (closure, id) in closure_entries.declared() {
+        let args = apply::arity(
+            program.function(closure.function),
+            closure.captures as usize,
+        );
+        largest = largest.max(args);
+        ctx.func.signature = apply::uniform(usize::from(args));
+        ctx.func.name = UserFuncName::testcase(names::closure_entry(
+            closure.captures,
+            &program.function(closure.function).name,
+        ));
+        let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+        apply::define_closure_entry(b, module, &imports, &callees, closure);
+        closures.push((
+            closure,
+            args,
+            define(module, &mut ctx, id, false, Vec::new())?,
+        ));
+    }
+    let mut applies = Vec::with_capacity(imports.applies.len());
+    for (index, &id) in imports.applies.iter().enumerate() {
+        let args = index + 1;
+        ctx.func.signature = apply::uniform(args);
+        ctx.func.name = UserFuncName::testcase(names::apply(args));
+        let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+        apply::define_apply(b, module, &imports, args);
+        applies.push(define(module, &mut ctx, id, false, Vec::new())?);
+    }
+    let mut paps = Vec::new();
+    for rest in apply::pap_rests(largest) {
+        let name = names::pap(rest);
+        let signature = apply::uniform(rest as usize);
+        let id = module.declare_function(&name, Linkage::Local, &signature)?;
+        ctx.func.signature = signature;
+        ctx.func.name = UserFuncName::testcase(name);
+        let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+        apply::define_pap_adapter(b, module, &imports, rest);
+        paps.push((rest, define(module, &mut ctx, id, false, Vec::new())?));
+    }
     let data = data.define(module)?;
     Ok(Lowered {
         functions,
         raise,
+        closures,
+        applies,
+        paps,
         data,
     })
 }

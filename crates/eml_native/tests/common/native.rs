@@ -5,7 +5,7 @@ use eml_cabi::Linked;
 use eml_native::{Arg, NativeMachine};
 use eml_nrt::image::Start;
 use eml_nrt::{Finished, HostRef, RunConfig, RuntimeError, Thunk};
-use eml_rt::{Buffering, Ctx, Fast, StdHost};
+use eml_rt::{Buffering, Ctx, Fast, StdHost, Word};
 use eml_test_support::{Engine, capture, execute_finished};
 
 /// LIRのテキストを読み、verifierを通す。
@@ -182,4 +182,25 @@ fn agree_program(program: &eml_lir::Program) {
             .map_err(|error| error.to_string()),
         "result and exit code"
     );
+}
+
+/// 代役の記録。試す関数が作った物体の`lin`ビットと、ヒープの呼び出しがどれも成功したかである。
+pub struct Lin {
+    pub seen: Option<(bool, bool)>,
+}
+
+/// 代役。試す関数を`int`の5で呼んで物体を1つ作り、その`lin`ビットを記録して手放す。
+pub unsafe extern "C" fn lin_bit(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
+    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
+    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Lin>>() };
+    // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない
+    let seen = unsafe {
+        let mut argv = [5u64];
+        call_visited(ctx, visit, &mut argv);
+        let w = argv.as_ptr().cast::<Word>().read();
+        let lin = (*ctx).heap_mut().meta(w).map(|meta| meta.lin());
+        let freed = (*ctx).heap_mut().decref(w).is_ok();
+        (lin.unwrap_or(false), lin.is_ok() && freed)
+    };
+    visit.record.seen = Some(seen);
 }

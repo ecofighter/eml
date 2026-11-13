@@ -32,11 +32,13 @@ fn run_f(sites: &[SiteRow], thunk: Thunk, argv: &mut [u64]) -> Result<Finished, 
         code: CODE.as_ptr(),
         size: CODE.len() as u32,
         sites: Slice::new(sites),
+        value: std::ptr::null_mut(),
     }];
     let image = Image {
         functions: Slice::new(&functions),
         files: Slice::new(&files),
         data: Slice::new(&[]),
+        paps: Slice::new(&[]),
     };
     let start = Start {
         thunk,

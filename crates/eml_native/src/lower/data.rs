@@ -115,7 +115,12 @@ impl<M: Module> FnLower<'_, '_, M> {
     }
 
     /// `eml_rt_alloc_data`で物体を作り、どの欄も書く。`head`は`tag`、`scanned`、`raw`、`lin`の語である。
-    fn alloc_con(&mut self, head: &[Value; 4], shape: &Shape, values: &[Value]) -> Value {
+    pub(super) fn alloc_con(
+        &mut self,
+        head: &[Value; 4],
+        shape: &Shape,
+        values: &[Value],
+    ) -> Value {
         let w = self
             .call_entry("eml_rt_alloc_data", head)
             .expect("an allocation returns its word");

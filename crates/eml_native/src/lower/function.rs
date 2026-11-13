@@ -6,9 +6,10 @@ use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataId, FuncId, Module};
 use eml_extern::ExternRef;
 use eml_lir::unwind::Unwinds;
-use eml_lir::{Atom, BlockId, LirFn, Repr, Rhs, Stmt, Term, VarId};
+use eml_lir::{Atom, BlockId, Call, LirFn, Repr, Rhs, Stmt, Term, VarId};
 use eml_nrt::image::SiteRow;
 
+use super::apply::ClosureEntries;
 use super::consts::Data;
 use super::data::CaseFields;
 use super::rows::{self, Lowering};
@@ -22,6 +23,7 @@ pub(super) fn lower<M: Module>(
     b: FunctionBuilder,
     module: &mut M,
     data: &mut Data,
+    closures: &mut ClosureEntries,
     imports: &Imports,
     callees: &Callees,
     id: FuncId,
@@ -29,7 +31,9 @@ pub(super) fn lower<M: Module>(
     unwinds: &Unwinds,
 ) -> Vec<SiteRow> {
     let config = module.target_config();
-    let mut fx = FnLower::new(b, module, data, imports, callees, id, function, unwinds);
+    let mut fx = FnLower::new(
+        b, module, data, closures, imports, callees, id, function, unwinds,
+    );
     for (index, lir) in function.blocks.iter().enumerate() {
         fx.b.switch_to_block(fx.blocks[index]);
         fx.case_fields(BlockId(index as u32));
@@ -50,6 +54,8 @@ pub(super) struct FnLower<'a, 'b, M: Module> {
     pub(super) module: &'a mut M,
     /// moduleの読み込み時の値の記号。関数をまたいで共有する。
     pub(super) data: &'a mut Data,
+    /// moduleのクロージャのエントリ。関数をまたいで共有する。
+    pub(super) closures: &'a mut ClosureEntries,
     pub imports: &'a Imports,
     pub callees: &'a Callees<'a>,
     /// 下ろしている関数自身。
@@ -76,6 +82,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
         mut b: FunctionBuilder<'b>,
         module: &'a mut M,
         data: &'a mut Data,
+        closures: &'a mut ClosureEntries,
         imports: &'a Imports,
         callees: &'a Callees<'a>,
         id: FuncId,
@@ -97,6 +104,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             function,
             module,
             data,
+            closures,
             imports,
             callees,
             id,
@@ -179,7 +187,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 Repr::TObj => self.b.ins().iconst(types::I64, mem::imm_bits(i64::from(n))),
                 _ => unreachable!("a tag sits in an `enum` or a `tobj` position"),
             },
-            Atom::Fn(_) => unreachable!("function values are rejected"),
+            Atom::Fn(function) => self.fn_value(function),
         }
     }
 
@@ -217,9 +225,23 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             }
             Stmt::Let {
                 var,
+                rhs:
+                    Rhs::Call(Call::Apply {
+                        callee,
+                        args,
+                        yields: _,
+                        prompt: None,
+                    }),
+            } => self.apply(block, position, *var, *callee, args),
+            Stmt::Let {
+                var,
                 rhs: Rhs::Call(call),
             } => self.call(block, position, std::slice::from_ref(var), call),
             Stmt::LetMany { vars, call } => self.call(block, position, vars, call),
+            Stmt::Let {
+                var,
+                rhs: Rhs::MakeClosure(function, args),
+            } => self.make_closure(*var, *function, args),
             Stmt::Let {
                 var,
                 rhs: Rhs::ConstString(index),
@@ -303,6 +325,12 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 cases,
                 default,
             } => self.switch(*scrutinee, cases, *default),
+            Term::TailCall(Call::Apply {
+                callee,
+                args,
+                yields: _,
+                prompt: None,
+            }) => self.tail_apply(*callee, args),
             Term::TailCall(call) => self.tail_call(call),
         }
     }

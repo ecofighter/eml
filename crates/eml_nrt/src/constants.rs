@@ -3,8 +3,10 @@
 
 use std::sync::Arc;
 
-use eml_rt::{Control, Fast, Frozen, Heap, HeapError, Word};
+use eml_rt::{Control, Fast, Frozen, Heap, HeapError, Word, layout};
 use eml_sched::constants::{immortal_big_int, immortal_float};
+
+use crate::closures::code_word;
 
 /// 中身で表した読み込み時の値1つ。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -12,6 +14,11 @@ pub(crate) enum Datum<'a> {
     String(&'a str),
     BigInt(i64),
     Float(u64),
+    /// 関数の静的なクロージャ。`arity`個の引数を待ち、エントリのコードは`code`にある。
+    Fn {
+        arity: u16,
+        code: *const u8,
+    },
 }
 
 /// 値の語 (値と同じ順) と、その物体を持つ凍結した塊。値がなければ塊もない。
@@ -35,12 +42,24 @@ pub(crate) fn build(control: &Arc<Control>, data: &[Datum]) -> Result<Built, Hea
             Datum::String(text) => heap.alloc_string_immortal(text),
             Datum::BigInt(n) => immortal_big_int(&mut heap, n),
             Datum::Float(bits) => immortal_float(&mut heap, bits),
+            Datum::Fn { arity, code } => static_closure(&mut heap, arity, code),
         })
         .collect();
     Ok(Built {
         words,
         region: Some(Arc::new(heap.freeze()?)),
     })
+}
+
+/// 不死のクロージャ`{ tag = arity, [code] }`。捕まえた値はない (docs/spec/native.md の「関数の値」)。
+fn static_closure(heap: &mut Heap<Fast>, arity: u16, code: *const u8) -> Word {
+    // SAFETY: 構築中の物体で、ほかの操作の前にコードの語を書き終える。コードの語は即値なので、参照を移さない
+    unsafe {
+        let w = heap.alloc_immortal(1, layout::data_meta(arity, 1, false));
+        heap.set_field(w, layout::data_first(1, false), code_word(code))
+            .expect("a fresh closure takes its code word");
+        w
+    }
 }
 
 #[cfg(test)]

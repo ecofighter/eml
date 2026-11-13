@@ -124,42 +124,6 @@ fn c_row_is_rejected() {
 }
 
 #[test]
-fn closure_is_rejected() {
-    assert_rejects(
-        "count_down : Int -> (Int -> <Panic> Int) -> <Panic> Int\n\
-         count_down n k = if n == 0 then k 0 else count_down (n - 1) (fn m -> k (m + 1))\n\
-         \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () = println (show (count_down 10 (fn m -> m)))\n",
-        Form::Closure,
-    );
-}
-
-#[test]
-fn fn_value_is_rejected() {
-    assert_rejects(
-        "count_down : Int -> (Int -> <Panic> Int) -> <Panic> Int\n\
-         count_down n k = if n == 0 then k 0 else count_down (n - 1) (fn m -> k (m + 1))\n\
-         \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () = println (show (count_down 10 (fn m -> m)))\n",
-        Form::FnValue,
-    );
-}
-
-#[test]
-fn apply_is_rejected() {
-    assert_rejects(
-        "count_down : Int -> (Int -> <Panic> Int) -> <Panic> Int\n\
-         count_down n k = if n == 0 then k 0 else count_down (n - 1) (fn m -> k (m + 1))\n\
-         \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () = println (show (count_down 10 (fn m -> m)))\n",
-        Form::Apply,
-    );
-}
-
-#[test]
 fn forms_are_sorted_and_distinct() {
     let found = forms(
         "import Std.Par\nimport Float\n\

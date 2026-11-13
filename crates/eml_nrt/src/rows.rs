@@ -203,6 +203,7 @@ mod fatal {
             functions: Slice::new(&[]),
             files: Slice::new(&[]),
             data: Slice::new(&[]),
+            paps: Slice::new(&[]),
         };
         // SAFETY: `image`の表は空で、workerより長く生きる
         let mut worker = unsafe { Worker::new(&image) };

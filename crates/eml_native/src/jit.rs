@@ -9,8 +9,8 @@ use cranelift_module::ModuleError;
 use eml_cabi::Linked;
 use eml_lir::{Program, Repr};
 use eml_nrt::image::{
-    DATUM_BIG_INT, DATUM_FLOAT, DATUM_STRING, DatumRow, FnRow, Image, Options, SiteRow, Slice,
-    Start, Str,
+    DATUM_BIG_INT, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow, FnRow, Image, Options, PapRow,
+    SiteRow, Slice, Start, Str,
 };
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
@@ -79,7 +79,15 @@ struct Function {
     sites: Vec<SiteRow>,
 }
 
-/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`と、各関数の`sites`と各値の文字列の中を
+/// 静的なクロージャのエントリのコードと、その値の待つ引数の数。下ろしはエントリのシグネチャを同じ数から決めたので、
+/// タグとシグネチャは食い違わない。
+#[derive(Clone, Copy)]
+struct Static {
+    code: *const u8,
+    arity: u16,
+}
+
+/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`、`paps`と、各関数の`sites`と各値の文字列の中を
 /// 指す。どれも`new`の後で変わらず、`Vec`を動かしてもその要素は動かない。`data`のslotはmoduleのデータの物を指す。
 struct Tables {
     functions: Vec<Function>,
@@ -88,34 +96,47 @@ struct Tables {
     _rows: Vec<FnRow>,
     _data: Vec<Datum>,
     _datum_rows: Vec<DatumRow>,
+    _paps: Vec<PapRow>,
     image: Image,
 }
 
 impl Tables {
-    fn new(functions: Vec<Function>, files: Vec<String>, data: Vec<(Datum, *mut u64)>) -> Tables {
+    /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードと待つ引数の数を持つ。
+    fn new(
+        functions: Vec<Function>,
+        files: Vec<String>,
+        data: Vec<(Datum, *mut u64, Static)>,
+        paps: Vec<PapRow>,
+    ) -> Tables {
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
-        let rows: Vec<FnRow> = functions
+        let mut rows: Vec<FnRow> = functions
             .iter()
             .map(|function| FnRow {
                 name: Str::new(&function.name),
                 code: function.code,
                 size: function.size,
                 sites: Slice::new(&function.sites),
+                value: std::ptr::null_mut(),
             })
             .collect();
         let datum_rows: Vec<DatumRow> = data
             .iter()
-            .map(|(datum, slot)| {
+            .map(|&(ref datum, slot, Static { code, arity })| {
                 let (kind, bits, text) = match datum {
                     Datum::String(text) => (DATUM_STRING, 0, text.as_str()),
                     Datum::BigInt(n) => (DATUM_BIG_INT, *n as u64, ""),
                     Datum::Float(bits) => (DATUM_FLOAT, *bits, ""),
+                    Datum::Fn(function) => {
+                        rows[function.0 as usize].value = slot;
+                        (DATUM_FN, u64::from(arity), "")
+                    }
                 };
                 DatumRow {
                     kind,
                     bits,
                     text: Str::new(text),
-                    slot: *slot,
+                    code,
+                    slot,
                 }
             })
             .collect();
@@ -123,14 +144,16 @@ impl Tables {
             functions: Slice::new(&rows),
             files: Slice::new(&file_rows),
             data: Slice::new(&datum_rows),
+            paps: Slice::new(&paps),
         };
         Tables {
             functions,
             _files: files,
             _file_rows: file_rows,
             _rows: rows,
-            _data: data.into_iter().map(|(datum, _)| datum).collect(),
+            _data: data.into_iter().map(|(datum, _, _)| datum).collect(),
             _datum_rows: datum_rows,
+            _paps: paps,
             image,
         }
     }
@@ -244,16 +267,55 @@ impl NativeMachine {
                 sites: defined.sites,
             });
         }
+        let mut statics = HashMap::with_capacity(lowered.closures.len());
+        for (closure, arity, defined) in lowered.closures {
+            let code = module.get_finalized_function(defined.id);
+            self.symbols.push(Symbol {
+                name: names::closure_entry(
+                    closure.captures,
+                    &program.function(closure.function).name,
+                ),
+                address: code,
+                size: defined.size,
+            });
+            if closure.captures == 0 {
+                statics.insert(closure.function, Static { code, arity });
+            }
+        }
+        for (index, defined) in lowered.applies.into_iter().enumerate() {
+            self.symbols.push(Symbol {
+                name: names::apply(index + 1),
+                address: module.get_finalized_function(defined.id),
+                size: defined.size,
+            });
+        }
+        let mut paps = Vec::with_capacity(lowered.paps.len());
+        for (rest, defined) in lowered.paps {
+            let code = module.get_finalized_function(defined.id);
+            self.symbols.push(Symbol {
+                name: names::pap(rest),
+                address: code,
+                size: defined.size,
+            });
+            paps.push(PapRow { rest, code });
+        }
         // どの値のslotも、moduleが定義した8バイトの書けるデータの物で、領域とともにマシンが終わるまで生きる
         let data = lowered
             .data
             .into_iter()
             .map(|(datum, id)| {
                 let (slot, _) = module.get_finalized_data(id);
-                (datum, slot.cast_mut().cast::<u64>())
+                let fn_value = match datum {
+                    Datum::Fn(function) => statics[&function],
+                    _ => Static {
+                        code: std::ptr::null(),
+                        arity: 0,
+                    },
+                };
+                (datum, slot.cast_mut().cast::<u64>(), fn_value)
             })
             .collect();
-        self.tables = Some(Tables::new(functions, program.files.clone(), data));
+        self.tables = Some(Tables::new(functions, program.files.clone(), data, paps));
         Ok(Loaded {
             entry: program.entry.0,
         })
