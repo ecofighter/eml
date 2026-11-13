@@ -98,10 +98,11 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
 - Conformance: N-9 (exactly one `target` load per call point; `abort` only after it). N-18: only `after_unwind_point` changes.
 
 **D-3 Clause calls use S2b's closure entries.**
-- A clause value is a closure or a static closure (`Const::Fn`) whose scanned word 0 is the code pointer of `c<k>:<g>` [S2b D-19/D-20]. For a clause function, `g`'s parameters after the captures are `(ev, op params…)` with typed leaves, so `c<k>:<g>` already has the op's signature (S2b D-20 and its interface table: "adapter `c0:<f>` typed for clause functions").
+- A clause value is a closure or a static closure (`Const::Fn`) whose scanned word 0 is the code pointer of `c<k>:<g>` [S2b D-19/D-20]. For a clause function, `g`'s parameters after the captures are `(ev, op params…)` with typed leaves, so `c<k>:<g>` must get the op's signature. jit-apply did not deliver this (corrected at the jit-apply Close): at that stage `apply::arity` asserts `function.clause.is_none()` (a clause function used as a value panics in lowering), and `ClosureEntries::id` and `define_closure_entry` declare and define every entry with the uniform signature `uniform(n)`. jit-effects lifts the assert and gives clause functions' entries the op's typed signature in those three places (5.1's N-18 list).
 - `Call::Clause { c, args }` becomes:
   ```
-  code = mem::closure_code(c)               // crates/eml_native/src/mem.rs
+  meta = mem::load_meta(c)
+  code = mem::closure_code(b, c, meta)      // crates/eml_native/src/mem.rs; takes the loaded meta word (00 C-12)
   r = call_indirect sig(op) code(ctx, c, ev, args…)   // sig from abi.rs, CallConv::Tail
   ```
   followed by `After::Call`. Clauses are always saturated (VM `clause_call`: arity must equal), so there is no tag test. `TailCall(Clause)` is `return_call_indirect`.
@@ -384,6 +385,7 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
 
 **Changes to earlier code (N-18 list):**
 - `after_unwind_point` (`Call`);
+- `apply::arity` (its `clause.is_none()` assert), `ClosureEntries::id` (declares every entry with `uniform(n)`) and `define_closure_entry` (`lower/apply.rs`, jit-apply): typed `c<k>:<g>` entries for clause functions (D-3);
 - the inline copy of the `Call` check in `eml$apply$m`'s `n < m` arms (`lower/apply.rs` `define_apply`, jit-apply): it treats `target != UNIT` as an abort, relying on only aborts occurring in a non-last part of one `apply`; it must change together with `after_unwind_point`;
 - `eml$raise` body; `eml_nrt_failed` signature (+`out`) and body; new `eml_nrt_landed`, `eml_nrt_raise_arg`;
 - data symbols `e:<effect>`, `m:<mask>` and their `DatumRow` kinds (00 C-6);
@@ -432,6 +434,7 @@ Scope as in S1's stage table; in particular the main worker (`hard = stack_base 
 
 **Changes to earlier code (N-18 list):**
 - `eml_nrt_safepoint` body; `eml_nrt_failed` steps 1 and `RAISE_DONE`; `eml_nrt_landed` body;
+- `eml$apply$m`'s `n < m` stack check (`lower/apply.rs` `define_apply`, jit-apply): before nesting it compares SP with `stack_limit` and, when below, calls `eml_nrt_safepoint(ctx, me, 0)` and traps on any action other than `ACTION_CONTINUE` (the helper owns `clo` and `a_1..a_m` there and has no cleanup path). Under jit-tasks' limit classes this crashes the process: `Pending` sets `stack_limit = usize::MAX`, so every `n < m` arm enters the service, and step 8 returns `ACTION_RAISE`. jit-tasks must give the arm either a depth-only check (or a service entry that never returns another action) or a cleanup path for the owned `clo` and arguments like the entry `leave`, and decide what location an error there reports (today `<native code>`, since helpers have no `Image.functions` row; N-43 if it differs from the VM);
 - `Worker` extensions (`cur`, levels, child records, request slot, `limits`); `run` replaced by the shared orchestration (Separate seat);
 - the `task` section of `extern_rows!` (names -> lines) and its arms in the four expansions;
 - the CLI usage error for `--native` with `--workers` ≠ 1, `EML_WORKERS` ≠ 1, `--gui` or `EML_GUI` removed (XR-7; 00 C-7, C-11);
