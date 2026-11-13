@@ -8,17 +8,25 @@ use eml_rt::HeapError;
 use crate::enter::Fatal;
 use crate::worker;
 
-/// 行の結果をエントリの結果にする。`unit`の行の`()`はUnitの語に、`never`の行の`Infallible`は結果なしになる。
+/// 行の結果をエントリの結果にする。`unit`の行の`()`はUnitの語になる。
 macro_rules! entry_value {
     (unit, $v:ident) => {{
         let () = $v;
         $crate::__rt::Word::UNIT.bits() as i64
     }};
+    ($kind:tt, $v:ident) => {
+        $v
+    };
+}
+
+/// 行が`Ok`で返したときのエントリの腕の値。`never`の行の`Ok`は`Infallible`を持つので、`Ok`で包まずに`match`で
+/// 終える。こうすれば到達しないコードができない。
+macro_rules! entry_ok {
     (never, $v:ident) => {
         match $v {}
     };
     ($kind:tt, $v:ident) => {
-        $v
+        Ok(entry_value!($kind, $v))
     };
 }
 
@@ -110,7 +118,7 @@ macro_rules! entries {
                 $vis shim fn $variant(ctx $(, $arg: $kind)*) -> $ret {
                     // SAFETY: 生成したコードは、行の関数が求めるとおりの語を渡す (docs/spec/lir.md の「extern の借用」)
                     match unsafe { row_fn!($path $first)(ctx $(, $arg)*) } {
-                        Ok(value) => Ok(entry_value!($ret, value)),
+                        Ok(value) => entry_ok!($ret, value),
                         Err(::eml_sched::error::RunFault::Extern(fault))
                             if const { ::eml_extern::Extern::$variant.row().faults } =>
                         {

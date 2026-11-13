@@ -3,6 +3,7 @@
 //! ネイティブのエントリを1つ作る (docs/spec/native.md の「externの失敗」)。
 
 use eml_extern::{Extern, FunctionRow, OpRet, Repr};
+use eml_rt::externs::{Fault, Raised};
 use eml_rt::{Ctx, Form, Handle, Mode, ReadAmount, Stream, Word, Write, WriteMode, externs};
 
 use eml_sched::error::RunFault;
@@ -472,6 +473,27 @@ macro_rules! extern_rows {
                 }
                 fn StdoutFlush(ctx, h: obj) -> obj { Ok(ctx.handle_flush(h, Handle::Stdout)?) }
                 fn FileOutFlush(ctx, h: obj) -> obj { Ok(ctx.handle_flush(h, Handle::FileOut)?) }
+                fn EnvArgCount(ctx, _u: unit) -> int { Ok(ctx.env_arg_count()) }
+                fn EnvArg(ctx, i: int) -> obj { Ok(ctx.env_arg(i)?) }
+                fn EnvHas(ctx, name: obj) -> enum { Ok(ctx.env_has(name)?) }
+                fn EnvLookup(ctx, name: obj) -> obj { Ok(ctx.env_var(name)?) }
+                fn ProcSpawn(ctx, stages: obj, stdin: int, payload: obj, stdout: int, path: obj) -> obj {
+                    Ok(ctx.proc_spawn(stages, stdin, payload, stdout, path)?)
+                }
+                fn ProcWait(ctx, p: obj) -> int { Ok(ctx.proc_wait(p)?) }
+                fn ProcStageCount(ctx, p: obj) -> int { Ok(ctx.proc_stage_count(p)?) }
+                fn ProcWaitStage(ctx, n: int, p: obj) -> int { Ok(ctx.proc_wait_stage(p, n)?) }
+                fn ProcCloseStdin(ctx, p: obj) -> obj { Ok(ctx.proc_close_stdin(p)?) }
+                // いつも誤りを返すので、結果はない。届け先は`failed`が決める (docs/spec/vm.md の「extern の中断」)
+                fn FailIo(ctx, kind: enum, message: obj) -> never {
+                    let message = ctx.copy_string(message, usize::MAX)?;
+                    Err(RunFault::Extern(Fault::Raised(Box::new(Raised {
+                        kind,
+                        message: message.into_boxed_str(),
+                    }))))
+                }
+                // channelの即値をそのまま`Cell`の即値にする (docs/spec/vm.md の「命令」)
+                fn ChanToCell | AsyncJobCell(_, a: int) -> int { Ok(a) }
             }
             engine { Panic, Exit }
             lir { Par }
@@ -579,18 +601,6 @@ macro_rules! extern_rows {
                 GuiIsGuiTaskRaw,
             }
             pending {
-                EnvArgCount,
-                EnvArg,
-                EnvHas,
-                EnvLookup,
-                ProcSpawn,
-                ProcWait,
-                ProcCloseStdin,
-                ProcStageCount,
-                ProcWaitStage,
-                FailIo,
-                AsyncJobCell,
-                ChanToCell,
                 TlsPushTls,
                 TlsPushEof,
                 TlsPullTls,

@@ -4231,47 +4231,6 @@ fn run_extern<R: Exec>(
         // 借りる引数 (`FunctionRow::borrowed`) の行は、引数を手放さない。失敗しても、借りた値は呼んだ側の
         // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.md の「extern の借用」)
         match ext {
-            // channel の即値をそのまま `Cell` の即値にする (docs/spec/vm.md の「命令」)
-            Extern::ChanToCell | Extern::AsyncJobCell => task.set_raw(dst, task.raw(arg(0))),
-            Extern::EnvArgCount => task.set_raw(dst, ctx.env_arg_count()),
-            Extern::EnvArg => {
-                let w = ctx.env_arg(task.raw(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::EnvHas => {
-                let b = ctx.env_has(task.get(arg(0)))?;
-                task.set_raw(dst, b);
-            }
-            Extern::EnvLookup => {
-                let w = ctx.env_var(task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::ProcSpawn => {
-                let w = ctx.proc_spawn(
-                    task.get(arg(0)),
-                    task.raw(arg(1)),
-                    task.get(arg(2)),
-                    task.raw(arg(3)),
-                    task.get(arg(4)),
-                )?;
-                task.set(dst, w);
-            }
-            Extern::ProcWait => {
-                let code = ctx.proc_wait(task.get(arg(0)))?;
-                task.set_raw(dst, code);
-            }
-            Extern::ProcStageCount => {
-                let n = ctx.proc_stage_count(task.get(arg(0)))?;
-                task.set_raw(dst, n);
-            }
-            Extern::ProcWaitStage => {
-                let code = ctx.proc_wait_stage(task.get(arg(1)), task.raw(arg(0)))?;
-                task.set_raw(dst, code);
-            }
-            Extern::ProcCloseStdin => {
-                let w = ctx.proc_close_stdin(task.get(arg(0)))?;
-                task.set(dst, w);
-            }
             // TLSの状態の行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Tls`」)
             Extern::TlsPushTls => {
                 let w = tls::push_tls(ctx, task.get(arg(0)), task.get(arg(1)))?;
@@ -4330,14 +4289,6 @@ fn run_extern<R: Exec>(
                 }
                 let w = gui::arm(ctx, ext, &args[..n])?;
                 task.set(dst, w);
-            }
-            // いつも誤りを返すので、宛先には書かない。届け先は `failed` が決める (docs/spec/vm.md の「extern の中断」)
-            Extern::FailIo => {
-                let message = ctx.copy_string(task.get(arg(1)), usize::MAX)?;
-                return Err(RunFault::Extern(Fault::Raised(Box::new(Raised {
-                    kind: task.raw(arg(0)),
-                    message: message.into_boxed_str(),
-                }))));
             }
             _ => {
                 let value = eml_rows::rows::call(ext, ctx, &At { task: &*task, ops })?;

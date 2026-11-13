@@ -891,6 +891,29 @@ mod tests {
     }
 
     #[test]
+    fn x_fail_io_parks_the_raised_failure() {
+        use crate::rows::FailIo;
+        use eml_rt::externs::Raised;
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。行はメッセージの参照を受け取り、文言を写して手放す
+        unsafe {
+            let message = (*c).fresh_string("no such file");
+            FailIo(c, 4, message);
+            let fault = c.cast::<u8>().add(eml_rt::CTX_FAULT).cast::<u64>().read();
+            assert_ne!(fault, 0);
+            assert_eq!(
+                (*c).take_fault(),
+                Some(Fault::Raised(Box::new(Raised {
+                    kind: 4,
+                    message: "no such file".into(),
+                })))
+            );
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
     fn x_exit_starts_the_abort_and_returns() {
         use crate::rows::Exit;
         let mut ctx = ctx();
