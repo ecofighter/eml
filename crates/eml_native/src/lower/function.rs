@@ -6,7 +6,7 @@ use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataId, FuncId, Module};
 use eml_extern::ExternRef;
 use eml_lir::unwind::Unwinds;
-use eml_lir::{Atom, BlockId, LirFn, Repr, Rhs, Stmt, Term, VarId};
+use eml_lir::{Atom, BlockId, Call, LirFn, Repr, Rhs, Stmt, Term, VarId};
 use eml_nrt::image::SiteRow;
 
 use super::consts::Data;
@@ -179,7 +179,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 Repr::TObj => self.b.ins().iconst(types::I64, mem::imm_bits(i64::from(n))),
                 _ => unreachable!("a tag sits in an `enum` or a `tobj` position"),
             },
-            Atom::Fn(_) => unreachable!("function values are rejected"),
+            Atom::Fn(function) => self.fn_value(function),
         }
     }
 
@@ -215,6 +215,16 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             } if let Some(Lowering::Inline(inline)) = rows::lowering(*ext) => {
                 self.inline_row(block, position, *var, *ext, inline, args, *at);
             }
+            Stmt::Let {
+                var,
+                rhs:
+                    Rhs::Call(Call::Apply {
+                        callee,
+                        args,
+                        yields: _,
+                        prompt: None,
+                    }),
+            } => self.apply(block, position, *var, *callee, args),
             Stmt::Let {
                 var,
                 rhs: Rhs::Call(call),
@@ -303,6 +313,12 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 cases,
                 default,
             } => self.switch(*scrutinee, cases, *default),
+            Term::TailCall(Call::Apply {
+                callee,
+                args,
+                yields: _,
+                prompt: None,
+            }) => self.tail_apply(*callee, args),
             Term::TailCall(call) => self.tail_call(call),
         }
     }

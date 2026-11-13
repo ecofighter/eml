@@ -382,6 +382,7 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
 
 **Changes to earlier code (N-18 list):**
 - `after_unwind_point` (`Call`);
+- the inline copy of the `Call` check in `eml$apply$m`'s `n < m` arms (`lower/apply.rs` `define_apply`, jit-apply): it treats `target != UNIT` as an abort, relying on only aborts occurring in a non-last part of one `apply`; it must change together with `after_unwind_point`;
 - `eml$raise` body; `eml_nrt_failed` signature (+`out`) and body; new `eml_nrt_landed`, `eml_nrt_raise_arg`;
 - data symbols `e:<effect>`, `m:<mask>` and their `DatumRow` kinds (00 C-6);
 - `Form::Prim` (except `ChildAbort`), `Form::Clause` and `Form::Prompt` removed;

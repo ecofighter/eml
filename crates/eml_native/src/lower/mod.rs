@@ -1,5 +1,7 @@
-//! LIRをCLIFに下ろす。どの関数を定義するよりも前にすべての関数を宣言するので、本体はプログラムのどの関数も名指せる
+//! LIRをCLIFに下ろす。どの関数を定義するよりも前にプログラムのすべての関数と`apply`の補助の関数を宣言するので、本体は
+//! それらのどれも名指せる。静的なクロージャのエントリは、データの行だけが名指すので、本体の後で宣言する
 //! (docs/spec/native.md の「関数の形」)。
+mod apply;
 mod call;
 pub mod consts;
 mod data;
@@ -38,13 +40,19 @@ pub struct Defined {
 pub struct Lowered {
     pub functions: Vec<Defined>,
     pub raise: Defined,
+    /// 静的なクロージャのエントリ`c0:<f>`。`data`の関数の値と同じ順である。
+    pub adapters: Vec<(FnIdx, Defined)>,
+    /// `eml$apply$<m>`。添字が`m - 1`である。
+    pub applies: Vec<Defined>,
     pub data: Vec<(Datum, DataId)>,
 }
 
-/// 下ろしたコードが名指す、プログラムによらない関数。
+/// 下ろしたコードが名指す、プログラムの関数でない関数。コードは名前と形だけで決まる。
 struct Imports {
     entries: HashMap<&'static str, FuncId>,
     raise: FuncId,
+    /// `eml$apply$<m>`。添字が`m - 1`である。
+    applies: Vec<FuncId>,
 }
 
 impl Imports {
@@ -53,6 +61,10 @@ impl Imports {
             .entries
             .get(symbol)
             .unwrap_or_else(|| panic!("no runtime entry `{symbol}`"))
+    }
+
+    fn apply(&self, args: usize) -> FuncId {
+        self.applies[args - 1]
     }
 }
 
@@ -103,7 +115,19 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     }
     let raise =
         module.declare_function(names::RAISE, Linkage::Local, &unwind::raise_signature())?;
-    let imports = Imports { entries, raise };
+    let mut applies = Vec::new();
+    for args in 1..=apply::largest_apply(program) {
+        applies.push(module.declare_function(
+            &names::apply(args),
+            Linkage::Local,
+            &apply::uniform(args),
+        )?);
+    }
+    let imports = Imports {
+        entries,
+        raise,
+        applies,
+    };
     let mut ids = Vec::with_capacity(program.functions.len());
     for function in &program.functions {
         ids.push(module.declare_function(
@@ -136,10 +160,34 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
     unwind::define_raise(b, module, &imports);
     let raise = define(module, &mut ctx, raise, keep_clif, Vec::new())?;
+    // 静的なクロージャはどれも、コードの語に自分のエントリを持つ
+    let mut adapters = Vec::new();
+    for function in data.functions().collect::<Vec<_>>() {
+        let lir = program.function(function);
+        let args = apply::arity(lir);
+        let name = names::adapter(0, &lir.name);
+        let id = module.declare_function(&name, Linkage::Local, &apply::uniform(args))?;
+        ctx.func.signature = apply::uniform(args);
+        ctx.func.name = UserFuncName::testcase(&name);
+        let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+        apply::define_adapter(b, module, &callees, function);
+        adapters.push((function, define(module, &mut ctx, id, false, Vec::new())?));
+    }
+    let mut applies = Vec::with_capacity(imports.applies.len());
+    for (index, &id) in imports.applies.iter().enumerate() {
+        let args = index + 1;
+        ctx.func.signature = apply::uniform(args);
+        ctx.func.name = UserFuncName::testcase(names::apply(args));
+        let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+        apply::define_apply(b, module, &imports, args);
+        applies.push(define(module, &mut ctx, id, false, Vec::new())?);
+    }
     let data = data.define(module)?;
     Ok(Lowered {
         functions,
         raise,
+        adapters,
+        applies,
         data,
     })
 }

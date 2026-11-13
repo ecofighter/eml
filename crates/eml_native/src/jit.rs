@@ -9,8 +9,8 @@ use cranelift_module::ModuleError;
 use eml_cabi::Linked;
 use eml_lir::{Program, Repr};
 use eml_nrt::image::{
-    DATUM_BIG_INT, DATUM_FLOAT, DATUM_STRING, DatumRow, FnRow, Image, Options, SiteRow, Slice,
-    Start, Str,
+    DATUM_BIG_INT, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow, FnRow, Image, Options, SiteRow,
+    Slice, Start, Str,
 };
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
@@ -92,9 +92,14 @@ struct Tables {
 }
 
 impl Tables {
-    fn new(functions: Vec<Function>, files: Vec<String>, data: Vec<(Datum, *mut u64)>) -> Tables {
+    /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードを持つ。
+    fn new(
+        functions: Vec<Function>,
+        files: Vec<String>,
+        data: Vec<(Datum, *mut u64, *const u8)>,
+    ) -> Tables {
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
-        let rows: Vec<FnRow> = functions
+        let mut rows: Vec<FnRow> = functions
             .iter()
             .map(|function| FnRow {
                 name: Str::new(&function.name),
@@ -106,18 +111,23 @@ impl Tables {
             .collect();
         let datum_rows: Vec<DatumRow> = data
             .iter()
-            .map(|(datum, slot)| {
+            .map(|&(ref datum, slot, code)| {
                 let (kind, bits, text) = match datum {
                     Datum::String(text) => (DATUM_STRING, 0, text.as_str()),
                     Datum::BigInt(n) => (DATUM_BIG_INT, *n as u64, ""),
                     Datum::Float(bits) => (DATUM_FLOAT, *bits, ""),
+                    Datum::Fn(function) => {
+                        let index = function.0 as usize;
+                        rows[index].value = slot;
+                        (DATUM_FN, functions[index].params.len() as u64, "")
+                    }
                 };
                 DatumRow {
                     kind,
                     bits,
                     text: Str::new(text),
-                    code: std::ptr::null(),
-                    slot: *slot,
+                    code,
+                    slot,
                 }
             })
             .collect();
@@ -132,7 +142,7 @@ impl Tables {
             _files: files,
             _file_rows: file_rows,
             _rows: rows,
-            _data: data.into_iter().map(|(datum, _)| datum).collect(),
+            _data: data.into_iter().map(|(datum, _, _)| datum).collect(),
             _datum_rows: datum_rows,
             image,
         }
@@ -247,13 +257,34 @@ impl NativeMachine {
                 sites: defined.sites,
             });
         }
+        let mut adapters = HashMap::with_capacity(lowered.adapters.len());
+        for (function, defined) in lowered.adapters {
+            let code = module.get_finalized_function(defined.id);
+            self.symbols.push(Symbol {
+                name: names::adapter(0, &program.function(function).name),
+                address: code,
+                size: defined.size,
+            });
+            adapters.insert(function, code);
+        }
+        for (index, defined) in lowered.applies.into_iter().enumerate() {
+            self.symbols.push(Symbol {
+                name: names::apply(index + 1),
+                address: module.get_finalized_function(defined.id),
+                size: defined.size,
+            });
+        }
         // どの値のslotも、moduleが定義した8バイトの書けるデータの物で、領域とともにマシンが終わるまで生きる
         let data = lowered
             .data
             .into_iter()
             .map(|(datum, id)| {
                 let (slot, _) = module.get_finalized_data(id);
-                (datum, slot.cast_mut().cast::<u64>())
+                let code = match datum {
+                    Datum::Fn(function) => adapters[&function],
+                    _ => std::ptr::null(),
+                };
+                (datum, slot.cast_mut().cast::<u64>(), code)
             })
             .collect();
         self.tables = Some(Tables::new(functions, program.files.clone(), data));

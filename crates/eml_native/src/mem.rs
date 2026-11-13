@@ -1,7 +1,9 @@
 //! `eml_rt`の物体の配置を読む唯一のmodule (docs/spec/object-model.md の「語の位置」)。メモリに触るコード生成をここに置き、
 //! 生成したコードが頼る配置の事実を1か所で`eml_rt`に結び付ける。
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{GlobalValue, InstBuilder, MemFlagsData, Type, Value, types};
+use cranelift_codegen::ir::{
+    GlobalValue, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, Type, Value, types,
+};
 use cranelift_frontend::FunctionBuilder;
 use eml_lir::Shape;
 use eml_rt::rc::{DECREF_FAST_BIAS, DECREF_FAST_SPAN, DUP_FAST_BIAS, DUP_FAST_SPAN};
@@ -51,15 +53,63 @@ pub fn imm_round_trips(b: &mut FunctionBuilder, v: Value) -> Value {
     b.ins().icmp(IntCC::Equal, back, v)
 }
 
-/// 物体`obj`のタグ (`I32`)。`meta`の語の下の16ビットである。
-pub fn load_tag(b: &mut FunctionBuilder, obj: Value) -> Value {
-    let meta = b.ins().load(
+/// 物体`obj`の`meta`の語 (`I32`)。
+pub fn load_meta(b: &mut FunctionBuilder, obj: Value) -> Value {
+    b.ins().load(
         types::I32,
         MemFlagsData::trusted(),
         obj,
         layout::META_BYTE as i32,
-    );
+    )
+}
+
+/// `meta`の語のタグ (`I32`)。下の16ビットである。
+pub fn meta_tag(b: &mut FunctionBuilder, meta: Value) -> Value {
     b.ins().band_imm_u(meta, i64::from(Meta::TAG_MASK))
+}
+
+/// 物体`obj`のタグ (`I32`)。
+pub fn load_tag(b: &mut FunctionBuilder, obj: Value) -> Value {
+    let meta = load_meta(b, obj);
+    meta_tag(b, meta)
+}
+
+/// `meta`の語を持つ関数の値`clo`のエントリのコードのアドレス。コードは0番の走査する語の即値である。その位置は、走査する
+/// 語が数の語を要するかで1語ずれ、適用する所は捕まえた値の数を知らないので、`meta`の`scan`のバイトで選ぶ
+/// (docs/spec/native.md の「関数の値」)。
+pub fn closure_code(b: &mut FunctionBuilder, clo: Value, meta: Value) -> Value {
+    let short = layout::slot_byte_offset(layout::data_first(1, false));
+    let long = layout::slot_byte_offset(layout::data_first(layout::INLINE_SCAN_LIMIT, false));
+    let scan = b.ins().ushr_imm_u(meta, i64::from(Meta::SCAN_SHIFT));
+    let scan = b.ins().band_imm_u(scan, i64::from(Meta::SCAN_MASK));
+    let extended = b.ins().icmp_imm_u(
+        IntCC::Equal,
+        scan,
+        i64::from(layout::data_scan(layout::INLINE_SCAN_LIMIT, false)),
+    );
+    let short = b.ins().iconst(types::I64, short as i64);
+    let long = b.ins().iconst(types::I64, long as i64);
+    let offset = b.ins().select(extended, long, short);
+    let address = b.ins().iadd(clo, offset);
+    let word = b
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), address, 0);
+    imm_value(b, word)
+}
+
+/// `values`を順に並べたスタックの領域のアドレス。領域は今の関数のフレームにあり、関数が戻るまで生きる。
+pub fn spill(b: &mut FunctionBuilder, values: &[Value]) -> Value {
+    let bytes = u32::try_from(values.len() * layout::WORD_BYTES).expect("a spill fits in 4 GiB");
+    let slot = b.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        bytes,
+        layout::WORD_BYTES.trailing_zeros() as u8,
+    ));
+    for (i, &value) in values.iter().enumerate() {
+        let offset = i32::try_from(i * layout::WORD_BYTES).expect("a spill fits in 2 GiB");
+        b.ins().stack_store(types::I64, value, slot, offset);
+    }
+    b.ins().stack_addr(types::I64, slot, 0)
 }
 
 /// 物体`obj`が`BigInt`なら0でない。ダミーは`BigInt`で、構造体の箱はいつも`Data`なので、構造体の箱を受ける所ではこれで

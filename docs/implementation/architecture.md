@@ -430,7 +430,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - コード生成器は、次の置き場所の規則を守る。`tests/placement.rs`が、規則ごとにソースのファイルを走査して確かめる
   - エントリをimportとして宣言する (`Linkage::Import`) のも、`tail`の呼び出し規約を名指す (`CallConv::Tail`) のも、`preserve_frame_pointers`を置くのも、`abi.rs`だけである。Craneliftのフラグを作る (`settings::builder`) のは、`abi.rs`と`bridge.rs`だけである
   - 生成したコードは、`mem.rs`を通してだけメモリをロードしストアする (狭い幅の形、アトミック、スタックの枠への読み書きを含む)。ほかにロードとストアを書くのは、`thunk.rs` (`eml_enter`の引数と結果の配列) と`bridge.rs` (Cの呼び出しの引数の配列) だけである
-  - `call_indirect`は、呼ぶ先が実行時の値である所、つまり`bridge.rs`と`thunk.rs`だけで使う
+  - `call_indirect`は、呼ぶ先が実行時の値である所、つまり`bridge.rs`、`lower/apply.rs` (関数の値の適用)、`thunk.rs`だけで使う
   - `CTX_*`のずれを定めない。`mem.rs`を通して`eml_rt`から読む。`eml_rt::Ctx`、`eml_rt::Heap`、`Ctx<…>`の型も、`Checked`も名指さない
   - `eml_sched`への辺を持たない。実行の境界の型と共有の行の関数には、`eml_nrt`の再エクスポートを通して届く。thread-localは使わない
   - `eml_native`、`eml_nrt`、`eml_sched`のファイル (コード、コメント、マニフェスト) が引く`docs/`の文書は、`docs/spec/`と`docs/implementation/`の下だけである
