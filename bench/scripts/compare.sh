@@ -12,11 +12,13 @@
 #                                する。各側は自分の写しの中で動き、書いたファイルも比べる (リポジトリにファイルを残さない)
 #
 # 引数の `@OUT` は各側の一時ファイルのパスに置き換え、実行の後でその中身を標準出力の後ろに足して比べる。書き出す
-# ファイルも比べるためである。eml は `$EML` (既定は debug ビルドの `target/debug/eml`) を使う。
+# ファイルも比べるためである。eml は `$EML` (既定は debug ビルドの `target/debug/eml`) を使う。`$EML_RUN_FLAGS` (既定は
+# 空) は空白で分けて `run` の直後に足す (`--native` でネイティブの実行を比べる)。
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 eml="${EML:-$root/target/debug/eml}"
+read -r -a run_flags <<<"${EML_RUN_FLAGS:-}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -117,7 +119,7 @@ if [[ $rust == 1 ]]; then
   other_label=rust
 fi
 
-run_side eml "$eml" run "$eml_file" ${args[@]+"${args[@]}"}
+run_side eml "$eml" run ${run_flags[@]+"${run_flags[@]}"} "$eml_file" ${args[@]+"${args[@]}"}
 run_side "$other_label" "${other[@]}" ${args[@]+"${args[@]}"}
 
 if cmp -s "$work/eml" "$work/$other_label"; then
