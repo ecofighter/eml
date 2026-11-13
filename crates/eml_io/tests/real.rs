@@ -557,8 +557,8 @@ fn an_op_on_an_unknown_handle_fails() {
     );
 }
 
-/// プールの仕事は、SIGINT と SIGTERM を塞いだスレッドで動く。塞ぐのは `submit` の間だけなので、呼んだスレッドは
-/// 元の塞ぎに戻る。
+/// プールの仕事は、SIGINTとSIGTERMを塞いだスレッドで動く。プールのスレッドは自分の本体の始めに塞ぐので、
+/// 呼んだスレッドは塞がない。
 #[cfg(unix)]
 #[test]
 fn pool_threads_block_interrupt_and_terminate() {

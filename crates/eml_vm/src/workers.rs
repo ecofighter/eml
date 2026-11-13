@@ -871,7 +871,7 @@ pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
         let cells_k = Arc::clone(cells);
         // worker 0 は run の方針をそのまま使い、worker 1..N-1 は worker ごとの方針を使う
         let policy_k = policy.for_worker(k);
-        // worker 0 のほかの worker は SIGINT と SIGTERM を塞ぐ (docs/spec/vm.md の「上限と割り込み」)
+        // worker 0のほかのworkerは、本体の始めにSIGINTとSIGTERMを塞ぐ (docs/spec/vm.md の「上限と割り込み」)
         match eml_io::spawn_scoped_masked(scope, builder, move || {
             run_worker::<M, P>(
                 code, policy_k, run_k, control_k, cells_k, host_k, k, max_depth,

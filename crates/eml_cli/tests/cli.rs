@@ -1025,8 +1025,7 @@ main () = println (show (Env.get \"BAD\"))
 /// 子のプロセスを待つ間にSIGINTが来ると、子が終わった後で止まり、終了コード130で終わる。OSは端末のCtrl-Cをグループの
 /// プロセスごとに別々に届け、emlが受け取る前に子が終わるとrunは自分の終了コードで終わることがあるので、emlに送ってから
 /// 子に送る。子もSIGINTで終わるので、emlは待ちから戻る。子が標準エラーに書いたプロセスの番号を読んで、子が動いてから送る
-/// (docs/spec/stdlib.mdの「`Proc`」)。並列の重い負荷の下では、emlがスレッドでシグナルを塞ぐ形の知られた不具合のため、
-/// まれに失敗する (2000回のうち4回。docs/future/roadmap.mdの「マルチコア対応」)。
+/// (docs/spec/stdlib.mdの「`Proc`」)。
 #[cfg(unix)]
 #[test]
 fn an_interrupt_stops_a_program_waiting_for_a_child_with_130() {

@@ -234,6 +234,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 ### ThreadSanitizer
 
 - `tsan`のジョブは、workerのスレッドの間で共有する記憶にdata raceがないことを`-Zsanitizer=thread`で確かめる。流すのは`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`、`eml_vm`のlibの`counters::`、`eml_io`のlibの`driver::tests::`の4手順で、対象は`x86_64-unknown-linux-gnu`だけである。Miriは複数のスレッドのinterleavingを網羅しないので、スレッドをまたぐ`unsafe`の核 (`eml_rt`のremote解放の経路と、`eml_vm`の起こしの語、runの表、ほかのworkerへの操作の転送、`Counter`のatomic、workerの間で共有する`CCall`と、`eml_sched`の`cells.rs`のrunの登録表とmail、workerをまたぐchannelと、`eml_io`のdriverのプールのスレッドが貸された記憶に書くファイルの仕事) は、実際に走るスレッドの上でThreadSanitizerが見る。`eml_sched`の核は、`eml_vm`の結合テストの中で走る
+- `eml_io`の`mask.rs`の単体テスト (Appleの送り直し) は、この組に入れない。ThreadSanitizerはシグナルのハンドラを自分の選ぶ後の時点で動かし、`sigwait`と`sigpending`も横取りするので、テストのハンドラが期限の中で動かないためである。送り直しは、スレッドの間で共有する記憶を持たないので、ThreadSanitizerが見るものがない
 - nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。`eml_rt` と `eml_vm` の3つの手順も、この形で流す
 - 合否は終了コードで決める。`TSAN_OPTIONS=halt_on_error=1` で、警告が1件でも出たらテストのプロセスが止まる。警告は抑制せず、`suppressions` も書かない。報告が出たら、コードの不具合か、`eml_rt` の `unsafe` が前提にしている順序の誤りとして直す
 - 開発機では、buildの置き場所を`target/tsan`に分け、`--target`には「AddressSanitizer」と同じく開発機のhostのtargetを書く (「よく使うコマンド」)。CIが流すのはx86_64のLinuxだけだが、aarch64-darwinの開発機でも同じ手順で流せる
@@ -577,9 +578,11 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - 本物の時計で `Async.sleep_ms 100000` だけをするタスクの run に、標準エラーの `sleeping` の行が届いたら SIGINT を1回送り、終了コード 130 と、標準エラーの `interrupted` を確かめる。すべてのタスクが眠る worker は、空きのループの上限付きの眠りの後に割り込みを読む。同じことを `crates/eml_vm/tests/api.rs` の `an_interrupt_wakes_a_sleeping_worker` が、プロセスの中で `Sequential` の方針について確かめる
 - `mkfifo` で作った名前付きのパイプを `FileIn.read_all` で読むプログラムに、100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。読みは1回目の SIGINT で `EINTR` で戻って止まる。読みに入る直前に届いた SIGINT は読みを止めないので、2回目の SIGINT でハンドラが終わらせることもある。どちらも 130 である。送り続けるのは、続けて届いた2つの SIGINT が1つにまとまることがあるためである
 - 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、同じく 100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。プログラムが標準エラーに書いた行を読んでから送る。ハンドラを入れる前の SIGINT は、既定の動作でプロセスを終わらせるためである
-- `Proc.run`で`sh -c 'echo $$ >&2; exec sleep 30'`を待つプログラムを起動し、子が標準エラーに書いた行から子のプロセスの番号を読んで、emlにSIGINTを1回送り、続けて子に1回送る。子が終わり、終了コード130と、標準エラーの`interrupted`を確かめる。子より先にemlに送るのは、OSが端末のCtrl-Cをグループのプロセスごとに別々に届けるためである。emlが受け取る前に子が終わると、runは自分の終了コードで終わることがある。子はテストが送るまで終わらないので、番号はほかのプロセスに使い回されていない。並列の重い負荷の下では、emlがスレッドでシグナルを塞ぐ形の知られた不具合のため、まれに失敗する (2000回のうち4回。[ロードマップ](../future/roadmap.md)の「マルチコア対応」)
+- `Proc.run`で`sh -c 'echo $$ >&2; exec sleep 30'`を待つプログラムを起動し、子が標準エラーに書いた行から子のプロセスの番号を読んで、emlにSIGINTを1回送り、続けて子に1回送る。子が終わり、終了コード130と、標準エラーの`interrupted`を確かめる。子より先にemlに送るのは、OSが端末のCtrl-Cをグループのプロセスごとに別々に届けるためである。emlが受け取る前に子が終わると、runは自分の終了コードで終わることがある。子はテストが送るまで終わらないので、番号はほかのプロセスに使い回されていない
 
 `eml run` の SIGTERM のテストも `cfg(unix)` で2本あり、`libc::kill` で SIGTERM を送るほかは SIGINT のテストと同じ形である。
+
+どのスレッドが2つのシグナルを塞ぐかは、外からシグナルを送らずに確かめる。`eml_vm`の`spawns::every_thread_but_worker_0_is_masked`は、スレッドを作る所と呼んだスレッドを塞ぐ所を固定する。`crates/eml_io/tests/real.rs`の`pool_threads_block_interrupt_and_terminate`は、プールのスレッドが塞ぎ、呼んだスレッドが塞がないことを確かめる。Appleでは、`eml_io`の`mask.rs`の単体テストが、塞いだスレッドの保留に残ったシグナルを送り直すとほかのスレッドに届くことを確かめる。worker 0を作ってから呼んだスレッドが塞ぐまでの隙間を突く決定的なテストは書けない。
 
 - `Async.run` の中で標準エラーに `ready` を書いてから眠るプログラムに、その行が届いたら SIGTERM を1回送り、終了コード 143 と、標準エラーが `runtime error: terminated in` で始まることを確かめる。待つタスクがないので、1回目の SIGTERM が run を止める
 - 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、100 ms ごとに SIGTERM を送り続け、終了コード 143 で終わることを確かめる。SIGINT の同じテストと同じく、2回目の SIGTERM でハンドラが終わらせることもある

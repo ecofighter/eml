@@ -23,9 +23,9 @@ pub use eml_native::{LinkError, Linker};
 pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{
-    Capture, CaptureHost, Clock, Control, Doorbell, Finished, HostRef, Limits, Linked, RunConfig,
-    RunFault, RunStats, RuntimeError, Sched, Signal, SourceLocation, Stop, VirtualSignal, Written,
-    capture_host, execute, script_host, stdio_host,
+    Capture, CaptureHost, Clock, Control, Doorbell, Finished, HostRef, Limits, Linked, Masked,
+    RunConfig, RunFault, RunStats, RuntimeError, Sched, Signal, SourceLocation, Stop,
+    VirtualSignal, Written, capture_host, execute, script_host, stdio_host,
 };
 #[cfg(feature = "gui")]
 pub use eml_vm::{
@@ -303,7 +303,7 @@ pub enum Engine {
     Native,
 }
 
-/// `program`を`engine`で1回流す。ネイティブは既定の`Options`で流し、`RunStats`は数えない。
+/// `program`を`engine`で1回流す。ネイティブは既定の`Options`に塞ぎのフックを足して流し、`RunStats`は数えない。
 #[cfg(feature = "run")]
 pub fn execute_on(
     engine: Engine,
@@ -314,8 +314,22 @@ pub fn execute_on(
 ) -> Result<Finished, RuntimeError> {
     match engine {
         Engine::Vm => execute(program, linked, config, host),
-        Engine::Native => eml_native::execute(program, linked, config, host, Default::default()),
+        Engine::Native => {
+            let options = eml_native::Options {
+                masked: masked_run,
+                ..Default::default()
+            };
+            eml_native::execute(program, linked, config, host, options)
+        }
     }
+}
+
+/// ネイティブのrunの間、`eml_vm::execute`と同じく呼んだスレッドでSIGINTとSIGTERMを塞ぐ (docs/spec/vm.md の
+/// 「上限と割り込み」)。
+#[cfg(feature = "run")]
+fn masked_run(body: &mut dyn FnMut()) {
+    let _blocked = Masked::new();
+    body();
 }
 
 /// `eml run` の既定の上限。深さは 2^27 語 (1 GiB 分のスタック) で、OCaml 5 のスタックの既定の上限と同じ量である。
