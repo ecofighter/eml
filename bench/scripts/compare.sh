@@ -119,7 +119,15 @@ if [[ $rust == 1 ]]; then
   other_label=rust
 fi
 
-run_side eml "$eml" run ${run_flags[@]+"${run_flags[@]}"} "$eml_file" ${args[@]+"${args[@]}"}
+# `--native`はworkerが1つでないと断るので、呼び手の`EML_WORKERS`によらず1にする
+eml_env=()
+for flag in ${run_flags[@]+"${run_flags[@]}"}; do
+  if [[ "$flag" == "--native" ]]; then
+    eml_env=(env EML_WORKERS=1)
+  fi
+done
+
+run_side eml ${eml_env[@]+"${eml_env[@]}"} "$eml" run ${run_flags[@]+"${run_flags[@]}"} "$eml_file" ${args[@]+"${args[@]}"}
 run_side "$other_label" "${other[@]}" ${args[@]+"${args[@]}"}
 
 if cmp -s "$work/eml" "$work/$other_label"; then

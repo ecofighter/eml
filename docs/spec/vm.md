@@ -1050,7 +1050,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 
 - 橋渡しの関数の型は `eml_cabi::Bridge`、つまり `unsafe extern "C" fn(callee: *const (), args: *const u64) -> u64` である。`CCall { bridge, callee }` は、橋渡しと、それで呼ぶ C の関数のアドレスの組である
 - 橋渡しは C の型の並び `CSignature` (要素は `I32`、`I64`、`F64`) ごとに1つ作り、同じ署名の関数で共有する。呼ぶ関数は最初の引数で受ける。引数は `u64` の slot の列で、slot k を `args` の offset `8*k` から読む。橋渡しが読むのは `args` だけで、`Ctx`、`Word`、ヒープの配置、スレッドローカル、記号の名前のどれにも触れない
-- `I64` の slot は語をそのまま渡し、`F64` の slot は語の bit の並びを `double` として渡す。`I32` (`int32_t`) の slot は語の下の 32 bit を拡張せずに渡し、上の 32 bit は読まない。呼ぶ関数の署名は `eml_clink::c_signature` が作り、引数にも結果にも拡張の印を付けない。上の 32 bit の中身は C の ABI が決めないためである
+- `I64`のslotは語をそのまま渡し、`F64`のslotは語のbitの並びを`double`として渡す。`I32` (`int32_t`) のslotは語の下の32 bitを拡張せずに渡し、上の32 bitは読まない。呼ぶ関数の署名は`eml_clink::c_signature`が作り、引数にも結果にも拡張の印を付けない。対応する対象 (x86_64のSysV、Win64、Appleのものを含むAAPCS64) では、上の32 bitの中身をCのABIが決めないためである。32 bitの整数に符号の拡張を求めるriscv64とs390xは、対応する対象ではない
 - 結果は1語で返す。`I32` は下の 32 bit を明示の `sextend` で広げ、`I64` はそのまま、`F64` は bit の並びをそのまま語にする。void の関数では 0 を返す
 - 呼び出し規約は、動いている OS の既定のもの (Rust の `extern "C"`) である
 - 橋渡しは状態を持たないので、どのスレッドから同時に呼んでもよい

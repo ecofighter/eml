@@ -1,4 +1,4 @@
-//! テストの記述と、C の関数として呼ぶ Rust の関数。
+//! テストの記述と、Cの関数として呼ぶRustの関数。
 
 use eml_cabi::CCall;
 use eml_extern::{CFunction, CLibrary, CLink, CParam, CRet, Os};
@@ -21,7 +21,7 @@ pub fn function(
     )
 }
 
-/// 動いている OS の C の標準ライブラリ。何も入れずにどの CI の機械にもある。
+/// 動いているOSのCの標準ライブラリ。何も入れずにどのCIの機械にもある。
 pub fn c_library() -> CLink {
     let (os, name) = if cfg!(target_os = "linux") {
         (Os::Linux, "libc.so.6")
@@ -38,7 +38,7 @@ pub fn c_library() -> CLink {
 
 /// 橋渡しを通して呼ぶ。
 pub fn call(c: CCall, args: &[u64]) -> u64 {
-    // SAFETY: テストは `args` を、呼ぶ関数の C の署名の slot の数だけ渡す
+    // SAFETY: テストは`args`を、呼ぶ関数のCの署名のslotの数だけ渡す
     unsafe { (c.bridge)(c.callee, args.as_ptr()) }
 }
 
@@ -75,7 +75,7 @@ pub extern "C" fn neg() -> i32 {
 }
 
 /// # Safety
-/// `a` と `b` は `n` 個の `f64` を指す。
+/// `a`と`b`は`n`個の`f64`を指す。
 pub unsafe extern "C" fn dot(a: *const f64, b: *const f64, n: i64) -> f64 {
     let n = usize::try_from(n).unwrap();
     // SAFETY: 上の約束による

@@ -1,4 +1,4 @@
-//! 利用者のCの関数の呼び出し (docs/spec/native.md の「Cの関数の呼び出し」)。
+//! 利用者のCの関数の呼び出し (docs/spec/native.mdの「Cの関数の呼び出し」)。
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{Block, InstBuilder, Value, types};
 use cranelift_module::{FuncId, Module};
@@ -172,7 +172,7 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
     /// 貸した位置はどれもCが戻るまで有効である。文は物体の引数をどれも借りるので、呼び手の参照が呼び出しの間それを
     /// 生かし、`MutUnboxedArray`は一意でこのworkerのものである。これで、ポインタのエントリと`eml_x_c_handle_ptr`の
     /// 約束を守る。`eml_x_c_handle_ptr`は、ポインタをCに渡す者に、Cがそのポインタを使う間ハンドルを生かしておくことを
-    /// 求める (docs/spec/native.md の「Cの関数の呼び出し」、docs/spec/object-model.md の「`unsafe` の核」のT16)。
+    /// 求める (docs/spec/native.mdの「Cの関数の呼び出し」、docs/spec/object-model.mdの「`unsafe` の核」のT16)。
     fn lend_and_call(&mut self, callee: FuncId, args: &[CArg]) -> Option<Value> {
         let mut values = Vec::with_capacity(args.len());
         for &arg in args {

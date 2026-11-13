@@ -1,6 +1,6 @@
-//! 利用者のCの関数の呼び出しの前後で生成したコードが呼ぶエントリ (docs/spec/native.md の「externの失敗」)。externの行の
+//! 利用者のCの関数の呼び出しの前後で生成したコードが呼ぶエントリ (docs/spec/native.mdの「externの失敗」)。externの行の
 //! 一覧の行ではない。関数の名前を受けるエントリは、それを不死の文字列として借りるだけで、何も手放さない。行のエントリと
-//! 同じく、`run`が入ったコードからだけ呼ぶ (docs/spec/native.md の「実行の始めと終わり」)。
+//! 同じく、`run`が入ったコードからだけ呼ぶ (docs/spec/native.mdの「実行の始めと終わり」)。
 #![allow(unsafe_code)]
 
 use eml_extern::CInt;

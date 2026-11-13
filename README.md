@@ -126,11 +126,14 @@ claude plugin install ecoskills@ecoskills --scope user
 | `eml_cli` | `check` / `run` / `repl` のコマンド。各段階をつなぐ唯一の場所 (`Session`) |
 | `eml_vm` | LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上で実行する。`par`、`Async` のタスク、channel も扱う |
 | `eml_sched` | VMとネイティブの実行系が共有する層 (タスクのセルの核、実行時エラーの型、実行の設定と結果の型、時計の選び方) |
+| `eml_rows` | 組み込みの関数が実行時に何であるかを、VMとネイティブの実行系のどちらにも与える層 (externの行の本体、組み込みの定数、利用者のCの関数の呼び出しの部品、`Std.Tls`と`Std.Gui`の腕) |
 | `eml_io` | I/Oのdriver。OSごとのbackend (epoll、kqueue、IOCP) の上の本物のdriverと、決定的なテストのdriver。`eml run`とREPLのHostを作る関数も持つ |
 | `eml_tls` | rustlsの接続を包むTLSの状態 (I/Oを持たない。aws-lc-rsのprovider、rustls-platform-verifier) |
+| `eml_gui` | ネイティブのGUIのtoolkitの層 (AppKit、Qt 6、WinUI 3のbackendと、画面を開かないstubのbackend) |
 | `eml_clink` | C の関数を呼ぶ橋渡しの関数を Cranelift で作り、C のライブラリと記号を解決する |
 | `eml_native` | ネイティブのコード生成器。LIR を Cranelift で機械語にして JIT で動かす |
-| `eml_cabi` | C の関数を呼ぶコードのポインタ (`eml_clink` が作り、`eml_vm` が使う) |
+| `eml_nrt` | ネイティブのコードが呼ぶ実行系のエントリ、エントリのstub、実行の駆動 |
+| `eml_cabi` | Cの関数を呼ぶコードのポインタ (`eml_clink`が作り、VMとネイティブのコードの読み込みが使う) |
 | `eml_rt` | VM とネイティブで共有するランタイムの核 (物体、ヒープ、参照カウント、検査モード、extern)。Verus で検証する |
 | `eml_core_ir` | 型付き HIR から Core IR (基本ブロックの列) への変換、evidence passing、LIR への変換 |
 | `eml_lir` | LIR と、`box` / `unbox` の挿入、縮約、`dup` / `decref` / `release` の挿入 |

@@ -11,13 +11,13 @@ LIR から Cranelift でネイティブのコードを出す設計をまとめ�
 - コンパイルの条件: JIT は std と 1000 行のプログラムを release のビルドで 300 ms 未満でコンパイルする
 - 範囲: コード生成器、呼び出し規約とエントリ、中断と実行時エラー、安全点とスタック、extern のエントリ、展開、生の要素の配列、並列の実行、AOT と配布、テスト
 - VMは、確かめと開発のための基準の実行系である。ネイティブの速さとVMの速さを引き換える選択では、ネイティブの速さを先にする。ただし、速くなっても特別な場合や二重の論理が要る最適化は諦め、諦めたことを書く。ネイティブの設計はどれも、速い道の費用のモデルと、諦めた最適化を述べる。将来のプロファイラのために、フレームポインタと、名前を鍵にした記号を保つ
-- 範囲の外: 利用者の`extern "C"`の宣言と型の対応、GUIのtoolkit (`Std.Gui`)。これらはネイティブのバックエンドなしにVMの上で動く。Craneliftで作るのは、VMからCの関数を呼ぶ橋渡しの関数だけである。この文書は、ネイティブのコードがそれらを呼ぶ所と、AOTでリンクする形だけを書く。宣言と型の対応と拡張の設計は[FFI と拡張の設計](ffi.md)にある
+- 範囲の外: 利用者の`extern "C"`の宣言と型の対応、GUIのtoolkit (`Std.Gui`)。GUIはネイティブのバックエンドなしにVMの上で動く。利用者のCの関数を、VMは`eml_clink`がCraneliftで作る橋渡しの関数を通して呼び、ネイティブのコードは直に呼ぶ ([ネイティブの実行系](../spec/native.md)の「Cの関数の呼び出し」)。この文書は、AOTでリンクする形だけを書く。宣言と型の対応と拡張の設計は[FFI と拡張の設計](ffi.md)にある
 
 ## 確定した設計判断
 
 | # | 領域 | 決定 |
 |---|---|---|
-| 1 | コード生成器 | コード生成器は1つで、開いた後のLIRをCLIFにするcrate `eml_native`である。JIT (`eml run --native`とREPL。`cranelift-jit`) とAOT (`eml build`。`cranelift-object`) の両方が、同じCLIFと同じ実行系のエントリを使う。出すコードが呼ぶ実行系のエントリ、エントリのstub、runの駆動はcrate `eml_nrt`に置く。`eml_nrt`はCraneliftに依存せず、実行系の静的ライブラリ (成果物のcrate `eml_rtlib`が組む) はそこから作る。実行の方式によらない共有の層はcrate `eml_sched`で、externの行の本体はcrate `eml_rows`が持つ。依存の辺は`eml_native` → `eml_nrt` → `eml_rows` → `eml_sched` → `eml_rt`で、`eml_native`はほかに`eml_lir`と、定数を読むためだけに`eml_rt`にも依存する。`eml_native`は、FFIの橋渡しの関数とライブラリの解決も持ち、`eml_extern`、`eml_cabi`、Cranelift、libloadingに依存する ([コンパイラの構成](../implementation/architecture.md)の「crate の依存関係」)。`eml_vm`は、Cranelift、`eml_native`、`eml_nrt`のどれにも依存しない |
+| 1 | コード生成器 | コード生成器は1つで、開いた後のLIRをCLIFにするcrate `eml_native`である。JIT (`eml run --native`とREPL。`cranelift-jit`) とAOT (`eml build`。`cranelift-object`) の両方が、同じCLIFと同じ実行系のエントリを使う。出すコードが呼ぶ実行系のエントリ、エントリのstub、runの駆動はcrate `eml_nrt`に置く。`eml_nrt`はCraneliftに依存せず、実行系の静的ライブラリ (成果物のcrate `eml_rtlib`が組む) はそこから作る。実行の方式によらない共有の層はcrate `eml_sched`で、externの行の本体はcrate `eml_rows`が持つ。依存の辺は`eml_native` → `eml_nrt` → `eml_rows` → `eml_sched` → `eml_rt`で、`eml_native`はほかに`eml_lir`と、定数を読むためだけに`eml_rt`にも依存する。FFIの橋渡しの関数とCのライブラリの解決はcrate `eml_clink`が持ち、libloadingに依存するのは`eml_clink`だけである。`eml_native`は、Cの関数のシグネチャを作る`c_signature`を使うために`eml_clink`に依存し、ほかに`eml_extern`、`eml_cabi`、Craneliftにも依存する ([コンパイラの構成](../implementation/architecture.md)の「crate の依存関係」)。`eml_vm`は、Cranelift、`eml_native`、`eml_nrt`のどれにも依存しない |
 | 2 | コンパイルの単位 | プログラム全体 (利用者のモジュールと、届く std) を、Core IR の最適化の後で一度にコンパイルする。`eml run --native` は始めに、REPL は入力の境目ごとに、その入力が足す関数をコンパイルする。どちらも worker が動いていない間に行う。関数ごとに遅れてコンパイルする stub は置かない |
 | 3 | VM との関係 | VM とネイティブのコードは混ぜない。ネイティブのコードはバイトコードを呼ばず、バイトコードもネイティブの eml の関数を呼ばない。VM は参照の実装で、検査モード (`--debug-heap`) を持つ唯一の実行系である。ネイティブは `eml_rt` を速いモードで具体化する。バックエンドを作る途中は、扱わない形を含むプログラムを E0004 で断る。断る形の一覧は空になるまで減らし、仕上がったバックエンドは何も断らない |
 | 4 | 呼び出し規約 | eml の中の呼び出しは Cranelift の `tail` 規約で、末尾呼び出しは `return_call` と `return_call_indirect` である。extern と C の関数は OS の既定の規約で、`tail` のコードから普通の `call` で呼ぶ |

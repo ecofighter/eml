@@ -1,8 +1,8 @@
-//! `unsafe` の一覧のテスト (docs/implementation/testing.md の「`eml_native` の検証」)。`unsafe` を書いてよいファイルを
-//! ここで固定する。走査は `eml_io` の `trust.rs` と同じである。新しい `unsafe` が一覧の外に入ると、レビューを通らずに
-//! ライブラリを開いて C の関数を呼ぶ道が増えるためである。
+//! `unsafe`の一覧のテスト (docs/implementation/testing.mdの「`eml_native` の検証」)。`unsafe`を書いてよいファイルを
+//! ここで固定する。走査は`eml_io`の`trust.rs`と同じである。新しい`unsafe`が一覧の外に入ると、レビューを通らずに
+//! ライブラリを開いてCの関数を呼ぶ道が増えるためである。
 
-/// 調べるファイル。`src/` のこの module 以外をすべて載せる (`every_source_file_is_listed` が確かめる)。
+/// 調べるファイル。`src/`のこのmodule以外をすべて載せる (`every_source_file_is_listed`が確かめる)。
 const FILES: &[(&str, &str)] = &[
     ("lib.rs", include_str!("lib.rs")),
     ("bridge.rs", include_str!("bridge.rs")),
@@ -12,10 +12,10 @@ const FILES: &[(&str, &str)] = &[
     ("signature.rs", include_str!("signature.rs")),
 ];
 
-/// 調べないファイル。この module だけである。
+/// 調べないファイル。このmoduleだけである。
 const SKIPPED: &[&str] = &["trust.rs"];
 
-/// `unsafe` を持ち、先頭に `#![allow(unsafe_code)]` を置くファイル。
+/// `unsafe`を持ち、先頭に`#![allow(unsafe_code)]`を置くファイル。
 const UNSAFE_FILES: &[&str] = &["bridge.rs", "library.rs", "linker.rs"];
 
 fn is_ident(c: char) -> bool {
@@ -23,7 +23,7 @@ fn is_ident(c: char) -> bool {
 }
 
 /// コメント、文字列、文字のリテラルを空白に置き換える。位置を保つので、後の探し方がずれない。生の文字列
-/// (`r"`、`r#"`) は扱わない。どのファイルにもないことは `the_scanner_skips_comments_and_strings` が確かめる。
+/// (`r"`、`r#"`) は扱わない。どのファイルにもないことは`the_scanner_skips_comments_and_strings`が確かめる。
 fn blank_comments_and_strings(text: &str) -> Vec<char> {
     let s: Vec<char> = text.chars().collect();
     let mut out = s.clone();
@@ -73,7 +73,7 @@ fn prepare(text: &str) -> String {
     blank_comments_and_strings(text).into_iter().collect()
 }
 
-/// 識別子 `unsafe` が現れるか。`unsafe_code` のような長い識別子は数えない。
+/// 識別子`unsafe`が現れるか。`unsafe_code`のような長い識別子は数えない。
 fn has_unsafe(text: &str) -> bool {
     let s: Vec<char> = prepare(text).chars().collect();
     let word: Vec<char> = "unsafe".chars().collect();
@@ -84,14 +84,14 @@ fn has_unsafe(text: &str) -> bool {
     })
 }
 
-/// 先頭の項目が `#![allow(unsafe_code)]` か。先頭のコメントは読み飛ばす。
+/// 先頭の項目が`#![allow(unsafe_code)]`か。先頭のコメントは読み飛ばす。
 fn starts_with_allow(text: &str) -> bool {
     prepare(text)
         .trim_start()
         .starts_with("#![allow(unsafe_code)]")
 }
 
-/// `allow(unsafe_code)` が現れる回数。空白を詰めて数える。
+/// `allow(unsafe_code)`が現れる回数。空白を詰めて数える。
 fn allow_count(text: &str) -> usize {
     let squeezed: String = prepare(text)
         .chars()
@@ -196,7 +196,7 @@ fn the_scanner_skips_comments_and_strings() {
     }
 }
 
-/// `r"`、`r#"` (と `b` の付いた形) を探す。`r#type` のような生の識別子は数えない。`"driver"` のように識別子の文字の後の `r"` は数えない。
+/// `r"`、`r#"` (と`b`の付いた形) を探す。`r#type`のような生の識別子は数えない。`"driver"`のように識別子の文字の後の`r"`は数えない。
 fn has_raw_string(text: &str) -> bool {
     let s = text.as_bytes();
     let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';

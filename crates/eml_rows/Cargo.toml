@@ -3,7 +3,7 @@ name = "eml_rows"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.mdの「crate の中の置き方」)
 autotests = false
 
 [lib]
@@ -19,7 +19,7 @@ gui = ["dep:eml_gui"]
 gui-native = ["gui", "eml_gui/native"]
 
 # コンパイラとエンジン (eml_lir、eml_core_ir、eml_vm、eml_native、eml_clink) とCraneliftには依存しない
-# (docs/implementation/architecture.md の「crate の依存関係」)
+# (docs/implementation/architecture.mdの「crate の依存関係」)
 [dependencies]
 eml_cabi.workspace = true
 eml_extern.workspace = true

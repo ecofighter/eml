@@ -1,5 +1,5 @@
 //! 利用者のCの関数のネイティブの呼び出し。どの実行のテストもVMの検査モードとネイティブで同じソースを流し、標準出力と
-//! 結果の文が同じことを確かめる (docs/spec/native.md の「Cの関数の呼び出し」)。
+//! 結果の文が同じことを確かめる (docs/spec/native.mdの「Cの関数の呼び出し」)。
 #![cfg(not(miri))]
 use std::collections::{HashMap, HashSet};
 

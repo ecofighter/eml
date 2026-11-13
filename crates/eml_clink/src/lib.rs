@@ -1,7 +1,7 @@
-//! 利用者の C の関数をつなぐ (docs/spec/vm.md の「C の関数の呼び出し」)。`CSignature` ごとの橋渡しの関数を
-//! Cranelift で作り、記号を宣言したモジュールの `link` から解決して、`eml_cabi::Linked` を返す。呼び手はプログラムを
-//! 読み込む前につなぎ、結果の値だけを VM に渡す。ネイティブのコード生成器 (`eml_native`) とは別の crate で、
-//! Cranelift のフラグも自分で作る (docs/implementation/architecture.md の「`eml_clink`の内部」)。
+//! 利用者のCの関数をつなぐ (docs/spec/vm.mdの「C の関数の呼び出し」)。`CSignature`ごとの橋渡しの関数を
+//! Craneliftで作り、記号を宣言したモジュールの`link`から解決して、`eml_cabi::Linked`を返す。呼び手はプログラムを
+//! 読み込む前につなぎ、結果の値だけをVMに渡す。ネイティブのコード生成器 (`eml_native`) とは別のcrateで、
+//! Craneliftのフラグも自分で作る (docs/implementation/architecture.mdの「`eml_clink`の内部」)。
 
 #![deny(unsafe_code)]
 

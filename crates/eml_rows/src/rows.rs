@@ -1,6 +1,6 @@
-//! extern の行の一覧。どちらのエンジンも行の本体をここの1つのテキストから取るので、行の実装は1つで済む。展開`defs`が
+//! externの行の一覧。どちらのエンジンも行の本体をここの1つのテキストから取るので、行の実装は1つで済む。展開`defs`が
 //! 一覧から、行ごとの関数と、表`SHARED`と、変種で行を流す関数`call`を作る。`eml_nrt`の展開`entries`は、変種ごとに
-//! ネイティブのエントリを1つ作る (docs/spec/native.md の「externの失敗」)。
+//! ネイティブのエントリを1つ作る (docs/spec/native.mdの「externの失敗」)。
 
 use eml_extern::{Extern, FunctionRow, OpRet, Repr};
 use eml_rt::externs::{Fault, Raised};
@@ -41,7 +41,7 @@ const fn kinds_match(row: &FunctionRow<'_>, params: &[Repr], ret: OpRet) -> bool
 }
 
 // 引数の種類は`entries!`の字句と同じで、対象の物体の語は`Word`のまま渡す。物体の語を整数から作り直さないためである
-// (docs/spec/native.md の「エントリのABI」)
+// (docs/spec/native.mdの「エントリのABI」)
 macro_rules! arg_ty {
     (obj) => {
         Word
@@ -180,7 +180,7 @@ macro_rules! extern_rows {
                     Ok(())
                 }
                 fn IntShow | ByteDisplay(ctx, n: int) -> obj { Ok(ctx.int_show(n)) }
-                // SAFETY: `Char` の語は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)
+                // SAFETY: `Char`の語はUnicodeのスカラー値である (docs/spec/lir.mdの「値の表現」)
                 fn CharShow(ctx, c: int) -> obj { Ok(ctx.char_show(c)) }
                 fn CharDisplay(ctx, c: int) -> obj { Ok(ctx.char_display(c)) }
                 fn StrShow(ctx, s: obj) -> obj { Ok(ctx.string_show(s)?) }
@@ -189,7 +189,7 @@ macro_rules! extern_rows {
                 fn StrSlice(ctx, start: int, end: int, s: obj) -> obj {
                     Ok(ctx.string_slice(start, end, s)?)
                 }
-                // SAFETY: `Char` の語は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)
+                // SAFETY: `Char`の語はUnicodeのスカラー値である (docs/spec/lir.mdの「値の表現」)
                 fn StrPush(ctx, c: int, s: obj) -> obj { Ok(ctx.string_push_char(c, s)?) }
                 fn StrFindFrom(ctx, needle: obj, from: int, s: obj) -> int {
                     Ok(ctx.string_find_from(needle, from, s)?)
@@ -300,7 +300,7 @@ macro_rules! extern_rows {
                         externs::FALSE
                     })
                 }
-                // `Std.Float.parse` は読める文字列にだけ呼ぶ。読めない文字列には NaN を返す
+                // `Std.Float.parse`は読める文字列にだけ呼ぶ。読めない文字列にはNaNを返す
                 fn FloatParseRaw(ctx, s: obj) -> float {
                     Ok(ctx.string_to_float(s)?.unwrap_or(f64::NAN))
                 }
@@ -486,7 +486,7 @@ macro_rules! extern_rows {
                 fn ProcStageCount(ctx, p: obj) -> int { Ok(ctx.proc_stage_count(p)?) }
                 fn ProcWaitStage(ctx, n: int, p: obj) -> int { Ok(ctx.proc_wait_stage(p, n)?) }
                 fn ProcCloseStdin(ctx, p: obj) -> obj { Ok(ctx.proc_close_stdin(p)?) }
-                // いつも誤りを返すので、結果はない。届け先は`failed`が決める (docs/spec/vm.md の「extern の中断」)
+                // いつも誤りを返すので、結果はない。届け先は`failed`が決める (docs/spec/vm.mdの「extern の中断」)
                 fn FailIo(ctx, kind: enum, message: obj) -> never {
                     let message = ctx.copy_string(message, usize::MAX)?;
                     Err(RunFault::Extern(Fault::Raised(Box::new(Raised {
@@ -494,7 +494,7 @@ macro_rules! extern_rows {
                         message: message.into_boxed_str(),
                     }))))
                 }
-                // channelの即値をそのまま`Cell`の即値にする (docs/spec/vm.md の「命令」)
+                // channelの即値をそのまま`Cell`の即値にする (docs/spec/vm.mdの「命令」)
                 fn ChanToCell | AsyncJobCell(_, a: int) -> int { Ok(a) }
                 // TLSの状態の行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Tls`」)
                 fn TlsPushTls(ctx, bytes: obj, conn: obj) -> obj { tls::push_tls(ctx, bytes, conn) }
@@ -720,7 +720,7 @@ macro_rules! defs {
         $(
             /// # Safety
             /// 引数の語は生きている物体で、`Ctx`の対応する操作が求める条件を満たす。借りない引数は行が消費する
-            /// (docs/spec/lir.md の「extern の借用」)。
+            /// (docs/spec/lir.mdの「extern の借用」)。
             #[inline]
             #[allow(unused_unsafe, non_snake_case)]
             pub unsafe fn $first<M: Mode>(

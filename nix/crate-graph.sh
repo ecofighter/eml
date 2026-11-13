@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# workspace の crate の依存の辺、feature、他の crate からの再 export を表に持ち、cargo の解決した結果と比べる
-# (docs/implementation/architecture.md の「crate の依存関係」)。辺・feature・再 export を変える変更は、同じコミットで下の表を直す。
+# workspaceのcrateの依存の辺、feature、他のcrateからの再exportを表に持ち、cargoの解決した結果と比べる
+# (docs/implementation/architecture.mdの「crate の依存関係」)。辺・feature・再exportを変える変更は、同じコミットで下の表を直す。
 # 使い方: nix/crate-graph.sh [--check]
-# 引数なしは、いまの結果を表の見出しつきで書き出す (表に貼る用)。--check は表との差と閉包の検査をすべて走らせ、
-# 1つでも外れれば失敗する (CI の crate graph の step)。cargo tree の出力は Windows の Git Bash でも読めるよう CR を落とす
+# 引数なしは、いまの結果を表の見出しつきで書き出す (表に貼る用)。--checkは表との差と閉包の検査をすべて走らせ、
+# 1つでも外れれば失敗する (CIのcrate graphのstep)。cargo treeの出力はWindowsのGit Bashでも読めるようCRを落とす
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# 直接の辺 (normal、optional、target 固有)。crate ごとに1行
+# 直接の辺 (normal、optional、target固有)。crateごとに1行
 EDGES='eml_cabi: eml_extern
 eml_cli: eml_clink eml_core_ir eml_diagnostics eml_hir eml_io eml_lir eml_native eml_rows eml_sched eml_syntax eml_tls eml_types eml_vm
 eml_clink: eml_cabi eml_extern
@@ -171,7 +171,7 @@ if grep -rnE '^[[:space:]]*pub use ((crate|self)::)?(cells|doorbell|driver|error
   fail "crates/eml_vm/src re-exports through an alias of an eml_sched module"
 fi
 
-# cargo tree の結果のうち、行頭が PATTERN に合う行の数が WANT に等しいことを調べる
+# cargo treeの結果のうち、行頭がPATTERNに合う行の数がWANTに等しいことを調べる
 expect_tree() {
   local want=$1 pattern=$2 label=$3 got
   shift 3
@@ -220,7 +220,7 @@ if [ "$got" -lt 1 ]; then
   fail "eml_cli does not enable eml_io/tls"
 fi
 
-# 実行のバイナリの依存の木に、eml_sched の testing はない
+# 実行のバイナリの依存の木に、eml_schedのtestingはない
 testing=$(cargo tree -p eml_cli -e normal,build -f '{p} {f}' | tr -d '\r' | { grep -c 'eml_sched.*testing' || true; })
 if [ "$testing" -ne 0 ]; then
   fail "eml_sched's feature testing is in eml_cli's tree"

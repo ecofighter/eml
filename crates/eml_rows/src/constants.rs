@@ -21,7 +21,7 @@ pub fn empty_mut_array<M: Mode>(heap: &mut Heap<M>) -> Word {
 }
 
 fn immortal_box<M: Mode>(heap: &mut Heap<M>, kind: Kind, value: u64) -> Word {
-    // 構築中の物体で、ほかの操作の前に値の語を書き終える (docs/spec/object-model.md の「核の操作」)
+    // 構築中の物体で、ほかの操作の前に値の語を書き終える (docs/spec/object-model.mdの「核の操作」)
     unsafe {
         let w = heap.alloc_immortal(layout::BOX_WORDS, Meta::new(0, 0, kind, false));
         heap.set_raw(w, layout::BOX_VALUE_WORD, value)
