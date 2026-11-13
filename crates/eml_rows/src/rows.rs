@@ -190,6 +190,31 @@ macro_rules! extern_rows {
                     Ok(ctx.string_find_from(needle, from, s)?)
                 }
                 fn StringDecode(ctx, b: obj) -> obj { Ok(ctx.string_decode(b)?) }
+                fn BytesEmpty(ctx, _u: unit) -> obj { Ok(ctx.bytes_empty()?) }
+                fn BytesAppend(ctx, a: obj, b: obj) -> obj { Ok(ctx.bytes_append(a, b)?) }
+                fn BytesAppendSlice(ctx, start: int, end: int, src: obj, dst: obj) -> obj {
+                    Ok(ctx.bytes_append_part(start, end, src, dst)?)
+                }
+                fn BytesSlice(ctx, start: int, end: int, b: obj) -> obj {
+                    Ok(ctx.bytes_slice(start, end, b)?)
+                }
+                fn BytesTruncate(ctx, n: int, b: obj) -> obj { Ok(ctx.bytes_truncate(n, b)?) }
+                fn BytesOfString(ctx, s: obj) -> obj { Ok(ctx.bytes_of_string(s)?) }
+                fn BytesEq(ctx, a: obj, b: obj) -> enum { Ok(ctx.bytes_eq(a, b)?) }
+                fn BytesNe(ctx, a: obj, b: obj) -> enum { Ok(ctx.bytes_ne(a, b)?) }
+                fn BytesCompare(ctx, a: obj, b: obj) -> enum { Ok(ctx.bytes_compare(a, b)?) }
+                fn BytesFindFrom(ctx, needle: obj, from: int, b: obj) -> int {
+                    Ok(ctx.bytes_find_from(needle, from, b)?)
+                }
+                fn BytesMake(ctx, n: int, byte: int) -> obj { Ok(ctx.bytes_make(n, byte)?) }
+                fn BytesWithCapacity(ctx, n: int) -> obj { Ok(ctx.bytes_with_capacity(n)?) }
+                fn BytesSet(ctx, i: int, byte: int, b: obj) -> obj {
+                    Ok(ctx.bytes_set(i, byte, b)?)
+                }
+                fn BytesPush(ctx, byte: int, b: obj) -> obj { Ok(ctx.bytes_push(byte, b)?) }
+                fn BytesFindByte(ctx, byte: int, from: int, b: obj) -> int {
+                    Ok(ctx.bytes_find_byte(byte, from, b)?)
+                }
                 fn FloatShow(ctx, x: float) -> obj { Ok(ctx.float_show(x)) }
                 fn StrConcat(ctx, a: obj, b: obj) -> obj { Ok(ctx.string_append(a, b)?) }
                 fn StrEq(ctx, a: obj, b: obj) -> enum { Ok(ctx.string_eq(a, b)?) }
@@ -378,23 +403,8 @@ macro_rules! extern_rows {
                 FloatParseRaw,
                 StrByteLength,
                 StrByteAt,
-                BytesEmpty,
                 BytesLength,
-                BytesAppend,
-                BytesAppendSlice,
-                BytesSlice,
-                BytesTruncate,
-                BytesOfString,
-                BytesEq,
-                BytesNe,
-                BytesCompare,
-                BytesFindFrom,
-                BytesMake,
-                BytesWithCapacity,
                 BytesGet,
-                BytesSet,
-                BytesPush,
-                BytesFindByte,
                 ShowBytesLength,
                 ShowBytesGet,
                 EnvArgCount,
