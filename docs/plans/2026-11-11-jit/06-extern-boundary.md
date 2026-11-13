@@ -137,7 +137,7 @@ Deleted: `names!`, `LISTED`, `Listed`, `Section`, `section_of!`. eml_nrt keeps `
 - `lower/consts.rs`: `Datum::EmptyMutArray`, symbol `a:mut` (`names.rs`); `DATUM_EMPTY_MUT_ARRAY` in `image.rs`; `fill_data` / `constants::build` call `eml_sched::constants::empty_mut_array(heap)` (`alloc_array_immortal(true)`, moved from `compile/constants.rs:112-118`; the VM calls the same function).
 - `abi.rs`:
   ```rust
-  pub fn c_signature(signature: &CSignature, call_conv: CallConv) -> Signature;   // I32 parameters and result carry `.sext()`
+  pub fn c_signature(signature: &CSignature, call_conv: CallConv) -> Signature;   // no `.sext()` anywhere (Q-3 fired at CP-C); callers `ireduce` I32 arguments and `sextend` an I32 result
   pub enum Import<'a> { Entry(&'a Entry), C(&'a CFunction), Dtor(&'a CHandleType) }
   pub fn declare_import<M: Module>(module: &mut M, import: Import<'_>) -> Built<FuncId>;   // the one `Linkage::Import`
   ```

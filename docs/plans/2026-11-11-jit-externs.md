@@ -992,17 +992,17 @@ Left to the implementer in U5: the wording of the lines within the row order; no
 
 ### 8a: imports on every target
 
-- Purpose: settle on the four CI targets, before any C lowering exists, that `func_addr` of a `Linkage::Import` function registered with `JITBuilder::symbol` gives its address (Q-2) and that a direct `call` with `AbiParam::new(I32).sext()` follows the C ABI (Q-3). Verified so far on aarch64 macOS only.
+- Purpose: settle on the four CI targets, before any C lowering exists, that `func_addr` of a `Linkage::Import` function registered with `JITBuilder::symbol` gives its address (Q-2) and that a direct `call` with plain `AbiParam::new(I32)` params and result, the caller narrowing `I32` arguments with `ireduce` and extending the result with an explicit `sextend`, follows the C ABI (Q-3, fired at CP-C: `.sext()` is not honoured the same way on every target, so nothing relies on it).
 - Targets: `crates/eml_native/tests/abi.rs` only.
 - Work: the test `abi::an_import_gives_its_address`:
-  - build with `eml_native::abi::jit_builder()`, registering local Rust `extern "C"` functions: `symbol("eml_cd$M.H", dtor)` with `dtor: extern "C" fn(*mut c_void)`; `symbol("eml_c$M.add", add)` with `add: (i32, f64, i32) -> i32`; `symbol("eml_c$M.sum12", sum12)` with the shape `(i32, i64, i32, usize, i32 × 6, f64, f64) -> i64`;
+  - build with `eml_native::abi::jit_builder()`, registering local Rust `extern "C"` functions: `symbol("eml_cd$M.H", dtor)` with `dtor: extern "C" fn(*mut c_void)`; `symbol("eml_c$M.add", add)` with `add: (i32, f64, i32) -> i32`; `symbol("eml_c$M.sum12", sum12)` with the shape `(i32, i64, i32, usize, i32 × 6, f64, f64) -> i64`; `symbol("eml_c$M.wide", wide)` with `wide: () -> i64` returning `0x1_FFFF_FFFB` (low half -5, upper half not its sign bits);
   - declare the imports with `Linkage::Import` inside the test (it is not under `src`, so G-grep is unaffected);
-  - assert: `func_addr` of `eml_cd$M.H` equals `dtor as usize`; `eml_c$M.add`, with `.sext()` on the `I32` params and result, returns the right value for `(-5, 0.5, -7)`; `eml_c$M.sum12` returns its weighted sum with negative `i32` arguments.
+  - assert: `func_addr` of `eml_cd$M.H` equals `dtor as usize`; no import signature carries `.sext()`; `eml_c$M.add`, its `I32` arguments passed through `ireduce` and its `I32` result through an explicit `sextend`, returns the right value for `(-5, 0.5, -7)`; `eml_c$M.sum12` returns its weighted sum with negative `i32` arguments (some stack-passed); the result probe `eml_c$M.wide`, imported with an `I32` result, returns -5 after the explicit `sextend`. Nothing is asserted about the upper bits a callee sees for an `I32` argument: the C ABI leaves them unspecified.
 - Left to the implementer: the weights of `sum12`.
 - Completion criteria:
   - `cargo nextest run -p eml_native -E 'test(=abi::an_import_gives_its_address)'` → `1 test run: 1 passed`.
   - G; G-grep.
-- Then CP-C. If the address assertion is red on a target: Q-2. If a `.sext()` assertion is red: Q-3.
+- Then CP-C. If the address assertion is red on a target: Q-2. If a `.sext()` assertion is red: Q-3. (Q-3 fired at CP-C on aarch64 Linux; the assertions above are the revised ones.)
 
 ### 7a: the empty `MutArray` datum
 
@@ -1219,7 +1219,7 @@ Left to the implementer in U5: the wording of the lines within the row order; no
 
 - Purpose: one helper builds a C function's Cranelift signature for the bridges and for native code (M-4, AM-6); one function declares every import.
 - Targets:
-  - `crates/eml_clink/src/` (the module holding `bridge.rs`'s signature code): `pub fn c_signature(signature: &CSignature, call_conv: CallConv) -> Signature`, with `.sext()` on `I32` params and result. `bridge.rs` builds its callee signature with it.
+  - `crates/eml_clink/src/` (the module holding `bridge.rs`'s signature code): `pub fn c_signature(signature: &CSignature, call_conv: CallConv) -> Signature`, with plain `AbiParam`s and no `.sext()` on `I32` params or result (Q-3); the callers narrow `I32` arguments with `ireduce` and extend an `I32` result with an explicit `sextend`. `bridge.rs` builds its callee signature with it (its `.sext()` on `I32` goes).
   - `crates/eml_native/src/abi.rs`:
     ```rust
     pub enum Import<'a> { Entry(&'a Entry), C(&'a CFunction), Dtor(&'a CHandleType) }
@@ -1229,14 +1229,14 @@ Left to the implementer in U5: the wording of the lines within the row order; no
   - `lower/mod.rs`: the caller. `lower/names.rs`: `c_function(name) = "eml_c$<name>"`, `c_dtor(handle) = "eml_cd$<handle type name>"`.
   - `crates/eml_native/Cargo.toml`: a normal edge to `eml_clink`; `nix/crate-graph.sh`'s `eml_native` row becomes `eml_cabi eml_clink eml_extern eml_lir eml_nrt eml_rt`.
   - Docs: architecture.md, the `eml_clink` bullet (`c_signature`) and the `eml_native` bullet (`declare_import`, the edge to `eml_clink`); CLAUDE.md, the `eml_native` line (it depends on `eml_clink`) and the `eml_clink` line if it names its contents.
-- Work (test first): `c_signature_extends_int32` in `crates/eml_clink/tests/bridge.rs`: `I32` params and result carry `ArgumentExtension::Sext`; other types carry none.
+- Work (test first): `c_signature_has_no_extension` in `crates/eml_clink/tests/bridge.rs`: the params and result have the Cranelift types of the C types, and every one of them, `I32` included, carries `ArgumentExtension::None`.
 - Left to the implementer: the module of `c_signature` inside `eml_clink`.
 - Completion criteria:
   - G; G-grep (8c).
   - `cargo nextest run -p eml_clink -p eml_native` → exit 0, no `failed`.
-  - `cargo nextest run -p eml_clink -E 'test(c_signature_extends_int32)'` → `1 test run: 1 passed`.
+  - `cargo nextest run -p eml_clink -E 'test(c_signature_has_no_extension)'` → `1 test run: 1 passed`.
   - `git diff --exit-code HEAD -- crates/eml_cli/tests/snapshots` → exit 0.
-- Pitfalls: if Q-3 fired at CP-C, `c_signature` has no `.sext()` and this test follows the revision.
+- Rule (Q-3 fired at CP-C): `c_signature` puts no `.sext()` anywhere; the extension of an `I32` result is the caller's explicit `sextend`, and an `I32` argument is passed as `ireduce.i32(v)`, whose upper bits the C ABI leaves unspecified.
 
 ### 8d: call user C functions natively
 
@@ -1247,8 +1247,8 @@ Left to the implementer in U5: the wording of the lines within the row order; no
     1. Arguments as words of the row's Reprs.
     2. For each `CParam::Int(int)` with `int.narrows()`, in parameter order: `I32`: `sextend(ireduce.i32(v)) == v`; `SizeT`: `v >= 0`. Cold edge: `eml_x_c_narrow(ctx, <the s: datum of the name>, k + 1, code, v)`, then the `Never` path with `raise = Some((site, row.purity))`. `k + 1` is 1-based over all `CFunction.params`, `NoArg` included (D-37).
     3. Pointer and handle arguments, in parameter order: the three `eml_rt_*` entries and `eml_x_c_handle_ptr`. `NoArg` passes nothing.
-    4. `call` of `eml_c$<name>` (`I32` arguments through `ireduce`).
-    5. Result: `Void` → `Word::UNIT`; `I32` → `sextend`; `I64` / `SizeT` raw; `F64`; `Handle(h)` → `eml_x_c_handle_new(ctx, name, func_addr(eml_cd$<h>) or 0, ptr)`, then the fault load (`After::Faults`).
+    4. `call` of `eml_c$<name>`: an `I32` argument is passed as `ireduce.i32(v)` (after the narrowing check of step 2); the signature from `c_signature` carries no `.sext()` (Q-3).
+    5. Result: `Void` → `Word::UNIT`; `I32` → an explicit `sextend` to `I64` (the import's result has no `.sext()`, Q-3); `I64` / `SizeT` raw; `F64`; `Handle(h)` → `eml_x_c_handle_new(ctx, name, func_addr(eml_cd$<h>) or 0, ptr)`, then the fault load (`After::Faults`).
     Steps 3 and 4 are emitted by one function, `FnLower::lend_and_call`, which takes the already checked scalar values and whose body contains no builder call other than `call_entry` of the four lending entries and the `call` of the import. A statement may reach its unwind cleanup from several cold edges (each narrowing check, the handle fault), as `After::Arith` already does with two.
   - The name datum goes through `lower/consts.rs`'s string datum (the `ConstString` path). No new datum kind.
   - `lower/function.rs`: the `ExternRef::C` arm. `unsupported.rs`: `CRow` is deleted and `ExternRef::C(_) => {}`. `rejected_what` loses `CRow`.
@@ -1443,7 +1443,7 @@ U1 → UT → G-a → G-b → G-c → G-d → U2a → U2b → U3 → U4 → [CP-
 |---|---|---|---|---|
 | Q-1 | One of the 53 rows cannot be put in an accepted file, or a residue row turns out to be reached (the Tls / Gui residue was not verified row by row) | 7c-7e, S-4 | the implementer, at the snapshot run | name the std functions that contain the row and the rejected form each brings; move the row between the lists of D-32, the 7e completion and testing.md's residue sentence in the same commit. More than 3 rows move: stop and report |
 | Q-2 | 8a's `func_addr` assertion is red on a target | 8b, 8d, G-14 | CP-C | plan revision without a user decision, applied on every target: a datum kind `DATUM_ADDRESS` in `crates/eml_nrt/src/image.rs`; `eml_native`'s `Tables::new` puts the dtor address from `Linked::dtors()` (after `fits`) into the row's `bits`, and `fill_data` copies `bits` into the slot raw, building no object; the datum is named `h:<handle type name>`; `eml_nrt` gains no `eml_cabi` edge; `eml_x_c_handle_new` is unchanged; G-grep allows `"h:`; 8a drops the address assertion |
-| Q-3 | 8a's `.sext()` assertions are red on a target | 8c, 8d | CP-C | `eml_clink::c_signature` drops `.sext()`; `lower/c.rs` emits an explicit `sextend` of `I32` arguments and of the result; 8c's test follows |
+| Q-3 | 8a's `.sext()` assertions are red on a target | 8c, 8d | CP-C | `eml_clink::c_signature` drops `.sext()`; `lower/c.rs` emits an explicit `sextend` of `I32` arguments and of the result; 8c's test follows. Fired at CP-C (run 43498436398, aarch64-unknown-linux-gnu: `an_import_gives_its_address` got `8589934587` for -5 from an `I32` argument with `.sext()`): applied. 8a, 8c and 8d read the revision: an `I32` argument is passed as `ireduce.i32(v)` after the narrowing check (its value already equals the sign extension of its low half, and the C ABI leaves the upper bits unspecified), and the result goes through an explicit `sextend` |
 | Q-4 | B ≥ 5.000 s, or T's slowest file ≥ 1000 ms | 7b, 7e, 8d | measured in those tasks | stop and report T's 5 slowest lines and B to the user; do not split the test or mark files |
 | Q-5 | T-B-vm or T-B-nrt rises above 1.20 × base | U5f, U5j | T-B's rule | the remedy of T-B, then stop and report |
 | Q-6 | `.#cross` is unavailable on the dev machine | GS 9, 15, 17; U4; U5i; 8d | U1's prerequisite check | record those lines as skipped in each commit message; CP-A's Windows CI covers Windows type-checking of the default features |
