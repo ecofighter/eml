@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
+use eml_rows::constants::{immortal_big_int, immortal_float};
 use eml_rt::{Control, Fast, Frozen, Heap, HeapError, Word, layout};
-use eml_sched::constants::{immortal_big_int, immortal_float};
 
 use crate::closures::code_word;
 

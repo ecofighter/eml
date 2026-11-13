@@ -49,7 +49,7 @@ macro_rules! placeholder {
 }
 
 /// 一覧の展開。`inline`の行を飛ばし、ほかの行の変種ごとに1つのエントリを作る。行の本体は読まず、一覧の最初の変種の
-/// 名前の行の関数を`$rows`から呼ぶ。本体は`eml_sched`の中の名前を修飾せずに書くためである。作ったエントリは、
+/// 名前の行の関数を`$rows`から呼ぶ。本体は`eml_rows`の中の名前を修飾せずに書くためである。作ったエントリは、
 /// 最後に`$done!`へ渡して1つの表にする。
 macro_rules! entries {
     (
@@ -59,7 +59,7 @@ macro_rules! entries {
         lir { $($lir:tt)* }
         task { $($task:tt)* }
     ) => {
-        entries!(@lines [eml_sched::rows] rows_table [] $($generic)* $($dedicated)*);
+        entries!(@lines [eml_rows::rows] rows_table [] $($generic)* $($dedicated)*);
     };
     (@lines [$($rows:ident)::+] $done:ident [$($acc:tt)*]) => {
         $done! { $($acc)* }
@@ -144,7 +144,7 @@ macro_rules! rows_table {
     };
 }
 
-eml_sched::extern_rows!(entries);
+eml_rows::extern_rows!(entries);
 
 /// 致命的な誤りの道を通るので、Miriでは流さない (docs/implementation/testing.md の「`eml_nrt`の検証」)。
 #[cfg(all(test, not(miri)))]

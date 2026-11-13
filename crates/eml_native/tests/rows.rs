@@ -159,7 +159,7 @@ fn floats() -> [f64; 10] {
     ]
 }
 
-/// インラインの行の共有の関数。行の最初の変種の名前を持つ`eml_sched::rows`の関数で、VMの側もそれを呼ぶ。
+/// インラインの行の共有の関数。行の最初の変種の名前を持つ`eml_rows::rows`の関数で、VMの側もそれを呼ぶ。
 #[derive(Clone, Copy)]
 enum Shared {
     Int(unsafe fn(&mut Ctx<Fast>, i64) -> Result<i64, RunFault>),

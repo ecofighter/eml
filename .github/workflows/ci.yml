@@ -78,7 +78,7 @@ jobs:
           cargo clippy -p eml_cli --no-default-features --features core -- -D warnings
           cargo clippy -p eml_cli --no-default-features --features run -- -D warnings
           cargo clippy -p eml_cli --no-default-features --features run,gui -- -D warnings
-          cargo clippy -p eml_io -p eml_vm -p eml_nrt --all-targets -- -D warnings
+          cargo clippy -p eml_io -p eml_rows -p eml_vm -p eml_nrt --all-targets -- -D warnings
           cargo clippy -p eml_sched --all-targets -- -D warnings
           cargo clippy -p eml_test_support --no-default-features -- -D warnings
           cargo clippy -p eml_test_support --no-default-features --features hir -- -D warnings
@@ -93,20 +93,11 @@ jobs:
           test "$(cargo tree --workspace -e features -i eml_vm | grep -c 'eml_vm feature "tls"')" -ge 1
           test "$(cargo tree -p eml_vm -p eml_io -e normal,dev,build --target all | grep -c -E 'eml_tls|aws-lc|ring v')" -eq 0
           test "$(cargo tree --workspace --exclude eml_tls --no-default-features --features eml_cli/run,eml_test_support/run -e normal,dev,build --target all | grep -c -E 'eml_tls|aws-lc|ring v')" -eq 0
-      # VMはCranelift、eml_native、eml_nrtのどれにも依存せず、eml_nrtはCranelift、eml_lir、eml_core_ir、eml_vm、eml_nativeに
-      # 依存せず、eml_nativeはeml_vmに依存せず、eml_lirはeml_rtに依存せず、eml_schedはCranelift、eml_lir、eml_vm、eml_native、
-      # eml_nrtに依存せず、emlのバイナリの依存の木にeml_schedのfeature testingはなく、externの表はunsafeを持たない
+      # crateの依存の辺とfeature、crateの木の閉包を、nix/crate-graph.shの表と検査に照らす
       # (docs/implementation/architecture.md の「crate の依存関係」)
-      - name: dependency edges of eml_native
+      - name: crate graph
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
-        run: |
-          test "$(cargo tree -p eml_vm -e normal --target all | grep -c -E 'cranelift|eml_native|eml_nrt')" -eq 0
-          test "$(cargo tree -p eml_nrt -e normal --target all | grep -c -E 'cranelift|eml_lir|eml_core_ir|eml_vm|eml_native')" -eq 0
-          test "$(cargo tree -p eml_native -e normal --target all | grep -c -E 'eml_vm')" -eq 0
-          test "$(cargo tree -p eml_lir -e normal --target all | grep -c -E 'eml_rt')" -eq 0
-          test "$(cargo tree -p eml_sched -e normal --target all | grep -c -E 'cranelift|eml_lir|eml_vm|eml_native|eml_nrt')" -eq 0
-          test "$(cargo tree -p eml_cli -e normal,build -f '{p} {f}' | grep -c 'eml_sched.*testing')" -eq 0
-          test -z "$(grep -rn unsafe crates/eml_extern/src)"
+        run: bash nix/crate-graph.sh --check
       # eml_guiはワークスペースのどのcrateにも依存せず、既定の依存の木にnativeのtoolkitのcrateは入らない。gui-nativeの木には
       # 3つのtoolkitのcrateがどれも入る。既定の木では、生成したWinUIのbindingだけが使うwindows-collections、windows-reference、
       # windows-timeも見る。gui-nativeの木でのWinUIの印は、windows-collectionsとする

@@ -681,6 +681,16 @@ name = "eml_nrt"
 version = "0.1.0"
 dependencies = [
  "eml_extern",
+ "eml_rows",
+ "eml_rt",
+ "eml_sched",
+]
+
+[[package]]
+name = "eml_rows"
+version = "0.1.0"
+dependencies = [
+ "eml_extern",
  "eml_rt",
  "eml_sched",
 ]
@@ -696,7 +706,6 @@ dependencies = [
 name = "eml_sched"
 version = "0.1.0"
 dependencies = [
- "eml_extern",
  "eml_io",
  "eml_rt",
  "libc",
@@ -759,6 +768,7 @@ dependencies = [
  "eml_gui",
  "eml_io",
  "eml_lir",
+ "eml_rows",
  "eml_rt",
  "eml_sched",
  "eml_test_support",

@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-テストの書き方、テストの変更の運用、テストの置き場所、層ごとの方法、`eml_rt`の検証、`eml_sched`のテスト、`eml_vm`のテスト、LIRとCore IRのテキストの形、UIテストの仕組みを定める。
+テストの書き方、テストの変更の運用、テストの置き場所、層ごとの方法、`eml_rt`の検証、`eml_sched`のテスト、`eml_rows`のテスト、`eml_vm`のテスト、LIRとCore IRのテキストの形、UIテストの仕組みを定める。
 
 ## 方針
 
@@ -299,6 +299,10 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 - `eml_vm`の単体テストが使う`cells.rs`のテストの道具は、`cfg(any(test, feature = "testing"))`の下で組む。`testing`を有効にするのは`eml_vm`のdev-dependencyだけである ([アーキテクチャ](architecture.md)の「crate の依存関係」)
 - `cells.rs`にただ1つある`cfg!(test)`の式 (`Registry::host_bin`) は、`cfg!(test)`のままにする。featureに広げると、`eml_vm`の結合テストとUIテストの下のライブラリが、releaseのビルドより甘くなるためである。`eml_vm`の単体テストは、代わりに道具からhostにbinを渡す
+
+## `eml_rows`のテスト
+
+`eml_rows`のテストは、`rows.rs`の単体テストと結合テストの`tests/constants.rs`である。単体テストは、VMを通さずに一覧の行の関数と一覧の表を直接確かめる。`constants.rs`は、定数の箱を作る関数が作る大きい`int`と`float`の箱が、検査モードでも速いモードでも読み戻せて不死であることを確かめる。2つの実行系が同じ関数を使うので、定数の箱の表現は1か所で確かめる ([ネイティブの実行系](../spec/native.md)の「値と定数」)。
 
 ## `eml_vm` のテスト
 
@@ -721,7 +725,7 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ## feature の組み合わせの確認
 
-ワークスペースの`cargo clippy --all-targets`は、各crateを既定のfeatureでしか検査しない。`eml_cli`と`eml_test_support`のfeatureや、featureで切り替えるコードを変えたときは、既定でない組み合わせのlibも検査する。組み合わせは、`eml_cli`のfeatureなし、`types`、`core`と、`eml_test_support`のfeatureなし、`hir`、`types`、`core`の7個に、`eml_cli`の`--no-default-features --features run` (lib、`tls`と`gui`なし) と`--no-default-features --features run,gui` (lib、`tls`なし)、`-p eml_io -p eml_vm -p eml_nrt --all-targets` (`tls`と`gui`なし、テストも含む)、`-p eml_sched --all-targets` (`testing`なし、テストも含む) を足した11個である。前の7個は`cargo clippy -p <crate> --no-default-features [--features <feature>] -- -D warnings`で流す。テストとbinは`run`を前提にするので、`--all-targets`は付けない。上流のcrateのテストが下流のcrateを組み立てないことは、`cargo tree -p eml_hir -e normal,dev`と`cargo tree -p eml_types -e normal,dev`に下流の段階のcrateが出ないことで確かめる。
+ワークスペースの`cargo clippy --all-targets`は、各crateを既定のfeatureでしか検査しない。`eml_cli`と`eml_test_support`のfeatureや、featureで切り替えるコードを変えたときは、既定でない組み合わせのlibも検査する。組み合わせは、`eml_cli`のfeatureなし、`types`、`core`と、`eml_test_support`のfeatureなし、`hir`、`types`、`core`の7個に、`eml_cli`の`--no-default-features --features run` (lib、`tls`と`gui`なし) と`--no-default-features --features run,gui` (lib、`tls`なし)、`-p eml_io -p eml_rows -p eml_vm -p eml_nrt --all-targets` (`tls`と`gui`なし、テストも含む)、`-p eml_sched --all-targets` (`testing`なし、テストも含む) を足した11個である。前の7個は`cargo clippy -p <crate> --no-default-features [--features <feature>] -- -D warnings`で流す。テストとbinは`run`を前提にするので、`--all-targets`は付けない。上流のcrateのテストが下流のcrateを組み立てないことは、`cargo tree -p eml_hir -e normal,dev`と`cargo tree -p eml_types -e normal,dev`に下流の段階のcrateが出ないことで確かめる。
 
 `tls` は `eml_cli` の既定で有効になり、`eml_vm/tls`、`eml_io/tls` の順に伝わる。ワークスペース全体の実行では feature が統一されて `eml_io` と `eml_vm` の `tls` も有効になるが、`-p eml_io` や `-p eml_vm` で選ぶと無効になる。この2つの crate の `tls` ありのテストだけを流すには `cargo nextest run -p eml_io -p eml_vm --features eml_io/tls,eml_vm/tls` を使う。`cargo test -p eml_cli --no-default-features --features run` は対応しない。UI テストが `tls` を前提にするためである。
 
@@ -758,7 +762,7 @@ Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-App
 
 `.github/workflows/ci.yml`は、mainへのpush、pull request、手動の起動で、次の8つのジョブを流す。
 
-- `test`: macOS (macos-15)、Linux (ubuntu-24.04と、aarch64のubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls`と`gui`を外した`tls_off::`と`gui_off::`のテスト、既定でないfeatureのclippy (「feature の組み合わせの確認」の11個) と、段「feature resolution of tls」、段「dependency edges of eml_native」、段「dependency edges of eml_gui」の検査を流す。段「dependency edges of eml_gui」は、`eml_gui`がワークスペースのどのcrateにも依存しないことと、`eml_cli`の既定の依存の木にnativeのtoolkitのcrate (`cxx`、`objc2`、`qt-build-utils`と、生成したWinUIのbindingだけが使う`windows-collections`、`windows-reference`、`windows-time`) が入らないことを`cargo tree`で守る。`gui-native`を足した木 (`--target all`) は1度書き出し、`cxx v`、`objc2 v`、WinUIの印の`windows-collections v`、`qt-build-utils v`がそれぞれ出ることを、crateごとの`grep -q`で確かめる。まとめて数えると、1つのtoolkitのcrateだけでも数が足りてしまうからである。toolchainはrustupが`rust-toolchain.toml`から入れ、`rustc -V`のバージョンが`channel`と同じことを確かめる。Windowsのtargetは`x86_64-pc-windows-msvc`だけで、ジョブはhostがそれであることを確かめる。cargo-nextestは、ワークフローに書いたバージョンを入れる。ubuntu-24.04では、同じビルドで時間の検査 (「性能のテスト」) も流す
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04と、aarch64のubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls`と`gui`を外した`tls_off::`と`gui_off::`のテスト、既定でないfeatureのclippy (「feature の組み合わせの確認」の11個) と、段「feature resolution of tls」、段「crate graph」、段「dependency edges of eml_gui」の検査を流す。段「crate graph」は`nix/crate-graph.sh --check`を流し、crate間の直接の辺とfeatureの表、crateの木の閉包を守る ([アーキテクチャ](architecture.md)の「crate の依存関係」)。段「dependency edges of eml_gui」は、`eml_gui`がワークスペースのどのcrateにも依存しないことと、`eml_cli`の既定の依存の木にnativeのtoolkitのcrate (`cxx`、`objc2`、`qt-build-utils`と、生成したWinUIのbindingだけが使う`windows-collections`、`windows-reference`、`windows-time`) が入らないことを`cargo tree`で守る。`gui-native`を足した木 (`--target all`) は1度書き出し、`cxx v`、`objc2 v`、WinUIの印の`windows-collections v`、`qt-build-utils v`がそれぞれ出ることを、crateごとの`grep -q`で確かめる。まとめて数えると、1つのtoolkitのcrateだけでも数が足りてしまうからである。toolchainはrustupが`rust-toolchain.toml`から入れ、`rustc -V`のバージョンが`channel`と同じことを確かめる。Windowsのtargetは`x86_64-pc-windows-msvc`だけで、ジョブはhostがそれであることを確かめる。cargo-nextestは、ワークフローに書いたバージョンを入れる。ubuntu-24.04では、同じビルドで時間の検査 (「性能のテスト」) も流す
 - `gui-native`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUIの手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKit、Qt、WinUIのbackendはテストの中では作れない。WindowsではWindows App SDKのファイルなしに組み、`eml_gui`のbootstrapのテストは、runnerにruntimeがなければ文言がMicrosoftの配布のページを示すことを確かめ、あれば`skipped: the Windows App SDK 2 runtime is installed`と書いて通る。Windowsでは、この行をログに出すため、別の段でこのテストだけを`--no-capture`でもう1度流す。全体の実行には`--no-capture`を付けない。nextestがテストを1つずつ流すようになるからである。Linuxでは、Qt 6の入ったふだんのdevShellを通して流し、続けて`nix build`を流す。rustcはx86_64のLinuxで既定に自分のLLDでリンクし、nixのldのラッパーを通らないので、Qtとlibstdc++へのRUNPATHが付かない。そこでdevShellと`nix build`は`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Clinker-features=-lld`でラッパーのldに戻し、ラッパーがRUNPATHを付ける。`result/bin/.eml-wrapped`が`libQt6Widgets.so.6`に動的にリンクすること (`readelf -d`) と、`result`に`libQt6*`、`*.dll`、`*.msix`のファイルがないことを確かめる
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
@@ -852,5 +856,5 @@ nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -
 cargo verus verify -p eml_rt                                                                # Verus の証明
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')                         # eml_rt の verus! の中の書式
 bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)
-cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でないfeature (なし、types、core、run (tlsなし)。eml_test_supportはhirも。eml_io、eml_vm、eml_nrtは--all-targetsでtlsなし。eml_schedは--all-targetsでtestingなし)
+cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でないfeature (なし、types、core、run (tlsなし)。eml_test_supportはhirも。eml_io、eml_rows、eml_vm、eml_nrtは--all-targetsでtlsなし。eml_schedは--all-targetsでtestingなし)
 ```

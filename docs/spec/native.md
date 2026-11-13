@@ -113,7 +113,7 @@
 - `FnRow { name, code, size, sites, value }`は関数1つで、名前、コードの範囲`[code, code + size)`、その関数自身のfaultの地点 (文の順)、その関数の静的なクロージャを持つ`DATUM_FN`の行のslot (なければnull。「関数の値」) を持つ。地点は、関数のコードのアドレスと、その関数の`sites`の添字の組で表す。だからプログラムのほかの部分で変わる番号はコードに現れない
 - `SiteRow { file, line, column }`は地点のソースの位置である。`file`は`files`の添字で、`NO_FILE` (`u32::MAX`) は位置のない地点を表す
 - 実行系は、コードのアドレスから関数を、`code`の順に並べた行の二分探索で探す。並べるのはrunごとに1回で、探すのは冷たい道だけである。どの行の範囲にもないアドレスは、関数`<native code>`として報告する
-- `DatumRow { kind, bits, text, code, slot }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`)、`DATUM_FN` (3。静的なクロージャで、`bits`は引数の数、`code`はエントリのコード。「関数の値」) のどれかである。`slot`はmoduleの書ける8バイトのデータの物である。実行系は最初のエントリの前に、どの値も凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。定数は、VMが定数を作るのと同じ関数 (`eml_sched::constants`と、文字列には`alloc_string_immortal`) で作る。生成したコードは、値をそのslotからのロード1つで読む
+- `DatumRow { kind, bits, text, code, slot }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`)、`DATUM_FN` (3。静的なクロージャで、`bits`は引数の数、`code`はエントリのコード。「関数の値」) のどれかである。`slot`はmoduleの書ける8バイトのデータの物である。実行系は最初のエントリの前に、どの値も凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。定数は、VMが定数を作るのと同じ関数 (`eml_rows::constants`と、文字列には`alloc_string_immortal`) で作る。生成したコードは、値をそのslotからのロード1つで読む
 - `PapRow { rest, code }`は、`rest`個の引数を待つPAPのアダプタ1つのコードである (「関数の値」)
 - slotを書いた後、`Image`は読むだけになる。だから`Image`は`Sync`で、呼ぶ側が待っている間にworkerのスレッドがそれを読む
 - `Start { thunk, entry, argv, result_rc }`は、runがコードに入る所である。`eml_enter`の引数と、エントリの結果がrunの手放す数える語かどうかを持つ
@@ -201,7 +201,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## externの失敗
 
-行のエントリ`eml_x_<Variant>`は、`eml_nrt/src/rows.rs`の表`ROWS`にある。行の一覧`extern_rows!` (`eml_sched/src/rows.rs`) の展開`entries`が、`inline`の印のない行の変種ごとに`shim`のエントリを1つ作る。エントリの識別子は行の`as`の識別子で、`eml_x_`に変種の名前を続けたものである。引数と結果の種類は、行の種類のトークンをそのまま使う。エントリは行の本体を読まず、行の最初の変種の名前を持つ`eml_sched::rows`の行の関数を呼ぶ。だから行の実装は、どちらのエンジンでも1つである。
+行のエントリ`eml_x_<Variant>`は、`eml_nrt/src/rows.rs`の表`ROWS`にある。行の一覧`extern_rows!` (`eml_rows/src/rows.rs`) の展開`entries`が、`inline`の印のない行の変種ごとに`shim`のエントリを1つ作る。エントリの識別子は行の`as`の識別子で、`eml_x_`に変種の名前を続けたものである。引数と結果の種類は、行の種類のトークンをそのまま使う。エントリは行の本体を読まず、行の最初の変種の名前を持つ`eml_rows::rows`の行の関数を呼ぶ。だから行の実装は、どちらのエンジンでも1つである。
 
 - 行の関数が`Ok(v)`を返したら、エントリは`v`を返す。`unit`の行はUnitの語を返し、`never`の行は結果なしでふつうに戻る
 - `Err(RunFault::Extern(fault))`を返し、行の`faults`が真なら、エントリは`ctx.set_fault`でfaultを置き、仮の値 (語の結果ならUnitの語、整数なら0、`float`なら0.0) を返す。生成したコードは呼び出しのすぐ後でfaultの語を確かめ、仮の値を使わない
@@ -220,7 +220,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## 行の下ろし方
 
-`eml_sched::rows`の一覧`extern_rows!`の行は、印`inline`の有無で下ろし方が分かれる。印のある行はエントリを持たず、`Listed`の記録は`inline`が真で`entry`が`None`である。eml_nativeの`rows::INLINE` (「断る形」) は、印のある行の集まりと等しい。印のない行は、エントリ`eml_x_<Variant>`を持つ (「externの失敗」)。eml_nativeの`rows::CALLED`のどの行にもエントリがあり、その記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、`eml_sched::rows`の行の関数を`eml_nrt::shared_rows`として、一覧を`eml_nrt::LISTED`として再エクスポートする。eml_nativeは、`eml_sched`に依存せずにこれらを読む。
+`eml_rows::rows`の一覧`extern_rows!`の行は、印`inline`の有無で下ろし方が分かれる。印のある行はエントリを持たず、`Listed`の記録は`inline`が真で`entry`が`None`である。eml_nativeの`rows::INLINE` (「断る形」) は、印のある行の集まりと等しい。印のない行は、エントリ`eml_x_<Variant>`を持つ (「externの失敗」)。eml_nativeの`rows::CALLED`のどの行にもエントリがあり、その記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、`eml_rows::rows`の行の関数を`eml_nrt::shared_rows`として、一覧を`eml_nrt::LISTED`として再エクスポートする。eml_nativeは、`eml_sched`に依存せずにこれらを読む。
 
 生成したコードは、`rows::INLINE`の行を、その文の位置でCLIFの命令に展開する。結果は、行の共有の関数 (`eml_nrt::shared_rows`の関数) の結果とビット単位で等しい。
 

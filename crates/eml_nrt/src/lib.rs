@@ -24,8 +24,8 @@ pub use eml_rt::HostRef;
 pub use eml_sched::config::{Finished, RunConfig};
 pub use eml_sched::error::{RunFault, RuntimeError};
 // 行の関数と一覧。eml_nativeは、eml_schedに依存せずにここから読む (docs/spec/native.md の「行の下ろし方」)
-pub use eml_sched::rows as shared_rows;
-pub use eml_sched::rows::{LISTED, Listed, Section};
+pub use eml_rows::rows as shared_rows;
+pub use eml_rows::rows::{LISTED, Listed, Section};
 pub use enter::{
     FATAL_FAULT, FATAL_PANICKED, FATAL_RECORDED, Fatal, Raise, Thunk, detached, eml_enter,
     eml_fatal, enter,

@@ -280,19 +280,34 @@ fn only_mem_names_eml_rt() {
 }
 
 #[test]
-fn eml_native_has_no_edge_to_eml_sched() {
+fn eml_native_has_no_edge_to_the_shared_runtime() {
     let nrt_manifest = std::fs::read_to_string(crate_dir("eml_nrt").join("Cargo.toml")).unwrap();
-    assert!(nrt_manifest.contains("eml_sched"));
+    for name in ["eml_sched", "eml_rows"] {
+        assert!(
+            nrt_manifest.contains(name),
+            "eml_nrt's Cargo.toml lacks {name}"
+        );
+    }
+    // dev-dependencies は検査の道具なので、読むのは `[dependencies]` の節だけにする
     let manifest = std::fs::read_to_string(crate_dir("eml_native").join("Cargo.toml")).unwrap();
-    assert!(
-        !manifest.contains("eml_sched"),
-        "Cargo.toml names eml_sched ({NATIVE})"
-    );
-    let found = files_with(&native(), "eml_sched", true);
-    assert!(
-        found.is_empty(),
-        "eml_sched is named in {found:?} ({NATIVE})"
-    );
+    let dependencies: String = manifest
+        .lines()
+        .skip_while(|line| line.trim_end() != "[dependencies]")
+        .skip(1)
+        .take_while(|line| !line.starts_with('['))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!dependencies.is_empty());
+    for name in ["eml_sched", "eml_rows", "eml_io", "eml_vm"] {
+        assert!(
+            !dependencies.contains(name),
+            "[dependencies] names {name} ({NATIVE})"
+        );
+    }
+    for name in ["eml_sched", "eml_rows"] {
+        let found = files_with(&native(), name, true);
+        assert!(found.is_empty(), "{name} is named in {found:?} ({NATIVE})");
+    }
 }
 
 #[test]
@@ -343,7 +358,7 @@ fn code_cites_only_spec_and_implementation() {
     let docs = ["docs", ""].join("/");
     let mut cited = 0;
     let mut found = Vec::new();
-    for name in ["eml_native", "eml_nrt", "eml_sched"] {
+    for name in ["eml_native", "eml_nrt", "eml_sched", "eml_rows"] {
         let mut paths = Vec::new();
         walk(&crate_dir(name), &mut paths);
         for path in paths {

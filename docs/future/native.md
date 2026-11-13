@@ -17,7 +17,7 @@ LIR から Cranelift でネイティブのコードを出す設計をまとめ�
 
 | # | 領域 | 決定 |
 |---|---|---|
-| 1 | コード生成器 | コード生成器は1つで、開いた後のLIRをCLIFにするcrate `eml_native`である。JIT (`eml run --native`とREPL。`cranelift-jit`) とAOT (`eml build`。`cranelift-object`) の両方が、同じCLIFと同じ実行系のエントリを使う。出すコードが呼ぶ実行系のエントリ、エントリのstub、runの駆動はcrate `eml_nrt`に置く。`eml_nrt`はCraneliftに依存せず、`libeml_rt.a`はそこから作る。実行の方式によらない共有の層はcrate `eml_sched`である。依存の辺は`eml_native` → `eml_nrt` → `eml_sched` → `eml_rt`で、`eml_native`はほかに`eml_lir`と、定数を読むためだけに`eml_rt`にも依存する。`eml_native`は、FFIの橋渡しの関数とライブラリの解決も持ち、`eml_extern`、`eml_cabi`、Cranelift、libloadingに依存する ([コンパイラの構成](../implementation/architecture.md)の「crate の依存関係」)。`eml_vm`は、Cranelift、`eml_native`、`eml_nrt`のどれにも依存しない |
+| 1 | コード生成器 | コード生成器は1つで、開いた後のLIRをCLIFにするcrate `eml_native`である。JIT (`eml run --native`とREPL。`cranelift-jit`) とAOT (`eml build`。`cranelift-object`) の両方が、同じCLIFと同じ実行系のエントリを使う。出すコードが呼ぶ実行系のエントリ、エントリのstub、runの駆動はcrate `eml_nrt`に置く。`eml_nrt`はCraneliftに依存せず、`libeml_rt.a`はそこから作る。実行の方式によらない共有の層はcrate `eml_sched`で、externの行の本体はcrate `eml_rows`が持つ。依存の辺は`eml_native` → `eml_nrt` → `eml_rows` → `eml_sched` → `eml_rt`で、`eml_native`はほかに`eml_lir`と、定数を読むためだけに`eml_rt`にも依存する。`eml_native`は、FFIの橋渡しの関数とライブラリの解決も持ち、`eml_extern`、`eml_cabi`、Cranelift、libloadingに依存する ([コンパイラの構成](../implementation/architecture.md)の「crate の依存関係」)。`eml_vm`は、Cranelift、`eml_native`、`eml_nrt`のどれにも依存しない |
 | 2 | コンパイルの単位 | プログラム全体 (利用者のモジュールと、届く std) を、Core IR の最適化の後で一度にコンパイルする。`eml run --native` は始めに、REPL は入力の境目ごとに、その入力が足す関数をコンパイルする。どちらも worker が動いていない間に行う。関数ごとに遅れてコンパイルする stub は置かない |
 | 3 | VM との関係 | VM とネイティブのコードは混ぜない。ネイティブのコードはバイトコードを呼ばず、バイトコードもネイティブの eml の関数を呼ばない。VM は参照の実装で、検査モード (`--debug-heap`) を持つ唯一の実行系である。ネイティブは `eml_rt` を速いモードで具体化する。バックエンドを作る途中は、扱わない形を含むプログラムを E0004 で断る。断る形の一覧は空になるまで減らし、仕上がったバックエンドは何も断らない |
 | 4 | 呼び出し規約 | eml の中の呼び出しは Cranelift の `tail` 規約で、末尾呼び出しは `return_call` と `return_call_indirect` である。extern と C の関数は OS の既定の規約で、`tail` のコードから普通の `call` で呼ぶ |
@@ -151,7 +151,7 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 ## AOT と配布
 
 - `eml build` は `cranelift-object` で object を書き、システムのリンカを呼ぶ。リンカは rustc と同じやり方で探す (Unix では `cc`、Windows では Visual Studio の `link.exe`、あれば `lld-link`)。モジュールの `link` の指示は `-l` と `-framework` にして渡す。利用者のマシンに rustc も cargo も要らない
-- emlの配布物 (Nixのパッケージと、リリースのtarball) は、実行系の静的ライブラリを、emlのビルドのときに固定したtoolchainで作って同梱する。変種は2つある。`libeml_rt.a`は`eml_nrt`から (`eml_sched`と`eml_rt`を含めて) 作り、実行系とエントリのstubをまとめ、GUIを持たない。`libeml_rt_gui.a`はそれに、toolkitの行の腕、`Park`の繋ぎ、runの外の待ちの印とゲートと回収の処理、`eml_gui`、shimのobjectを加える。AOTのプログラムにリンクするRustの静的ライブラリは、いつもちょうど1つである。1つのリンクに複数のRustの静的ライブラリを入れると衝突するためである (personalityの記号の直しが入るrustcは、固定した版より後である)
+- emlの配布物 (Nixのパッケージと、リリースのtarball) は、実行系の静的ライブラリを、emlのビルドのときに固定したtoolchainで作って同梱する。変種は2つある。`libeml_rt.a`は`eml_nrt`から (`eml_rows`、`eml_sched`、`eml_rt`を含めて) 作り、実行系とエントリのstubをまとめ、GUIを持たない。`libeml_rt_gui.a`はそれに、toolkitの行の腕、`Park`の繋ぎ、runの外の待ちの印とゲートと回収の処理、`eml_gui`、shimのobjectを加える。AOTのプログラムにリンクするRustの静的ライブラリは、いつもちょうど1つである。1つのリンクに複数のRustの静的ライブラリを入れると衝突するためである (personalityの記号の直しが入るrustcは、固定した版より後である)
 - `eml build`はビルドのプロファイル`--profile console|gui`を取り、既定は`console`である。何をリンクするかはプロファイルだけが決め、importからは推し量らない。Windowsのsubsystemや後のバンドルは、プログラムの事実でなく作者の選択だからである
 
   | | `console` (既定) | `gui` |

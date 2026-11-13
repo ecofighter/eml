@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn every_row_entry_is_named_after_its_variant() {
-        use eml_sched::rows::{LISTED, Section};
+        use eml_rows::rows::{LISTED, Section};
         let mut expected: Vec<String> = LISTED
             .iter()
             .filter(|l| !l.inline && matches!(l.section, Section::Generic | Section::Dedicated))

@@ -12,6 +12,7 @@ doctest = false
 # Cranelift、eml_lir、eml_core_ir、eml_vm、eml_nativeには依存しない (docs/implementation/architecture.md の「crate の依存関係」)
 [dependencies]
 eml_extern.workspace = true
+eml_rows.workspace = true
 eml_rt.workspace = true
 eml_sched.workspace = true
 

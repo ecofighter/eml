@@ -4,7 +4,7 @@
 use eml_extern::{Extern, FunctionRow, OpRet, Repr};
 use eml_rt::{Ctx, Mode, Stream, Word, externs};
 
-use crate::error::RunFault;
+use eml_sched::error::RunFault;
 
 /// 一覧の中の行の置き場所。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

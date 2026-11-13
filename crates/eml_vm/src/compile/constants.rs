@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use eml_lir::FloatBits;
+use eml_rows::constants::{immortal_big_int, immortal_float};
 use eml_rt::{Control, Frozen, Heap, Mode, Word};
-use eml_sched::constants::{immortal_big_int, immortal_float};
 use rustc_hash::FxHashMap;
 
 use crate::code::{CompileError, Index};

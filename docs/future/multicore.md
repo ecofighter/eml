@@ -55,13 +55,14 @@ eml_cli        Session::run が実行系を組み立てる (worker の数、実�
 eml_native     コード生成器 (LIR → CLIF、JIT のホスト)。eml_nrt の上に立つ
 eml_vm         Exec を実装する (VM)                eml_nrt      Exec を実装する (ネイティブ)
 eml_sched      スレッド、受け箱、タスクのセル、監視のスレッド、deque、待ちと起こし、Exec の trait
+eml_rows       externの行の一覧と本体 (行の関数)、組み込みが持つ値を作る関数
 eml_io         IoDriver を実装する (本物の driver、テストの driver、ブロックする呼び出しのプール)
 eml_rt         語の単位の操作 (share、移し戻し、範囲のプリミティブ)、Host、Sched、IoDriver の trait
 型システム:     row の Kind による制限 + Lin による移動
 ```
 
-- 依存の順は`eml_rt` ← `eml_sched` ← `eml_vm`と、`eml_sched` ← `eml_nrt` ← `eml_native`である。`eml_sched`はworkerのループが呼ぶ`Exec`のtraitを持ち、`eml_vm`と`eml_nrt`がそれを実装する。`eml_nrt`は、出すコードが呼ぶ実行系のエントリ、エントリのstub、runの駆動を持ち、Craneliftに依存しない。`eml_io`は`eml_rt`に依存して`IoDriver`を実装する ([非同期の設計](async.md)の「I/O の driver」)。コード生成器の`eml_native`は、`eml_nrt`、`eml_lir`、`eml_rt` (定数だけ)、Craneliftに依存し、`eml_sched`には直接依存しない。`eml_cli`はすべてに依存する
-- `eml_sched`は、タスクのセルの核と実行のインタフェース、時計の選び方、自己パイプ、メインのworkerの`Park`を持つ。スケジューラとworkerの表はまだ`eml_vm`の`sched.rs`と`workers.rs`にある ([VM](../spec/vm.md)の「タスクとスケジュール」)。`jit-tasks`がworkerの表、受け箱、監視のスレッド、`Exec`のtraitを`eml_sched`へ移す ([ロードマップ](roadmap.md)の「段の列」)
+- 依存の順は`eml_rt` ← `eml_sched` ← `eml_rows` ← `eml_vm`と、`eml_rows` ← `eml_nrt` ← `eml_native`である (`eml_vm`と`eml_nrt`は`eml_sched`にも直に依存する)。`eml_sched`はworkerのループが呼ぶ`Exec`のtraitを持ち、`eml_vm`と`eml_nrt`がそれを実装する。`eml_rows`はexternの行の本体を持ち、VMとネイティブの実行系が同じ本体を呼ぶ。`eml_nrt`は、出すコードが呼ぶ実行系のエントリ、エントリのstub、runの駆動を持ち、Craneliftに依存しない。`eml_io`は`eml_rt`に依存して`IoDriver`を実装する ([非同期の設計](async.md)の「I/O の driver」)。コード生成器の`eml_native`は、`eml_nrt`、`eml_lir`、`eml_rt` (定数だけ)、Craneliftに依存し、`eml_sched`と`eml_rows`には直接依存しない。`eml_cli`はすべてに依存する
+- `eml_sched`は、タスクのセルの核と実行のインタフェース、時計の選び方、自己パイプ、メインのworkerの`Park`を持つ。externの行の一覧と本体は`eml_rows`にあり、ここには置かない。スケジューラとworkerの表はまだ`eml_vm`の`sched.rs`と`workers.rs`にある ([VM](../spec/vm.md)の「タスクとスケジュール」)。`jit-tasks`がworkerの表、受け箱、監視のスレッド、`Exec`のtraitを`eml_sched`へ移す ([ロードマップ](roadmap.md)の「段の列」)
 - `Session::run` が実行系を組み立てるので、`Session` は今と同じく唯一のパイプラインの駆動役である。`Host`、`Sched`、`IoDriver` の trait は `eml_rt` に置く。`Host` と `Sched` は `Ctx` を通して届く。`IoDriver` は、`eml_rt` の extern が要るまでは実行系が持ち、`Ctx` には入れない。`Session::run` は driver そのものでなく、`Copy + Send` の時計の選び方 (`Clock`) と seed を渡し、各 worker が自分のスレッドの上で driver を作る。driver はそのスレッドから動かない ([VM](../spec/vm.md) の「時計と driver」)
 - `eml_rt` は vstd だけに依存したまま Verus で証明する。スケジューラ (`eml_sched`) は Verus の外に置き、Miri と TSan で確かめる (下の「テスト」)
 - スケジューラをエフェクトのライブラリとして書く形は採らない。監視、スレッドをまたぐ起こし、根の登録は、語の外のRustの構造を要るためである。ライブラリとして書いた協調的なスケジューラ`tests/ui/run/kinds/scheduler.em`は、継続を扱う言語のテストとして残す

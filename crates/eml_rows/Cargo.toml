@@ -1,0 +1,21 @@
+[package]
+name = "eml_rows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+[lib]
+doctest = false
+
+# コンパイラとエンジン (eml_lir、eml_core_ir、eml_vm、eml_native、eml_clink) とCraneliftには依存しない
+# (docs/implementation/architecture.md の「crate の依存関係」)
+[dependencies]
+eml_extern.workspace = true
+eml_rt.workspace = true
+eml_sched.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

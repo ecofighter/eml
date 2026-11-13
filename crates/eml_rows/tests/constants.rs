@@ -1,5 +1,5 @@
+use eml_rows::constants::{immortal_big_int, immortal_float};
 use eml_rt::{Checked, Fast, Heap, Kind, Mode, layout};
-use eml_sched::constants::{immortal_big_int, immortal_float};
 
 fn big_int_reads_back<M: Mode>() {
     let mut heap = Heap::<M>::new();

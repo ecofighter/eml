@@ -20,6 +20,7 @@ eml_core_ir = { path = "crates/eml_core_ir" }
 eml_lir = { path = "crates/eml_lir" }
 eml_rt = { path = "crates/eml_rt" }
 eml_sched = { path = "crates/eml_sched" }
+eml_rows = { path = "crates/eml_rows" }
 eml_io = { path = "crates/eml_io" }
 eml_tls = { path = "crates/eml_tls" }
 eml_gui = { path = "crates/eml_gui" }
