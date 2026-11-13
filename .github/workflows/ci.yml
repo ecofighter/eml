@@ -18,6 +18,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # CIは変数の単位のdebug情報を使わないので、devプロファイルのdebug情報を行の表だけにしてビルドを軽くする。
+  # panicのbacktraceはファイルと行を保つ (docs/implementation/testing.md の「CI」)
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 defaults:
   run:
