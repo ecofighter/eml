@@ -292,9 +292,6 @@ fn rejected_what(rejected: &eml_native::Unsupported) -> String {
         Form::Prompt => "handler landings".to_string(),
         Form::StdRow => format!("the std row `{row}`"),
         Form::CRow => "C functions".to_string(),
-        Form::Closure => "closures".to_string(),
-        Form::FnValue => "function values".to_string(),
-        Form::Apply => "calls of function values".to_string(),
     }
 }
 

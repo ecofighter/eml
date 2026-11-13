@@ -307,11 +307,8 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 | `Prompt` | `prompt` | 着地の印 (`prompt`) を持つ`Call::Apply` |
 | `StdRow` | `std row` | タスクの行でなく、`rows::INLINE`にも`rows::CALLED`にもないstdの行 |
 | `CRow` | `c row` | `ExternRef::C` |
-| `Closure` | `closure` | `Rhs::MakeClosure` |
-| `FnValue` | `fn value` | どこかにある`Atom::Fn` |
-| `Apply` | `apply` | `Call::Apply` |
 
-- 形は、何度現れても1度だけ報告する。1つの構文が2つの形に入ることがある。着地の印を持つ`Call::Apply`は、`Prompt`でもあり`Apply`でもある
+- 形は、何度現れても1度だけ報告する
 - `rows::INLINE`は、CLIFの演算としてインラインに下ろす45の行である。VMの算術と比較の専用の命令 ([VM](vm.md)の「基本操作と extern」) の行から`FloatMod`を除いたものである。Craneliftの`LibCall`には`fmod`がないので、`FloatMod`は呼ぶ行にする
 - `rows::CALLED`は、エントリ`eml_x_<Variant>`の呼び出しとして下ろす行で、`Println`、`Eprintln`、`IntShow`、`StrShow`、`FloatShow`、`StrConcat`、`StrEq`、`StrCompare`、`FloatMod`、`Exit`、`Panic`である。`rows::lowering(ext)`は、行がこの2つのどちらであるかを返し、ネイティブのコードが断る行には`None`を返す
 

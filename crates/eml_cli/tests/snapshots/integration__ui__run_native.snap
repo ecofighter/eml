@@ -2,13 +2,11 @@
 source: crates/eml_cli/tests/ui.rs
 expression: counts
 ---
-accepted 174
+accepted 208
 skipped 6
-rejected 455
+rejected 421
   async row 128
   c row 2
-  closure 19
-  fn value 15
   par 22
   prim 156
   std row 113
