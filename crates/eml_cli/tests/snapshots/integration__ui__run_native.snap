@@ -2,38 +2,19 @@
 source: crates/eml_cli/tests/ui.rs
 expression: counts
 ---
-accepted 320
+accepted 324
 skipped 6
 rejected 310
   async row 129
   c row 6
   par 22
   prim 153
-unlowered 84
+unlowered 65
   ReadChunk
   ReadAllBytes
   ReadLineBytes
-  ByteGt
-  ByteToInt
-  ByteOfInt
-  FloatTruncate
-  FloatFloor
-  FloatCeil
-  FloatSqrt
-  FloatAbs
-  FloatSin
-  FloatCos
-  FloatExp
-  FloatLog
-  BoolNe
-  StrPush
-  BytesTruncate
-  BytesWithCapacity
-  BytesSet
-  BytesPush
   ShowBytesLength
   ShowBytesGet
-  StringDecode
   StdinReadChunk
   StdinReadAllBytes
   StdinReadLineBytes
