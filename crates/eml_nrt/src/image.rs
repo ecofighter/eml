@@ -112,11 +112,10 @@ pub struct DatumRow {
     pub slot: *mut u64,
 }
 
-/// PAPのアダプタ1つ。`args`個の引数を持ち、`rest`個の引数を待つPAPのエントリのコードである。
+/// PAPのアダプタ1つ。`rest`個の引数を待つPAPのエントリのコードである。
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct PapRow {
-    pub args: u32,
     pub rest: u32,
     pub code: *const u8,
 }

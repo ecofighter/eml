@@ -269,6 +269,14 @@ pub fn stack_limit(b: &mut FunctionBuilder, ctx: Value) -> Value {
     )
 }
 
+/// スタックポインタが`ctx`の`stack_limit`より下なら0でない。スタックポインタは呼んだ関数が自分のフレームを作った後に
+/// 読むので、比べる値はそのフレームを含む (docs/spec/native.md の「安全点」)。
+pub fn below_stack_limit(b: &mut FunctionBuilder, ctx: Value) -> Value {
+    let sp = b.ins().get_stack_pointer(types::I64);
+    let limit = stack_limit(b, ctx);
+    b.ins().icmp(IntCC::UnsignedLessThan, sp, limit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

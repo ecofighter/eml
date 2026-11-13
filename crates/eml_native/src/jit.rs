@@ -9,8 +9,8 @@ use cranelift_module::ModuleError;
 use eml_cabi::Linked;
 use eml_lir::{Program, Repr};
 use eml_nrt::image::{
-    DATUM_BIG_INT, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow, FnRow, Image, Options, SiteRow,
-    Slice, Start, Str,
+    DATUM_BIG_INT, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow, FnRow, Image, Options, PapRow,
+    SiteRow, Slice, Start, Str,
 };
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
@@ -79,7 +79,7 @@ struct Function {
     sites: Vec<SiteRow>,
 }
 
-/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`と、各関数の`sites`と各値の文字列の中を
+/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`、`paps`と、各関数の`sites`と各値の文字列の中を
 /// 指す。どれも`new`の後で変わらず、`Vec`を動かしてもその要素は動かない。`data`のslotはmoduleのデータの物を指す。
 struct Tables {
     functions: Vec<Function>,
@@ -88,6 +88,7 @@ struct Tables {
     _rows: Vec<FnRow>,
     _data: Vec<Datum>,
     _datum_rows: Vec<DatumRow>,
+    _paps: Vec<PapRow>,
     image: Image,
 }
 
@@ -97,6 +98,7 @@ impl Tables {
         functions: Vec<Function>,
         files: Vec<String>,
         data: Vec<(Datum, *mut u64, *const u8)>,
+        paps: Vec<PapRow>,
     ) -> Tables {
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
         let mut rows: Vec<FnRow> = functions
@@ -135,7 +137,7 @@ impl Tables {
             functions: Slice::new(&rows),
             files: Slice::new(&file_rows),
             data: Slice::new(&datum_rows),
-            paps: Slice::new(&[]),
+            paps: Slice::new(&paps),
         };
         Tables {
             functions,
@@ -144,6 +146,7 @@ impl Tables {
             _rows: rows,
             _data: data.into_iter().map(|(datum, _, _)| datum).collect(),
             _datum_rows: datum_rows,
+            _paps: paps,
             image,
         }
     }
@@ -279,6 +282,16 @@ impl NativeMachine {
                 size: defined.size,
             });
         }
+        let mut paps = Vec::with_capacity(lowered.paps.len());
+        for (rest, defined) in lowered.paps {
+            let code = module.get_finalized_function(defined.id);
+            self.symbols.push(Symbol {
+                name: names::pap(rest),
+                address: code,
+                size: defined.size,
+            });
+            paps.push(PapRow { rest, code });
+        }
         // どの値のslotも、moduleが定義した8バイトの書けるデータの物で、領域とともにマシンが終わるまで生きる
         let data = lowered
             .data
@@ -292,7 +305,7 @@ impl NativeMachine {
                 (datum, slot.cast_mut().cast::<u64>(), code)
             })
             .collect();
-        self.tables = Some(Tables::new(functions, program.files.clone(), data));
+        self.tables = Some(Tables::new(functions, program.files.clone(), data, paps));
         Ok(Loaded {
             entry: program.entry.0,
         })

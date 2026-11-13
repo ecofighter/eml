@@ -577,19 +577,8 @@ mod tests {
         use crate::closures::eml_nrt_pap;
         use crate::heap::eml_rt_decref;
         use crate::image::PapRow;
-        let adapter = CODE[1..].as_ptr();
-        let paps = [
-            PapRow {
-                args: 1,
-                rest: 2,
-                code: CODE.as_ptr(),
-            },
-            PapRow {
-                args: 2,
-                rest: 1,
-                code: adapter,
-            },
-        ];
+        let (two, one) = (CODE.as_ptr(), CODE[1..].as_ptr());
+        let paps = [PapRow { rest: 2, code: two }, PapRow { rest: 1, code: one }];
         let mut ctx = ctx();
         let c: *mut Ctx<Fast> = &mut *ctx;
         // SAFETY: 上と同じ。workerの構造体は`with_paps`が置き、その前提を満たす。アダプタがあるので、呼び出しは
@@ -598,28 +587,37 @@ mod tests {
             let callee = closure(c, 3, true);
             let text = (*c).fresh_string("a");
             let argv = [text, Word::imm(7)];
-            let pap = with_paps(c, &paps, |_| eml_nrt_pap(c, callee, argv.as_ptr(), 2));
+            let outer = with_paps(c, &paps, |_| eml_nrt_pap(c, callee, argv.as_ptr(), 2));
+            // 2つの引数は、1つずつ持つ2つのPAPの鎖になる。外のPAPの呼ぶ値が内のPAPである
             let heap = (*c).heap();
-            let meta = heap.meta(pap).unwrap();
+            let first = layout::data_first(3, false);
+            let shape = |w: Word| {
+                let meta = heap.meta(w).unwrap();
+                let fields: Vec<Word> = (0..3).map(|i| heap.field(w, first + i).unwrap()).collect();
+                ((meta.kind(), meta.tag(), meta.scan(), meta.lin()), fields)
+            };
+            let (outer_meta, outer_fields) = shape(outer);
+            assert_eq!(outer_meta, (ObjectKind::Data, 1, 3, true));
+            let inner = outer_fields[1];
             assert_eq!(
-                (meta.kind(), meta.tag(), meta.scan(), meta.lin()),
-                (ObjectKind::Data, 1, 4, true)
+                outer_fields,
+                [Word::imm(one.addr() as i64), inner, Word::imm(7)]
             );
-            let first = layout::data_first(4, false);
-            let fields: Vec<Word> = (0..4)
-                .map(|i| heap.field(pap, first + i).unwrap())
-                .collect();
             assert_eq!(
-                fields,
-                [Word::imm(adapter.addr() as i64), callee, text, Word::imm(7)]
+                shape(inner),
+                (
+                    (ObjectKind::Data, 2, 3, true),
+                    vec![Word::imm(two.addr() as i64), callee, text]
+                )
             );
             assert_eq!(
                 live(&mut *c),
-                [("Data".to_string(), 2), ("String".to_string(), 1)]
+                [("Data".to_string(), 3), ("String".to_string(), 1)]
             );
-            (*c).heap_mut().set_lin(pap, false).unwrap();
-            (*c).heap_mut().set_lin(callee, false).unwrap();
-            eml_rt_decref(c, pap);
+            for w in [outer, inner, callee] {
+                (*c).heap_mut().set_lin(w, false).unwrap();
+            }
+            eml_rt_decref(c, outer);
             assert_eq!(live(&mut *c), []);
         }
     }
@@ -693,7 +691,6 @@ mod tests {
         #[test]
         fn pap_without_an_adapter_is_fatal() {
             let other = PapRow {
-                args: 2,
                 rest: 1,
                 code: std::ptr::null(),
             };
@@ -701,11 +698,20 @@ mod tests {
         }
 
         #[test]
+        fn a_chain_without_one_of_its_adapters_is_fatal() {
+            // 3引数の値を2つの引数に部分適用する鎖は、残り2と1のアダプタを要する。1がないことを、鎖を作り始める前に見つける
+            let two = PapRow {
+                rest: 2,
+                code: std::ptr::null(),
+            };
+            assert_eq!(pap_error(&[two], 3, 2), not_a_function());
+        }
+
+        #[test]
         fn pap_of_a_saturated_callee_is_fatal() {
-            let rows: Vec<PapRow> = [(1, 1), (2, 0), (1, 0)]
+            let rows: Vec<PapRow> = [1, 0]
                 .into_iter()
-                .map(|(args, rest)| PapRow {
-                    args,
+                .map(|rest| PapRow {
                     rest,
                     code: std::ptr::null(),
                 })
@@ -714,10 +720,9 @@ mod tests {
             assert_eq!(pap_error(&rows, 1, 2), not_a_function());
         }
 
-        /// どれも`(1, 2)`のアダプタはあるので、断るのは呼ばれる値の形である。
+        /// どれも残りが2のアダプタはあるので、断るのは呼ばれる値の形である。
         fn adapters() -> [PapRow; 1] {
             [PapRow {
-                args: 1,
                 rest: 2,
                 code: std::ptr::null(),
             }]

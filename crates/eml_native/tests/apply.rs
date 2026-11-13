@@ -113,8 +113,10 @@ fn entry$main() -> unit {
 }
 ";
     assert_eq!(count_in_8_mib(text), 2_000_000);
-    // 引数が余る末尾の`apply`の輪。`count`は`&pick`を3つの引数に適用し、`eml$apply$3`は`pick`を1つ目で呼んでから、
-    // その結果の`&count`と残りの2つで`eml$apply$2`へ末尾で飛ぶ。どの段も末尾呼び出しなので、スタックは伸びない
+    // 引数が余る末尾の`apply`の輪。`count`は`&pick`を3つの引数に適用する。`eml$apply$3`は`eml$apply$2`を、それは
+    // `eml$apply$1`を末尾でなく呼び、`pick`の結果の`&count`を1つ目の残りに適用して、一時の1引数のPAPを作る。入れ子の
+    // 段はそこで戻り、外の段がそのPAPと最後の引数で`eml$apply$1`へ末尾で飛び、`eml$pap$1`が`count`を末尾で呼ぶ。
+    // 入れ子のフレームは`count`に入る前に消えているので、スタックは伸びない
     let over = text.replace(
         "tail apply &count(p.7, q.8)",
         "let u.9: unit = drop ()\n  tail apply &pick(u.9, p.7, q.8)",
@@ -431,4 +433,69 @@ fn wide(count: usize) -> String {
         c + 4
     );
     text
+}
+
+#[test]
+fn a_wide_over_application_checks_the_stack() {
+    // 引数が余る適用の補助の関数は、入れ子にする前にスタックの上限を確かめる。workerのスタックを`real`の256 KiB上までに
+    // すると、`eml$apply$180`からの入れ子のフレーム (およそ390 KB) が上限を越え、補助の関数が深さの上限で止める。補助の関数はプログラムの
+    // 関数でないので、誤りは`<native code>`を名指す。確かめなければ、`me`の入口が同じ誤りで`me`を名指すか、引数が
+    // 十分多ければ`base`を越えてプロセスが止まる
+    let (text, start) = wide_over_application(180);
+    let mut m = machine();
+    m.load(&program(&text), &Linked::default())
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let options = Options {
+        stack: (3 << 20) + (256 << 10),
+        ..native_options()
+    };
+    let error = m
+        .call(start, &[Arg::I64(0)], options)
+        .expect_err("the nested helpers run out of stack");
+    assert_eq!(
+        error.to_string(),
+        "the call depth limit is exceeded in `<native code>`"
+    );
+    m.close();
+}
+
+#[test]
+#[ignore = "an apply of 600 arguments makes 600 helpers, which take longer than 1 s to compile"]
+fn a_very_wide_over_application_stops_with_the_depth_error() {
+    // 600個の引数では、補助の関数の入れ子のフレームはおよそ4.3 MBで、`real`より下の3 MiBを越える。上限を確かめなければ、
+    // フレームが`base`を越えてプロセスが止まる
+    let (text, start) = wide_over_application(600);
+    let mut m = machine();
+    m.load(&program(&text), &Linked::default())
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let options = Options {
+        stack: (3 << 20) + (32 << 10),
+        ..native_options()
+    };
+    let error = m
+        .call(start, &[Arg::I64(0)], options)
+        .expect_err("the nested helpers run out of stack");
+    assert_eq!(
+        error.to_string(),
+        "the call depth limit is exceeded in `<native code>`"
+    );
+    m.close();
+}
+
+/// 自分自身を返す1引数の`me`を`count`個の引数に適用する`start`のプログラムと、`start`の名前。
+fn wide_over_application(count: usize) -> (String, &'static str) {
+    let mut text = String::from(
+        "fn me(x.0: tobj) -> tobj {\n  decref x.0\n  return &me\n}\nfn start(n.0: int) -> int {\n",
+    );
+    for i in 0..count {
+        text += &format!("  let a{i}.{}: tobj = box {i}\n", i + 1);
+    }
+    let args: Vec<String> = (0..count).map(|i| format!("a{i}.{}", i + 1)).collect();
+    let r = count + 1;
+    text += &format!(
+        "  let r.{r}: tobj = apply &me({})\n  decref r.{r}\n  return 0\n}}\n\
+         fn entry$main() -> unit {{\n  return ()\n}}\n",
+        args.join(", ")
+    );
+    (text, "start")
 }

@@ -230,7 +230,8 @@ fn entry$main() -> unit {
 ";
     // プログラムの関数、thunk、`eml$raise`のほかに定義する記号。後のエントリと補助の関数も、ここに名前を足す
     let adapters = [(0, "make"), (0, "add"), (1, "add")];
-    let helpers = ["eml$apply$1", "eml$apply$2", "eml$apply$3"];
+    // 関数の値が待つ引数の数の最大は`&add`の2なので、PAPのアダプタは`eml$pap$1`だけである
+    let helpers = ["eml$apply$1", "eml$apply$2", "eml$apply$3", "eml$pap$1"];
     let mut expected: Vec<String> = adapters
         .iter()
         .map(|(captures, name)| format!("c{captures}:{name}"))
@@ -282,6 +283,21 @@ fn entry$main() -> unit {
             .unwrap_or_else(|| panic!("no adapter for `{name}`"));
         assert_eq!(datum.code, adapter.address, "{name}");
     }
+    // `Image.paps`の行は、PAPのアダプタの記号ごとに1つで、そのコードを指す
+    // SAFETY: 上と同じ
+    let paps = unsafe { image.paps.as_slice() };
+    let mut rows: Vec<(String, *const u8)> = paps
+        .iter()
+        .map(|row| (format!("eml$pap${}", row.rest), row.code))
+        .collect();
+    rows.sort();
+    let mut pap_symbols: Vec<(String, *const u8)> = symbols
+        .iter()
+        .filter(|s| s.name.starts_with("eml$pap$"))
+        .map(|s| (s.name.clone(), s.address))
+        .collect();
+    pap_symbols.sort();
+    assert_eq!(rows, pap_symbols);
     m.close();
 }
 

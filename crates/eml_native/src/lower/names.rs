@@ -18,6 +18,11 @@ pub fn apply(args: usize) -> String {
     format!("eml$apply${args}")
 }
 
+/// 引数を1つ持ち、さらに`rest`個を待つPAPのアダプタの記号 (docs/spec/native.md の「関数の値」)。
+pub fn pap(rest: u32) -> String {
+    format!("eml$pap${rest}")
+}
+
 /// 関数`name`の静的なクロージャのデータの記号。
 pub fn fn_value(name: &str) -> String {
     format!("v:{name}")

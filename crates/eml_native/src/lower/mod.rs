@@ -1,6 +1,6 @@
 //! LIRをCLIFに下ろす。どの関数を定義するよりも前にプログラムのすべての関数と`apply`の補助の関数を宣言するので、本体は
-//! それらのどれも名指せる。クロージャのエントリは、データの記号と同じく本体が初めて使うときに宣言し、本体の後で定義する
-//! (docs/spec/native.md の「関数の形」)。
+//! それらのどれも名指せる。クロージャのエントリは、データの記号と同じく本体が初めて使うときに宣言し、本体の後で定義する。
+//! PAPのアダプタはコードが名指さず、`Image.paps`だけが指すので、最後に宣言して定義する (docs/spec/native.md の「関数の形」)。
 mod apply;
 mod call;
 pub mod consts;
@@ -45,6 +45,8 @@ pub struct Lowered {
     pub closures: Vec<(ClosureEntry, Defined)>,
     /// `eml$apply$<m>`。添字が`m - 1`である。
     pub applies: Vec<Defined>,
+    /// PAPのアダプタ`eml$pap$<r>`と、その`r`。
+    pub paps: Vec<(u32, Defined)>,
     pub data: Vec<(Datum, DataId)>,
 }
 
@@ -171,11 +173,14 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     unwind::define_raise(b, module, &imports);
     let raise = define(module, &mut ctx, raise, keep_clif, Vec::new())?;
     let mut closures = Vec::new();
+    // どの関数の値もクロージャのエントリを持つので、エントリの待つ引数の数の最大が、関数の値の待ちうる数の最大である
+    let mut largest = 0;
     for (closure, id) in closure_entries.declared() {
         let args = apply::arity(
             program.function(closure.function),
             closure.captures as usize,
         );
+        largest = largest.max(args);
         ctx.func.signature = apply::uniform(args);
         ctx.func.name = UserFuncName::testcase(names::closure_entry(
             closure.captures,
@@ -194,12 +199,24 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
         apply::define_apply(b, module, &imports, args);
         applies.push(define(module, &mut ctx, id, false, Vec::new())?);
     }
+    let mut paps = Vec::new();
+    for rest in apply::pap_rests(largest) {
+        let name = names::pap(rest);
+        let signature = apply::uniform(rest as usize);
+        let id = module.declare_function(&name, Linkage::Local, &signature)?;
+        ctx.func.signature = signature;
+        ctx.func.name = UserFuncName::testcase(name);
+        let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+        apply::define_pap_adapter(b, module, &imports, rest);
+        paps.push((rest, define(module, &mut ctx, id, false, Vec::new())?));
+    }
     let data = data.define(module)?;
     Ok(Lowered {
         functions,
         raise,
         closures,
         applies,
+        paps,
         data,
     })
 }

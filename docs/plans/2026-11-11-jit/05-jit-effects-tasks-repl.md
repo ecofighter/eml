@@ -297,6 +297,8 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
 - jit-repl adds it with a debug assertion in `NativeMachine::load` for known names. If S2b adds the assertion in jit-core, jit-repl only keeps the key (review B-6).
 - native-aot uses the same function for its cache.
 
+**PAP adapters across appended programs (00 C-13).** A function value from an earlier program can reach a later program's `eml$apply$m` and so `eml_nrt_pap`, whose adapters `eml$pap$<r>` are looked up in `Image.paps`. Each module emits `r in 1..A` for its own `A`, so the runtime PAP table must be the union over the appended programs (adapters are shared by name). Function values created by name (`FnRow.value`, clause closures) must count toward `A` when they can be partially applied.
+
 **D-23 Transcripts.** A native pass after the fast-mode pass in `crates/eml_cli/tests/repl.rs`; `# native: skip (<reason>)` marks are listed one by one in the plan (kind 1), and each reason cites a difference listed in spec/native.md 「VMとの違い」 (N-43).
 
 ## 2. Rationale
