@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use eml_rt::{Fault, HeapError};
-use eml_vm::{Control, Finished, Limits, RunConfig, RuntimeError, Sched, VmFault};
+use eml_vm::{Control, Finished, Limits, RunConfig, RunFault, RuntimeError, Sched};
 
 use crate::common::parse;
 
@@ -832,7 +832,7 @@ fn leaky(p.0: unit) -> tobj {
     assert_eq!(
         result,
         Err(RuntimeError::Fault {
-            fault: VmFault::Extern(Fault::Heap(HeapError::TransferLeak { worker: 1, live: 1 })),
+            fault: RunFault::Extern(Fault::Heap(HeapError::TransferLeak { worker: 1, live: 1 })),
             function: "main".to_string(),
             at: None,
         })

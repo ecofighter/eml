@@ -7,7 +7,7 @@ use std::time::Duration;
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
     Clock, CodeBase, Control, Entry, Finished, Limits, Machine, Normal, ParkFactory, Ready,
-    RunConfig, RunStats, RuntimeError, Sched, Stop, Task, VmFault,
+    RunConfig, RunFault, RunStats, RuntimeError, Sched, Stop, Task,
 };
 
 use crate::common::parse;
@@ -195,7 +195,7 @@ fn main() -> unit {
         matches!(
             error,
             RuntimeError::Fault {
-                fault: VmFault::Extern(Fault::Stopped(Stop::Interrupted)),
+                fault: RunFault::Extern(Fault::Stopped(Stop::Interrupted)),
                 ..
             }
         ),
@@ -204,7 +204,7 @@ fn main() -> unit {
     assert!(error.interrupted());
 }
 
-fn fault(fault: VmFault) -> RuntimeError {
+fn fault(fault: RunFault) -> RuntimeError {
     RuntimeError::Fault {
         fault,
         function: "f".to_string(),
@@ -215,14 +215,14 @@ fn fault(fault: VmFault) -> RuntimeError {
 /// 割り込みだけが真になる。上限で止めたことも、終了の求めも、ほかの誤りも、リークも割り込みではない。
 #[test]
 fn only_an_interrupt_is_interrupted() {
-    assert!(fault(VmFault::Stopped(Stop::Interrupted)).interrupted());
-    assert!(fault(VmFault::Extern(Fault::Stopped(Stop::Interrupted))).interrupted());
+    assert!(fault(RunFault::Stopped(Stop::Interrupted)).interrupted());
+    assert!(fault(RunFault::Extern(Fault::Stopped(Stop::Interrupted))).interrupted());
     for stop in [Stop::DepthLimit, Stop::MemoryLimit, Stop::Terminated] {
-        assert!(!fault(VmFault::Stopped(stop)).interrupted());
-        assert!(!fault(VmFault::Extern(Fault::Stopped(stop))).interrupted());
+        assert!(!fault(RunFault::Stopped(stop)).interrupted());
+        assert!(!fault(RunFault::Extern(Fault::Stopped(stop))).interrupted());
     }
-    assert!(!fault(VmFault::Extern(eml_rt::ArithFault::DivisionByZero.into())).interrupted());
-    assert!(!fault(VmFault::Internal("x")).interrupted());
+    assert!(!fault(RunFault::Extern(eml_rt::ArithFault::DivisionByZero.into())).interrupted());
+    assert!(!fault(RunFault::Internal("x")).interrupted());
     assert!(!RuntimeError::Leak(vec![("String".to_string(), 1)]).interrupted());
 }
 
@@ -230,13 +230,13 @@ fn only_an_interrupt_is_interrupted() {
 /// (docs/spec/vm.md の「上限と割り込み」)。
 #[test]
 fn only_a_terminate_is_terminated() {
-    assert!(fault(VmFault::Stopped(Stop::Terminated)).terminated());
-    assert!(fault(VmFault::Extern(Fault::Stopped(Stop::Terminated))).terminated());
+    assert!(fault(RunFault::Stopped(Stop::Terminated)).terminated());
+    assert!(fault(RunFault::Extern(Fault::Stopped(Stop::Terminated))).terminated());
     for stop in [Stop::DepthLimit, Stop::MemoryLimit, Stop::Interrupted] {
-        assert!(!fault(VmFault::Stopped(stop)).terminated());
-        assert!(!fault(VmFault::Extern(Fault::Stopped(stop))).terminated());
+        assert!(!fault(RunFault::Stopped(stop)).terminated());
+        assert!(!fault(RunFault::Extern(Fault::Stopped(stop))).terminated());
     }
-    assert!(!fault(VmFault::Internal("x")).terminated());
+    assert!(!fault(RunFault::Internal("x")).terminated());
     assert!(!RuntimeError::Leak(vec![("String".to_string(), 1)]).terminated());
 }
 

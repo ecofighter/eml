@@ -2,7 +2,7 @@
 //! 手放すので、検査モードのリークの検査も通る。
 
 use eml_rt::{Fault, HeapError};
-use eml_vm::{AnyMachine, RunConfig, RuntimeError, Sched, VmFault, capture_host};
+use eml_vm::{AnyMachine, RunConfig, RunFault, RuntimeError, Sched, capture_host};
 
 use crate::common::{disasm, parse, run_lir_merged};
 
@@ -41,7 +41,7 @@ fn main() -> unit {
     assert_eq!(
         run_lir_merged(text).1,
         Err(RuntimeError::Fault {
-            fault: VmFault::Extern(Fault::Heap(HeapError::RootMisuse)),
+            fault: RunFault::Extern(Fault::Heap(HeapError::RootMisuse)),
             function: "main".to_string(),
             at: None,
         })

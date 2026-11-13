@@ -1,3 +1,4 @@
+-- native: skip (the depth limit is the thread's stack, not a word count)
 -- max-depth: 4096
 -- タスクの中の入れ子の `run` の本体の深さの超過は、`run` が起こし直し、外のタスクが捕まえる
 -- (docs/spec/vm.md の「`Async` のタスク」)。

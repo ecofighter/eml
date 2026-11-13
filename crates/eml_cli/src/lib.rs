@@ -24,7 +24,7 @@ pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{
     Capture, CaptureHost, Clock, Control, Doorbell, Finished, HostRef, Limits, Linked, RunConfig,
-    RunStats, RuntimeError, Sched, Signal, SourceLocation, Stop, VirtualSignal, VmFault, Written,
+    RunFault, RunStats, RuntimeError, Sched, Signal, SourceLocation, Stop, VirtualSignal, Written,
     capture_host, execute, script_host, stdio_host,
 };
 #[cfg(feature = "gui")]
@@ -241,6 +241,83 @@ impl Session {
             program,
             link_keys,
         }
+    }
+}
+
+impl Session {
+    /// `compile`の結果から、ネイティブのコードが断る形を誤りにする。形ごとに E0004 を1つ、エントリの`main`の名前に置く
+    /// (docs/spec/native.md の「断る形」)。断る形があれば、プログラムは返さない。
+    #[cfg(feature = "run")]
+    pub fn compile_native(&self) -> Compiled<eml_lir::Program> {
+        let mut main_range = None;
+        let mut compiled = self.compile_with(|input| {
+            main_range = Some(input.hir[input.entry].name_range);
+            eml_core_ir::lower(input)
+        });
+        let (Some(program), Some(range)) = (&compiled.program, main_range) else {
+            return compiled;
+        };
+        let rejected = eml_native::unsupported(program);
+        if rejected.is_empty() {
+            return compiled;
+        }
+        compiled.diagnostics.extend(rejected.iter().map(|rejected| {
+            Diagnostic::not_yet_supported(
+                self.loaded.entry,
+                range,
+                format!(
+                    "native code does not support {} yet (first in `{}`)",
+                    rejected_what(rejected),
+                    rejected.function
+                ),
+            )
+        }));
+        sort_diagnostics(&mut compiled.diagnostics);
+        compiled.program = None;
+        compiled
+    }
+}
+
+/// 断る形の言い方。
+#[cfg(feature = "run")]
+fn rejected_what(rejected: &eml_native::Unsupported) -> String {
+    use eml_native::Form;
+    let row = rejected.row.unwrap_or_default();
+    match rejected.form {
+        Form::Par => "`par`".to_string(),
+        Form::AsyncRow => format!("the task row `{row}`"),
+        Form::BlockingC => "blocking C functions".to_string(),
+        Form::Prim => "effect operations".to_string(),
+        Form::Clause => "operation clauses".to_string(),
+        Form::Prompt => "handler landings".to_string(),
+        Form::StdRow => format!("the std row `{row}`"),
+        Form::CRow => "C functions".to_string(),
+        Form::Closure => "closures".to_string(),
+        Form::FnValue => "function values".to_string(),
+        Form::Apply => "calls of function values".to_string(),
+    }
+}
+
+/// 同じ`Linked`のプログラムを流す実行系 (docs/spec/native.md の「VMとの違い」)。
+#[cfg(feature = "run")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    Vm,
+    Native,
+}
+
+/// `program`を`engine`で1回流す。ネイティブは既定の`Options`で流し、`RunStats`は数えない。
+#[cfg(feature = "run")]
+pub fn execute_on(
+    engine: Engine,
+    program: &eml_lir::Program,
+    linked: &Linked,
+    config: &RunConfig,
+    host: HostRef,
+) -> Result<Finished, RuntimeError> {
+    match engine {
+        Engine::Vm => execute(program, linked, config, host),
+        Engine::Native => eml_native::execute(program, linked, config, host, Default::default()),
     }
 }
 

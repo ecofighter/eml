@@ -1,3 +1,4 @@
+-- native: skip (the depth limit is the thread's stack, not a word count)
 -- max-depth: 4096
 -- 1つのタスクは、深さの超過を続けて何度でも捕まえられる。着地の後は限度が元に戻る
 -- (docs/spec/vm.md の「`Async` のタスク」)。

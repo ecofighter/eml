@@ -1,3 +1,4 @@
+-- native: skip (the depth limit is the thread's stack, not a word count)
 -- max-depth: 4096
 -- スコープに取り消されたタスクが `Cancelled` を受けた後でも、深さの超過は `ResourceLimit` として受け取れる
 -- (docs/spec/stdlib.md の「取り消し」)。

@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use eml_cli::{
-    Clock, Control, Finished, FsProvider, Limits, LinkError, Linker, RunConfig, Sched, Session,
-    default_limits, script_host,
+    Clock, Control, Engine, Finished, FsProvider, Limits, LinkError, Linker, RunConfig, Sched,
+    Session, default_limits, execute_on, script_host,
 };
 use eml_diagnostics::{has_errors, render};
 
@@ -44,6 +44,9 @@ enum Command {
         /// The backend that `Std.Gui` opens windows with: `native`, or `stub`, which opens nothing and sends one close request to each window it shows (default: `EML_GUI`, else native)
         #[arg(long, value_name = "native|stub", value_parser = parse_gui)]
         gui: Option<GuiChoice>,
+        /// Compile to machine code and run it on one worker, in place of the VM (not with `--debug-heap`, `--stats` or `--gui`)
+        #[arg(long, conflicts_with_all = ["debug_heap", "stats", "gui"])]
+        native: bool,
         file: PathBuf,
     },
     /// Start an interactive session
@@ -90,10 +93,16 @@ fn main() -> ExitCode {
             workers,
             link,
             gui,
+            native,
             file,
         } => {
             // 環境変数の誤りも、ファイルを読む前に使い方の誤りとして断る
-            let workers = match workers.map_or_else(workers_from_env, Ok) {
+            let engine = if native { Engine::Native } else { Engine::Vm };
+            if native && !eml_native::SUPPORTED {
+                eprintln!("error: native code is not supported on this machine");
+                return ExitCode::from(2);
+            }
+            let workers = match workers_for(engine, workers) {
                 Ok(workers) => workers,
                 Err(message) => {
                     eprintln!("error: {message}");
@@ -101,7 +110,7 @@ fn main() -> ExitCode {
                 }
             };
             #[cfg_attr(not(feature = "gui"), allow(unused_variables))]
-            let gui = match gui.map_or_else(gui_from_env, Ok) {
+            let gui = match gui_for(engine, gui) {
                 Ok(gui) => gui,
                 Err(message) => {
                     eprintln!("error: {message}");
@@ -125,14 +134,17 @@ fn main() -> ExitCode {
                 .with_clock(Clock::Real)
                 .with_control(Arc::clone(&control));
             #[cfg(feature = "gui")]
-            {
+            if engine == Engine::Vm {
                 config = config.with_main_park(gui_park(gui, &control, doorbell.clone()));
             }
             if let Some(doorbell) = doorbell {
                 config = config.with_doorbell(doorbell);
             }
             // 警告がプログラムの出力の後に出ないように、実行の前に表示する。
-            let compiled = session.compile();
+            let compiled = match engine {
+                Engine::Vm => session.compile(),
+                Engine::Native => session.compile_native(),
+            };
             eprint!("{}", render(&compiled.diagnostics, session.files()));
             let Some(program) = compiled.program else {
                 return ExitCode::from(1);
@@ -145,7 +157,8 @@ fn main() -> ExitCode {
                 }
             };
             // 相対パスはカレントディレクトリを基準にする
-            match eml_cli::execute(
+            match execute_on(
+                engine,
                 &program,
                 &linked,
                 &config,
@@ -261,6 +274,45 @@ fn gui_park(
             }
         }),
     )
+}
+
+/// workerの数。ネイティブのコードは1つのworkerで流れるので、1でない数は`--workers`でも`EML_WORKERS`でも使い方の誤りにする
+/// (docs/spec/native.mdの「VMとの違い」)。
+fn workers_for(engine: Engine, flag: Option<usize>) -> Result<usize, String> {
+    if engine == Engine::Vm {
+        return flag.map_or_else(workers_from_env, Ok);
+    }
+    match flag {
+        Some(1) => Ok(1),
+        Some(_) => Err("--native runs one worker; --workers must be 1".to_string()),
+        None => match workers_from_env_if_set()? {
+            None | Some(1) => Ok(1),
+            Some(_) => Err("--native runs one worker; EML_WORKERS must be 1 or unset".to_string()),
+        },
+    }
+}
+
+/// `EML_WORKERS`があればその数を返す。ないときは`None`である。
+fn workers_from_env_if_set() -> Result<Option<usize>, String> {
+    match std::env::var("EML_WORKERS") {
+        Ok(text) => parse_workers(&text)
+            .map(Some)
+            .map_err(|message| format!("EML_WORKERS: {message}")),
+        Err(std::env::VarError::NotUnicode(_)) => Err("EML_WORKERS: not valid unicode".to_string()),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+    }
+}
+
+/// GUIのbackend。ネイティブのコードは窓を開かないので、`EML_GUI`があれば使い方の誤りにする (`--gui`は`conflicts_with`で
+/// 断る)。
+fn gui_for(engine: Engine, flag: Option<GuiChoice>) -> Result<GuiChoice, String> {
+    if engine == Engine::Vm {
+        return flag.map_or_else(gui_from_env, Ok);
+    }
+    match std::env::var_os("EML_GUI") {
+        Some(_) => Err("--native opens no windows; EML_GUI must be unset".to_string()),
+        None => Ok(GuiChoice::Native),
+    }
 }
 
 /// `--gui`がないときのbackend。`EML_GUI`がなければnativeにする。

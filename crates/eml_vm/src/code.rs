@@ -8,7 +8,7 @@ use eml_lir::{FloatBits, Loc, Repr};
 use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 use rustc_hash::FxHashMap;
 
-use crate::error::{RuntimeError, SourceLocation, VmFault};
+use crate::error::{RunFault, RuntimeError, SourceLocation};
 use crate::op::{BUILTINS, Op, Pc, Slot};
 use crate::vm::{Failure, Task};
 
@@ -294,7 +294,7 @@ impl<M: Mode> CodeBase<M> {
     /// (docs/spec/vm.md の「誤り、止めること、終わり」)。デッドロックには付けない
     /// (docs/spec/vm.md の「時計と driver」)。
     pub(crate) fn error(&self, Failure { fault, pc }: Failure, task: &Task) -> RuntimeError {
-        if matches!(fault, VmFault::Deadlock) {
+        if matches!(fault, RunFault::Deadlock) {
             return RuntimeError::Deadlock;
         }
         let function = self

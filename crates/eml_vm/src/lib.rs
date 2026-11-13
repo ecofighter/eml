@@ -45,7 +45,7 @@ pub use eml_gui;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use eml_sched::config::{Finished, RunConfig, RunStats};
 pub(crate) use eml_sched::{cells, doorbell, driver, error, park};
-pub use error::{RuntimeError, SourceLocation, VmFault};
+pub use error::{RunFault, RuntimeError, SourceLocation};
 #[cfg(feature = "gui")]
 pub use gui::park as gui_park;
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
@@ -409,7 +409,7 @@ impl<M: Mode> Machine<M> {
         let (code, ctx) = (&self.code, &mut self.ctx);
         let mut task = Task::new(code, entry, self.max_depth);
         // 実行の後の誤りは、最後に戻った関数の名前を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)
-        let after = |fault: VmFault, task: &Task| {
+        let after = |fault: RunFault, task: &Task| {
             code.error(
                 vm::Failure {
                     fault,
@@ -422,7 +422,7 @@ impl<M: Mode> Machine<M> {
             if !code.functions[entry as usize].ret_rc {
                 return Err(code.error(
                     vm::Failure {
-                        fault: VmFault::Internal("a shown entry does not return a string"),
+                        fault: RunFault::Internal("a shown entry does not return a string"),
                         pc: task.pc,
                     },
                     &task,
@@ -446,7 +446,7 @@ impl<M: Mode> Machine<M> {
         if let Some(what) = refused {
             return Err(code.error(
                 vm::Failure {
-                    fault: VmFault::Internal(what),
+                    fault: RunFault::Internal(what),
                     pc: task.pc,
                 },
                 &task,
@@ -466,7 +466,7 @@ impl<M: Mode> Machine<M> {
                     .map_err(|e| {
                         code.error(
                             vm::Failure {
-                                fault: VmFault::Driver(e.to_string()),
+                                fault: RunFault::Driver(e.to_string()),
                                 pc: task.pc,
                             },
                             &task,
@@ -555,7 +555,7 @@ impl<M: Mode> Machine<M> {
         let flushed = ctx.flush();
         if let Err(
             cause @ RuntimeError::Fault {
-                fault: VmFault::Stopped(Stop::Ended),
+                fault: RunFault::Stopped(Stop::Ended),
                 ..
             },
         ) = result
@@ -565,7 +565,7 @@ impl<M: Mode> Machine<M> {
             flushed.map_err(|fault| after(fault.into(), &task))?;
             let Some(code) = exit else {
                 return Err(after(
-                    VmFault::Internal("a run ended without an exit"),
+                    RunFault::Internal("a run ended without an exit"),
                     &task,
                 ));
             };
@@ -579,7 +579,7 @@ impl<M: Mode> Machine<M> {
         flushed.map_err(|fault| after(fault.into(), &task))?;
         if !ctx.check_finished() || !self.others.iter().all(Ctx::check_finished) {
             return Err(after(
-                VmFault::Internal("the evidence list or a yield is left at the end"),
+                RunFault::Internal("the evidence list or a yield is left at the end"),
                 &task,
             ));
         }
@@ -924,7 +924,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         Err(error) => {
             control.clear_end();
             let error = RuntimeError::Fault {
-                fault: VmFault::Driver(error.to_string()),
+                fault: RunFault::Driver(error.to_string()),
                 function: "<worker 0>".into(),
                 at: None,
             };
@@ -1073,7 +1073,7 @@ fn entry_body<M: Mode, P: Policy>(
         Err(e) => {
             let error = code.error(
                 vm::Failure {
-                    fault: VmFault::Driver(e.to_string()),
+                    fault: RunFault::Driver(e.to_string()),
                     pc: task.pc,
                 },
                 task,
@@ -1222,7 +1222,7 @@ fn drop_recording<T>(value: T, panic: &mut Option<Box<dyn std::any::Any + Send>>
 /// panicしたworker 0の本体の結果。runは`Machine`のスレッドでpanicを起こし直すので、この誤りは返らない。
 fn worker_panicked() -> RuntimeError {
     RuntimeError::Fault {
-        fault: VmFault::Internal("a worker thread panicked"),
+        fault: RunFault::Internal("a worker thread panicked"),
         function: "<worker 0>".into(),
         at: None,
     }
@@ -1297,7 +1297,7 @@ fn finish_run<M: Mode>(
         if panicked {
             return Ok(());
         }
-        let at_finish = |fault: VmFault| {
+        let at_finish = |fault: RunFault| {
             code.error(
                 vm::Failure {
                     fault,
@@ -1309,7 +1309,7 @@ fn finish_run<M: Mode>(
         if kept_pending && ctx.heap().control().exit_code().is_some() {
             // 操作を残したdriverがあっても、`main`の底の`exit`は終了コードを保つ。ほかのタスクの`exit`と同じくrunを
             // 捨てたことにし、終わりの確かめで誤りにせずに回復する (docs/spec/vm.mdの「時計と driver」)
-            return Err(at_finish(VmFault::Stopped(Stop::Ended)));
+            return Err(at_finish(RunFault::Stopped(Stop::Ended)));
         }
         workers::end_check(kept_pending, left).map_err(at_finish)?;
         cells::sweep_all(cells, ctx, task.depth_offset).map_err(|fault| at_finish(fault.into()))
@@ -1545,7 +1545,7 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         ),
     };
     RuntimeError::Fault {
-        fault: VmFault::Internal(what),
+        fault: RunFault::Internal(what),
         function,
         at: None,
     }

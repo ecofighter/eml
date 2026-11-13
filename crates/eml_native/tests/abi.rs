@@ -24,6 +24,73 @@ eml_nrt::entries! {
         }
     }
 
+    plain fn eml_t_echo_ii_i(ctx, a: i64, b: i64) -> i64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe {
+            *out = a as u64;
+            *out.add(1) = b as u64;
+        }
+        -2
+    }
+
+    plain fn eml_t_echo_iii_i(ctx, a: i64, b: i64, c: i64) -> i64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe {
+            *out = a as u64;
+            *out.add(1) = b as u64;
+            *out.add(2) = c as u64;
+        }
+        -3
+    }
+
+    plain fn eml_t_echo_i(ctx, a: i64) {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe { *out = a as u64 };
+    }
+
+    plain fn eml_t_echo_i_i(ctx, a: i64) -> i64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe { *out = a as u64 };
+        -1
+    }
+
+    plain fn eml_t_echo_f_i(ctx, a: f64) -> i64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe { *out = a.to_bits() };
+        -1
+    }
+
+    plain fn eml_t_echo_ff_f(ctx, a: f64, b: f64) -> f64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe {
+            *out = a.to_bits();
+            *out.add(1) = b.to_bits();
+        }
+        -2.5
+    }
+
+    plain fn eml_t_echo_iiii_i(ctx, a: i64, b: i64, c: i64, d: i64) -> i64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        for (i, v) in [a, b, c, d].into_iter().enumerate() {
+            unsafe { *out.add(i) = v as u64 };
+        }
+        -4
+    }
+
+    plain fn eml_t_echo_iiiii_i(ctx, a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        for (i, v) in [a, b, c, d, e].into_iter().enumerate() {
+            unsafe { *out.add(i) = v as u64 };
+        }
+        -5
+    }
+
+    plain fn eml_t_echo_obj_tobj(ctx, a: obj) -> tobj {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe { *out = a.bits() as u64 };
+        eml_rt::Word::imm(-7)
+    }
+
     plain fn eml_t_echo6(ctx, a: i64, b: f64, c: i64, d: f64, e: i64, f: f64) -> f64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         for (i, bits) in [a as u64, b.to_bits(), c as u64, d.to_bits(), e as u64, f.to_bits()]
@@ -173,7 +240,8 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
             entry.params,
             &rets,
         )
-        .unwrap();
+        .unwrap()
+        .0;
         callers.push((entry, id, th));
     }
     m.finalize_definitions().unwrap();
@@ -204,6 +272,16 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
         assert_eq!(r, Ok(()), "{}", entry.symbol);
         assert_eq!(seen, sent, "{}", entry.symbol);
         match entry.symbol {
+            "eml_t_echo_ii_i" => assert_eq!(argv[0] as i64, -2),
+            "eml_t_echo_iii_i" => assert_eq!(argv[0] as i64, -3),
+            "eml_t_echo_obj_tobj" => assert_eq!(
+                eml_rt::Word::from_bits(argv[0] as usize),
+                eml_rt::Word::imm(-7)
+            ),
+            "eml_t_echo_i_i" | "eml_t_echo_f_i" => assert_eq!(argv[0] as i64, -1),
+            "eml_t_echo_ff_f" => assert_eq!(f64::from_bits(argv[0]), -2.5),
+            "eml_t_echo_iiii_i" => assert_eq!(argv[0] as i64, -4),
+            "eml_t_echo_iiiii_i" => assert_eq!(argv[0] as i64, -5),
             "eml_t_echo6" => assert_eq!(f64::from_bits(argv[0]), -6.5),
             "eml_t_echo9" => assert_eq!(argv[0] as i64, -9),
             "eml_t_echo18" => assert_eq!(f64::from_bits(argv[0]), -18.5),
@@ -253,7 +331,9 @@ fn tail_calls_and_multiple_results_run() {
             b.ins().return_call(wide, &args);
         },
     );
-    let th = define_thunk(&mut m, "thunk$count", &[I64, I64], &[I64, F64, I64]).unwrap();
+    let th = define_thunk(&mut m, "thunk$count", &[I64, I64], &[I64, F64, I64])
+        .unwrap()
+        .0;
     m.finalize_definitions().unwrap();
     let mut ctx = ctx();
     let n = 10_000_000u64;
@@ -372,11 +452,17 @@ fn the_code_generator_features_run() {
         b.ins().return_(&[sum]);
     });
 
-    let thunk_read = define_thunk(&mut m, "thunk$read", &[], &[I64]).unwrap();
-    let thunk_bounce = define_thunk(&mut m, "thunk$bounce", &[I64, I64, I64], &[I64, I64]).unwrap();
-    let thunk_big = define_thunk(&mut m, "thunk$big", &[], &[I64]).unwrap();
-    let thunk_overflow = define_thunk(&mut m, "thunk$overflow", &[I64, I64], &[I64; 6]).unwrap();
-    let thunk_sp = define_thunk(&mut m, "thunk$sp", &[], &[I64, I64]).unwrap();
+    let thunk_read = define_thunk(&mut m, "thunk$read", &[], &[I64]).unwrap().0;
+    let thunk_bounce = define_thunk(&mut m, "thunk$bounce", &[I64, I64, I64], &[I64, I64])
+        .unwrap()
+        .0;
+    let thunk_big = define_thunk(&mut m, "thunk$big", &[], &[I64]).unwrap().0;
+    let thunk_overflow = define_thunk(&mut m, "thunk$overflow", &[I64, I64], &[I64; 6])
+        .unwrap()
+        .0;
+    let thunk_sp = define_thunk(&mut m, "thunk$sp", &[], &[I64, I64])
+        .unwrap()
+        .0;
     m.finalize_definitions().unwrap();
 
     // `big`は、まだ何も深く触れていない小さいスタックの新しいスレッドで最初に流す。Windowsはスタックをガードページ1枚ずつ
@@ -469,7 +555,7 @@ fn a_second_round_reaches_the_first() {
         let r = b.ins().iadd(word, r);
         b.ins().return_(&[r]);
     });
-    let th = define_thunk(&mut m, "thunk$sum", &[], &[I64]).unwrap();
+    let th = define_thunk(&mut m, "thunk$sum", &[], &[I64]).unwrap().0;
     m.finalize_definitions().unwrap();
     let mut ctx = ctx();
     let mut argv = [0u64];
@@ -524,7 +610,9 @@ mod fatal {
             let r1 = b.ins().iadd_imm_s(r, 1);
             b.ins().return_(&[r1]);
         });
-        let th = define_thunk(&mut m, "thunk$deep", &[I64], &[I64]).unwrap();
+        let th = define_thunk(&mut m, "thunk$deep", &[I64], &[I64])
+            .unwrap()
+            .0;
         m.finalize_definitions().unwrap();
         let mut ctx = ctx();
         for depth in [0u64, 1, 100] {

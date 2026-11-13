@@ -25,7 +25,7 @@ LIR から Cranelift でネイティブのコードを出す設計をまとめ�
 | 6 | 中断 | 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`try_panic`、`exit`) は戻り値で伝える。巻き戻しの地点ごとに旗を1回確かめ、yield の確かめと一緒にする |
 | 7 | 実行時エラー | 評価全体を止める誤りは、自前の setjmp と longjmp の組 (`eml_enter` と `eml_fatal`) でエントリまで切る。後始末はしない。extern の失敗は `Ctx.fault` で返す |
 | 8 | 安全点 | 関数のエントリで、止めるビットとスタックの限度を確かめる。ループの後ろ向きの辺ができたら、そこでも確かめる。ネイティブのタスクは`Async`の操作でだけ切り替わる |
-| 9 | スタック | emlのコードを動かすスレッドは、スタックを明示して予約する。workerのスレッドの既定は1 GiBの仮想の予約で、`--stack-size`で変えられる。メインのworkerは、プロセスのメインスレッドのOSの既定のスタックで動く。スタックの限度は、硬い限度`hard` (workerでは`base + 1 MiB`、メインのworkerでは`stack_base + 2 MiB`) と、`real = hard + LIMIT_HEADROOM_BYTES`の2つである。Windowsでは、`eml`とAOTのバイナリがそのスタックに8 MiBを予約する (`/STACK:8388608`) |
+| 9 | スタック | emlのコードを動かすスレッドは、スタックを明示して予約する。workerのスレッドは1 GiBの仮想の予約で、それを変える`--stack-size`を出すかは利用者が決める ([ロードマップ](roadmap.md)の「ネイティブ化」)。メインのworkerは、プロセスのメインスレッドのOSの既定のスタックで動く。スタックの限度は、硬い限度`hard` (workerでは`base + 1 MiB`、メインのworkerでは`stack_base + 2 MiB`) と、`real = hard + LIMIT_HEADROOM_BYTES`の2つである。Windowsでは、`eml`とAOTのバイナリがそのスタックに8 MiBを予約する (`/STACK:8388608`) |
 | 10 | 使い回しの鍵 | ネイティブのコードを使い回す単位は関数1つで、鍵は名前と、開いた後の LIR と、それが指す形と配置の中身のハッシュである |
 | 11 | 生の要素の配列 | `UnboxedArray a` と `MutUnboxedArray a` の要素の読み書きは、呼び出しにせず展開する |
 
@@ -93,7 +93,7 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 - 安全点は関数のエントリに置く。LIRの辺が前へだけ向き、自分への`return_call`がエントリに入り直す間は、それで足りる。ループの後ろ向きの辺ができたら、そこにも同じ安全点を置く。安全点はworkerの止める語 ([マルチコア対応の設計](multicore.md)の「スレッドと worker」) とスタックの限度を読み、止めるビットが立っているか、SPが限度より下なら冷たいブロックへ分岐する。SPはCLIFの`get_stack_pointer`で読む
 - 冷たいブロックは止めるビットなら`eml_fatal`を呼ぶ。SPが`stack_limit`を下回ったとき (`Pending`の毒を含む) は、上限の種類と関数の種類で、`ResourceLimit`を起こすか、`DepthLimit`にするか、続けるかを実行系のサービスが決める (上の「タスクごとの上限」)
 - ネイティブのタスクは`Async`の操作でだけ切り替わり、安全点はスタックと止めるビットのためにあって、時間の配分のためにはない。VMとネイティブは同じビットを読む。`Control`、SIGINT、EINTRの扱いはVMと同じである ([VM](../spec/vm.md)の「上限と割り込み」)
-- emlのコードを動かすスレッドは、スタックを明示して予約する。workerのスレッド (worker 0とworker 1..N-1) は既定で1 GiBの仮想の予約で、`--stack-size`で変えられる。Linuxで`vm.overcommit_memory=2`のときは小さい値を使うよう文書に書く。`main`のタスクはプロセスのメインスレッドの8 MiBのスタックでなく、大きいスタックで作るworker 0のスレッドで動く。メインのworkerは、プロセスのメインスレッドのOSの既定のスタックで動き、下の限度で深い再帰を止める。ブロックする呼び出しのプールのスレッドはemlのコードを動かさないので、OSの既定のスタックで足りる
+- emlのコードを動かすスレッドは、スタックを明示して予約する。workerのスレッド (worker 0とworker 1..N-1) は1 GiBの仮想の予約である。それを変える`--stack-size`を出すかは利用者が決める ([ロードマップ](roadmap.md)の「ネイティブ化」)。出すなら、Linuxで`vm.overcommit_memory=2`のときは小さい値を使うよう文書に書く。`main`のタスクはプロセスのメインスレッドの8 MiBのスタックでなく、大きいスタックで作るworker 0のスレッドで動く。メインのworkerは、プロセスのメインスレッドのOSの既定のスタックで動き、下の限度で深い再帰を止める。ブロックする呼び出しのプールのスレッドはemlのコードを動かさないので、OSの既定のスタックで足りる
 - スタックの限度はスレッドごとに決める。`base`をスタックのいちばん低いアドレスとして、硬い限度`hard`はworkerでは`base + 1 MiB`、メインのworkerでは`stack_base + 2 MiB`である。`real = hard + LIMIT_HEADROOM_BYTES` (2 MiB。VMの`LIMIT_HEADROOM`の2^18語をバイトにしたもの) で、普通に動いている間の`stack_limit`は`real`である。emlのフレームの大きさはLIRのverifierのフレームの上限 (VMでは`u16::MAX`語 = 512 KiB。ネイティブのフレームはこれより大きくならない) で抑えられ、`eml_rt`のRustのexternはスタックで再帰しない (解放は明示したワークリストで行う) ので、`hard`の下の1 MiB (メインのworkerでは2 MiB) でemlのフレーム1つと任意のexternが収まる
 - ページより大きいフレームにはその場で stack probe を入れる (`probestack_strategy=inline`)。Windows で要り、ほかの OS でも害がない
 - ネイティブでは `max_depth` を使わず、スタックの限度で深さを止める。タスクの外で止めるときの誤りの文は `DepthLimit` のままにする

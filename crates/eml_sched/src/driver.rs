@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use eml_io::{RealDriver, TestDriver};
 use eml_rt::{Control, IoDriver};
 
-use crate::error::VmFault;
+use crate::error::RunFault;
 use crate::park::PollSource;
 
 /// 静止が `Op::Job` の仕事を待つ予算の既定の値。run のすべての静止が分け合い、過ぎたら残る仕事を見捨てる
@@ -86,7 +86,7 @@ impl RunClock {
     }
 
     /// 基準が示す今の時刻。`Injected` だけは `driver` に聞く。
-    pub fn now(&self, driver: Option<&dyn IoDriver>) -> Result<Duration, VmFault> {
+    pub fn now(&self, driver: Option<&dyn IoDriver>) -> Result<Duration, RunFault> {
         match self {
             RunClock::Real { epoch } => Ok(epoch.elapsed()),
             RunClock::Virtual(clock) => Ok(Duration::from_millis(clock.load(Ordering::SeqCst))),
@@ -143,7 +143,7 @@ pub fn ceil_ms(d: Duration) -> u64 {
 }
 
 /// driver を持たない worker が driver に触れようとした。
-pub const NO_DRIVER: VmFault = VmFault::Internal("a worker without a driver");
+pub const NO_DRIVER: RunFault = RunFault::Internal("a worker without a driver");
 
 #[cfg(test)]
 mod tests {

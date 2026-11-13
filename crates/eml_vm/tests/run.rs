@@ -3,7 +3,7 @@
 
 use eml_rt::{ArithFault, Fault, HeapError};
 use eml_test_support::{execute, run_stats};
-use eml_vm::{RuntimeError, SourceLocation, VmFault};
+use eml_vm::{RunFault, RuntimeError, SourceLocation};
 
 use crate::common::{parse, run_lir, run_unverified};
 
@@ -79,7 +79,7 @@ fn main() -> unit {
     assert_eq!(
         error,
         RuntimeError::Fault {
-            fault: VmFault::Extern(Fault::Arith(ArithFault::DivisionByZero)),
+            fault: RunFault::Extern(Fault::Arith(ArithFault::DivisionByZero)),
             function: "main".to_string(),
             at: Some(SourceLocation {
                 path: "main.em".to_string(),
@@ -229,7 +229,7 @@ fn main() -> unit {
     assert_eq!(
         result,
         Err(RuntimeError::Fault {
-            fault: VmFault::Extern(Fault::Heap(HeapError::UseAfterFree)),
+            fault: RunFault::Extern(Fault::Heap(HeapError::UseAfterFree)),
             function: "main".to_string(),
             at: None,
         })
@@ -253,7 +253,7 @@ fn main() -> unit {
     assert_eq!(
         error,
         RuntimeError::Fault {
-            fault: VmFault::Extern(Fault::Heap(HeapError::UseAfterFree)),
+            fault: RunFault::Extern(Fault::Heap(HeapError::UseAfterFree)),
             function: "main".to_string(),
             at: Some(SourceLocation {
                 path: "main.em".to_string(),
@@ -297,7 +297,7 @@ fn f(p.0: obj) -> unit {{
     assert_eq!(
         error,
         RuntimeError::Fault {
-            fault: VmFault::Extern(Fault::Heap(HeapError::LinDup)),
+            fault: RunFault::Extern(Fault::Heap(HeapError::LinDup)),
             function: "f".to_string(),
             at: None,
         }

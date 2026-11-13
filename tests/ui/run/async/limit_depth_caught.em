@@ -1,3 +1,4 @@
+-- native: skip (the depth limit is the thread's stack, not a word count)
 -- max-depth: 4096
 -- タスクの中の深さの超過は `ResourceLimit` の IO の失敗になり、タスクの `try_all` が受ける。再帰の1段ごとに持つ
 -- `String` は巻き戻しが放す (docs/spec/vm.md の「`Async` のタスク」、docs/spec/stdlib.md の「`Std.Async`」)。

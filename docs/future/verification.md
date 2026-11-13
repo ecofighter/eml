@@ -94,7 +94,9 @@ Verus では扱わない。理由は次のとおりである。
 
 - UI テストは検査モードと速いモードで流す ([テスト戦略](../implementation/testing.md) の「2つのモードで流す」)。検査モードでは `YieldMisuse`、`BadEvidence`、`NoHandler` が実行時の網になる ([オブジェクトモデル](../spec/object-model.md) の「受け入れる制約」)
 - VM の1歩は、Verus で書ける大きさに保つ
-- その後、LIR の verifier を Verus で書き、「verifier を通った LIR を VM が実行すると、`eml_rt` の前提が毎回成り立つ」ことを証明するかを検討する。証明できれば、Perceus、box の挿入、EP の出力の形の誤りがあってもメモリの安全は損なわれなくなる。印の正しさは LIR から確かめられないので、その部分は Kind 推論の証明に頼る
+- その後、LIRのverifierをVerusで書き、「verifierを通ったLIRをVMが実行すると、`eml_rt`の前提が毎回成り立つ」ことを証明するかを検討する。証明できれば、Perceus、boxの挿入、EPの出力の形の誤りがあってもメモリの安全は損なわれなくなる。印の正しさはLIRから確かめられないので、その部分はKind推論の証明に頼る
+- 今のverifierでは、この証明はできない。verifierは値を作ったときの配置を追わないので、verifierを通ることは`eml_rt`の前提を保証しない ([LIR](../spec/lir.md)の「実行の前提」)。証明には、値の型を残すLIRと、その型を追うverifierが要る
+- 証明がない間は、前提を呼ぶ側の約束として扱う。その約束をRustのAPIに表す設計は、[エンジンの信頼の境界の設計](engine-trust.md)にある
 
 ## 順序
 

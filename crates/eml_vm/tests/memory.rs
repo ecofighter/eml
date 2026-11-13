@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use eml_vm::{Control, Finished, Limits, RunConfig, RuntimeError, Sched, Stop, VmFault};
+use eml_vm::{Control, Finished, Limits, RunConfig, RunFault, RuntimeError, Sched, Stop};
 
 const MIB: usize = 1 << 20;
 
@@ -61,7 +61,7 @@ fn assert_memory_limit(result: Result<Finished, RuntimeError>, workers: usize) {
         matches!(
             error,
             RuntimeError::Fault {
-                fault: VmFault::Stopped(Stop::MemoryLimit),
+                fault: RunFault::Stopped(Stop::MemoryLimit),
                 ..
             }
         ),

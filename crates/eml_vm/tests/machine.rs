@@ -11,8 +11,8 @@ use eml_rt::{
     IoWaker, Op, OpKey, Submit,
 };
 use eml_vm::{
-    AnyMachine, CompileError, Control, Limits, Machine, RunConfig, RuntimeError, SourceLocation,
-    VmFault, capture_host, disassemble,
+    AnyMachine, CompileError, Control, Limits, Machine, RunConfig, RunFault, RuntimeError,
+    SourceLocation, capture_host, disassemble,
 };
 
 use crate::common::parse;
@@ -204,7 +204,7 @@ fn second() -> unit {
     assert_eq!(
         machine.run(b.entry).unwrap_err(),
         RuntimeError::Fault {
-            fault: VmFault::Extern(Fault::Arith(ArithFault::DivisionByZero)),
+            fault: RunFault::Extern(Fault::Arith(ArithFault::DivisionByZero)),
             function: "second".to_string(),
             at: Some(SourceLocation {
                 path: "b.em".to_string(),
@@ -289,16 +289,26 @@ fn a_broken_error_is_a_heap_or_internal_fault() {
         function: "f".to_string(),
         at: None,
     };
-    assert!(fault(VmFault::Internal("x")).is_broken());
-    assert!(fault(VmFault::Driver("x".to_string())).is_broken());
+    assert!(fault(RunFault::Internal("x")).is_broken());
+    assert!(fault(RunFault::Driver("x".to_string())).is_broken());
     assert!(
-        fault(VmFault::Extern(Fault::Heap(
+        fault(RunFault::Extern(Fault::Heap(
             eml_rt::HeapError::UseAfterFree
         )))
         .is_broken()
     );
-    assert!(!fault(VmFault::Extern(Fault::Arith(ArithFault::DivisionByZero))).is_broken());
+    assert!(!fault(RunFault::Extern(Fault::Arith(ArithFault::DivisionByZero))).is_broken());
     assert!(!RuntimeError::Leak(Vec::new()).is_broken());
+}
+
+#[test]
+fn an_engine_held_failure_is_broken() {
+    let error = RuntimeError::Fault {
+        fault: RunFault::Extern(Fault::Engine),
+        function: "f".to_string(),
+        at: None,
+    };
+    assert!(error.is_broken());
 }
 
 /// 根に置いた値は実行をまたいで残り、`close` で手放す。検査モードでも、閉じた後にリークは残らない。
@@ -541,7 +551,7 @@ fn main() -> unit {
                 } if matches!(
                     **cause,
                     RuntimeError::Fault {
-                        fault: VmFault::Extern(Fault::Arith(ArithFault::DivisionByZero)),
+                        fault: RunFault::Extern(Fault::Arith(ArithFault::DivisionByZero)),
                         ..
                     }
                 )
@@ -608,7 +618,7 @@ fn a_shown_entry_must_return_an_object() {
         matches!(
             error,
             RuntimeError::Fault {
-                fault: VmFault::Internal(_),
+                fault: RunFault::Internal(_),
                 ..
             }
         ),

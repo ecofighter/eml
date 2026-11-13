@@ -19,7 +19,7 @@ use crate::cells::{self, CellRef, JobSource, Raise, Runnable, Take, WaitToken};
 use crate::code::{CodeBase, ForkTable, UnwindEntry};
 use crate::data;
 use crate::driver::DriverKind;
-use crate::error::VmFault;
+use crate::error::RunFault;
 use crate::ffi;
 use crate::gui;
 use crate::jobs;
@@ -177,7 +177,7 @@ pub(crate) struct Placed {
 
 /// 誤りと、それが起きた命令の位置。
 pub(crate) struct Failure {
-    pub(crate) fault: VmFault,
+    pub(crate) fault: RunFault,
     pub(crate) pc: Pc,
 }
 
@@ -512,7 +512,7 @@ enum Polled {
 /// `Ctx::poll` の VM での呼び方。速い道は `Ok(())` の分岐だけで、残りは `polled_stop` に置く
 /// (docs/spec/vm.md の「タスクとスケジュール」)。
 #[inline(always)]
-fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize, k: usize) -> Result<Polled, VmFault> {
+fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize, k: usize) -> Result<Polled, RunFault> {
     match ctx.poll(depth) {
         Ok(()) => Ok(Polled::Continue),
         Err(stop) => polled_stop(ctx, depth, stop, k),
@@ -530,7 +530,7 @@ fn polled_stop<M: Mode>(
     depth: usize,
     stop: Stop,
     k: usize,
-) -> Result<Polled, VmFault> {
+) -> Result<Polled, RunFault> {
     // `Ctx` は worker `k` の語を読むので、下ろすのも `k` 番の語である
     let control = ctx.heap().control();
     match stop {
@@ -561,7 +561,7 @@ fn safepoint<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let polled = poll(ctx, task.stack_depth(), sched.index)?;
     if let Polled::Limit { collect } = polled {
         if limit_safepoint::<R>(code, ctx, task, sched, collect)? {
@@ -592,7 +592,7 @@ fn limit_safepoint<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     collect: bool,
-) -> Result<bool, VmFault> {
+) -> Result<bool, RunFault> {
     if collect {
         collect_notice::<R>(ctx, task, sched)?;
     }
@@ -613,9 +613,9 @@ fn limit_hit<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     if matches!(task.limit, Limit::Stops | Limit::Aborting { .. }) {
-        return Err(VmFault::Stopped(Stop::DepthLimit));
+        return Err(RunFault::Stopped(Stop::DepthLimit));
     }
     // yield の途中の状態は `Ctx` が1つだけ持ち、中断はそれを使うので、yield を終えるまで待つ
     if ctx.yielding() != 0 {
@@ -631,7 +631,7 @@ fn limit_hit<R: Exec>(
     let real = real_limit(ctx, task.depth_offset);
     // 補助の関数のエントリで延ばしても深さの限度がなくならないよう、延ばす前に確かめる
     if task.stack_depth() > real.saturating_add(LIMIT_HEADROOM) {
-        return Err(VmFault::Stopped(Stop::DepthLimit));
+        return Err(RunFault::Stopped(Stop::DepthLimit));
     }
     // 補助の関数のエントリの `evv` は利用者のプログラムのどの地点のものでもなく、起こすとプログラムに見えない
     // handler に届く
@@ -658,7 +658,7 @@ fn limit_hit<R: Exec>(
         if real_over {
             task.limit = Limit::Task;
             ctx.set_depth_limit(real);
-            return Err(VmFault::Stopped(Stop::DepthLimit));
+            return Err(RunFault::Stopped(Stop::DepthLimit));
         }
         task.limit = Limit::Pending;
         ctx.set_depth_limit(0);
@@ -771,7 +771,7 @@ fn collect_notice<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     collect::<R>(ctx, task, sched, true)
 }
 
@@ -829,7 +829,7 @@ fn work_loop<R: Exec>(
     match run_tasks::<R>(code, ctx, task, sched, counts) {
         Ok(()) => code.error(
             Failure {
-                fault: VmFault::Internal("a placed child reached the end of a run"),
+                fault: RunFault::Internal("a placed child reached the end of a run"),
                 pc: task.pc,
             },
             task,
@@ -861,7 +861,7 @@ pub(crate) fn main_work<R: Exec>(
     (error, sched.peak_stack(&task))
 }
 
-fn main_fault(fault: VmFault) -> RuntimeError {
+fn main_fault(fault: RunFault) -> RuntimeError {
     RuntimeError::Fault {
         fault,
         function: "<main worker>".into(),
@@ -906,7 +906,7 @@ fn main_wait<R: Exec>(
     // driverの誤りは`default_wait`が`stop`に残したので、ここに来る誤りは`Park`自身のものである
     if let Err(e) = waited {
         sched.guard = Guard::Outside;
-        return Err(main_fault(VmFault::Park(e.to_string())));
+        return Err(main_fault(RunFault::Park(e.to_string())));
     }
     if matches!(sched.guard, Guard::Stopped(_)) {
         sched.guard = Guard::Outside;
@@ -999,7 +999,7 @@ impl<R: Exec> Pending for MainPending<'_, R> {
         }
         let waited = self.sched.main_default_wait();
         if let Err(e) = &waited {
-            self.stop = Some(main_fault(VmFault::Driver(e.to_string())));
+            self.stop = Some(main_fault(RunFault::Driver(e.to_string())));
             self.sched.guard = Guard::Stopped(0);
         }
         waited
@@ -1031,7 +1031,7 @@ impl<R: Exec> Pending for MainPending<'_, R> {
 
 impl<R: Exec> MainPending<'_, R> {
     /// `Park`が呼んだ登録表の操作の誤りを、`run`の誤りと同じくrunの誤りにする。続く`run`は`Stopping`を返す。
-    fn fail(&mut self, fault: VmFault) {
+    fn fail(&mut self, fault: RunFault) {
         if self.stop.is_none() {
             self.stop = Some(main_fault(fault));
         }
@@ -1041,7 +1041,7 @@ impl<R: Exec> MainPending<'_, R> {
 
 /// ゲート`gate`に知らせ、起こしたタスクを積む。`Std.Gui.poke_raw`の腕とメインのworkerの`Pending::poke`が使う
 /// (docs/spec/vm.mdの「セルと登録表」)。
-fn poke_gate<P: Policy>(sched: &mut Scheduler<P>, gate: i64) -> Result<(), VmFault> {
+fn poke_gate<P: Policy>(sched: &mut Scheduler<P>, gate: i64) -> Result<(), RunFault> {
     let mut runs = Vec::new();
     {
         here!(sched, post, here);
@@ -1080,7 +1080,7 @@ fn drive<R: Exec>(
         ran = match run_tasks::<R>(code, ctx, task, sched, counts) {
             Ok(()) => Err(code.error(
                 Failure {
-                    fault: VmFault::Internal("a pinned task reached the end of a run"),
+                    fault: RunFault::Internal("a pinned task reached the end of a run"),
                     pc: task.pc,
                 },
                 task,
@@ -1128,7 +1128,7 @@ fn step<R: Exec>(
     sched: &mut Scheduler<R::P>,
     counts: &mut RunCounts,
     pc: Pc,
-) -> Result<bool, VmFault> {
+) -> Result<bool, RunFault> {
     task.pc = pc + 1;
     let ops = |at: u32| &code.tables.operands[at as usize..];
     match code.tables.code[pc as usize] {
@@ -1514,7 +1514,7 @@ fn apply_call<R: Exec>(
     sched: &mut Scheduler<R::P>,
     at: u32,
     target: apply::Target,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let callee = load_call::<R>(code, task, at);
     apply::apply::<R>(code, ctx, task, callee, target)?;
     safepoint::<R>(code, ctx, task, sched)?;
@@ -1529,7 +1529,7 @@ fn clause_call<R: Exec>(
     sched: &mut Scheduler<R::P>,
     at: u32,
     target: apply::Target,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let callee = load_call::<R>(code, task, at);
     apply::apply_clause::<R>(code, ctx, task, callee, target)?;
     safepoint::<R>(code, ctx, task, sched)?;
@@ -1570,7 +1570,7 @@ fn call_many<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     call::<R>(code, task, 0, at);
     safepoint::<R>(code, ctx, task, sched)?;
     Ok(())
@@ -1585,7 +1585,7 @@ fn return_many<R: Exec>(
     sched: &mut Scheduler<R::P>,
     pc: Pc,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     ret_many::<R>(code, task, at)?;
     task.last_ret = pc;
     safepoint::<R>(code, ctx, task, sched)?;
@@ -1597,7 +1597,7 @@ fn return_many<R: Exec>(
 /// (docs/spec/vm.md の「呼び出しと戻り」)。値は呼ばれる側のフレームから
 /// 呼び出し元のフレームへ写すので、読む所と書く所は重ならない。
 #[inline]
-fn ret_many<R: Exec>(code: &CodeBase<R::M>, task: &mut Task, at: u32) -> Result<(), VmFault> {
+fn ret_many<R: Exec>(code: &CodeBase<R::M>, task: &mut Task, at: u32) -> Result<(), RunFault> {
     let o = &code.tables.operands[at as usize..];
     let n = o[0] as usize;
     let (ret, _, _) = read_header(task.stack[task.base - 2]);
@@ -1613,7 +1613,7 @@ fn ret_many<R: Exec>(code: &CodeBase<R::M>, task: &mut Task, at: u32) -> Result<
 /// 戻り先 `ret` の直前の、複数の値を受ける命令の結果のスロット。`Finish` と `ApplyRest` の位置へは値が1つしか
 /// 戻らないので、ほかの命令の後への戻りは内部の誤りである。検査モードは値の数も比べる。
 #[inline]
-fn receivers<R: Exec>(code: &CodeBase<R::M>, ret: Pc, n: usize) -> Result<&[u32], VmFault> {
+fn receivers<R: Exec>(code: &CodeBase<R::M>, ret: Pc, n: usize) -> Result<&[u32], RunFault> {
     let o = |at: u32| &code.tables.operands[at as usize..];
     let dsts = match ret.checked_sub(1).map(|pc| code.tables.code[pc as usize]) {
         Some(Op::CallN { at }) => {
@@ -1631,8 +1631,8 @@ fn receivers<R: Exec>(code: &CodeBase<R::M>, ret: Pc, n: usize) -> Result<&[u32]
 
 #[cold]
 #[inline(never)]
-fn not_received() -> VmFault {
-    VmFault::Internal("multiple values return to a place that does not receive them")
+fn not_received() -> RunFault {
+    RunFault::Internal("multiple values return to a place that does not receive them")
 }
 
 /// 中断を始めた命令の後で、タスクのスタックを巻き戻す (docs/spec/vm.md の「巻き戻しの手順」)。`task.pc` は中断を
@@ -1648,7 +1648,7 @@ fn unwind<R: Exec>(
     task: &mut Task,
     counts: &mut RunCounts,
     target: Word,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     // 最後に外したフレームの見出しにある、呼び出し元の結果のスロット
     let mut dst = None;
     loop {
@@ -1657,7 +1657,11 @@ fn unwind<R: Exec>(
                 landed(ctx, task);
                 return Ok(());
             }
-            FINISH => return Err(VmFault::Internal("an abort reached the bottom of the task")),
+            FINISH => {
+                return Err(RunFault::Internal(
+                    "an abort reached the bottom of the task",
+                ));
+            }
             // 子の中の handler は子の中に着地するので、子の境目に着くのは `child_abort` の巻き戻しだけである。宛先は
             // 不死のダミーで、どの着地の印とも合わない
             CHILD_DONE if task.exit.is_none() && target == ctx.heap().dummy() => {
@@ -1665,7 +1669,7 @@ fn unwind<R: Exec>(
                 return Ok(());
             }
             CHILD_DONE => {
-                return Err(VmFault::Internal(
+                return Err(RunFault::Internal(
                     "an abort reached the boundary of a par child",
                 ));
             }
@@ -1679,7 +1683,7 @@ fn unwind<R: Exec>(
                 let entry = code
                     .tables
                     .unwind_at(pc)
-                    .ok_or(VmFault::Internal("a frame stops outside an unwind point"))?;
+                    .ok_or(RunFault::Internal("a frame stops outside an unwind point"))?;
                 if let Some(landing) = entry.landing {
                     let ev = task.get(landing);
                     // 中断を始めたフレーム (`dst` がまだない) は、印の付いた呼び出しの最中ではないので印を持たない
@@ -1725,11 +1729,11 @@ fn unwind<R: Exec>(
 // 命令の列を変えないためである (docs/spec/vm.md の「`par` の fork と join」)
 
 /// join が見つけた子の誤りを `Scheduler::failed` に置いたことを、実行の繰り返しに伝える印。外には出ない。
-const CHILD_FAILED: VmFault = VmFault::Internal("a child failure is waiting in the scheduler");
+const CHILD_FAILED: RunFault = RunFault::Internal("a child failure is waiting in the scheduler");
 
 /// メインのworkerの走れるタスクがなくなったことを、実行の繰り返しに伝える印。`drive`が受け取り、外には出ない
 /// (docs/spec/vm.mdの「メインのworker」)。
-const HOST_IDLE: VmFault = VmFault::Internal("the main worker has nothing to run");
+const HOST_IDLE: RunFault = RunFault::Internal("the main worker has nothing to run");
 
 /// `par` の fork。親の文脈で、右の子に ID を出して閉包と子の `evv` に印を付け、右の子をまだ始めずに列に入れ、左の子を
 /// 親のスタックの上で始める。mask は evidence passing の包みがすでに当てている。
@@ -1741,7 +1745,7 @@ fn par<R: Exec>(
     sched: &mut Scheduler<R::P>,
     dst: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let o = &code.tables.operands[at as usize..];
     // 2つの閉包は `par` が消費する、VM の持つ参照である
     let (f, g) = (task.get(o[0] as Slot), task.get(o[1] as Slot));
@@ -1814,7 +1818,7 @@ fn fork_child<R: Exec>(
     ctx: &mut Ctx<R::M>,
     sched: &mut Scheduler<R::P>,
     g: Word,
-) -> Result<(u32, Word), VmFault> {
+) -> Result<(u32, Word), RunFault> {
     // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
     // 触れない
     let child = unsafe { ctx.heap_mut() }.fork_worker();
@@ -1835,7 +1839,7 @@ fn fork_child<R: Exec>(
 fn idle_home<R: Exec>(
     ctx: &Ctx<R::M>,
     sched: &mut Scheduler<R::P>,
-) -> Result<Option<usize>, VmFault> {
+) -> Result<Option<usize>, RunFault> {
     let home = match sched.workers.places() {
         true => sched.run.pop_idle(),
         false => None,
@@ -1843,7 +1847,7 @@ fn idle_home<R: Exec>(
     // 根に印を付けるのは worker 0 の fork だけなので、置く子が読む根にはもう印が付いている
     // (docs/spec/object-model.md の「セッションの根」)
     if home.is_some() && <R::M as Mode>::CHECKED && sched.shared_roots != ctx.roots().len() {
-        return Err(VmFault::Internal(
+        return Err(RunFault::Internal(
             "a placed child may read an unshared root",
         ));
     }
@@ -1875,7 +1879,7 @@ fn apply_to_unit<R: Exec>(
     f: Word,
     ret: Pc,
     dst: Slot,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     task.scratch.clear();
     task.scratch.push(Word::UNIT);
     apply::apply::<R>(code, ctx, task, f, apply::Target::Frame { ret, dst })
@@ -1889,7 +1893,7 @@ fn fork_evv<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     parent: Word,
-) -> Result<Word, VmFault> {
+) -> Result<Word, RunFault> {
     let forks = &code.forks;
     let mut mirrored: Vec<(u16, Word, u32)> = Vec::new();
     let mut ranks: Vec<(u16, u32)> = Vec::new();
@@ -1900,7 +1904,7 @@ fn fork_evv<R: Exec>(
         let effect = unsafe { heap.meta(node) }?
             .tag()
             .checked_sub(1)
-            .ok_or(VmFault::Internal("an evv node has tag 0"))?;
+            .ok_or(RunFault::Internal("an evv node has tag 0"))?;
         if Some(effect) != forks.panic {
             match forks.tables.get(usize::from(effect)) {
                 Some(ForkTable::Resumable) => {}
@@ -1918,7 +1922,7 @@ fn fork_evv<R: Exec>(
                     mirrored.push((effect, table, depth));
                 }
                 _ => {
-                    return Err(VmFault::Internal(
+                    return Err(RunFault::Internal(
                         "a never-only evidence of a par parent has no fork table",
                     ));
                 }
@@ -1953,10 +1957,10 @@ fn child_done<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     outcome: Outcome,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     // 子は親の handler に yield できないので、yield の途中で終わる子はない
     if ctx.yielding() != 0 {
-        return Err(VmFault::Internal(
+        return Err(RunFault::Internal(
             "a par child ends in the middle of a yield",
         ));
     }
@@ -2017,7 +2021,7 @@ fn placed_done<R: Exec>(
     placed: Placed,
     j: JoinId,
     outcome: Outcome,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     // `()` を入れ替えるだけで、返る語も `()` である
@@ -2039,7 +2043,7 @@ fn job_done<R: Exec>(
     sched: &mut Scheduler<R::P>,
     job: JobRef,
     outcome: Outcome,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let end = match outcome {
         Outcome::Value(w) => cells::JobEnd::Value(w),
         Outcome::Abort {
@@ -2051,7 +2055,7 @@ fn job_done<R: Exec>(
             depth,
             clause,
         },
-        Outcome::Error(_) => return Err(VmFault::Internal("a job ends with an error")),
+        Outcome::Error(_) => return Err(RunFault::Internal("a job ends with an error")),
     };
     let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
@@ -2076,7 +2080,7 @@ fn switch_away<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     keep: Option<TaskState>,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     debug_assert!(
         sched.hold.is_none(),
         "a channel reservation is held at a switch"
@@ -2134,7 +2138,7 @@ fn switch_away<R: Exec>(
             Polled::Limit { .. }
         ) && matches!(task.limit, Limit::Stops | Limit::Aborting { .. })
         {
-            return Err(VmFault::Stopped(Stop::DepthLimit));
+            return Err(RunFault::Stopped(Stop::DepthLimit));
         }
         sched.since_poll = 0;
         collect::<R>(ctx, task, sched, false)?;
@@ -2160,8 +2164,8 @@ fn resume<R: Exec>(
     sched: &mut Scheduler<R::P>,
     next: TaskId,
     keep: Option<TaskState>,
-) -> Result<Option<Pc>, VmFault> {
-    let mut incoming = sched.tasks[next].take().ok_or(VmFault::Internal(
+) -> Result<Option<Pc>, RunFault> {
+    let mut incoming = sched.tasks[next].take().ok_or(RunFault::Internal(
         "a task to resume is not in the scheduler",
     ))?;
     let evv = std::mem::replace(&mut incoming.evv, Word::UNIT);
@@ -2254,7 +2258,7 @@ fn collect<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     look: bool,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let gathered = sched.gather(ctx, task.depth_offset, look);
     if !sched.limited.is_empty() {
         mark_limited(ctx, task, sched);
@@ -2279,7 +2283,7 @@ fn preempt<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     debug_assert!(
         sched.hold.is_none(),
         "a channel reservation is held at a switch"
@@ -2331,7 +2335,7 @@ fn complete_join<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     j: JoinId,
-) -> Result<Pc, VmFault> {
+) -> Result<Pc, RunFault> {
     let join = sched.take_join(j);
     let at = join.ret - 1;
     let result = join_outcomes::<R>(code, ctx, task, sched, join);
@@ -2349,8 +2353,8 @@ fn at_par<M: Mode, P: Policy>(
     task: &Task,
     sched: &mut Scheduler<P>,
     at: Pc,
-    result: Result<(), VmFault>,
-) -> Result<(), VmFault> {
+    result: Result<(), RunFault>,
+) -> Result<(), RunFault> {
     match result {
         Err(fault) if sched.failed.is_none() => {
             sched.failed = Some(code.error(Failure { fault, pc: at }, task));
@@ -2369,9 +2373,9 @@ fn join_outcomes<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     join: JoinNode,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let (Some(left), Some(right)) = (join.left, join.right_outcome) else {
-        return Err(VmFault::Internal(
+        return Err(RunFault::Internal(
             "a join completes before both children end",
         ));
     };
@@ -2391,7 +2395,7 @@ fn join_outcomes<R: Exec>(
     let (abort, dropped) = match (left, right) {
         (Outcome::Value(l), Outcome::Value(r)) => {
             let Op::Par { at, .. } = code.tables.code[join.ret as usize - 1] else {
-                return Err(VmFault::Internal(
+                return Err(RunFault::Internal(
                     "a join returns after something other than a par",
                 ));
             };
@@ -2407,7 +2411,7 @@ fn join_outcomes<R: Exec>(
             return Ok(());
         }
         (Outcome::Error(_), _) | (_, Outcome::Error(_)) => {
-            return Err(VmFault::Internal(
+            return Err(RunFault::Internal(
                 "a join raises an error after reporting it",
             ));
         }
@@ -2425,7 +2429,7 @@ fn join_outcomes<R: Exec>(
         clause,
     } = abort
     else {
-        return Err(VmFault::Internal(
+        return Err(RunFault::Internal(
             "a join raises again something other than an abort",
         ));
     };
@@ -2440,7 +2444,7 @@ fn reraise<R: Exec>(
     abort: (u16, u32, Word),
     ret: Pc,
     dst: Slot,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let (effect, depth, clause) = abort;
     // 子が見た `depth` 番目の evidence に届くように、親の `evv` を mask する。`reperform$` は今の `evv` の最初の
     // evidence で perform して戻らないので、mask した `evv` は handler の `prompt$` が手放す
@@ -2471,9 +2475,9 @@ fn child_abort<R: Exec>(
     counts: &mut RunCounts,
     ev: Slot,
     c: Slot,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     if task.boundaries.is_empty() {
-        return Err(VmFault::Internal("a child abort outside a par child"));
+        return Err(RunFault::Internal("a child abort outside a par child"));
     }
     let ev = task.get(ev);
     // `ev` は節のエントリが持つ fork evidence で、状態の欄は深さの即値である
@@ -2481,14 +2485,14 @@ fn child_abort<R: Exec>(
     let effect = unsafe { heap.meta(ev) }?
         .tag()
         .checked_sub(1)
-        .ok_or(VmFault::Internal(
+        .ok_or(RunFault::Internal(
             "a child abort gets something other than evidence",
         ))?;
     let depth = unsafe { heap.scanned(ev, 1) }?;
     let depth = u32::try_from(depth.imm_value())
         .ok()
         .filter(|_| depth.is_imm())
-        .ok_or(VmFault::Internal(
+        .ok_or(RunFault::Internal(
             "a child abort gets evidence without a depth",
         ))?;
     let clause = task.get(c);
@@ -2571,10 +2575,10 @@ fn stops_the_run(error: &RuntimeError) -> bool {
     matches!(
         error,
         RuntimeError::Fault {
-            fault: VmFault::Stopped(
+            fault: RunFault::Stopped(
                 Stop::Interrupted | Stop::Terminated | Stop::MemoryLimit | Stop::Ended
-            ) | VmFault::Extern(eml_rt::Fault::Heap(_))
-                | VmFault::Internal(_),
+            ) | RunFault::Extern(eml_rt::Fault::Heap(_))
+                | RunFault::Internal(_),
             ..
         } | RuntimeError::Leak(_)
             | RuntimeError::Deadlock
@@ -2634,7 +2638,7 @@ fn finish<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &Task,
     sched: &mut Scheduler<R::P>,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let mut out = Vec::new();
     sched.take_slot(ctx, task.depth_offset, &mut out)?;
     {
@@ -2651,7 +2655,7 @@ fn finish<R: Exec>(
         )?;
     }
     if !out.is_empty() || sched.cells.lock().left_at_end() {
-        return Err(VmFault::Internal("a task is left at the end"));
+        return Err(RunFault::Internal("a task is left at the end"));
     }
     // 予約と確定の間に安全点はないので、`Finish` に来た worker は予約を持たない (docs/spec/vm.md の「channel」)
     debug_assert!(
@@ -2659,10 +2663,10 @@ fn finish<R: Exec>(
         "a channel reservation is held at the end"
     );
     if sched.has_children() {
-        return Err(VmFault::Internal("a task is left at the end"));
+        return Err(RunFault::Internal("a task is left at the end"));
     }
     if task.exit.is_some() && !task.boundaries.is_empty() {
-        return Err(VmFault::Internal("an exit ends a run with an open par"));
+        return Err(RunFault::Internal("an exit ends a run with an open par"));
     }
     if let Some(n) = task.exit {
         // 途中のフレームは巻き戻しで片付けてある。エントリの結果はダミーなので手放さない。中断の途中の `evv` には
@@ -2674,7 +2678,7 @@ fn finish<R: Exec>(
         // 終了コードは終わりの欄だけが運ぶ。run の始めに開いた欄に先に書いた者はいないはずである
         // (docs/spec/vm.md の「`exit`」)
         if !cells::end_with_exit(ctx.heap().control(), n) {
-            return Err(VmFault::Internal("an exit after the end of the run"));
+            return Err(RunFault::Internal("an exit after the end of the run"));
         }
         return Ok(());
     }
@@ -2697,11 +2701,11 @@ fn async_op<R: Exec>(
     sched: &mut Scheduler<R::P>,
     dst: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let o = &code.tables.operands[at as usize..];
     let arg = |i: usize| o[2 + i] as Slot;
     if code.entries.is_none() {
-        return Err(VmFault::Internal("the Async entries are not loaded"));
+        return Err(RunFault::Internal("the Async entries are not loaded"));
     }
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、行がそれを預かる
     let ext = Extern::ALL[o[0] as usize];
@@ -2720,7 +2724,7 @@ fn async_op<R: Exec>(
             let owner = place_owner(sched, pinned);
             let (handle, run) =
                 start_task::<R>(ctx, task, sched, scope, owner, task.get(arg(0)), pinned)?
-                    .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
+                    .ok_or(RunFault::Internal("a task starts in a closed scope"))?;
             task.set(dst, handle);
             // ほかの worker に置いたタスクは、`Place` を受けた持ち主が始める
             if let Some(run) = run {
@@ -2742,8 +2746,8 @@ fn async_op<R: Exec>(
             let me = sched.me();
             let (handle, run) =
                 start_task::<R>(ctx, task, sched, root, me, task.get(arg(0)), pinned)?
-                    .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
-            let run = run.ok_or(VmFault::Internal("a root task is placed elsewhere"))?;
+                    .ok_or(RunFault::Internal("a task starts in a closed scope"))?;
+            let run = run.ok_or(RunFault::Internal("a root task is placed elsewhere"))?;
             sched
                 .cells
                 .lock()
@@ -3534,7 +3538,7 @@ fn async_op<R: Exec>(
             let driver = sched
                 .driver
                 .as_deref_mut()
-                .ok_or(VmFault::Internal("a worker without a driver"))?;
+                .ok_or(RunFault::Internal("a worker without a driver"))?;
             let mut parents = Vec::new();
             let launched = {
                 let mut pipes = |end: PipeEnd| {
@@ -3664,7 +3668,7 @@ fn async_op<R: Exec>(
             task.set_raw(dst, i64::from(own));
         }
         _ => {
-            return Err(VmFault::Internal(
+            return Err(RunFault::Internal(
                 "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net, Std.Stream, Std.Exec, Std.Tls and Std.Gui reached the Async instruction",
             ));
         }
@@ -3692,7 +3696,7 @@ fn bind_here<M: Mode, P: Policy>(
     sched: &mut Scheduler<P>,
     ctx: &Ctx<M>,
     stream: Word,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     if cells::stream_unbound(ctx, stream)? {
         sched.own_driver()?;
     }
@@ -3708,7 +3712,7 @@ fn ffi_submit<R: Exec>(
     sched: &mut Scheduler<R::P>,
     dst: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let Some((from, job)) = ffi::job::<R>(code, ctx, task, dst, at)? else {
         return Ok(());
     };
@@ -3716,9 +3720,9 @@ fn ffi_submit<R: Exec>(
 }
 
 /// 今の `Task` のタスクのセル。`main`、`par` の右の子、`compute` の仕事は `Async` の操作を実行しない。
-pub(crate) fn current_cell(task: &Task) -> Result<CellRef, VmFault> {
+pub(crate) fn current_cell(task: &Task) -> Result<CellRef, RunFault> {
     task.cell
-        .ok_or(VmFault::Internal("an Async operation runs outside a task"))
+        .ok_or(RunFault::Internal("an Async operation runs outside a task"))
 }
 
 /// `take_result` と `run_result` が受け取ったタスクの失敗を、今のタスクで起こし直す。`Panic` は `panic` の extern と
@@ -3731,7 +3735,7 @@ fn raise_again<R: Exec>(
     dst: Slot,
     raise: Raise,
     ext: Extern,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     match raise {
         Raise::Panic(message) => {
             if abort_to::<R, _>(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |ctx| {
@@ -3739,7 +3743,7 @@ fn raise_again<R: Exec>(
             })? {
                 return Ok(());
             }
-            Err(VmFault::Panicked(message))
+            Err(RunFault::Panicked(message))
         }
         Raise::Io { kind, message } => {
             let fault = Fault::Raised(Box::new(Raised {
@@ -3768,7 +3772,7 @@ fn start_task<R: Exec>(
     owner: u32,
     g: Word,
     pinned: bool,
-) -> Result<Option<(Word, Option<Runnable>)>, VmFault> {
+) -> Result<Option<(Word, Option<Runnable>)>, RunFault> {
     let roots = unshared_roots(ctx, sched);
     let started = {
         here!(sched, post, here);
@@ -3783,9 +3787,11 @@ fn start_task<R: Exec>(
 /// `finish_*` の終わり方をエントリの `Task` に預ける。核に渡すのは `Task` の `Finish` で、そのときにはタスクの ID の物体は
 /// 終わり方の値のほかに片付いている。先に渡すと、起こした側がセルを放してタスクの ID を退かせたときに、まだ動いている
 /// タスクの物体が残る (docs/spec/vm.md の「`Async` のタスク」)。
-fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), VmFault> {
+fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), RunFault> {
     if task.cell.is_none() || task.outcome.is_some() {
-        return Err(VmFault::Internal("a task finishes twice or outside a task"));
+        return Err(RunFault::Internal(
+            "a task finishes twice or outside a task",
+        ));
     }
     task.outcome = Some(outcome);
     Ok(())
@@ -3794,7 +3800,7 @@ fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), VmFault> {
 /// 核が返した仕事を実行待ちの列の後ろに積む。どの方針でも FIFO である (docs/spec/vm.md の「タスクとスケジュール」)。
 /// 始める仕事と再開する仕事はフレームを持たない `Entry` のまま積み、持ち主が `pick` で取ったときにエントリの `Task` に
 /// する。token は待っている `Task` の番号である。
-fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), VmFault> {
+fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), RunFault> {
     // 今のタスクが自分の再開を積んだ。待ちに入っても実行待ちにいるので、今の数で `top` に出す
     // (docs/spec/vm.md の「タスクとスケジュール」)
     if let Runnable::Resume { cell, .. } | Runnable::ResumeIo { cell, .. } = run
@@ -3845,7 +3851,7 @@ fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), Vm
                     ..
                 })) => {}
                 _ => {
-                    return Err(VmFault::Internal("a woken token names no waiting task"));
+                    return Err(RunFault::Internal("a woken token names no waiting task"));
                 }
             }
             sched.run.push_ready(sched.index, Ready::Task(id));
@@ -3867,14 +3873,14 @@ fn ready_task<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     sched: &mut Scheduler<P>,
     item: Ready,
-) -> Result<TaskId, VmFault> {
+) -> Result<TaskId, RunFault> {
     let entry = match item {
         Ready::Task(id) => return Ok(id),
         Ready::Entry(entry) => entry,
     };
     let entries = code
         .entries
-        .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
+        .ok_or(RunFault::Internal("the Async entries are not loaded"))?;
     let (function, args, argc) = match entry.kind {
         EntryKind::Start => (entries.start, [entry.word, Word::UNIT, Word::UNIT], 1),
         EntryKind::Resume { wake } => (
@@ -3917,10 +3923,10 @@ fn enter<R: Exec>(
     function: u32,
     mut args: [Word; 3],
     argc: u8,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let cell = task
         .cell
-        .ok_or(VmFault::Internal("an Async entry task has no cell"))?;
+        .ok_or(RunFault::Internal("an Async entry task has no cell"))?;
     let marks = if argc == 1 {
         let (spawner, marks) = sched.cells.lock().started(cell)?;
         // 閉包は始めたタスクが印を付けて渡した参照で、このタスクだけが持つ
@@ -3960,9 +3966,9 @@ fn entry_finish<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let Some(cell) = task.cell else {
-        return Err(VmFault::Internal("a task is left at the end"));
+        return Err(RunFault::Internal("a task is left at the end"));
     };
     if let Some(n) = task.exit {
         // 途中のフレームは巻き戻しで片付けてある。セルにもスコープにも書かず、ほかのタスクも動かさずに run ごと
@@ -3978,10 +3984,10 @@ fn entry_finish<R: Exec>(
         if sched.index != 0 {
             ctx.heap().control().end_run();
         }
-        return Err(VmFault::Stopped(Stop::Ended));
+        return Err(RunFault::Stopped(Stop::Ended));
     }
     if ctx.yielding() != 0 || !task.boundaries.is_empty() {
-        return Err(VmFault::Internal(
+        return Err(RunFault::Internal(
             "an Async task ends in the middle of a yield or a par",
         ));
     }
@@ -4029,8 +4035,8 @@ fn step_failed<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     pc: Pc,
-    fault: VmFault,
-) -> Result<(), VmFault> {
+    fault: RunFault,
+) -> Result<(), RunFault> {
     let (dst, purity) = match code.tables.code[pc as usize] {
         Op::IntAdd { dst, .. }
         | Op::IntSub { dst, .. }
@@ -4052,7 +4058,7 @@ fn step_failed<R: Exec>(
         _ => return Err(fault),
     };
     match fault {
-        VmFault::Extern(fault) => failed::<R>(code, ctx, task, dst, fault, purity),
+        RunFault::Extern(fault) => failed::<R>(code, ctx, task, dst, fault, purity),
         other => Err(other),
     }
 }
@@ -4065,9 +4071,9 @@ fn extern_call<R: Exec>(
     counts: &mut RunCounts,
     dst: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     match run_extern::<R>(code, ctx, task, counts, dst, at) {
-        Err(VmFault::Extern(fault)) => {
+        Err(RunFault::Extern(fault)) => {
             let ext = Extern::ALL[code.tables.operands[at as usize] as usize];
             failed::<R>(code, ctx, task, dst, fault, ext.row().purity)
         }
@@ -4087,7 +4093,7 @@ pub(crate) fn failed<R: Exec>(
     dst: Slot,
     fault: Fault,
     purity: Purity,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     // `Pure` の行の extern は巻き戻しの地点を持たないので、誤りを返しても中断にしない (docs/spec/vm.md の「extern の中断」)
     let caught = if fault.panics() && purity != Purity::Pure {
         abort_to::<R, _>(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |ctx| {
@@ -4109,7 +4115,7 @@ pub(crate) fn failed<R: Exec>(
     if caught {
         Ok(())
     } else {
-        Err(VmFault::Extern(fault))
+        Err(RunFault::Extern(fault))
     }
 }
 
@@ -4125,7 +4131,7 @@ pub(crate) fn abort_to<R: Exec, const N: usize>(
     effect: ExternEffect,
     op: usize,
     args: impl FnOnce(&mut Ctx<R::M>) -> [Word; N],
-) -> Result<bool, VmFault> {
+) -> Result<bool, RunFault> {
     let Some(&number) = code.index.effects.get(effect.row().name) else {
         return Ok(false);
     };
@@ -4157,7 +4163,7 @@ fn run_extern<R: Exec>(
     counts: &mut RunCounts,
     dst: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let arg = |i: usize| ops[2 + i] as Slot;
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、extern がそれを消費する
@@ -4171,7 +4177,7 @@ fn run_extern<R: Exec>(
         }
         // 捕まえる `try_panic` がないので、文言を写して実行時エラーにする。写すと文字列の参照も手放す
         let text = unsafe { ctx.copy_string(message, usize::MAX) }?;
-        return Err(VmFault::Panicked(text));
+        return Err(RunFault::Panicked(text));
     }
     if ext == Extern::Exit {
         task.exit = Some(task.raw(arg(0)));
@@ -4528,7 +4534,7 @@ fn run_extern<R: Exec>(
             // いつも誤りを返すので、宛先には書かない。届け先は `failed` が決める (docs/spec/vm.md の「extern の中断」)
             Extern::FailIo => {
                 let message = ctx.copy_string(task.get(arg(1)), usize::MAX)?;
-                return Err(VmFault::Extern(Fault::Raised(Box::new(Raised {
+                return Err(RunFault::Extern(Fault::Raised(Box::new(Raised {
                     kind: task.raw(arg(0)),
                     message: message.into_boxed_str(),
                 }))));
@@ -4775,12 +4781,12 @@ fn run_extern<R: Exec>(
             | Extern::UnboxedArraySetInt
             | Extern::MutUnboxedArrayWriteFloat
             | Extern::MutUnboxedArrayWriteInt => {
-                return Err(VmFault::Internal(
+                return Err(RunFault::Internal(
                     "a dedicated-instruction extern reached the generic extern instruction",
                 ));
             }
             Extern::Par => {
-                return Err(VmFault::Internal(
+                return Err(RunFault::Internal(
                     "`Std.Par.par` is not an extern instruction",
                 ));
             }
@@ -4886,7 +4892,7 @@ fn run_extern<R: Exec>(
             | Extern::GuiPokeRaw
             | Extern::GuiAbandonRaw
             | Extern::GuiIsGuiTaskRaw => {
-                return Err(VmFault::Internal("Async externs run through Op::Async"));
+                return Err(RunFault::Internal("Async externs run through Op::Async"));
             }
         }
     }
@@ -5129,7 +5135,7 @@ fn leaks(a.0: obj) -> unit {
         ctx.set_depth_limit(0);
         let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
         assert!(
-            matches!(result, Err(VmFault::Stopped(Stop::DepthLimit))),
+            matches!(result, Err(RunFault::Stopped(Stop::DepthLimit))),
             "{result:?}"
         );
     }
@@ -5252,7 +5258,7 @@ fn \"prompt$\"(p.0: unit) -> unit {
                 ctx.set_depth_limit(0);
                 let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
                 assert!(
-                    matches!(result, Err(VmFault::Stopped(Stop::DepthLimit))),
+                    matches!(result, Err(RunFault::Stopped(Stop::DepthLimit))),
                     "{name}, {limit:?}: {result:?}"
                 );
             }
@@ -5302,7 +5308,7 @@ fn \"prompt$\"(p.0: unit) -> unit {
         ctx.set_depth_limit(0);
         let result = safepoint::<Checked>(&code, &mut ctx, &mut task, &mut sched);
         assert!(
-            matches!(result, Err(VmFault::Stopped(Stop::DepthLimit))),
+            matches!(result, Err(RunFault::Stopped(Stop::DepthLimit))),
             "{result:?}"
         );
     }

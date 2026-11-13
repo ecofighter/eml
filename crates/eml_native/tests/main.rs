@@ -1,4 +1,14 @@
 mod abi;
+mod abort;
 mod bridge;
+mod calls;
+mod clif;
 mod common;
+mod data;
 mod linker;
+mod machine;
+mod placement;
+mod rc;
+mod reuse;
+mod rows;
+mod unsupported;

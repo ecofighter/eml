@@ -7,7 +7,7 @@ use std::sync::atomic::{Ordering, fence};
 
 use eml_rt::{Completion, Control, Ctx, IoDriver, Mode, Stop};
 
-use crate::VmFault;
+use crate::RunFault;
 use crate::cells::{self, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken};
 use crate::driver::DriverKind;
 use crate::monitor::{self, Monitor};
@@ -22,15 +22,15 @@ pub(crate) use eml_sched::driver::NO_DRIVER;
 /// (docs/spec/vm.md の「上限と割り込み」)。
 #[cold]
 #[inline(never)]
-fn unheard_fault(control: &Control, bits: u32) -> VmFault {
+fn unheard_fault(control: &Control, bits: u32) -> RunFault {
     if bits & Control::TERMINATE != 0 {
         control.terminate();
     }
     if bits & Control::INTERRUPT != 0 {
         control.interrupt();
-        return VmFault::Stopped(Stop::Interrupted);
+        return RunFault::Stopped(Stop::Interrupted);
     }
-    VmFault::Stopped(Stop::Terminated)
+    RunFault::Stopped(Stop::Terminated)
 }
 
 /// 受け箱から取った`Async`のタスクとdriverの操作の知らせを、登録表の1回の区間で届いた順に処理する。走らせる仕事を
@@ -51,7 +51,7 @@ fn take_async<M: Mode>(
     out: &mut Vec<Runnable>,
     work: &mut IoWork,
     limited: &mut Vec<CellRef>,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let mut woken = Vec::new();
     for notice in notices {
         match notice {
@@ -83,7 +83,7 @@ fn take_async<M: Mode>(
             }
             Notice::Limit(cell) => limited.extend(cells.limit_forwarded(cell, here.me)),
             Notice::Child(_) | Notice::Joined { .. } => {
-                return Err(VmFault::Internal("a par notice is left for the registry"));
+                return Err(RunFault::Internal("a par notice is left for the registry"));
             }
         }
     }
@@ -268,7 +268,7 @@ const WAIT_CAP_MS: u64 = 10;
 /// ほかの欄と同時に借りられるように、欄を受け取る関数にしてある。
 pub(crate) fn driver_mut(
     driver: &mut Option<Box<dyn IoDriver>>,
-) -> Result<&mut (dyn IoDriver + 'static), VmFault> {
+) -> Result<&mut (dyn IoDriver + 'static), RunFault> {
     match driver {
         Some(driver) => Ok(&mut **driver),
         None => Err(NO_DRIVER),
@@ -350,7 +350,7 @@ pub struct Scheduler<P: Policy> {
     pub(crate) main_worker: u32,
     /// 深さの上限。右の子のスタックの上限を、fork のときの親の深さから作る。
     pub(crate) max_depth: usize,
-    /// join が見つけた右の子の誤り。`step` は `VmFault` しか返せないので、ここに置いて実行の繰り返しに渡す。
+    /// join が見つけた右の子の誤り。`step` は `RunFault` しか返せないので、ここに置いて実行の繰り返しに渡す。
     pub(crate) failed: Option<crate::RuntimeError>,
     /// 根の表のうち、この番号より前の根はどれも印が付いている。`Machine` が実行をまたいで持つ値を受け取って返す。
     pub(crate) shared_roots: usize,
@@ -572,14 +572,14 @@ impl<P: Policy> Scheduler<P> {
     /// 作る。自分で受け付ける操作 (`listen` と `connect`、縛っていないストリームの操作) を出す前と、期限のある空きの
     /// 待ちの前に呼ぶ。waker は眠った形になる前に置くので、作った後の起こしを取りこぼさない。ほかの run とほかの
     /// worker では何もしない (docs/spec/vm.md の「時計と driver」)。
-    pub(crate) fn own_driver(&mut self) -> Result<(), VmFault> {
+    pub(crate) fn own_driver(&mut self) -> Result<(), RunFault> {
         if self.driver.is_some() || self.run.io_worker(self.index) != self.index {
             return Ok(());
         }
         let Some(made) = self.run.new_driver() else {
             return Ok(());
         };
-        let (driver, poll) = made.map_err(|e| VmFault::Driver(e.to_string()))?;
+        let (driver, poll) = made.map_err(|e| RunFault::Driver(e.to_string()))?;
         self.driver = Some(driver);
         self.poll = poll;
         self.publish_driver();
@@ -590,7 +590,7 @@ impl<P: Policy> Scheduler<P> {
     /// 今から `WAIT_CAP_MS` 先までに切る。監視のスレッドがあれば、止めるビットはその起こしが届ける。テストの driver は
     /// 期限まで時計を進めるので切らない。切ると、終わらない保留のある run がデッドロックで止まらない
     /// (docs/spec/vm.md の「時計と driver」)。
-    pub(crate) fn wait_deadline(&mut self, deadline: Option<u64>) -> Result<Option<u64>, VmFault> {
+    pub(crate) fn wait_deadline(&mut self, deadline: Option<u64>) -> Result<Option<u64>, RunFault> {
         if self.watcher.monitor.is_some() || self.driver_kind == DriverKind::Virtual {
             return Ok(deadline);
         }
@@ -636,7 +636,7 @@ impl<P: Policy> Scheduler<P> {
         ctx: &mut Ctx<M>,
         depth_offset: usize,
         look: bool,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), RunFault> {
         let k = self.index;
         // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
         self.watcher.control.take_notice(k);
@@ -716,7 +716,7 @@ impl<P: Policy> Scheduler<P> {
                 // 今以前の期限なので待たない。`ceil_ms` は今より先になりうるので、driver が眠りうる
                 driver_mut(driver)?
                     .wait(Some(now))
-                    .map_err(|e| VmFault::Driver(e.to_string()))?;
+                    .map_err(|e| RunFault::Driver(e.to_string()))?;
             }
         }
         let drained = cells::drain(
@@ -817,7 +817,7 @@ impl<P: Policy> Scheduler<P> {
         ctx: &mut Ctx<M>,
         depth_offset: usize,
         out: &mut Vec<Runnable>,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), RunFault> {
         if !self.run.slots[self.index]
             .has_notices
             .load(Ordering::Acquire)
@@ -1834,7 +1834,7 @@ mod tests {
         shared.mail.push(MailItem::Signal(Control::TERMINATE));
         assert_eq!(
             sched.gather(&mut ctx, 0, false),
-            Err(VmFault::Stopped(Stop::Terminated))
+            Err(RunFault::Stopped(Stop::Terminated))
         );
         for k in 0..2 {
             assert_ne!(control.worker_bits(k) & Control::TERMINATE, 0, "worker {k}");

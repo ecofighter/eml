@@ -25,7 +25,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/lir.md](spec/lir.md) | 規範 | LIRの命令、2つのIRに共通する規則 (ブロックの列と構造の規則、値の表現、データの配置、位置の規則、末尾の位置の呼び出し)、基本操作と実行の文脈、LIRのパス (boxの挿入、開くパス、縮約、借用のパス、Perceus、reuse) とその境界の不変条件、LIRのverifier、実行の意味、実行時エラー |
 | [spec/object-model.md](spec/object-model.md) | 規範 | `eml_rt` の核: 語、ヘッダと種類、物体の形、ページの確保器と生存の列挙、別のスレッドからの解放、局所と共有の RC、`share`、`transfer_back`、`lin` ビット、核の操作、バイト列と文字列、凍結した領域、reuse の部品、検査モード (論理的な worker ID とページの表を含む)、実行文脈 `Ctx` (タスクの切り替えを含む)、extern (語の ABI、誤り、Host と出力のバッファ、読み手と `FileIn`、仕事の回数)、受け入れる制約、配列、ダミーの値、`unsafe` の核 |
 | [spec/vm.md](spec/vm.md) | 規範 | VMの置き場所と実行のAPI、`CodeBase`と`FnEntry`、スロットとフレーム、命令の形、スロットの割り当て、呼び出しと戻り、命令ごとの実行、誤りと終わりの処理、上限と割り込み、タスクとスケジュール、メインのworker、時計とdriver、`par`のforkとjoin、`Async`のタスク (プールの仕事を含む)、channel、Cの関数の呼び出し (橋渡しの関数、ライブラリと記号、`blocking`の呼び出し、`--link`)、`RunStats`、並列化への備え、巻き戻し、externの中断 |
-| [spec/native.md](spec/native.md) | 規範 | ネイティブの実行系: エントリ (エントリのABI、記述子の表、包みの本体、失敗の手順、`eml_enter`、`eml_fatal`、対象) |
+| [spec/native.md](spec/native.md) | 規範 | ネイティブの実行系: エントリ (エントリのABI、記述子の表、包みの本体、失敗の手順、ヒープのエントリ、`eml_enter`、`eml_fatal`、対象)、`Image`、実行の始めと終わり、関数の形、巻き戻しの地点、安全点、externの失敗、行の下ろし方、RC、値と定数、データ、断る形、VMとの違い |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止、他の言語の書き方へのヒント |
 | [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例。実装していない構文を含む |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
@@ -43,6 +43,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (スレッドとworker、メインのworker、スケジューラ、共有の印方式のRC、`par`、継続の移動、止める手順) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |
+| [future/engine-trust.md](future/engine-trust.md) | 将来の設計 | エンジンの信頼の境界の設計 (エントリが呼ぶ側に任せている約束、信頼するプログラムの型、採らなかった案) |
 | **plans/** | 作業中 | 段の設計と計画。段の最初のコミットで入れ、段を閉じるときにその段の計画だけを消す。まとめて計画した段の共有の付録のディレクトリは、最初の段の計画と一緒に入れ、それらの段の最後の段を閉じるときに消す。コードと文書から引かない |
 | **reports/** | 調査 | 実装の方針を決めるための調査レポート。書いた時点のコミットに基づき、後から更新しない |
 | [reports/eml/](reports/eml/) | 調査 | VM のマルチコア対応 |
@@ -63,7 +64,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | `eml_rt` | object-model |
 | `eml_sched` | vm |
 | `eml_io` | vm |
-| `eml_cabi`、`eml_native` | [vm](spec/vm.md) の「C の関数の呼び出し」。crate の中は [architecture](implementation/architecture.md) の「`eml_native` の内部」 |
+| `eml_cabi`、`eml_native` | [vm](spec/vm.md)の「C の関数の呼び出し」、[native](spec/native.md)の「関数の形」から「VMとの違い」まで。crateの中は[architecture](implementation/architecture.md)の「`eml_native` の内部」 |
 | `eml_nrt` | [native](spec/native.md)。crateの中は[architecture](implementation/architecture.md) の「`eml_nrt`の内部」 |
 | `eml_tls` | [stdlib](spec/stdlib.md) の「`Std.Tls`」。crate の中は [architecture](implementation/architecture.md) の「`eml_tls` の内部」 |
 | `eml_gui` | [stdlib](spec/stdlib.md) の「`Std.Gui`」。crate の中は [architecture](implementation/architecture.md) の「`eml_gui`の内部」。配布とライセンスは [distribution](implementation/distribution.md) |

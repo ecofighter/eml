@@ -16,6 +16,7 @@ testing = []
 
 # Cranelift、eml_lir、eml_vm、eml_nrt、eml_nativeには依存しない (docs/implementation/architecture.md の「crate の依存関係」)
 [dependencies]
+eml_extern.workspace = true
 eml_io.workspace = true
 eml_rt.workspace = true
 

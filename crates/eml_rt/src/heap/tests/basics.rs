@@ -241,6 +241,20 @@ fn immortal_objects_are_never_freed<M: Mode>() {
     assert_eq!(mortal(&mut heap), 1);
 }
 
+fn an_immortal_object_is_told_from_a_counted_one<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let counted = heap.alloc_data(0, 1, 0, false);
+    let constant = heap.alloc_string_immortal("constant");
+    let dummy = heap.dummy();
+    let live = heap.live_objects();
+    assert_eq!(live.len(), 3);
+    for w in live {
+        assert!([counted, constant, dummy].contains(&w));
+        assert_eq!(unsafe { heap.is_immortal(w) }, w != counted, "{w:?}");
+    }
+    unsafe { heap.decref(counted) }.unwrap();
+}
+
 fn the_boundary_between_small_and_large_works_in_both_modes<M: Mode>() {
     let mut heap = Heap::<M>::new();
     // 127 語のペイロードとヘッダで 128 語。検査モードでは前置きを足して大きい物体の道に移る
@@ -357,6 +371,7 @@ both_modes!(
     is_last_and_free_block_free_a_known_shape,
     bytes_in_use_come_back_after_a_large_object_dies,
     immortal_objects_are_never_freed,
+    an_immortal_object_is_told_from_a_counted_one,
     the_boundary_between_small_and_large_works_in_both_modes,
     mixed_sizes_keep_the_free_lists_apart,
     walking_counts_objects_across_pages,

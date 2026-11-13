@@ -1790,3 +1790,150 @@ fn blas_dgesv() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "8\n14\n0\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
+
+/// `--native`の run。環境変数は呼び手のものを引き継がない。
+fn native(args: &[&str], dir: &Path, env: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_eml"));
+    command
+        .args(args)
+        .current_dir(dir)
+        .env_remove("EML_WORKERS")
+        .env_remove("EML_GUI");
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    command.output().unwrap()
+}
+
+/// `--native`の run の引数と環境変数。
+type NativeCase<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
+
+/// 独立した run を並べて流し、プロセスの起動を待つ時間を重ねる。
+fn native_each(cases: &[NativeCase], dir: &Path) -> Vec<Output> {
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = cases
+            .iter()
+            .map(|(args, env)| scope.spawn(|| native(args, dir, env)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    })
+}
+
+const PAR: &str = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = Par.par (fn () -> 1) (fn () -> 2)\n  println (show (a + b))\n";
+
+#[test]
+fn native_runs_a_program() {
+    let dir = temp_project(
+        "native-runs",
+        &[(
+            "a.em",
+            "main : Unit -> <IO> Unit\nmain () = println \"hello\"\n",
+        )],
+    );
+    let outputs = native_each(
+        &[
+            (&["run", "--native", "a.em"], &[]),
+            (&["run", "--native", "--workers", "1", "a.em"], &[]),
+            (&["run", "--native", "a.em"], &[("EML_WORKERS", "1")]),
+            // `--workers`が`EML_WORKERS`に勝つ
+            (
+                &["run", "--native", "--workers", "1", "a.em"],
+                &[("EML_WORKERS", "2")],
+            ),
+        ],
+        &dir,
+    );
+    for output in outputs {
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "hello\n");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// 断る形は E0004 にして、実行せずに終了コード1で終わる。
+#[test]
+fn native_rejects_with_e0004_and_exit_1() {
+    let dir = temp_project("native-rejects", &[("a.em", PAR)]);
+    let output = native(&["run", "--native", "a.em"], &dir, &[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("[E0004]"), "{stderr}");
+    assert!(
+        stderr.contains("native code does not support `par` yet"),
+        "{stderr}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn native_conflicts_with_debug_heap_and_stats() {
+    let dir = temp_project("native-conflicts", &[("a.em", PAR)]);
+    let outputs = native_each(
+        &[
+            (&["run", "--native", "--debug-heap", "a.em"], &[]),
+            (&["run", "--native", "--stats", "a.em"], &[]),
+        ],
+        &dir,
+    );
+    for (flag, output) in ["--debug-heap", "--stats"].iter().zip(outputs) {
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("'--native' cannot be used with '{flag}'")),
+            "{stderr}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// 1つのworkerでしか流れないので、1でない数と`--gui`と`EML_GUI`は使い方の誤りにする。メッセージは段を名指さない。
+#[test]
+fn native_refuses_workers_other_than_one_and_gui() {
+    let dir = temp_project("native-refuses", &[("a.em", PAR)]);
+    let cases: [(NativeCase, &str); 4] = [
+        (
+            (&["run", "--native", "--workers", "2", "a.em"], &[]),
+            "--native runs one worker; --workers must be 1",
+        ),
+        (
+            (&["run", "--native", "a.em"], &[("EML_WORKERS", "2")]),
+            "--native runs one worker; EML_WORKERS must be 1",
+        ),
+        (
+            (&["run", "--native", "--gui", "stub", "a.em"], &[]),
+            "--gui",
+        ),
+        (
+            (&["run", "--native", "a.em"], &[("EML_GUI", "stub")]),
+            "--native opens no windows; EML_GUI must be unset",
+        ),
+    ];
+    let each: Vec<_> = cases.iter().map(|(case, _)| *case).collect();
+    let outputs = native_each(&each, &dir);
+    for (((args, env), message), output) in cases.iter().zip(outputs) {
+        let what = format!("{args:?} {env:?}: {output:?}");
+        assert_eq!(output.status.code(), Some(2), "{what}");
+        assert!(output.stdout.is_empty(), "{what}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(message), "{what}");
+        assert!(!stderr.contains("[E0004]"), "{what}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// 終了コードは`exit`の引数の下の8ビットで、VMと同じである (docs/spec/stdlib.md の「`exit`」)。
+#[test]
+fn native_exit_code_is_the_low_byte() {
+    let dir = temp_project(
+        "native-exit",
+        &[("a.em", "main : Unit -> <IO> Unit\nmain () = exit 300\n")],
+    );
+    let output = native(&["run", "--native", "a.em"], &dir, &[]);
+    assert_eq!(output.status.code(), Some(44), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

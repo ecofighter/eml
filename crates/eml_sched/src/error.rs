@@ -8,7 +8,7 @@ use eml_rt::{ArithFault, Fault, HeapError, Stop};
 use crate::cells::CellFault;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum VmFault {
+pub enum RunFault {
     /// extern、基本操作、ヒープの操作の誤り。
     Extern(Fault),
     /// 捕まえる `try_panic` のない利用者の `panic` と、その文言 (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
@@ -25,57 +25,57 @@ pub enum VmFault {
     Park(String),
 }
 
-/// `quiesce`の後にもdriverが保留の操作を残したときの、`VmFault::Driver`の文。そのdriverはどのヒープにも触れる前に
+/// `quiesce`の後にもdriverが保留の操作を残したときの、`RunFault::Driver`の文。そのdriverはどのヒープにも触れる前に
 /// 落とす (docs/spec/vm.mdの「時計と driver」)。
 pub const KEPT_PENDING: &str = "the driver kept pending ops after quiesce";
 
 /// デッドロックの文言。関数の名前と位置は内部のコードとスケジュールで変わるので付けない。
 const DEADLOCK: &str = "deadlock: every task is waiting and no timer is pending";
 
-impl fmt::Display for VmFault {
+impl fmt::Display for RunFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            VmFault::Extern(fault) => write!(f, "{fault}"),
-            VmFault::Panicked(message) => write!(f, "panicked: {message}"),
-            VmFault::Stopped(stop) => write!(f, "{stop}"),
-            VmFault::Internal(what) => write!(f, "internal error: {what}"),
-            VmFault::Deadlock => f.write_str(DEADLOCK),
-            VmFault::Driver(error) => write!(f, "the I/O driver failed: {error}"),
-            VmFault::Park(error) => write!(f, "the main worker's park failed: {error}"),
+            RunFault::Extern(fault) => write!(f, "{fault}"),
+            RunFault::Panicked(message) => write!(f, "panicked: {message}"),
+            RunFault::Stopped(stop) => write!(f, "{stop}"),
+            RunFault::Internal(what) => write!(f, "internal error: {what}"),
+            RunFault::Deadlock => f.write_str(DEADLOCK),
+            RunFault::Driver(error) => write!(f, "the I/O driver failed: {error}"),
+            RunFault::Park(error) => write!(f, "the main worker's park failed: {error}"),
         }
     }
 }
 
-impl From<Fault> for VmFault {
-    fn from(fault: Fault) -> VmFault {
-        VmFault::Extern(fault)
+impl From<Fault> for RunFault {
+    fn from(fault: Fault) -> RunFault {
+        RunFault::Extern(fault)
     }
 }
 
-impl From<HeapError> for VmFault {
-    fn from(error: HeapError) -> VmFault {
-        VmFault::Extern(Fault::Heap(error))
+impl From<HeapError> for RunFault {
+    fn from(error: HeapError) -> RunFault {
+        RunFault::Extern(Fault::Heap(error))
     }
 }
 
-impl From<ArithFault> for VmFault {
-    fn from(fault: ArithFault) -> VmFault {
-        VmFault::Extern(Fault::Arith(fault))
+impl From<ArithFault> for RunFault {
+    fn from(fault: ArithFault) -> RunFault {
+        RunFault::Extern(Fault::Arith(fault))
     }
 }
 
-impl From<CellFault> for VmFault {
-    fn from(fault: CellFault) -> VmFault {
+impl From<CellFault> for RunFault {
+    fn from(fault: CellFault) -> RunFault {
         match fault {
             CellFault::Heap(error) => error.into(),
-            CellFault::Internal(what) => VmFault::Internal(what),
+            CellFault::Internal(what) => RunFault::Internal(what),
         }
     }
 }
 
-impl From<Stop> for VmFault {
-    fn from(stop: Stop) -> VmFault {
-        VmFault::Stopped(stop)
+impl From<Stop> for RunFault {
+    fn from(stop: Stop) -> RunFault {
+        RunFault::Stopped(stop)
     }
 }
 
@@ -89,7 +89,7 @@ pub struct SourceLocation {
 #[derive(Debug, PartialEq, Eq)]
 pub enum RuntimeError {
     Fault {
-        fault: VmFault,
+        fault: RunFault,
         function: String,
         at: Option<SourceLocation>,
     },
@@ -112,8 +112,8 @@ impl RuntimeError {
         matches!(
             self,
             RuntimeError::Fault {
-                fault: VmFault::Stopped(Stop::Interrupted)
-                    | VmFault::Extern(Fault::Stopped(Stop::Interrupted)),
+                fault: RunFault::Stopped(Stop::Interrupted)
+                    | RunFault::Extern(Fault::Stopped(Stop::Interrupted)),
                 ..
             }
         )
@@ -125,22 +125,25 @@ impl RuntimeError {
         matches!(
             self,
             RuntimeError::Fault {
-                fault: VmFault::Stopped(Stop::Terminated)
-                    | VmFault::Extern(Fault::Stopped(Stop::Terminated)),
+                fault: RunFault::Stopped(Stop::Terminated)
+                    | RunFault::Extern(Fault::Stopped(Stop::Terminated)),
                 ..
             }
         )
     }
 
-    /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き `RootMisuse` を含む) と内部の誤りの後と、回復が
-    /// 失敗した後は、ヒープを信用できない。driverの誤りの後は、その`Machine`のI/Oを信用することも続けることもできない。
+    /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き`RootMisuse`を含む) と内部の誤りと、中身をエンジンが
+    /// 持つ失敗`Fault::Engine`の後と、回復が失敗した後は、ヒープを信用できない。driverの誤りの後は、その`Machine`の
+    /// I/Oを信用することも続けることもできない。
     /// driverを作れなかったときも、その`Machine`ではI/Oを動かせないので同じに扱う。REPLはこの後の入力を受け付けない
     /// (docs/spec/vm.mdの「追記」と「時計と driver」)。
     pub fn is_broken(&self) -> bool {
         matches!(
             self,
             RuntimeError::Fault {
-                fault: VmFault::Internal(_) | VmFault::Driver(_) | VmFault::Extern(Fault::Heap(_)),
+                fault: RunFault::Internal(_)
+                    | RunFault::Driver(_)
+                    | RunFault::Extern(Fault::Heap(_) | Fault::Engine),
                 ..
             } | RuntimeError::Unrecovered { .. }
         )

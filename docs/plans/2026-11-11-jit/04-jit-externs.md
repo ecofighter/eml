@@ -116,11 +116,11 @@ Rejected: a differential test over the 22 container rows plus an N-22 challenge.
 match rows::<First>::<Fast>(ctx, args..) {
     Ok(v) => Ok(to_word(v)),                                        // Word -> bits, () -> Word::UNIT bits
     Err(RunFault::Extern(f)) if FAULTS => { ctx.set_fault(f); Ok(PLACEHOLDER) }   // Word::UNIT bits / 0.0
-    Err(e) => Err(e),                                               // impl Raise for RunFault -> eml_fatal
+    Err(e) => Err(unsafe { worker::record(ctx, e, None) }),          // returns Fatal -> eml_fatal
 }
 ```
 
-Here `FAULTS` is `const { Extern::<V>.row().faults }`. For `never` rows the body is `Infallible`, so the `Ok` arm is `match n {}`, and the parking arm returns `Ok(())`. With S2a's shim, the remaining `Err(e)` and any caught panic go to `Raise::park` and then `eml_fatal`. `impl Raise for RunFault` (jit-core's) is `worker::record(ctx, self, None)` (`worker::record` takes `Option<At>`, 00 C-2): it records `RuntimeError::Fault { fault: e, function: "<native code>", at: None }` in the worker struct and returns `Fatal { code: FATAL_RECORDED (= 3), site: 0 }`. Codes 1 (caught panic) and 2 (`FATAL_FAULT`) are S2a's (R-2); all three are defined in `crates/eml_nrt/src/enter.rs` (00 C-5). This is the internal-error class (S1 U7). The wrapper body never names `eml_fatal`, so `grep eml_fatal crates/eml_nrt/src/rows.rs` stays empty.
+Here `FAULTS` is `const { Extern::<V>.row().faults }`. For `never` rows the body is `Infallible`, so the `Ok` arm is `match n {}`, and the parking arm returns `Ok(())`. The remaining `Err(e)` arm calls `worker::record(ctx, e, None)` itself (`worker::record` takes `Option<At>`, 00 C-2) and returns the `Fatal` it gives, which S2a's shim passes through `impl Raise for Fatal` to `eml_fatal`; a caught panic goes to the shim's fatal path. `Raise` has no impl for `RunFault`: `park` is safe and runs outside `catch_unwind`, so no `Raise` impl may need the worker struct. `worker::record` records `RuntimeError::Fault { fault: e, function: "<native code>", at: None }` in the worker struct and returns `Fatal { code: FATAL_RECORDED (= 3), site: 0 }`. Codes 1 (caught panic) and 2 (`FATAL_FAULT`) are S2a's (R-2); all three are defined in `crates/eml_nrt/src/enter.rs` (00 C-5). This is the internal-error class (S1 U7). The wrapper body never names `eml_fatal`, so `grep eml_fatal crates/eml_nrt/src/rows.rs` stays empty.
 
 What reaches the fatal arm [V: 7.4]:
 - The row bodies produce only `RunFault::Extern(..)`, either from `Fault` or from `From<HeapError>` (`error.rs:55-59`).
@@ -269,11 +269,11 @@ names     := Variant ("," Variant)* ","?
 - **`engine` rows.** `Exit` and `Panic` are only named in the list. Their entries are hand-written in eml_nrt with `entries!` directly (`-> never`, S2b K9).
 - **Introduced in jit-core** (eml_sched `rows.rs` + eml_nrt `rows.rs`):
   - the macro with this grammar;
-  - the `defs`, `entries` and `names` expansions;
+  - the `defs`, `entries` and `names` expansions; they recurse about one level per line and variant, and the full list passes the default `recursion_limit` (128), so the jit-externs plan sets `#![recursion_limit]` in eml_sched and eml_nrt or restructures the recursion (K10 review B-1);
   - the `generic` lines of the 8 seed rows `Println`, `Eprintln`, `IntShow` (jit-externs widens it to `IntShow as eml_x_IntShow | ByteDisplay as eml_x_ByteDisplay`), `StrShow`, `FloatShow`, `StrConcat`, `StrEq`, `StrCompare`, and the `dedicated` line `FloatMod`;
   - the 45 inline rows as `inline` lines, with the test that eml_native's inline-expander table equals the marked set, and N-27's differential test against their `rows::` functions (00 C-1; 03 K9, K17);
   - `LISTED` with the `Listed` struct (00 C-4), and eml_nrt's re-exports of `eml_sched::rows` and `LISTED` (00 C-3);
-  - `impl Raise for RunFault` = `worker::record(ctx, self, None)` (`FATAL_RECORDED` = 3, in `enter.rs`; 00 C-2, C-5);
+  - the row shims' last arm `worker::record(ctx, e, None)`, returning its `Fatal` (`FATAL_RECORDED` = 3, in `enter.rs`; 00 C-2, C-5); `Raise` has no impl for `RunFault`;
   - a seed-subset version of D-9c (with the `as`-identifier check).
 - **jit-externs adds** the remaining non-inline lines, the `engine` / `lir` / `task` sections, the `vm_arms` expansion and the D-2 call sites, and D-9a / D-9b.
 - The VM is untouched in jit-core: its hand-written arms for the seed rows coexist with the `defs` for one stage gap. N-22 is a jit-externs completion item.
@@ -286,7 +286,7 @@ names     := Variant ("," Variant)* ","?
 | row functions | `eml_sched::rows::<First>` | `pub unsafe fn <First><M: Mode>(ctx: &mut Ctx<M>, ..) -> Result<T, RunFault>` |
 | `LISTED`, `Listed`, `Section` | `eml_sched::rows`, re-exported by eml_nrt (00 C-3) | `pub const LISTED: &[Listed]`, `Listed { row, section, entry, inline }`, `pub enum Section { Generic, Dedicated, Engine, Lir, Task }` (introduced by jit-core, 00 C-4) |
 | `eml_x_<Variant>` | `crates/eml_nrt/src/rows.rs` | D-3; table `pub const ROWS` appended to `TABLES` |
-| `impl Raise for RunFault` (jit-core) | `crates/eml_nrt/src/rows.rs` | `worker::record(ctx, self, None)` → `Fatal { code: FATAL_RECORDED (= 3), site: 0 }` (00 C-2) |
+| internal-class record (jit-core) | `crates/eml_nrt/src/rows.rs` | the row shim's last arm `worker::record(ctx, e, None)` → `Fatal { code: FATAL_RECORDED (= 3), site: 0 }` (00 C-2); no `Raise` impl for `RunFault` |
 | C helpers | `crates/eml_nrt/src/c.rs` | `eml_x_c_narrow(ctx, cdesc, arg, value)` (parks via `park_panic`), `eml_x_c_handle_ptr(ctx, w) -> i64`, `eml_x_c_handle_new(ctx, hdesc, ptr) -> i64` (shim; `cdesc` / `hdesc` are data-symbol addresses, D-8); `eml_rt_text_payload`, `eml_rt_unboxed_ptr`, `eml_rt_unboxed_ptr_mut` (shim, fatal-only) |
 | C lowering | `crates/eml_native/src/lower/c.rs`; `c_signature` and the C import in `crates/eml_native/src/abi.rs` | D-8 |
 | shared C | `eml_sched::ffi::{CHandle, HandleCell, CRaise, CTables, CLinks, CMismatch}` | D-9 |
@@ -298,7 +298,7 @@ names     := Variant ("," Variant)* ","?
 - **To S2a:** none open. S2a r3's `entries!` takes the row kind tokens and `never`, and the function identifier is the symbol, which the list's `as` identifiers supply (R-1).
 - **To S2b (jit-core):**
   - K9 uses the grammar of 1.2 (`fn V as eml_x_V (ctx, a: kind) -> kind { body }`).
-  - K9 adds `impl Raise for RunFault` as `worker::record(ctx, self, None)`, with `FATAL_RECORDED = 3` (R-2, 00 C-2).
+  - The row shims record internal-class errors with `worker::record(ctx, e, None)` in their last arm and return its `Fatal`, with `FATAL_RECORDED = 3` (R-2, 00 C-2); `Raise` has no impl for `RunFault`, and no `Raise` impl may need the worker struct.
   - The per-name data-symbol scheme of R-6 also carries the C descriptors of D-8 (`c:<Module.f>`, 00 C-6).
   - K9 lists the 45 inline rows as `inline` lines and owns the inline-table test (00 C-1); `LISTED` uses the `Listed` struct (00 C-4); eml_nrt re-exports `eml_sched::rows` and `LISTED` (00 C-3).
   - The wrapper protocol is N-9's (D-3), and `park_panic` sets `Fault::Engine` (ruling S2b-1), which the C helpers reuse.

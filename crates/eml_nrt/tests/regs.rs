@@ -1,4 +1,4 @@
-//! レジスタのテストとフレームの記録のテストが使う、ABIごとのasmの補助 (docs/implementation/testing.md の「`eml_nrt`の検証」)。
+//! レジスタのテスト、フレームの記録のテスト、スタックの深さのテストが使う、ABIごとのasmの補助 (docs/implementation/testing.md の「`eml_nrt`の検証」)。
 #![cfg(not(miri))]
 use eml_rt::{Ctx, Fast};
 
@@ -245,3 +245,35 @@ mod imp {
 }
 
 pub use imp::{clobber_thunk, enter_noting_fp, enter_with_patterns, fp_thunk};
+
+/// 今のスタックポインタ。スタックの深さは局所変数のアドレスでなくこれで測る。アドレスを外に出す局所変数は、
+/// AddressSanitizerの偽のスタックに移りうるためである。
+#[inline(always)]
+pub fn stack_pointer() -> usize {
+    let sp: usize;
+    // SAFETY: レジスタを1つ読むだけで、記憶にもフラグにも触れない
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags))
+    };
+    // SAFETY: 上と同じ
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags))
+    };
+    sp
+}
+
+/// 1フレームが4 KiBの再帰で`left`段降り、いちばん深いフレームのスタックポインタを返す。
+#[inline(never)]
+pub fn deepest_frame(left: usize) -> usize {
+    let mut frame = [0u8; 4096];
+    std::hint::black_box(&mut frame);
+    let deepest = if left == 0 {
+        stack_pointer()
+    } else {
+        deepest_frame(left - 1)
+    };
+    std::hint::black_box(&frame);
+    deepest
+}

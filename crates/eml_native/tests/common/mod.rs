@@ -3,6 +3,8 @@
 use eml_cabi::CCall;
 use eml_extern::{CFunction, CLibrary, CLink, CParam, CRet, Os};
 
+pub mod native;
+
 pub fn function(
     name: &str,
     symbol: &str,

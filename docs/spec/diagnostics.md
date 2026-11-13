@@ -53,7 +53,7 @@ struct Fix {
 | E0001 | `UNEXPECTED_CHARACTER` | eml のソースとして認識できない文字 |
 | E0002 | `UNTERMINATED_STRING` | 閉じていない文字列リテラル (複数行の文字列、raw 文字列、コマンドリテラルを含む) と、閉じていない補間の穴 ([字句](lexical.md) の「改行での回復」) |
 | E0003 | `EXPECTED_ITEM` | トップレベルで項目の始まりでないトークン |
-| E0004 | `NOT_YET_SUPPORTED` | 実装していない構文 (型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`) |
+| E0004 | `NOT_YET_SUPPORTED` | 実装していない構文 (型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`)、ネイティブのコードが断る形 (`eml run --native`) |
 | E0005 | `UNTERMINATED_BLOCK_COMMENT` | 閉じていないブロックコメント |
 | E0006 | `TAB_INDENTATION` | インデントにタブを使った |
 | E0007 | `INVALID_NUMBER` | 不正な数値リテラル。`Int` や `Byte` の範囲を超える整数も含む ([字句](lexical.md) の「数値と文字」) |
@@ -169,10 +169,11 @@ E2006 が `==` の位置に出る場合も、演算子でなくクラスの言�
 
 ## 未対応の構文と E0004
 
-E0004 (`NOT_YET_SUPPORTED`) は、実装していない構文に使う。型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving` である。どの段階が出しても「実装していない」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
+E0004 (`NOT_YET_SUPPORTED`) は、実装していない構文と、ネイティブのコードが断る形に使う。構文は、型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving` である。どの段階が出しても「実装していない」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 
 - パーサは、これらの構文を CST まで組み、E0004 を出さない。意味を与える最初の段階が、未対応を判定する
-- E0004 を出すのは HIR である。HIR は `type` の宣言、`: Unr`、row の型引数を持つ型の instance と `deriving` に出す
+- 構文の E0004 を出すのは HIR である。HIR は `type` の宣言、`: Unr`、row の型引数を持つ型の instance と `deriving` に出す
+- ネイティブのコードが断る形にも E0004 を使う。`Session::compile_native` は、断る形ごとに1つ、エントリのファイルの `main` の名前に E0004 を出し、プログラムを返さない ([ネイティブ](native.md)の「断る形」)
 - 型の位置の `[` と `{`、コンストラクタのない `{ … }` は、未対応の構文でなく、構文の誤り (E0011) である。リストの型は `List a` と書き、レコードは `data` で宣言する ([文法](grammar.md) の「文法上の補足」)
 
 ## 他の言語の書き方へのヒント

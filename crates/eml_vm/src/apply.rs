@@ -6,11 +6,11 @@ use eml_rt::layout::{data_first, data_raw_first};
 use eml_rt::{Ctx, Mode, Word};
 
 use crate::code::{CodeBase, FnEntry};
-use crate::error::VmFault;
+use crate::error::RunFault;
 use crate::op::{APPLY_REST, Pc, Slot};
 use crate::vm::{Exec, Task};
 
-const NOT_A_FUNCTION: VmFault = VmFault::Internal("applying a value that is not a function");
+const NOT_A_FUNCTION: RunFault = RunFault::Internal("applying a value that is not a function");
 
 /// 適用の結果の行き先。
 pub(crate) enum Target {
@@ -50,7 +50,7 @@ pub(crate) fn apply<R: Exec>(
     task: &mut Task,
     callee: Word,
     target: Target,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let (f, k, closure) = decode::<R>(ctx, callee)?;
     let entry = lookup::<R>(code, f, k, closure)?;
     if k + task.scratch.len() == usize::from(entry.arity) {
@@ -68,7 +68,7 @@ fn apply_other<R: Exec>(
     task: &mut Task,
     (f, k, closure): (usize, usize, Option<Closure>),
     target: Target,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let entry = &code.functions[f];
     let arity = usize::from(entry.arity);
     let n = task.scratch.len();
@@ -94,7 +94,7 @@ fn apply_other<R: Exec>(
     let rest = n - missing;
     let size = 2 + rest;
     if size > usize::from(u16::MAX) {
-        return Err(VmFault::Internal("too many arguments are left over"));
+        return Err(RunFault::Internal("too many arguments are left over"));
     }
     // 余った引数は結果を受けて適用する `ApplyRest` のフレームに預ける
     let base = target.frame(task, size);
@@ -116,11 +116,11 @@ pub(crate) fn apply_clause<R: Exec>(
     task: &mut Task,
     callee: Word,
     target: Target,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let (f, k, closure) = decode::<R>(ctx, callee)?;
     let entry = lookup::<R>(code, f, k, closure)?;
     if k + task.scratch.len() != usize::from(entry.arity) {
-        return Err(VmFault::Internal(
+        return Err(RunFault::Internal(
             "a clause gets a different number of arguments than its function takes",
         ));
     }
@@ -133,7 +133,7 @@ pub(crate) fn apply_clause<R: Exec>(
 fn decode<R: Exec>(
     ctx: &Ctx<R::M>,
     callee: Word,
-) -> Result<(usize, usize, Option<Closure>), VmFault> {
+) -> Result<(usize, usize, Option<Closure>), RunFault> {
     let split = |imm: i64| {
         let bits = imm as u64;
         ((bits & 0xFFFF_FFFF) as usize, (bits >> 32) as usize)
@@ -170,7 +170,7 @@ fn lookup<R: Exec>(
     f: usize,
     k: usize,
     closure: Option<Closure>,
-) -> Result<&FnEntry, VmFault> {
+) -> Result<&FnEntry, RunFault> {
     let entry = code.functions.get(f).ok_or(NOT_A_FUNCTION)?;
     if R::M::CHECKED
         && let Some(closure) = closure
@@ -181,7 +181,7 @@ fn lookup<R: Exec>(
             .filter(|_| k < usize::from(entry.arity))
             .map(|captured| captured.iter().filter(|repr| repr.is_rc()).count());
         if refs.map(|refs| 1 + refs) != Some(closure.scanned) {
-            return Err(VmFault::Internal(
+            return Err(RunFault::Internal(
                 "the capture count packed with a function does not match its closure",
             ));
         }
@@ -199,7 +199,7 @@ fn enter<R: Exec>(
     k: usize,
     closure: Option<Closure>,
     target: Target,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let entry = &code.functions[f];
     let size = usize::from(entry.frame_size);
     let base = target.frame(task, size);
@@ -224,7 +224,7 @@ fn take_captures<R: Exec>(
     closure: Closure,
     params: &[Repr],
     dst: &mut [Word],
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     // 読むのは `closure` の語だけで、`Ctx` の持つ語には触れない
     let heap = unsafe { ctx.heap_mut() };
     let w = closure.w;
@@ -282,12 +282,12 @@ pub(crate) fn make_closure<R: Exec>(
     f: u32,
     lin: bool,
     args: &[Word],
-) -> Result<Word, VmFault> {
+) -> Result<Word, RunFault> {
     let k = args.len();
     let params = code.functions[f as usize]
         .params
         .get(..k)
-        .ok_or(VmFault::Internal(
+        .ok_or(RunFault::Internal(
             "a closure takes more arguments than its function",
         ))?;
     let refs = params.iter().filter(|repr| repr.is_rc()).count();
@@ -318,7 +318,7 @@ pub(crate) fn apply_rest<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let callee = task.get(0);
     let n = task.get(1).bits();
     task.load_scratch((2..2 + n).map(|i| i as Slot));

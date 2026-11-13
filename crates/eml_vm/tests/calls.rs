@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use eml_rt::{Control, Limits, Stop};
-use eml_vm::{RuntimeError, VmFault};
+use eml_vm::{RunFault, RuntimeError};
 
 use crate::common::{parse, run_lir, run_unverified};
 
@@ -244,7 +244,7 @@ fn a_self_tail_loop_stops_on_an_interrupt() {
     assert!(matches!(
         result,
         Err(RuntimeError::Fault {
-            fault: VmFault::Stopped(Stop::Interrupted),
+            fault: RunFault::Stopped(Stop::Interrupted),
             ..
         })
     ));

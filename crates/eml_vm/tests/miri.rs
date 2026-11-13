@@ -6,7 +6,7 @@
 //! 変換、`par` のタスクの切り替えと子の中断、C の関数の呼び出し (Rust の橋渡しと、整数を詰めたハンドル)、両方のモード。
 //! テストの driver の仕事にした `blocking` の C の呼び出しは、検査モードだけで流す。
 
-use eml_vm::{AnyMachine, RunConfig, RuntimeError, Sched, VmFault, capture_host, execute};
+use eml_vm::{AnyMachine, RunConfig, RunFault, RuntimeError, Sched, capture_host, execute};
 
 fn run_both(text: &str) -> String {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
@@ -563,7 +563,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             matches!(
                 error,
                 RuntimeError::Fault {
-                    fault: VmFault::Panicked(_),
+                    fault: RunFault::Panicked(_),
                     ..
                 }
             ),
@@ -608,7 +608,7 @@ fn a_c_call_passes_scalars_in_both_modes() {
             matches!(
                 &error,
                 RuntimeError::Fault {
-                    fault: VmFault::Panicked(text),
+                    fault: RunFault::Panicked(text),
                     ..
                 } if text == "argument 2 of `Main.sub` does not fit in C `int32_t`: 2147483648"
             ),

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_cli::{
     Capture, Control, FsProvider, HostRef, Limits, Linker, MemorySource, ModulePath, ModuleSource,
-    Outcome, ReadError, Repl, RunConfig, RuntimeError, Session, SourceLocation, Stop, VmFault,
+    Outcome, ReadError, Repl, RunConfig, RunFault, RuntimeError, Session, SourceLocation, Stop,
     capture_host, execute,
 };
 use eml_diagnostics::{Diagnostic, has_errors};
@@ -763,7 +763,7 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
             matches!(
                 error,
                 RuntimeError::Fault {
-                    fault: VmFault::Extern(Fault::Stopped(Stop::Interrupted)),
+                    fault: RunFault::Extern(Fault::Stopped(Stop::Interrupted)),
                     ..
                 }
             ),
@@ -775,7 +775,7 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
             matches!(
                 error,
                 RuntimeError::Fault {
-                    fault: VmFault::Stopped(Stop::Interrupted),
+                    fault: RunFault::Stopped(Stop::Interrupted),
                     ..
                 }
             ),
@@ -1231,7 +1231,7 @@ fn a_result_that_cannot_be_written_fails_at_the_input() {
     assert_eq!(
         error,
         RuntimeError::Fault {
-            fault: VmFault::Extern(Fault::Output("the pipe is closed".into())),
+            fault: RunFault::Extern(Fault::Output("the pipe is closed".into())),
             function: "<repl>".to_string(),
             at: Some(SourceLocation {
                 path: "<input 2>".to_string(),
@@ -1357,4 +1357,66 @@ fn set_width_formats_results_at_that_width() {
         console.eval(numbers).1,
         "[ 1, 2, 3, 4, 5, 6\n, 7, 8, 9, 10, 11\n, 12 ]\n"
     );
+}
+
+/// ハンドラと`par`を持つプログラム。`par`の子とハンドラはクロージャを作るので、クロージャと関数の値の形も断られる。
+/// `par`は`main`に直に置き、`first in`の関数が最適化のインライン展開に頼らないようにする。
+const REJECTED: &str = "import Std.Par\n\neffect Fail where\n  never fail : String -> a\n\nsafe : Int -> String\nsafe n =\n  handle (if n > 0 then show n else fail \"not positive\") with\n    | ctl fail message -> message\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, _) = Par.par (fn () -> 1) (fn () -> 2)\n  println (safe a)";
+
+/// 断る形ごとに E0004 を1つ、エントリの`main`の名前に置く (docs/spec/native.md の「断る形」)。スナップショットは、下ろしが
+/// 進んでも断り続ける4つの形の文だけを写す。クロージャと関数の値の形は、下ろしが受け入れれば消える。
+#[test]
+fn compile_native_reports_each_rejected_form_once() {
+    let session = single(REJECTED);
+    let compiled = session.compile_native();
+    assert!(compiled.program.is_none());
+    assert!(compiled.diagnostics.iter().all(|d| {
+        d.code.to_string() == "E0004"
+            && &session.files().text(d.primary.file)
+                [std::ops::Range::<usize>::from(d.primary.range)]
+                == "main"
+    }));
+    let messages: Vec<&str> = compiled
+        .diagnostics
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect();
+    let unique: std::collections::BTreeSet<_> = messages.iter().collect();
+    assert_eq!(unique.len(), messages.len(), "{messages:#?}");
+    let stable: Vec<&str> = [
+        "`par`",
+        "effect operations",
+        "operation clauses",
+        "handler landings",
+    ]
+    .iter()
+    .map(|form| {
+        let mut found = messages.iter().filter(|message| message.contains(form));
+        let message = found
+            .next()
+            .unwrap_or_else(|| panic!("no message for {form}"));
+        assert!(found.next().is_none(), "{form} is reported twice");
+        *message
+    })
+    .collect();
+    insta::assert_debug_snapshot!(stable, @r#"
+    [
+        "native code does not support `par` yet (first in `entry$main`)",
+        "native code does not support effect operations yet (first in `safe`)",
+        "native code does not support operation clauses yet (first in `safe$handle0`)",
+        "native code does not support handler landings yet (first in `safe`)",
+    ]
+    "#);
+}
+
+#[test]
+fn compile_native_keeps_an_accepted_program() {
+    let session = single("main : Unit -> <IO> Unit\nmain () = println \"hello\"");
+    let compiled = session.compile_native();
+    assert!(
+        compiled.diagnostics.is_empty(),
+        "{:?}",
+        compiled.diagnostics
+    );
+    assert!(compiled.program.is_some());
 }

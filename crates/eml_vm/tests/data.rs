@@ -2,7 +2,7 @@
 //! (docs/spec/lir.md)。共有された値の分解や、`tobj` の変数に入った引数のないコンストラクタは、ソースの `match`
 //! からは狙って作りにくいので、ここで書く。
 
-use eml_vm::{RuntimeError, VmFault};
+use eml_vm::{RunFault, RuntimeError};
 
 use crate::common::{run_lir, run_unverified};
 
@@ -47,7 +47,7 @@ b2:
     assert_eq!(
         run_unverified(text).1,
         Err(RuntimeError::Fault {
-            fault: VmFault::Internal(
+            fault: RunFault::Internal(
                 "a switch case binds a different number of fields than the value has"
             ),
             function: "main".to_string(),
@@ -80,7 +80,7 @@ b2:
     assert_eq!(
         run_lir(text).1,
         Err(RuntimeError::Fault {
-            fault: VmFault::Internal(
+            fault: RunFault::Internal(
                 "a switch case binds a different number of fields than the value has"
             ),
             function: "main".to_string(),
@@ -209,7 +209,7 @@ fn an_unpack_with_a_different_tag_is_an_internal_error() {
     assert_eq!(
         unpack_of_tag_one("unpack p.1 Option #0(a.2: obj)"),
         Err(RuntimeError::Fault {
-            fault: VmFault::Internal(
+            fault: RunFault::Internal(
                 "an unpack names a tag and number of fields the value does not have"
             ),
             function: "main".to_string(),
@@ -232,7 +232,7 @@ fn main() -> unit {
     assert_eq!(
         run_unverified(text).1,
         Err(RuntimeError::Fault {
-            fault: VmFault::Internal(
+            fault: RunFault::Internal(
                 "an unpack names a tag and number of fields the value does not have"
             ),
             function: "main".to_string(),
@@ -255,7 +255,7 @@ fn main() -> unit {
     assert_eq!(
         run_unverified(text).1,
         Err(RuntimeError::Fault {
-            fault: VmFault::Internal(
+            fault: RunFault::Internal(
                 "an unpack names a tag and number of fields the value does not have"
             ),
             function: "main".to_string(),
@@ -348,7 +348,7 @@ fn main() -> unit {{
 #[test]
 fn a_release_of_another_layout_is_an_internal_error() {
     let fault = Err(RuntimeError::Fault {
-        fault: VmFault::Internal(
+        fault: RunFault::Internal(
             "a release names a tag and number of fields the value does not have",
         ),
         function: "main".to_string(),
@@ -372,7 +372,7 @@ fn main() -> unit {
     assert_eq!(
         run_unverified(text).1,
         Err(RuntimeError::Fault {
-            fault: VmFault::Internal(
+            fault: RunFault::Internal(
                 "a release names a tag and number of fields the value does not have"
             ),
             function: "main".to_string(),
@@ -531,7 +531,7 @@ fn main() -> unit {
     assert!(matches!(
         result,
         Err(RuntimeError::Fault {
-            fault: VmFault::Extern(eml_rt::Fault::Heap(eml_rt::HeapError::WrongKind)),
+            fault: RunFault::Extern(eml_rt::Fault::Heap(eml_rt::HeapError::WrongKind)),
             ..
         })
     ));

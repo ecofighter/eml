@@ -1,3 +1,4 @@
+-- native: skip (the depth limit is the thread's stack, not a word count)
 -- max-depth: 4096
 -- 捕まえなかった `ResourceLimit` はスコープの失敗になり、`main` で捕まえなければ実行時エラーで run を止める
 -- (docs/spec/stdlib.md の「実行時エラー」)。

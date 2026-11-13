@@ -5,7 +5,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use eml_rt::{Checked, Fault};
-use eml_vm::{Clock, Control, Finished, Limits, Machine, RunConfig, RuntimeError, Sched, VmFault};
+use eml_vm::{Clock, Control, Finished, Limits, Machine, RunConfig, RunFault, RuntimeError, Sched};
 
 use eml_test_support::schedule_independent;
 
@@ -370,7 +370,7 @@ fn twice(p.0: unit) -> tobj {{
         matches!(
             &error,
             RuntimeError::Fault {
-                fault: VmFault::Extern(Fault::Heap(_)),
+                fault: RunFault::Extern(Fault::Heap(_)),
                 function,
                 ..
             } if function == "twice"

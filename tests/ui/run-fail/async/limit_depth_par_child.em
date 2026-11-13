@@ -1,3 +1,4 @@
+-- native: skip (the depth limit is the thread's stack, not a word count)
 -- max-depth: 4096
 -- タスクの中でも、`par` の右の子の深さの超過は run を止める。子の evv には IO の evidence がないので、
 -- 外に `try_all` があっても `ResourceLimit` にならない (docs/spec/vm.md の「深さ」)。

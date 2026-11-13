@@ -3,16 +3,16 @@
 slow-timeout = { period = "2s", terminate-after = 30 }
 fail-fast = false
 
-# テストの中でファイルを並べて流す5つのテスト。`test(=…)` は完全一致なので、名前を変えたらここも直す
+# テストの中でファイルを並べて流す7つのテスト。`test(=…)` は完全一致なので、名前を変えたらここも直す
 [[profile.default.overrides]]
-filter = 'test(=ui::run) | test(=ui::run_fail) | test(=ui::check_fail) | test(=repl::transcripts) | test(=lowering::every_program_lowers_to_the_same_text)'
+filter = 'test(=ui::run) | test(=ui::run_fail) | test(=ui::check_fail) | test(=repl::transcripts) | test(=lowering::every_program_lowers_to_the_same_text) | test(=ui::run_native) | test(=ui::run_fail_native)'
 threads-required = "num-cpus"
 slow-timeout = { period = "10s", terminate-after = 6 }
 
-# CI の時間の検査。1つずつ流し、`SLOW` と表示する時間を過ぎたテストを止めて失敗にする。上の5つは名前を合わせて直す
+# CI の時間の検査。1つずつ流し、`SLOW` と表示する時間を過ぎたテストを止めて失敗にする。上の7つは名前を合わせて直す
 [profile.timing]
 slow-timeout = { period = "2s", terminate-after = 1 }
 
 [[profile.timing.overrides]]
-filter = 'test(=ui::run) | test(=ui::run_fail) | test(=ui::check_fail) | test(=repl::transcripts) | test(=lowering::every_program_lowers_to_the_same_text)'
+filter = 'test(=ui::run) | test(=ui::run_fail) | test(=ui::check_fail) | test(=repl::transcripts) | test(=lowering::every_program_lowers_to_the_same_text) | test(=ui::run_native) | test(=ui::run_fail_native)'
 slow-timeout = { period = "10s", terminate-after = 1 }
