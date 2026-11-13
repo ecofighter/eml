@@ -764,7 +764,7 @@ Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-App
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `licenses`: Linuxで、devShell `.#base`を通して`nix/third-party-licenses.sh --check`を流し、コミットした`THIRD-PARTY-LICENSES.md`が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md)の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
-- `miri`: Linuxで、MiriのdevShellを通して`trusted::`、`miri::`、`eml_sched`の`cells::a_read`と`cells::a_write`、`eml_vm`の`counters::`、`eml_io`の`driver::tests::`、`eml_nrt`の`entries::`、`census::`、`constants::`を続けて流す。借用の規則ごとにジョブを1つ立てる
+- `miri`: Linuxで、MiriのdevShellを通して流す。借用の規則ごとにジョブを2つ立てて並べる。`eml_vm`の組は`eml_vm`の`miri::`とlibの`counters::`を、`rest`の組は`trusted::`、`eml_sched`の`cells::a_read`と`cells::a_write`、`eml_io`の`driver::tests::`、`eml_nrt`の`entries::`、`census::`、`constants::`を続けて流す。`miri::`が1つで最も長い段なので、ほかの段と分ける
 - `asan`: x86_64のLinux、aarch64のLinux、aarch64のmacOSのそれぞれで、`eml_io`のテスト、`fatal::`を除いた`eml_native`と`eml_nrt`のテストと`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`をAddressSanitizerの下で流す (下の「AddressSanitizer」)
 - `tsan`: x86_64のLinuxで、`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`、libの`counters::`と、`eml_io`のlibの`driver::tests::`をThreadSanitizerの下で流す (下の「ThreadSanitizer」)
 

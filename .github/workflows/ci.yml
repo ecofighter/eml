@@ -231,11 +231,15 @@ jobs:
       - name: THIRD-PARTY-LICENSES.md is up to date
         run: nix develop .#base -c nix/third-party-licenses.sh --check
 
+  # eml_vmのmiri::が一番長いので、借用の規則ごとにジョブを2つに分けて並べる。eml_vmの組はeml_vmの2つの段を、restの組は
+  # ほかの段を流す。後の段は、組の最初の段が流れたときだけ流す (docs/implementation/testing.md の「CI」)
   miri:
-    name: miri (${{ matrix.borrows }} borrows)
+    name: miri (${{ matrix.borrows }} borrows, ${{ matrix.part }})
     strategy:
       fail-fast: false
       matrix:
+        borrows: [stacked, tree]
+        part: [eml_vm, rest]
         include:
           - borrows: stacked
             miriflags: -Zmiri-strict-provenance
@@ -252,22 +256,24 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: "cargo miri test -p eml_rt trusted::"
-        id: rt
-        run: |
-          nix develop .#miri -c cargo miri test -p eml_rt trusted::
       - name: "cargo miri test -p eml_vm --test integration miri::"
-        if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
+        id: vm
+        if: ${{ matrix.part == 'eml_vm' }}
         run: |
           nix develop .#miri -c cargo miri test -p eml_vm --test integration miri::
+      - name: "cargo miri test -p eml_vm --lib -- counters::"
+        if: ${{ !cancelled() && steps.vm.outcome != 'skipped' }}
+        run: |
+          nix develop .#miri -c cargo miri test -p eml_vm --lib -- counters::
+      - name: "cargo miri test -p eml_rt trusted::"
+        id: rt
+        if: ${{ matrix.part == 'rest' }}
+        run: |
+          nix develop .#miri -c cargo miri test -p eml_rt trusted::
       - name: "cargo miri test -p eml_sched --lib -- cells::a_read cells::a_write"
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
           nix develop .#miri -c cargo miri test -p eml_sched --lib -- cells::a_read cells::a_write
-      - name: "cargo miri test -p eml_vm --lib -- counters::"
-        if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
-        run: |
-          nix develop .#miri -c cargo miri test -p eml_vm --lib -- counters::
       - name: "cargo miri test -p eml_io --lib -- driver::tests::"
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
