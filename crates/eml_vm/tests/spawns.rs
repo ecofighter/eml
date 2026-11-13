@@ -13,18 +13,19 @@ const CRATES: &[&str] = &["eml_vm", "eml_io", "eml_cli"];
 /// 所の一覧。`command`は子のプロセスを作り、`backend`は`spawn_masked`で作るbackendの関数を呼ぶ。`mask.rs`の2つは
 /// 塞ぐスレッドを作る関数の中身で、`lib.rs`の1つは塞がないworker 0である。`Masked::new`は呼んだスレッドを塞ぐ。
 /// `eml_vm`の`lib.rs`でworker 0を待つスレッド、`eml_cli`の`lib.rs`のネイティブのrun、`main.rs`のCのライブラリの
-/// つなぎがそれである。`Unmasked::new`は、`hosts.rs`のHostが子を作る間、呼んだスレッドの塞ぎを外す。その2つは`CaptureHost`の呼び出しと、
-/// `script_host`と`stdio_host`が`with_around_spawn`に渡す関数の中身で、渡す所も数える。
+/// つなぎがそれである。`Unmasked::new`は、Hostが子を作る間、呼んだスレッドの塞ぎを外す。`eml_vm`の`hosts.rs`の1つは`CaptureHost`の呼び出しで、
+/// `eml_io`の`hosts.rs`の1つは`script_host`と`stdio_host`が`with_around_spawn`に渡す関数の中身であり、渡す所も数える。
 const EXPECTED: &[(&str, &str, usize)] = &[
     ("eml_cli/src/lib.rs", "Masked::new", 1),
     ("eml_cli/src/main.rs", "Masked::new", 1),
     ("eml_io/src/driver/pool.rs", "backend.spawn", 1),
     ("eml_io/src/driver/resolve.rs", "backend.spawn", 1),
+    ("eml_io/src/hosts.rs", "Unmasked::new", 1),
+    ("eml_io/src/hosts.rs", "with_around_spawn", 2),
     ("eml_io/src/mask.rs", "builder.spawn", 1),
     ("eml_io/src/mask.rs", "builder.spawn_scoped", 1),
     ("eml_vm/src/hosts.rs", "command.spawn", 1),
-    ("eml_vm/src/hosts.rs", "Unmasked::new", 2),
-    ("eml_vm/src/hosts.rs", "with_around_spawn", 2),
+    ("eml_vm/src/hosts.rs", "Unmasked::new", 1),
     ("eml_vm/src/lib.rs", "Masked::new", 1),
     ("eml_vm/src/lib.rs", "builder.spawn_scoped", 1),
 ];

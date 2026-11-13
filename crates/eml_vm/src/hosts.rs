@@ -1,5 +1,5 @@
-//! VM を動かす Host (docs/spec/vm.md の「置き場所」)。`eml run` と REPL の Host と、テストが出力を読み、入力を与える
-//! Host を置く。
+//! テストが出力を読み、入力を与えるHost (`CaptureHost`) を置く。`eml run`とREPLのHostは`eml_io`の`hosts.rs`にある
+//! (docs/spec/vm.mdの「置き場所」)。
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -605,29 +605,6 @@ pub fn capture_host(file_root: PathBuf) -> (HostRef, Capture) {
     let host = CaptureHost::new(file_root);
     let out = host.output();
     (host.into_ref(), out)
-}
-
-/// 標準出力と標準エラーに書く Host。引数と標準入力を持たないので、REPL が使う。
-pub fn stdio_host(file_root: PathBuf) -> HostRef {
-    HostRef::new(Arc::new(
-        StdHost::stdio(file_root).with_around_spawn(unmasked),
-    ))
-}
-
-/// `eml run` の Host。標準出力と標準エラーに書き、スクリプトに `args` を渡し、標準入力を読ませる。
-pub fn script_host(file_root: PathBuf, args: Vec<OsString>) -> HostRef {
-    let host = StdHost::stdio(file_root)
-        .with_args(args)
-        .with_stdin(Box::new(io::stdin()))
-        .with_around_spawn(unmasked);
-    HostRef::new(Arc::new(host))
-}
-
-/// 子を1つ作る間だけ、呼んだスレッドでSIGINTとSIGTERMの塞ぎを外す。子は作ったスレッドの塞ぎを受け継ぐので、外さないと
-/// worker 0のほかのworkerが始めた子をCtrl-CとSIGTERMで終わらせられない (docs/spec/stdlib.md の「`Proc`」)。
-fn unmasked(body: &mut dyn FnMut()) {
-    let _unmasked = eml_io::Unmasked::new();
-    body();
 }
 
 #[cfg(all(test, unix))]

@@ -6,6 +6,7 @@
 const FILES: &[(&str, &str)] = &[
     ("lib.rs", include_str!("lib.rs")),
     ("flag.rs", include_str!("flag.rs")),
+    ("hosts.rs", include_str!("hosts.rs")),
     ("mask.rs", include_str!("mask.rs")),
     ("real.rs", include_str!("real.rs")),
     ("driver/mod.rs", include_str!("driver/mod.rs")),

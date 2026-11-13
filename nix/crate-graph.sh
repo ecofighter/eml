@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 
 # 直接の辺 (normal、optional、target 固有)。crate ごとに1行
 EDGES='eml_cabi: eml_extern
-eml_cli: eml_clink eml_core_ir eml_diagnostics eml_hir eml_lir eml_native eml_syntax eml_tls eml_types eml_vm
+eml_cli: eml_clink eml_core_ir eml_diagnostics eml_hir eml_io eml_lir eml_native eml_syntax eml_tls eml_types eml_vm
 eml_clink: eml_cabi eml_extern
 eml_core_ir: eml_diagnostics eml_extern eml_hir eml_lir eml_types
 eml_diagnostics:
@@ -35,7 +35,7 @@ FEATURES='[eml_cli]
 default = ["run", "tls", "gui"]
 types = ["dep:eml_types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
-run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_native", "dep:libc", "dep:rustyline", "dep:windows-sys"]
+run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_io", "dep:eml_native", "dep:libc", "dep:rustyline", "dep:windows-sys"]
 tls = ["run", "eml_vm/tls", "dep:eml_tls"]
 gui = ["run", "eml_vm/gui"]
 gui-native = ["gui", "eml_vm/gui-native"]

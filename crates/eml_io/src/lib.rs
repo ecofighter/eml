@@ -7,6 +7,7 @@
 
 mod driver;
 mod flag;
+mod hosts;
 mod mask;
 mod real;
 mod sys;
@@ -14,6 +15,7 @@ mod test;
 #[cfg(test)]
 mod trust;
 
+pub use hosts::{script_host, stdio_host};
 pub use mask::{Masked, Unmasked, spawn_masked, spawn_scoped_masked};
 pub use real::RealDriver;
 pub use test::TestDriver;

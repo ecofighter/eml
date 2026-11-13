@@ -49,7 +49,7 @@ pub(crate) use eml_sched::{cells, doorbell, driver, error, park};
 pub use error::{RunFault, RuntimeError, SourceLocation};
 #[cfg(feature = "gui")]
 pub use gui::park as gui_park;
-pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
+pub use hosts::{Capture, CaptureHost, Written, capture_host};
 pub use park::{DefaultPark, Park, ParkFactory, Pending, PollSource, Progress};
 pub use sched::{Memory, Normal, Policy, Sched, Scheduler, Seeded, Sequential};
 pub use vm::Task;
