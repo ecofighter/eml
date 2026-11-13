@@ -2,14 +2,14 @@
 source: crates/eml_cli/tests/ui.rs
 expression: counts
 ---
-accepted 324
+accepted 326
 skipped 6
 rejected 310
   async row 129
   c row 6
   par 22
   prim 153
-unlowered 65
+unlowered 44
   ReadChunk
   ReadAllBytes
   ReadLineBytes
@@ -27,27 +27,6 @@ unlowered 65
   ProcReadAllBytes
   ProcReadLineBytes
   ProcReadLine
-  ArraySet
-  ArrayThaw
-  UnboxedArrayLength
-  UnboxedArrayThaw
-  MutUnboxedArrayEmpty
-  MutUnboxedArrayLength
-  MutUnboxedArrayFreeze
-  UnboxedArrayMakeFloat
-  UnboxedArrayMakeInt
-  UnboxedArrayGetFloat
-  UnboxedArrayGetInt
-  UnboxedArraySetFloat
-  UnboxedArraySetInt
-  MutUnboxedArrayMakeFloat
-  MutUnboxedArrayMakeInt
-  MutUnboxedArrayReadFloat
-  MutUnboxedArrayReadInt
-  MutUnboxedArrayWriteFloat
-  MutUnboxedArrayWriteInt
-  MutUnboxedArrayFillFloat
-  MutUnboxedArrayFillInt
   AsyncJobCell
   ChanToCell
   TlsPushTls
