@@ -249,6 +249,26 @@ macro_rules! extern_rows {
                 fn FloatGe(_, a: float, b: float) -> enum { Ok(externs::float_ge(a, b)) }
                 fn BoolEq(_, a: enum, b: enum) -> enum { Ok(externs::bool_eq(a, b)) }
                 fn BoolNe(_, a: enum, b: enum) -> enum { Ok(externs::bool_ne(a, b)) }
+                fn CharOfInt(_, n: int) -> int { Ok(externs::char_of_int(n)?) }
+                fn ByteOfInt(_, n: int) -> int { Ok(externs::byte_of_int(n)?) }
+                fn ByteNeg(_, a: int) -> int { Ok(externs::byte_negate(a)?) }
+                fn ByteAdd(_, a: int, b: int) -> int { Ok(externs::byte_add(a, b)?) }
+                fn ByteSub(_, a: int, b: int) -> int { Ok(externs::byte_sub(a, b)?) }
+                fn ByteMul(_, a: int, b: int) -> int { Ok(externs::byte_mul(a, b)?) }
+                fn ByteWrap(_, n: int) -> int { Ok(externs::byte_wrap(n)) }
+                fn IntAnd | ByteAnd(_, a: int, b: int) -> int { Ok(externs::int_and(a, b)) }
+                fn IntOr | ByteOr(_, a: int, b: int) -> int { Ok(externs::int_or(a, b)) }
+                fn IntXor | ByteXor(_, a: int, b: int) -> int { Ok(externs::int_xor(a, b)) }
+                fn IntComplement(_, a: int) -> int { Ok(externs::int_complement(a)) }
+                fn ByteComplement(_, a: int) -> int { Ok(externs::byte_complement(a)) }
+                fn IntShl(_, a: int, n: int) -> int { Ok(externs::int_shl(a, n)) }
+                fn IntShr(_, a: int, n: int) -> int { Ok(externs::int_shr(a, n)) }
+                fn ByteShl(_, a: int, n: int) -> int { Ok(externs::byte_shl(a, n)) }
+                fn ByteShr(_, a: int, n: int) -> int { Ok(externs::byte_shr(a, n)) }
+                fn CheckIndex(_, index: int, len: int) -> unit {
+                    externs::check_index(index, len)?;
+                    Ok(())
+                }
             }
             engine { Panic, Exit }
             lir { Par }
@@ -363,25 +383,6 @@ macro_rules! extern_rows {
                 ReadAllBytes,
                 ReadLineBytes,
                 Close,
-                CharOfInt,
-                ByteNeg,
-                ByteAdd,
-                ByteSub,
-                ByteMul,
-                ByteOfInt,
-                ByteWrap,
-                IntAnd,
-                IntOr,
-                IntXor,
-                IntComplement,
-                IntShl,
-                IntShr,
-                ByteAnd,
-                ByteOr,
-                ByteXor,
-                ByteComplement,
-                ByteShl,
-                ByteShr,
                 FloatCompare,
                 FloatShowsMinus,
                 FloatOfInt,
@@ -480,7 +481,6 @@ macro_rules! extern_rows {
                 MutUnboxedArrayWriteInt,
                 MutUnboxedArrayFillFloat,
                 MutUnboxedArrayFillInt,
-                CheckIndex,
                 AsyncJobCell,
                 ChanToCell,
                 TlsPushTls,

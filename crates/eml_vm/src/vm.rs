@@ -4477,64 +4477,6 @@ fn run_extern<R: Exec>(
                 let n = convert(task.float(arg(0))).map_err(Fault::Arith)?;
                 task.set_raw(dst, n);
             }
-            Extern::CharOfInt => {
-                let c = externs::char_of_int(task.raw(arg(0))).map_err(Fault::Arith)?;
-                task.set_raw(dst, c);
-            }
-            Extern::ByteOfInt => {
-                let b = externs::byte_of_int(task.raw(arg(0))).map_err(Fault::Arith)?;
-                task.set_raw(dst, b);
-            }
-            Extern::ByteNeg => {
-                let r = externs::byte_negate(task.raw(arg(0))).map_err(Fault::Arith)?;
-                task.set_raw(dst, r);
-            }
-            Extern::ByteAdd => {
-                let r =
-                    externs::byte_add(task.raw(arg(0)), task.raw(arg(1))).map_err(Fault::Arith)?;
-                task.set_raw(dst, r);
-            }
-            Extern::ByteSub => {
-                let r =
-                    externs::byte_sub(task.raw(arg(0)), task.raw(arg(1))).map_err(Fault::Arith)?;
-                task.set_raw(dst, r);
-            }
-            Extern::ByteMul => {
-                let r =
-                    externs::byte_mul(task.raw(arg(0)), task.raw(arg(1))).map_err(Fault::Arith)?;
-                task.set_raw(dst, r);
-            }
-            Extern::ByteWrap => task.set_raw(dst, externs::byte_wrap(task.raw(arg(0)))),
-            Extern::IntAnd | Extern::ByteAnd => {
-                let r = externs::int_and(task.raw(arg(0)), task.raw(arg(1)));
-                task.set_raw(dst, r);
-            }
-            Extern::IntOr | Extern::ByteOr => {
-                let r = externs::int_or(task.raw(arg(0)), task.raw(arg(1)));
-                task.set_raw(dst, r);
-            }
-            Extern::IntXor | Extern::ByteXor => {
-                let r = externs::int_xor(task.raw(arg(0)), task.raw(arg(1)));
-                task.set_raw(dst, r);
-            }
-            Extern::IntComplement => task.set_raw(dst, externs::int_complement(task.raw(arg(0)))),
-            Extern::ByteComplement => task.set_raw(dst, externs::byte_complement(task.raw(arg(0)))),
-            Extern::IntShl => {
-                let r = externs::int_shl(task.raw(arg(0)), task.raw(arg(1)));
-                task.set_raw(dst, r);
-            }
-            Extern::IntShr => {
-                let r = externs::int_shr(task.raw(arg(0)), task.raw(arg(1)));
-                task.set_raw(dst, r);
-            }
-            Extern::ByteShl => {
-                let r = externs::byte_shl(task.raw(arg(0)), task.raw(arg(1)));
-                task.set_raw(dst, r);
-            }
-            Extern::ByteShr => {
-                let r = externs::byte_shr(task.raw(arg(0)), task.raw(arg(1)));
-                task.set_raw(dst, r);
-            }
             Extern::FloatSqrt
             | Extern::FloatAbs
             | Extern::FloatSin
@@ -4622,10 +4564,6 @@ fn run_extern<R: Exec>(
             Extern::MutUnboxedArrayFreeze => {
                 let w = ctx.unboxed_freeze(task.get(arg(0)))?;
                 task.set(dst, w);
-            }
-            Extern::CheckIndex => {
-                externs::check_index(task.raw(arg(0)), task.raw(arg(1)))?;
-                task.set(dst, Word::UNIT);
             }
             _ => {
                 let value = eml_rows::rows::call(ext, ctx, &At { task: &*task, ops })?;
