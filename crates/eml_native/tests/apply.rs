@@ -5,8 +5,10 @@ use eml_cabi::Linked;
 use eml_native::Arg;
 use eml_nrt::image::{DATUM_FN, Options};
 
+use eml_rt::{Ctx, Fast, Word, layout};
+
 use crate::common::native::{
-    Lin, agree, call, lin_bit, machine, native, native_options, program, visit,
+    Lin, Visit, agree, call, call_visited, lin_bit, machine, native, native_options, program, visit,
 };
 
 #[test]
@@ -498,4 +500,251 @@ fn wide_over_application(count: usize) -> (String, &'static str) {
         args.join(", ")
     );
     (text, "start")
+}
+
+/// `s.0`、`t.1`、`b.2`をつないで出力する`join3`。2つの文字列は`++`が受け取る参照である。
+const JOIN3: &str = "\
+fn join3(s.0: obj, t.1: obj, b.2: tobj) -> unit {
+  let y.3: int = unbox b.2
+  decref b.2
+  let m.4: obj = extern \"Prelude.Show Int.show\"(y.3)
+  let r.5: obj = extern \"Prelude.++\"(s.0, t.1)
+  let q.6: obj = extern \"Prelude.++\"(r.5, m.4)
+  let u.7: unit = extern Prelude.println(q.6)
+  return u.7
+}
+";
+
+#[test]
+fn a_partial_application_waits_for_the_rest() {
+    // `apply &join3(s.2)`は、静的なクロージャを呼ぶ値に持ち、さらに2つを待つPAPを作る。それを呼ぶのは`eml$pap$2`である。
+    // `closure greet(s.2, 10)`を`t.3`に適用すると、捕まえた値を持つクロージャを呼ぶ値に持ち、さらに1つを待つPAPが
+    // できる。1回だけ適用したPAPは最後の参照なので、アダプタは欄の参照を呼ぶ先へ移して箱を空ける。2回適用したPAPは
+    // 1回目に共有なので、アダプタは`callee`と引数を`dup`してからPAPを手放す。どちらを誤っても、`++`で作った`s.2`か
+    // クロージャが漏れるか二重に手放され、censusかVMとの比べが見つける
+    let head = "\
+fn entry$main() -> unit {
+  let a.0: obj = const \"a\"
+  let b.1: obj = const \"b\"
+  let s.2: obj = extern \"Prelude.++\"(a.0, b.1)
+";
+    let first = "\
+  let c.4: obj = const \"c\"
+  let x.5: tobj = box 1
+";
+    let second = "\
+  let d.7: obj = const \"d\"
+  let y.8: tobj = box 2
+  let v.9: unit = apply p.3(d.7, y.8)
+  return v.9
+}
+";
+    let made = "  let p.3: tobj = apply &join3(s.2)\n";
+    for ending in [Ending::Let, Ending::Tail] {
+        let apply = "apply p.3(c.4, x.5)";
+        let tail = match ending {
+            Ending::Let => format!("  let u.6: unit = {apply}\n  return u.6\n}}\n"),
+            Ending::Tail => format!("  tail {apply}\n}}\n"),
+        };
+        let text = format!("{JOIN3}{head}{made}{first}{tail}");
+        agree(&text);
+        assert_eq!(native(&text), ("abc1\n".to_string(), Ok(None)));
+    }
+    let text = format!(
+        "{JOIN3}{head}{made}  dup p.3\n{first}  let u.6: unit = apply p.3(c.4, x.5)\n{second}"
+    );
+    agree(&text);
+    assert_eq!(native(&text), ("abc1\nabd2\n".to_string(), Ok(None)));
+
+    // 引数`t.3`は即値なので、共有の道の`dup`はそれを数えない
+    let closure = "\
+  let t.3: tobj = box 1000
+  let c.4: tobj = closure greet(s.2, 10)
+  let p.5: tobj = apply c.4(t.3)
+";
+    let main = |shared: &str, rest: &str| {
+        format!(
+            "{GREET}{}{closure}{shared}  let x.6: tobj = box 5\n  let u.7: unit = apply p.5(x.6)\n{rest}",
+            head.replace("const \"a\"", "const \"n=\"")
+                .replace("const \"b\"", "const \"4\"")
+        )
+    };
+    let text = main("", "  return u.7\n}\n");
+    agree(&text);
+    assert_eq!(native(&text), ("n=41015\n".to_string(), Ok(None)));
+    let text = main(
+        "  dup p.5\n",
+        "  let y.8: tobj = box 6\n  let v.9: unit = apply p.5(y.8)\n  return v.9\n}\n",
+    );
+    agree(&text);
+    assert_eq!(native(&text), ("n=41015\nn=41016\n".to_string(), Ok(None)));
+}
+
+/// 3つの文字列と`d.3`をつないで出力する`join4`。
+const JOIN4: &str = "\
+fn join4(a.0: obj, b.1: obj, c.2: obj, d.3: tobj) -> unit {
+  let y.4: int = unbox d.3
+  decref d.3
+  let m.5: obj = extern \"Prelude.Show Int.show\"(y.4)
+  let r.6: obj = extern \"Prelude.++\"(a.0, b.1)
+  let q.7: obj = extern \"Prelude.++\"(r.6, c.2)
+  let z.8: obj = extern \"Prelude.++\"(q.7, m.5)
+  let u.9: unit = extern Prelude.println(z.8)
+  return u.9
+}
+";
+
+#[test]
+fn a_partial_application_of_a_partial_application() {
+    // PAPを部分適用したPAPの呼ぶ値はPAPなので、外のアダプタは内のPAPのコードを`closure_code`で読んで呼び、内の
+    // アダプタが`join4`を呼ぶ。外のPAPを2回適用するので、1回目はどのPAPも共有の道を、2回目はどれも最後の参照の道を
+    // 通る。`ones`は`apply`を1つずつ重ね、さらに3つ、2つを待つPAP (`eml$pap$3`、`eml$pap$2`) を作る。`twos`は2つの
+    // 引数を1つの`apply`で渡し、`eml_nrt_pap`が2つのPAPの鎖を作って、その上にさらに1つを待つPAPを重ねる
+    let head = "\
+fn entry$main() -> unit {
+  let a.0: obj = const \"a\"
+  let b.1: obj = const \"b\"
+  let s.2: obj = extern \"Prelude.++\"(a.0, b.1)
+  let c.3: obj = const \"c\"
+  let e.4: obj = const \"d\"
+  let t.5: obj = extern \"Prelude.++\"(c.3, e.4)
+";
+    let tail = "\
+  dup q.7
+  let x.9: tobj = box 1
+  let u.10: unit = apply q.7({first}x.9)
+  let y.11: tobj = box 2
+  let v.12: unit = apply q.7({second}y.11)
+  return v.12
+}
+";
+    let ones = "\
+  let p.6: tobj = apply &join4(s.2)
+  let q.7: tobj = apply p.6(t.5)
+  let f.8: obj = const \"e\"
+  let g.13: obj = const \"f\"
+";
+    let twos = "\
+  let p.6: tobj = apply &join4(s.2, t.5)
+  let f.8: obj = const \"!\"
+  let q.7: tobj = apply p.6(f.8)
+";
+    for (made, first, second, out) in [
+        (ones, "f.8, ", "g.13, ", "abcde1\nabcdf2\n"),
+        (twos, "", "", "abcd!1\nabcd!2\n"),
+    ] {
+        let text = format!(
+            "{JOIN4}{head}{made}{}",
+            tail.replace("{first}", first).replace("{second}", second)
+        );
+        agree(&text);
+        assert_eq!(native(&text), (out.to_string(), Ok(None)));
+    }
+}
+
+#[test]
+fn a_lin_closure_stays_lin_through_a_partial_application() {
+    // 鎖のどのPAPの`lin`ビットも、`callee`のものである。代役は関数の結果から呼ぶ値の欄をたどり、PAPの`lin`ビットを
+    // 外から順に、最後にクロージャのものを記録する。`lin`のクロージャから作ったどのPAPも`lin`のままで、`lin`でない
+    // ものはそうでない
+    let text = "\
+fn k(n.0: int, a.1: tobj, b.2: tobj, c.3: tobj) -> tobj {
+  decref a.1
+  decref b.2
+  return c.3
+}
+fn entry$main() -> unit {
+  return ()
+}
+fn unr(n.0: int) -> tobj {
+  let c.1: tobj = closure k(n.0)
+  let a.2: tobj = box 1
+  let p.3: tobj = apply c.1(a.2)
+  let b.4: tobj = box 2
+  let q.5: tobj = apply p.3(b.4)
+  return q.5
+}
+fn lin(n.0: int) -> tobj lin {
+  let c.1: tobj lin = closure k(n.0)
+  let a.2: tobj = box 1
+  let p.3: tobj lin = apply c.1(a.2)
+  let b.4: tobj = box 2
+  let q.5: tobj lin = apply p.3(b.4)
+  return q.5
+}
+fn once(n.0: int) -> tobj lin {
+  let c.1: tobj lin = closure k(n.0)
+  let a.2: tobj = box 1
+  let p.3: tobj lin = apply c.1(a.2)
+  return p.3
+}
+fn both(n.0: int) -> tobj lin {
+  let c.1: tobj lin = closure k(n.0)
+  let a.2: tobj = box 1
+  let b.3: tobj = box 2
+  let p.4: tobj lin = apply c.1(a.2, b.3)
+  return p.4
+}
+";
+    for (name, lin, links) in [
+        ("unr", false, 2),
+        ("lin", true, 2),
+        ("once", true, 1),
+        ("both", true, 2),
+    ] {
+        let (finished, record) = visit(text, name, chain_lins, Vec::<bool>::new());
+        finished.unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(record, vec![lin; links + 1], "{name}");
+    }
+    // `lin`のPAPを最後まで適用すると、`k`の結果が返る
+    let text = "\
+fn k(s.0: obj, a.1: tobj, b.2: obj) -> unit {
+  decref a.1
+  let r.3: obj = extern \"Prelude.++\"(s.0, b.2)
+  let u.4: unit = extern Prelude.println(r.3)
+  return u.4
+}
+fn entry$main() -> unit {
+  let a.0: obj = const \"l\"
+  let b.1: obj = const \"in\"
+  let s.2: obj = extern \"Prelude.++\"(a.0, b.1)
+  let c.3: tobj lin = closure k(s.2)
+  let x.4: tobj = box 1
+  let p.5: tobj lin = apply c.3(x.4)
+  let e.6: obj = const \"!\"
+  tail apply p.5(e.6)
+}
+";
+    agree(text);
+    assert_eq!(native(text), ("lin!\n".to_string(), Ok(None)));
+}
+
+/// 代役。試す関数を`int`の5で呼んでPAPを1つ受け、走査する語が3つの間は呼ぶ値の欄 (PAPの欄の1番) をたどって、
+/// 通ったPAPと最後の呼ぶ値の`lin`ビットを順に記録し、PAPを手放す。手放せなければ記録を空にする。
+///
+/// # Safety
+/// `visit`が走らせる代役である。
+unsafe extern "C" fn chain_lins(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
+    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
+    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Vec<bool>>>() };
+    // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない。たどる語は、
+    // 受け取ったPAPが持つ生きている物体である
+    unsafe {
+        let mut argv = [5u64];
+        call_visited(ctx, visit, &mut argv);
+        let pap = argv.as_ptr().cast::<Word>().read();
+        // 代役の中のpanicはプロセスを止めるので、読めなければ記録をそこで止め、テストが長さの違いで見つける
+        let heap = (*ctx).heap();
+        let mut w = pap;
+        while let Ok(meta) = heap.meta(w) {
+            visit.record.push(meta.lin());
+            match heap.field(w, layout::data_first(3, false) + 1) {
+                Ok(callee) if meta.scan() == 3 => w = callee,
+                _ => break,
+            }
+        }
+        if (*ctx).heap_mut().decref(pap).is_err() {
+            visit.record.clear();
+        }
+    }
 }
