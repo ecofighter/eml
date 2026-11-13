@@ -4,14 +4,69 @@
 use eml_extern::{Extern, OpRet};
 use eml_lir::Repr;
 use eml_native::Arg;
-use eml_native::rows::INLINE;
-use eml_nrt::RunFault;
+use eml_native::rows::{INLINE, Lowering, lowering};
+use eml_nrt::{Kind, RunFault};
 use eml_rows::rows::{self, Value};
 use eml_rt::{Control, Ctx, Fast, Limits, Word};
 
 use crate::common::native::{agree, clif, host, machine, native_options, program};
 
 const MAIN: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
+
+fn kind_of(repr: Repr) -> Kind {
+    match repr {
+        Repr::Float => Kind::F64,
+        _ => Kind::I64,
+    }
+}
+
+/// 行は、インラインに展開する行、呼ぶ行、`Par`、タスクの行に分かれる。前の2つだけがエントリを1つずつ持つ
+/// (docs/spec/native.md の「行の下ろし方」)。
+#[test]
+fn the_rows_are_partitioned() {
+    let (mut inline, mut called, mut par, mut task) = (0, 0, 0, 0);
+    for &row in Extern::ALL {
+        let symbol = format!("eml_x_{row:?}");
+        let entry = eml_nrt::entries().find(|e| e.symbol == symbol);
+        if row.is_async() || row == Extern::Par {
+            assert_eq!(lowering(row), None, "{row:?}");
+            assert!(entry.is_none(), "{symbol}");
+            if row == Extern::Par {
+                par += 1;
+            } else {
+                task += 1;
+            }
+            continue;
+        }
+        match INLINE.iter().find(|(r, _)| *r == row) {
+            Some(&(_, how)) => {
+                assert_eq!(lowering(row), Some(Lowering::Inline(how)), "{row:?}");
+                inline += 1;
+            }
+            None => {
+                assert_eq!(lowering(row), Some(Lowering::Called), "{row:?}");
+                called += 1;
+            }
+        }
+        let entry = entry.unwrap_or_else(|| panic!("no entry {symbol}"));
+        let desc = row.row();
+        let params: Vec<Kind> = desc.params.iter().map(|&r| kind_of(r)).collect();
+        let result = match desc.ret {
+            OpRet::Never => None,
+            OpRet::Repr(r) => Some(kind_of(r)),
+        };
+        assert_eq!(
+            (entry.params, entry.result),
+            (&params[..], result),
+            "{symbol}"
+        );
+    }
+    assert_eq!((inline, called, par, task), (45, 187, 1, 101));
+    let rows = eml_nrt::entries()
+        .filter(|e| e.symbol.starts_with("eml_x_") && !e.symbol.starts_with("eml_x_c_"))
+        .count();
+    assert_eq!(rows, 232);
+}
 
 #[test]
 fn println_of_a_shown_int() {

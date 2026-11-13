@@ -4,9 +4,7 @@
 use std::collections::BTreeMap;
 
 use eml_extern::ExternRef;
-use eml_lir::{Call, LirFn, Program, Rhs, Stmt, Term};
-
-use crate::lower::rows;
+use eml_lir::{Call, LirFn, Prim, Program, Rhs, Stmt, Term};
 
 /// 宣言の順が、報告の順とヒストグラムの鍵の順である。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -17,7 +15,6 @@ pub enum Form {
     Prim,
     Clause,
     Prompt,
-    StdRow,
     CRow,
 }
 
@@ -30,7 +27,6 @@ impl Form {
             Form::Prim => "prim",
             Form::Clause => "clause",
             Form::Prompt => "prompt",
-            Form::StdRow => "std row",
             Form::CRow => "c row",
         }
     }
@@ -44,7 +40,7 @@ pub struct Unsupported {
 }
 
 /// 違う形ごとに1つの要素を`Form`の順に返す。`function`はその形を持つ`program.functions`の最初の関数で、`row`は
-/// タスクの行とstdの行について、その関数の中で最初のその行である。
+/// タスクの行について、その関数の中で最初のその行である。
 pub fn unsupported(program: &Program) -> Vec<Unsupported> {
     let mut found: BTreeMap<Form, Unsupported> = BTreeMap::new();
     for function in &program.functions {
@@ -70,6 +66,7 @@ fn each_form(function: &LirFn, note: &mut impl FnMut(Form, Option<&'static str>)
                 Stmt::Let { var: _, rhs } => match rhs {
                     Rhs::Call(call) => call_form(call, note),
                     Rhs::Extern { ext, .. } => extern_form(*ext, note),
+                    Rhs::Prim(Prim::EmptyMutArray, _) => {}
                     Rhs::Prim(..) => note(Form::Prim, None),
                     Rhs::MakeClosure(..)
                     | Rhs::ConstString(_)
@@ -109,9 +106,6 @@ fn call_form(call: &Call, note: &mut impl FnMut(Form, Option<&'static str>)) {
 fn extern_form(ext: ExternRef, note: &mut impl FnMut(Form, Option<&'static str>)) {
     match ext {
         ExternRef::Std(row) if row.is_async() => note(Form::AsyncRow, Some(row.row().name)),
-        ExternRef::Std(row) if rows::lowering(row).is_none() => {
-            note(Form::StdRow, Some(row.row().name))
-        }
         ExternRef::Std(_) => {}
         ExternRef::C(_) => note(Form::CRow, None),
         ExternRef::CSubmit(_) | ExternRef::CTake(_) => note(Form::BlockingC, None),

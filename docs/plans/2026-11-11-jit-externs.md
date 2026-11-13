@@ -1204,7 +1204,7 @@ Left to the implementer in U5: the wording of the lines within the row order; no
   - `crates/eml_nrt/src/heap.rs`: `eml_rt_text_payload`, `eml_rt_unboxed_ptr`, `eml_rt_unboxed_ptr_mut`, each `(ctx, w: obj) -> i64`, fatal-only, returning the exposed address (as `eml_vm/src/ffi.rs:117-121` does). One `Heap` read each: no allocation, no free, no count change (G-13).
   - `lib.rs` `TABLES` and `trust.rs` (the `c.rs` row).
   - `crates/eml_native/tests/abi.rs`: the echo `eml_t_echo_iiii` for `(I64, I64, I64, I64) -> ()`, plus any other shape `mixed_int_and_float_arguments_reach_an_entry` reports.
-  - Docs: spec/native.md 「エントリのABI」 (`dtor`), 「externの失敗」 (the three helpers), 「ヒープのエントリ」 (the pointer entries); architecture.md, the `eml_nrt` bullet (`c.rs`, table `C`); CLAUDE.md, the `eml_nrt` line (the tables gain `C`).
+  - Docs: spec/native.md 「エントリのABI」 (`dtor`), 「externの失敗」 (the three helpers), 「ヒープのエントリ」 (the pointer entries), 「行の下ろし方」 (the sentence that no `eml_x_` symbol exists besides the row entries now names the `eml_x_c_*` helpers; Close's M-1 grep needs it); architecture.md, the `eml_nrt` bullet (`c.rs`, table `C`); CLAUDE.md, the `eml_nrt` line (the tables gain `C`).
 - Work (tests first, `entries::tests::*` in `crates/eml_nrt/src/entries.rs`): `x_c_narrow_parks_the_narrowing_panic` (text = `Raise::Narrowing { arg: 2, int: CInt::I32, value }.text(name)`; fault `Engine`); `x_c_handle_new_runs_the_dtor_once`; `x_c_handle_new_of_null_parks_the_null_handle_panic` (no dtor call); `x_c_handle_ptr_reads_the_pointer`; `rt_text_payload_points_at_the_bytes`; `rt_unboxed_ptr_points_at_the_elements`; `rt_unboxed_ptr_mut_points_at_the_elements`; `entries_take_a_dtor_kind` (the descriptor of `eml_x_c_handle_new` is `(I64, I64, I64) -> I64`). In `eml_extern`: `cint_codes_round_trip`.
 - Left to the implementer: wording.
 - Completion criteria:
@@ -1334,7 +1334,7 @@ Left to the implementer in U5: the wording of the lines within the row order; no
        ```
      - Check only: `grep -rnE 'eml_vm.{0,6}gui\.rs|eml_vm.{0,6}tls\.rs' docs/spec docs/implementation docs/future CLAUDE.md` → empty; `grep -nF '`match`の腕で`Ctx`のメソッドを呼ぶ' docs/implementation/architecture.md` → empty; `grep -rn 'shared_rows' docs crates` → only `docs/plans` lines.
   2. Measure. `eml_vm` changed, so: run `bench/scripts.sh` first (a VM row out of range gets its own commit `Resize bench rows`). Then run `bench/run.sh`, `bench/rt.sh`, `bench/scripts.sh` on the clean tree of the last code commit and replace the three tables of benchmarks.md 「今の数値」. Replace 「ネイティブの数値」: the three `nrt_bench` rows and the `bench/native.sh` table; update prose that names rejected programs. Re-read the findings hit by `grep -n 'run_extern\|extern の腕' docs/implementation/benchmarks.md` and re-measure or delete those the stage invalidated.
-  3. status.md: native code runs every non-async std row and every non-`blocking` C function; the Tls and Gui rows, `AsyncJobCell` and `ChanToCell` appear only with task rows; `Show Bytes` and `Proc.wait_all` need `try_panic`; L63 loses 「残りのstdの行、利用者のCの関数」.
+  3. status.md: native code runs every non-async std row and every non-`blocking` C function; the Tls and Gui rows, `AsyncJobCell` and `ChanToCell` appear only with task rows; `Show Bytes` and `Proc.wait_all` need `try_panic`; L63 loses 「利用者のCの関数」 (7b already removed 「残りのstdの行」 and rewrote the native summary).
   4. architecture.md and CLAUDE.md, check only (the structure commits wrote them); fix only what is missing and name it in the commit message:
      ```sh
      grep -n 'LISTED\|seed rows\|shared_rows' CLAUDE.md docs/implementation/architecture.md       # empty
@@ -1425,6 +1425,13 @@ U1 → UT → G-a → G-b → G-c → G-d → U2a → U2b → U3 → U4 → [CP-
   | FL | `run: entries 636 none 208 only-std 109 std-or-c 115 skip 6`; `run-fail: entries 81 none 8 only-std 32 std-or-c 34 skip 2`; the 4 `a:mut` files print `effect operations,std row` (4 lines) |
   | `bench/native.sh` | 42 rows: 27 with numbers, 15 `rejected`, 0 `differs` |
   | `native: skip` marks | 8 |
+
+  FL at 7b's parent (79cdef87, 2026-11-14), equal to U1's, so the counts of 7b stand:
+
+  ```
+  run: entries 636 none 208 only-std 109 std-or-c 115 skip 6
+  run-fail: entries 81 none 8 only-std 32 std-or-c 34 skip 2
+  ```
 - Overall verification (after 10, on the Close commit):
   - G → as defined; every G-grep line → as annotated.
   - `counts run_native` → `accepted <326 + F>/skipped 6/rejected 304/  async row 129/  par 22/  prim 153` (S-1, S-2).

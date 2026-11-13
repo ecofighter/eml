@@ -2,7 +2,7 @@
 //! 誤っても、成功と失敗の入れ替わりを検出できるようにするため。テストはその下の分類のサブディレクトリに置き、1つの
 //! ファイルか、`main.em` をエントリとする1つのディレクトリである (docs/implementation/testing.md の「UI テスト」)。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,9 @@ use eml_cli::{
     RunStats, RuntimeError, Sched, Session, Signal, VirtualSignal, default_limits, execute,
 };
 use eml_diagnostics::{has_errors, render};
+use eml_extern::{Extern, ExternRef};
+use eml_lir::{Rhs, Stmt};
+use eml_native::rows::lowering;
 use eml_rt::Fault;
 
 use crate::common::{
@@ -762,13 +765,16 @@ fn run_fail_file(path: &Path, marks: &Marks) {
 
 /// `run/`と`run-fail/`のエントリを、ネイティブのコード生成器が受け入れるか断るかで数える。数えるのはOSによらないので、
 /// `windows: skip`のファイルも数える。`run_fail_native`は、受け入れたファイルのうち、VMの検査モードの実行が
-/// 検査モードだけが見つける誤りで終わったものを`checked only`に数える (docs/implementation/testing.mdの「ネイティブで流す」)。
+/// 検査モードだけが見つける誤りで終わったものを`checked only`に数える。`run_native`は、ネイティブのコードが下ろす行のうち、
+/// 受け入れたどのファイルも持たないものを`unlowered`に挙げる (docs/implementation/testing.mdの「ネイティブで流す」)。
 #[derive(Debug, Default)]
 struct NativeTally {
     accepted: usize,
     checked_only: usize,
     skipped: usize,
     rejected: BTreeMap<&'static str, usize>,
+    /// 受け入れたファイルが持つstdの行の和。
+    rows: HashSet<Extern>,
 }
 
 impl NativeTally {
@@ -782,8 +788,40 @@ impl NativeTally {
         for (label, count) in &self.rejected {
             text += &format!("  {label} {count}\n");
         }
+        if !run_fail {
+            // ネイティブのコードが下ろすのに、受け入れたどの`run/`のファイルも持たない行
+            let unlowered: Vec<Extern> = Extern::ALL
+                .iter()
+                .copied()
+                .filter(|&row| lowering(row).is_some() && !self.rows.contains(&row))
+                .collect();
+            text += &format!("unlowered {}\n", unlowered.len());
+            for row in unlowered {
+                text += &format!("  {row:?}\n");
+            }
+        }
         text
     }
+}
+
+/// `program`の`let`が呼ぶstdの行。
+fn std_rows(program: &eml_lir::Program) -> impl Iterator<Item = Extern> + '_ {
+    program
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                rhs:
+                    Rhs::Extern {
+                        ext: ExternRef::Std(row),
+                        ..
+                    },
+                ..
+            } => Some(*row),
+            _ => None,
+        })
 }
 
 /// `run_native`と`run_fail_native`の本体。受け入れた各ファイルをVMの速いモードとネイティブで流し、2つの実行が
@@ -812,12 +850,20 @@ fn native_entries(name: &str, top: &str) {
                 .or_default() += 1;
             return;
         }
-        // `checked only`の数は流して決まるので、Windowsで流せないファイルを受け入れると、スナップショットがOSで変わる
+        // `checked only`の数は流して決まるので、Windowsで流せない`run-fail/`のファイルを受け入れると、スナップショットが
+        // OSで変わる。`run/`のファイルは流さなくても数えられる
         assert!(
-            !marks.windows_skip,
+            !(run_fail && marks.windows_skip),
             "{suffix}: an accepted file has a windows mark, so the native counts would differ by OS"
         );
-        tally.lock().unwrap().accepted += 1;
+        {
+            let mut tally = tally.lock().unwrap();
+            tally.accepted += 1;
+            tally.rows.extend(std_rows(&program));
+        }
+        if cfg!(windows) && marks.windows_skip {
+            return;
+        }
         if run_fail {
             let checked = execute_in(
                 &program,

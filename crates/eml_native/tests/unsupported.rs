@@ -1,7 +1,8 @@
-use eml_extern::{Extern, OpRet, Repr};
-use eml_native::rows::{CALLED, INLINE, Lowering, lowering};
+use eml_extern::Extern;
+use eml_native::rows::{INLINE, Lowering, lowering};
 use eml_native::{Form, Unsupported, unsupported};
-use eml_nrt::Kind;
+
+use crate::common::native::program;
 
 fn rejected(source: &str) -> Vec<Unsupported> {
     unsupported(&eml_test_support::lir(source))
@@ -95,24 +96,6 @@ fn prompt_is_rejected() {
 }
 
 #[test]
-fn std_row_is_rejected() {
-    let found = rejected(
-        "import Float\n\
-         \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () = println (show (Float.truncate 9.5))\n",
-    );
-    assert_eq!(
-        found,
-        [Unsupported {
-            form: Form::StdRow,
-            function: "entry$main".to_owned(),
-            row: Some("Std.Float.truncate"),
-        }]
-    );
-}
-
-#[test]
 fn c_row_is_rejected() {
     assert_rejects(
         "extern \"C\" pure symbol \"eml_fixture_add_i32\" add : Int as int -> Int as int -> <Panic> Int as int\n\
@@ -126,7 +109,7 @@ fn c_row_is_rejected() {
 #[test]
 fn forms_are_sorted_and_distinct() {
     let found = forms(
-        "import Std.Par\nimport Float\n\
+        "import Std.Par\n\
          \n\
          effect Fail where\n  never fail : String -> a\n\
          \n\
@@ -137,52 +120,63 @@ fn forms_are_sorted_and_distinct() {
          safe n =\n  handle show (check n) with\n    | ctl fail message -> message\n\
          \n\
          main : Unit -> <IO, Panic> Unit\n\
-         main () =\n  let (a, b) = Par.par (fn () -> safe 1) (fn () -> safe 0)\n  println (a ++ b)\n  println (show (Float.truncate 9.5))\n",
+         main () =\n  let (a, b) = Par.par (fn () -> safe 1) (fn () -> safe 0)\n  println (a ++ b)\n",
     );
-    for form in [Form::Par, Form::Prim, Form::StdRow] {
+    for form in [Form::Par, Form::Prim, Form::Prompt] {
         assert!(found.contains(&form), "{form:?} not in {found:?}");
     }
     assert!(found.windows(2).all(|pair| pair[0] < pair[1]), "{found:?}");
 }
 
-/// 関数は宣言の順に並ぶ。`Float.truncate`は`sum_floors`の最初の行で、`roots`の`Float.sqrt`はその後の関数にある。
+/// 関数は宣言の順に並ぶ。`Std.Atomic.add`は`bump`の最初のタスクの行で、`fresh`の`Std.Atomic.new`はその後の関数に
+/// ある。emlのソースでは`Std.Async`の関数が先に並ぶので、LIRのテキストで書く。
 #[test]
 fn the_first_function_and_row_are_reported() {
-    let found = rejected(
-        "import Float\n\
-         \n\
-         sum_floors : Int -> Float -> <Panic> Int\n\
-         sum_floors n x = if n == 0 then 0 else Float.truncate x + Float.round x + sum_floors (n - 1) x\n\
-         \n\
-         roots : Int -> Float -> <Panic> Float\n\
-         roots n x = if n == 0 then x else roots (n - 1) (Float.sqrt x)\n\
-         \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () =\n  println (show (sum_floors 3 2.5))\n  println (show (roots 2 81.0))\n",
-    );
+    let found = unsupported(&program(
+        "\
+fn bump(c.0: int) -> int {
+  let a.1: int = extern Std.Atomic.add(1, c.0)
+  let b.2: int = extern Std.Atomic.load(c.0)
+  return b.2
+}
+fn fresh(n.0: int) -> int {
+  let c.1: int = extern Std.Atomic.new(n.0)
+  return c.1
+}
+fn entry$main() -> unit {
+  return ()
+}
+",
+    ));
     assert_eq!(
         found,
         [Unsupported {
-            form: Form::StdRow,
-            function: "sum_floors".to_owned(),
-            row: Some("Std.Float.truncate"),
+            form: Form::AsyncRow,
+            function: "bump".to_owned(),
+            row: Some("Std.Atomic.add"),
         }]
     );
 }
 
+/// タスクの行と`Par`のほかのどの行も、インラインに展開するか呼ぶかで下ろす。
 #[test]
 fn inline_and_called_rows_are_supported() {
-    for &(row, inline) in INLINE {
-        assert_eq!(lowering(row), Some(Lowering::Inline(inline)), "{row:?}");
+    for &row in Extern::ALL {
+        let expected = if row.is_async() || row == Extern::Par {
+            None
+        } else if let Some(&(_, inline)) = INLINE.iter().find(|(r, _)| *r == row) {
+            Some(Lowering::Inline(inline))
+        } else {
+            Some(Lowering::Called)
+        };
+        assert_eq!(lowering(row), expected, "{row:?}");
     }
-    for &row in CALLED {
-        assert_eq!(lowering(row), Some(Lowering::Called), "{row:?}");
-    }
-    assert_eq!(lowering(Extern::FloatTruncate), None);
     assert_eq!(
         rejected(
-            "main : Unit -> <IO, Panic> Unit\n\
-             main () =\n  println (show (1 + 2 * 3))\n  println (show 1.5 ++ show (2.5 % 2.0))\n",
+            "import Float\n\
+             \n\
+             main : Unit -> <IO, Panic> Unit\n\
+             main () =\n  println (show (1 + 2 * 3))\n  println (show 1.5 ++ show (2.5 % 2.0))\n  println (show (Float.truncate 9.5))\n",
         ),
         []
     );
@@ -242,52 +236,4 @@ fn the_inline_table_is_the_vm_arithmetic_list_without_float_mod() {
     rows.sort_by_key(|row| *row as usize);
     expected.sort_by_key(|row| *row as usize);
     assert_eq!(rows, expected);
-}
-
-#[test]
-fn the_called_rows_are_the_seed() {
-    assert_eq!(
-        CALLED,
-        [
-            Extern::Println,
-            Extern::Eprintln,
-            Extern::IntShow,
-            Extern::StrShow,
-            Extern::FloatShow,
-            Extern::StrConcat,
-            Extern::StrEq,
-            Extern::StrCompare,
-            Extern::FloatMod,
-            Extern::Exit,
-            Extern::Panic,
-        ]
-    );
-}
-
-fn kind_of(repr: Repr) -> Kind {
-    match repr {
-        Repr::Float => Kind::F64,
-        _ => Kind::I64,
-    }
-}
-
-#[test]
-fn every_called_row_has_an_entry() {
-    for &row in CALLED {
-        let symbol = format!("eml_x_{row:?}");
-        let entry = eml_nrt::entries()
-            .find(|e| e.symbol == symbol)
-            .unwrap_or_else(|| panic!("no entry {symbol}"));
-        let desc = row.row();
-        let params: Vec<Kind> = desc.params.iter().map(|&r| kind_of(r)).collect();
-        let result = match desc.ret {
-            OpRet::Never => None,
-            OpRet::Repr(r) => Some(kind_of(r)),
-        };
-        assert_eq!(
-            (entry.params, entry.result),
-            (&params[..], result),
-            "{symbol}"
-        );
-    }
 }

@@ -87,25 +87,11 @@ pub const INLINE: &[(Extern, Inline)] = &[
     (Extern::BoolNe, Inline::BoolNe),
 ];
 
-/// エントリ`eml_x_<Variant>`の呼び出しに下ろす行。
-pub const CALLED: &[Extern] = &[
-    Extern::Println,
-    Extern::Eprintln,
-    Extern::IntShow,
-    Extern::StrShow,
-    Extern::FloatShow,
-    Extern::StrConcat,
-    Extern::StrEq,
-    Extern::StrCompare,
-    Extern::FloatMod,
-    Extern::Exit,
-    Extern::Panic,
-];
-
+/// `INLINE`の行はCLIFの演算に、タスクの行と`Par`のほかの行はエントリ`eml_x_<Variant>`の呼び出しに下ろす。
 pub fn lowering(ext: Extern) -> Option<Lowering> {
     if let Some(&(_, inline)) = INLINE.iter().find(|(row, _)| *row == ext) {
         Some(Lowering::Inline(inline))
-    } else if CALLED.contains(&ext) {
+    } else if !ext.is_async() && ext != Extern::Par {
         Some(Lowering::Called)
     } else {
         None

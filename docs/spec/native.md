@@ -208,7 +208,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - ほかの`Err`は内部の類である。エントリは`worker::record(ctx, fault, None)`でそれを記録して、返った`Fatal`を返し、`shim`は`FATAL_RECORDED`で致命的な誤りの道からrunを終える。誤りは関数を`<native code>`と名指し、位置を持たない。包みの本体は`eml_fatal`を名指さない
 - `eml_x_Exit(ctx, code: int) -> never`と`eml_x_Panic(ctx, message: obj) -> never`は、エンジンごとに違うので、同じ表に手で書く。`eml_x_Exit`は終了コードをworkerの構造体に置き、`exit_abort`で`exit`の中断を始めて戻る。`eml_x_Panic`は`worker::park_panic`でメッセージを置いて戻るので、faultは`Fault::Engine`になる。`eml_x_Panic`は`message`を消費する。呼ぶ側の参照1つがworkerの構造体へ移るので、生成したコードは、地点の後始末も含めて、呼び出しの後で`message`を手放さない
 - 行のエントリは、サービスと同じく、`run`が入ったコードからだけ呼ぶ
-- 生成したコードは、`rows::CALLED`の行を`eml_x_<Variant>(ctx, 引数...)`の呼び出しに下ろし、各引数を行の引数のReprで作る。戻る`faults`の行の後には「巻き戻しの地点」の`Faults`のコードを、`faults`のない行の後には何も出さない。結果が`never`の行の後には`Never`のコードを出す。`eml_x_Exit`の後は何も上げずに後始末へ進み、`eml_x_Panic`の後は行の純粋さで上げる。`eml_x_Panic`に渡したメッセージは、行が消費するので地点の所有に入らず、後始末はそれを手放さない
+- 生成したコードは、`Called`の行 (「行の下ろし方」) をどれも`eml_x_<Variant>(ctx, 引数...)`の呼び出しに下ろし、各引数を行の引数のReprで作る。戻る`faults`の行の後には「巻き戻しの地点」の`Faults`のコードを、`faults`のない行の後には何も出さない。結果が`never`の行の後には`Never`のコードを出す。`eml_x_Exit`の後は何も上げずに後始末へ進み、`eml_x_Panic`の後は行の純粋さで上げる。`eml_x_Panic`に渡したメッセージは、行が消費するので地点の所有に入らず、後始末はそれを手放さない
 
 行が`ctx`に置いた失敗は、生成したコードがサービス`eml_nrt_failed(ctx, function, site, purity) -> action`で上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の`FnRow.sites`の中の地点の添字 (関数の入口なら`ENTRY_SITE`)、`purity`は失敗した行の純粋さである。`purity`の語は`PURITY_PURE` (0)、`PURITY_PANICS` (1)、`PURITY_EFFECTFUL` (2) で、`eml_extern::Purity`の宣言の順である。3つの定数は`ACTION_*`と同じく`eml_nrt::image`にある。debugのビルドでは、サービスは`purity`がこのどれかであることと、`site`が`ENTRY_SITE`か32ビットに収まる添字であることを確かめる。
 
@@ -220,7 +220,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## 行の下ろし方
 
-`eml_rows::rows`の一覧`extern_rows!`の組`rows`の変種は、どれもエントリ`eml_x_<Variant>`を持つ (「externの失敗」)。一覧は、ネイティブのコードが行をどう下ろすかの印を持たない。どの行を命令に展開するかは、eml_nativeの`rows::INLINE` (「断る形」) だけが決める。その行もエントリを持つが、生成したコードはそれを呼ばない。eml_nativeの`rows::CALLED`のどの行にもエントリがあり、その記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、行の関数も一覧も再エクスポートしない。eml_nativeのテストは、dev-dependencyの`eml_rows`からこれらを読む。
+`eml_rows::rows`の一覧`extern_rows!`の組`rows`の変種は、どれもエントリ`eml_x_<Variant>`を持つ (「externの失敗」)。手で書く`eml_x_Exit`と`eml_x_Panic`と合わせて、エントリは232あり、タスクの行でも`Par`でもない行ごとに1つである。`Par`とタスクの行はエントリを持たず、行のエントリのほかに`eml_x_`で始まる記号はない。一覧は、ネイティブのコードが行をどう下ろすかの印を持たない。eml_nativeの`rows::lowering(ext)`が規則で決める。`rows::INLINE` (「断る形」) の45の行は`Inline`、タスクの行でも`Par`でもないほかの187の行は`Called`、タスクの行と`Par`は`None`である。`Inline`の行もエントリを持つが、生成したコードはそれを呼ばない。どのエントリも、記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、行の関数も一覧も再エクスポートしない。eml_nativeのテストは、dev-dependencyの`eml_rows`からこれらを読む。
 
 生成したコードは、`rows::INLINE`の行を、その文の位置でCLIFの命令に展開する。結果は、行の共有の関数 (`eml_rows::rows`の関数) の結果とビット単位で等しい。
 
@@ -295,22 +295,22 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## 断る形
 
-ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行とstdの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。
+ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。
 
 | `Form` | 名前 (`Form::label`) | LIRの形 |
 |---|---|---|
 | `Par` | `par` | `Call::Par` |
 | `AsyncRow` | `async row` | `Extern::is_async`が真であるstdの行 (タスクの行) |
 | `BlockingC` | `blocking c` | `ExternRef::CSubmit`と`ExternRef::CTake` |
-| `Prim` | `prim` | すべての`Rhs::Prim` |
+| `Prim` | `prim` | `Prim::EmptyMutArray`のほかのすべての`Rhs::Prim` |
 | `Clause` | `clause` | `Call::Clause`と、`LirFn.clause`を持つ関数 |
 | `Prompt` | `prompt` | 着地の印 (`prompt`) を持つ`Call::Apply` |
-| `StdRow` | `std row` | タスクの行でなく、`rows::INLINE`にも`rows::CALLED`にもないstdの行 |
 | `CRow` | `c row` | `ExternRef::C` |
 
 - 形は、何度現れても1度だけ報告する
 - `rows::INLINE`は、CLIFの演算としてインラインに下ろす45の行である。VMの算術と比較の専用の命令 ([VM](vm.md)の「基本操作と extern」) の行から`FloatMod`を除いたものである。Craneliftの`LibCall`には`fmod`がないので、`FloatMod`は呼ぶ行にする
-- `rows::CALLED`は、エントリ`eml_x_<Variant>`の呼び出しとして下ろす行で、`Println`、`Eprintln`、`IntShow`、`StrShow`、`FloatShow`、`StrConcat`、`StrEq`、`StrCompare`、`FloatMod`、`Exit`、`Panic`である。`rows::lowering(ext)`は、行がこの2つのどちらであるかを返し、ネイティブのコードが断る行には`None`を返す
+- タスクの行でも`Par`でもなく、`rows::INLINE`にない行は、エントリ`eml_x_<Variant>`の呼び出しとして下ろす。`rows::lowering(ext)`は、行がこの2つのどちらであるかを返し、タスクの行と`Par`には`None`を返す (「行の下ろし方」)
+- `prim empty_mut_array`は、読み込み時の値`a:mut`を読むので断らない (「値と定数」)
 
 ## VMとの違い
 

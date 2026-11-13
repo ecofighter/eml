@@ -566,6 +566,7 @@ dependencies = [
  "eml_clink",
  "eml_core_ir",
  "eml_diagnostics",
+ "eml_extern",
  "eml_hir",
  "eml_io",
  "eml_lir",
