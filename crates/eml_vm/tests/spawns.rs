@@ -1,6 +1,6 @@
-//! `eml_vm`、`eml_io`、`eml_cli`の`src/`がスレッドを作る所と、呼んだスレッドでSIGINTとSIGTERMを塞ぐ所の一覧。
+//! `eml_vm`、`eml_io`、`eml_cli`の`src/`がスレッドを作る所と、呼んだスレッドでSIGINTとSIGTERMを塞ぐ所と外す所の一覧。
 //! worker 0のほかのスレッドは本体の始めに2つを塞ぎ、worker 0は塞がない (docs/spec/vm.md の「上限と割り込み」)。塞がずに
-//! 作る所や呼んだスレッドを塞ぐ所が増えると、待っている読みに`EINTR`が届かなくなるので、それらの所を呼ぶ相手ごとに
+//! 作る所や呼んだスレッドの塞ぎを変える所が増えると、待っている読みに`EINTR`が届かなくなるので、それらの所を呼ぶ相手ごとに
 //! 数えて固定する。
 
 use std::collections::BTreeMap;
@@ -13,7 +13,8 @@ const CRATES: &[&str] = &["eml_vm", "eml_io", "eml_cli"];
 /// 所の一覧。`command`は子のプロセスを作り、`backend`は`spawn_masked`で作るbackendの関数を呼ぶ。`mask.rs`の2つは
 /// 塞ぐスレッドを作る関数の中身で、`lib.rs`の1つは塞がないworker 0である。`Masked::new`は呼んだスレッドを塞ぐ。
 /// `eml_vm`の`lib.rs`でworker 0を待つスレッド、`eml_cli`の`lib.rs`のネイティブのrun、`main.rs`のCのライブラリの
-/// つなぎがそれである。
+/// つなぎがそれである。`Unmasked::new`は、`hosts.rs`のHostが子を作る間、呼んだスレッドの塞ぎを外す。その2つは`CaptureHost`の呼び出しと、
+/// `script_host`と`stdio_host`が`with_around_spawn`に渡す関数の中身で、渡す所も数える。
 const EXPECTED: &[(&str, &str, usize)] = &[
     ("eml_cli/src/lib.rs", "Masked::new", 1),
     ("eml_cli/src/main.rs", "Masked::new", 1),
@@ -22,6 +23,8 @@ const EXPECTED: &[(&str, &str, usize)] = &[
     ("eml_io/src/mask.rs", "builder.spawn", 1),
     ("eml_io/src/mask.rs", "builder.spawn_scoped", 1),
     ("eml_vm/src/hosts.rs", "command.spawn", 1),
+    ("eml_vm/src/hosts.rs", "Unmasked::new", 2),
+    ("eml_vm/src/hosts.rs", "with_around_spawn", 2),
     ("eml_vm/src/lib.rs", "Masked::new", 1),
     ("eml_vm/src/lib.rs", "builder.spawn_scoped", 1),
 ];
@@ -113,10 +116,11 @@ fn spawns(text: &str) -> Vec<String> {
     keys
 }
 
-/// `Masked::new`の呼び出しの名前。前が識別子の文字なら、ほかの名前の一部なので数えない。
+/// `Masked::new`と`Unmasked::new`と`with_around_spawn`の呼び出しの名前。前が識別子の文字なら、ほかの名前の一部
+/// なので数えない。
 fn masks(text: &str) -> Vec<String> {
     let mut keys = Vec::new();
-    for name in ["Masked::new"] {
+    for name in ["Masked::new", "Unmasked::new", "with_around_spawn"] {
         let call = format!("{name}(");
         for (at, _) in text.match_indices(&call) {
             let before = text[..at].chars().next_back();

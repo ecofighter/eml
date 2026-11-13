@@ -582,7 +582,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `eml run` の SIGTERM のテストも `cfg(unix)` で2本あり、`libc::kill` で SIGTERM を送るほかは SIGINT のテストと同じ形である。
 
-どのスレッドが2つのシグナルを塞ぐかは、外からシグナルを送らずに確かめる。`eml_vm`の`spawns::every_thread_but_worker_0_is_masked`は、スレッドを作る所と呼んだスレッドを塞ぐ所を固定する。`crates/eml_io/tests/real.rs`の`pool_threads_block_interrupt_and_terminate`は、プールのスレッドが塞ぎ、呼んだスレッドが塞がないことを確かめる。Appleでは、`eml_io`の`mask.rs`の単体テストが、塞いだスレッドの保留に残ったシグナルを送り直すとほかのスレッドに届くことを確かめる。worker 0を作ってから呼んだスレッドが塞ぐまでの隙間を突く決定的なテストは書けない。
+どのスレッドが2つのシグナルを塞ぐかは、外からシグナルを送らずに確かめる。`eml_vm`の`spawns::every_thread_but_worker_0_is_masked`は、スレッドを作る所と呼んだスレッドを塞ぐ所を固定する。`crates/eml_io/tests/real.rs`の`pool_threads_block_interrupt_and_terminate`は、プールのスレッドが塞ぎ、呼んだスレッドが塞がないことを確かめる。Appleでは、`eml_io`の`mask.rs`の単体テストが、塞いだスレッドの保留に残ったシグナルを送り直すとほかのスレッドに届くことを確かめる。UIテスト`tests/ui/run/async/exec_child_signals_unblocked.em`は、`Async.start`と`Async.start_on_main`のタスクが始めた子が、自分に送ったSIGTERMで終わることを確かめる。2つ以上のworkerではそれぞれworker 1とメインのworkerが始める。worker 0を作ってから呼んだスレッドが塞ぐまでの隙間を突く決定的なテストは書けない。
 
 - `Async.run` の中で標準エラーに `ready` を書いてから眠るプログラムに、その行が届いたら SIGTERM を1回送り、終了コード 143 と、標準エラーが `runtime error: terminated in` で始まることを確かめる。待つタスクがないので、1回目の SIGTERM が run を止める
 - 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、100 ms ごとに SIGTERM を送り続け、終了コード 143 で終わることを確かめる。SIGINT の同じテストと同じく、2回目の SIGTERM でハンドラが終わらせることもある

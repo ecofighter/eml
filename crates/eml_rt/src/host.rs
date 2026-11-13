@@ -1769,6 +1769,10 @@ pub struct StdHost {
     args: Vec<OsString>,
     /// `None` なら標準入力を使えない (REPL)。
     stdin: Option<Arc<StdinSlot>>,
+    /// 子を1つ作る呼び出しを包むフック。渡したクロージャを1回呼ぶ。既定はそのまま呼ぶ。`eml_vm`は、子が作った
+    /// スレッドのシグナルの塞ぎを受け継がないよう、子を作る間だけ塞ぎを外すフックを渡す (docs/spec/object-model.mdの
+    /// 「出力のバッファ」)。`eml_rt`はシグナルを扱わないので、塞ぎは呼ぶ側に任せる。
+    around_spawn: fn(&mut dyn FnMut()),
 }
 
 impl StdHost {
@@ -1800,6 +1804,7 @@ impl StdHost {
             file_root,
             args: Vec::new(),
             stdin: None,
+            around_spawn: call,
         }
     }
 
@@ -1814,6 +1819,28 @@ impl StdHost {
         self.stdin = Some(Arc::new(StdinSlot::new(stdin)));
         self
     }
+
+    /// 子を1つ作る`Command::spawn`の呼び出しを包むフック。標準出力の書き出しとファイルを開くことは包まない。
+    pub fn with_around_spawn(mut self, around_spawn: fn(&mut dyn FnMut())) -> StdHost {
+        self.around_spawn = around_spawn;
+        self
+    }
+}
+
+fn call(body: &mut dyn FnMut()) {
+    body();
+}
+
+/// `around`の中で`command`から子を1つ作る。フックがクロージャを呼ばなければ、起動の誤りにする。2回目からの呼び出しは
+/// 何もしない。2つ目の子を作ると、1つ目を誰も待たず、killもしないためである。
+fn spawn_around(around: fn(&mut dyn FnMut()), command: &mut Command) -> io::Result<process::Child> {
+    let mut child = None;
+    around(&mut || {
+        if child.is_none() {
+            child = Some(command.spawn());
+        }
+    });
+    child.unwrap_or_else(|| Err(io::Error::other("the spawn hook did not start the child")))
 }
 
 /// ストリームのロックを取る。中身は書き込みのバッファだけなので、書き込み先の panic でロックが poisoned になっても、続けて使って
@@ -1962,7 +1989,7 @@ impl Host for StdHost {
                     let stdout = last_out.take().unwrap_or(StdoutSpec::Null);
                     shared = last_stdout(&mut command, stdout, stage.stderr, root, last)?;
                 }
-                command.spawn()
+                spawn_around(self.around_spawn, &mut command)
             })();
             // `command` が持つ pipe の端とファイルを閉じる。残すと、子が終わっても読み手に終わりが届かず、前の段が
             // 書き込みで EPIPE を受けない

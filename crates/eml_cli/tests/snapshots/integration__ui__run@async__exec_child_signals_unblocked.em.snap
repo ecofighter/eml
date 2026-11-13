@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/exec_child_signals_unblocked.em
+---
+--- stdout ---
+started Proc: "" exit 143
+started Exec: "" exit 143
+main-worker Proc: "" exit 143
+main-worker Exec: "" exit 143
+--- stderr ---

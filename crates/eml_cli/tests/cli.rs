@@ -1072,6 +1072,47 @@ main () = println (show (Proc.run `sh -c 'echo $$ >&2; exec sleep 30'`))
     assert!(rest.starts_with("runtime error: interrupted\n"), "{rest}");
 }
 
+/// workerが2つのとき、`Async.start`のタスク (worker 1) と`Async.start_on_main`のタスク (メインのworker) が始めた子は、
+/// SIGTERMを塞がずに始まるので、自分にSIGTERMを送るシェルは143で終わり、何も書かない。`eml run`のHost
+/// (`script_host`) が子を作るフックで塞ぎを外す道を通る (docs/spec/stdlib.mdの「`Proc`」)。
+#[cfg(unix)]
+#[test]
+fn children_of_tasks_off_worker_0_start_with_signals_unblocked() {
+    let text = "\
+import Async (Async)
+import Async
+import Exec
+import Proc
+
+report : String -> Unit -> <IO, Async> Unit
+report name () =
+  let (out, code) = Proc.output `sh -c 'kill -TERM $$; echo survived'`
+  println \"\\{name} Proc: \\{show out} exit \\{show code}\"
+  let (out, code) = Exec.output `sh -c 'kill -TERM $$; echo survived'`
+  println \"\\{name} Exec: \\{show out} exit \\{show code}\"
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  Async.await (Async.start (report \"started\"))
+  Async.await (Async.start_on_main (report \"main-worker\"))
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+";
+    let dir = temp_project("cli-child-signals", &[("main.em", text)]);
+    let output = eml_in(&dir, &["run", "--workers", "2", "main.em"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "started Proc: \"\" exit 143\n\
+started Exec: \"\" exit 143\n\
+main-worker Proc: \"\" exit 143\n\
+main-worker Exec: \"\" exit 143\n",
+        "{output:?}"
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}
+
 /// `Exec.wait` で待つプログラムは、SIGINT を eml だけに送っても、次の安全点で止まり、終了コード 130 で終わる。待ちは
 /// driver の中にあり、タスクのスレッドは OS の中で止まらないためである。巻き戻しが落とす子は kill するので、30 秒
 /// 眠る子を待たない。子が標準エラーに書いた行を読んで、子が動いてから送る (docs/spec/stdlib.md の「`Std.Exec`」)。

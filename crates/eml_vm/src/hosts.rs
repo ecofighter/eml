@@ -400,6 +400,8 @@ impl Host for CaptureHost {
                     }
                     StderrSpec::ToStdout => {}
                 }
+                // `script_host`と同じく、子を作る間だけ2つのシグナルの塞ぎを外す
+                let _unmasked = eml_io::Unmasked::new();
                 command.spawn()
             })();
             // `command` が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読むスレッドと次の段に終わりが届かない
@@ -607,15 +609,25 @@ pub fn capture_host(file_root: PathBuf) -> (HostRef, Capture) {
 
 /// 標準出力と標準エラーに書く Host。引数と標準入力を持たないので、REPL が使う。
 pub fn stdio_host(file_root: PathBuf) -> HostRef {
-    HostRef::new(Arc::new(StdHost::stdio(file_root)))
+    HostRef::new(Arc::new(
+        StdHost::stdio(file_root).with_around_spawn(unmasked),
+    ))
 }
 
 /// `eml run` の Host。標準出力と標準エラーに書き、スクリプトに `args` を渡し、標準入力を読ませる。
 pub fn script_host(file_root: PathBuf, args: Vec<OsString>) -> HostRef {
     let host = StdHost::stdio(file_root)
         .with_args(args)
-        .with_stdin(Box::new(io::stdin()));
+        .with_stdin(Box::new(io::stdin()))
+        .with_around_spawn(unmasked);
     HostRef::new(Arc::new(host))
+}
+
+/// 子を1つ作る間だけ、呼んだスレッドでSIGINTとSIGTERMの塞ぎを外す。子は作ったスレッドの塞ぎを受け継ぐので、外さないと
+/// worker 0のほかのworkerが始めた子をCtrl-CとSIGTERMで終わらせられない (docs/spec/stdlib.md の「`Proc`」)。
+fn unmasked(body: &mut dyn FnMut()) {
+    let _unmasked = eml_io::Unmasked::new();
+    body();
 }
 
 #[cfg(all(test, unix))]

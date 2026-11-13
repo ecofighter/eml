@@ -1,5 +1,5 @@
 //! VMのスレッド (`eml run`ではworker 0) のほかのすべてのスレッドでSIGINTとSIGTERMを塞ぎ、2つのシグナルをそのスレッド
-//! だけに届ける (docs/spec/vm.md の「上限と割り込み」)。新しいスレッドは自分の本体の始めに2つを塞いで外さないので、
+//! だけに届ける (docs/spec/vm.mdの「上限と割り込み」)。新しいスレッドは自分の本体の始めに2つを塞いで外さないので、
 //! それを作ったスレッドは、worker 0も含め、塞がない。SIGSEGVなどの同期のシグナルを塞ぐと動きが未定義になるので、塞ぐのは
 //! この2つに限る。
 
@@ -9,13 +9,13 @@
 const SIGNALS: [libc::c_int; 2] = [libc::SIGINT, libc::SIGTERM];
 
 /// 生きている間2つのシグナルを塞ぐ。落とすと、塞ぐ前の集合に戻す。`eml_vm::execute`を呼んだスレッドは、worker 0が
-/// 最初の命令を動かす前からworker 0をjoinし終えるまで、これで塞ぐ (docs/spec/vm.md の「上限と割り込み」)。
+/// 最初の命令を動かす前からworker 0をjoinし終えるまで、これで塞ぐ (docs/spec/vm.mdの「上限と割り込み」)。
 #[cfg(all(unix, not(miri)))]
 pub struct Masked {
     old: libc::sigset_t,
 }
 
-// 作ると今のスレッドを塞ぐので、`Default` で黙って作れる形にしない
+// 作ると今のスレッドを塞ぐので、`Default`で黙って作れる形にしない
 #[cfg(all(unix, not(miri)))]
 #[expect(clippy::new_without_default, reason = "creating one blocks signals")]
 impl Masked {
@@ -30,15 +30,15 @@ impl Masked {
 #[cfg(all(unix, not(miri)))]
 impl Drop for Masked {
     fn drop(&mut self) {
-        // SAFETY: `old` は `new` が読んだ集合で、`pthread_sigmask` は読むだけである
+        // SAFETY: `old`は`new`が読んだ集合で、`pthread_sigmask`は読むだけである
         let status =
             unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &self.old, std::ptr::null_mut()) };
         debug_assert_eq!(status, 0);
     }
 }
 
-/// Windows のコンソールの handler は OS が作るスレッドで動くので、塞ぐものがない。Miri は `pthread_sigmask` を
-/// 持たず、シグナルも届かないので、Miri でも塞がない。
+/// WindowsのコンソールのhandlerはOSが作るスレッドで動くので、塞ぐものがない。Miriは`pthread_sigmask`を
+/// 持たず、シグナルも届かないので、Miriでも塞がない。
 #[cfg(any(not(unix), miri))]
 pub struct Masked;
 
@@ -54,10 +54,62 @@ impl Masked {
     }
 }
 
+/// 生きている間、このスレッドで2つのシグナルの塞ぎを外す。落とすと塞ぐ前の集合に戻し、Appleでは自分のスレッドの
+/// 保留に残ったものを送り直す。子のプロセスは始めたスレッドの塞ぎを受け継ぐので、2つを塞ぐスレッドは子を始める間
+/// これで塞ぎを外す。外さなければ、Ctrl-CとSIGTERMでその子を終わらせられない (docs/spec/stdlib.mdの「`Proc`」)。
+/// 2つを塞がないworker 0では何も変わらない。
+#[cfg(all(unix, not(miri)))]
+pub struct Unmasked {
+    old: libc::sigset_t,
+}
+
+#[cfg(all(unix, not(miri)))]
+#[expect(clippy::new_without_default, reason = "creating one unblocks signals")]
+impl Unmasked {
+    #[must_use]
+    pub fn new() -> Unmasked {
+        let set = set_of(&SIGNALS);
+        // SAFETY: 2つの集合はこの関数の局所変数で、`pthread_sigmask`は渡した集合を読み書きするだけである
+        unsafe {
+            let mut old: libc::sigset_t = std::mem::zeroed();
+            let status = libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, &mut old);
+            debug_assert_eq!(status, 0);
+            Unmasked { old }
+        }
+    }
+}
+
+#[cfg(all(unix, not(miri)))]
+impl Drop for Unmasked {
+    fn drop(&mut self) {
+        // SAFETY: `old`は`new`が読んだ集合で、`pthread_sigmask`は読むだけである
+        let status =
+            unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &self.old, std::ptr::null_mut()) };
+        debug_assert_eq!(status, 0);
+        repost(&SIGNALS);
+    }
+}
+
+/// `Masked`と同じく、unixでないOSとMiriでは何もしない。
+#[cfg(any(not(unix), miri))]
+pub struct Unmasked;
+
+#[cfg(any(not(unix), miri))]
+#[expect(
+    clippy::new_without_default,
+    reason = "creating one unblocks signals on unix"
+)]
+impl Unmasked {
+    #[must_use]
+    pub fn new() -> Unmasked {
+        Unmasked
+    }
+}
+
 /// `signals`の集合。
 #[cfg(all(unix, not(miri)))]
 fn set_of(signals: &[libc::c_int]) -> libc::sigset_t {
-    // SAFETY: 集合はこの関数の局所変数で、0 で埋めた `sigset_t` は `sigemptyset` の前の値として正しい。正しい
+    // SAFETY: 集合はこの関数の局所変数で、0で埋めた`sigset_t`は`sigemptyset`の前の値として正しい。正しい
     // シグナルの番号ではどの呼び出しも失敗しない
     unsafe {
         let mut set: libc::sigset_t = std::mem::zeroed();
@@ -74,7 +126,7 @@ fn set_of(signals: &[libc::c_int]) -> libc::sigset_t {
 #[cfg(all(unix, not(miri)))]
 fn block(signals: &[libc::c_int]) -> libc::sigset_t {
     let set = set_of(signals);
-    // SAFETY: 2つの集合はこの関数の局所変数で、`pthread_sigmask` は渡した集合を読み書きするだけである
+    // SAFETY: 2つの集合はこの関数の局所変数で、`pthread_sigmask`は渡した集合を読み書きするだけである
     let old = unsafe {
         let mut old: libc::sigset_t = std::mem::zeroed();
         let status = libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old);
@@ -93,8 +145,8 @@ fn block(signals: &[libc::c_int]) -> libc::sigset_t {
 #[cfg(all(unix, not(miri)))]
 fn repost(signals: &[libc::c_int]) {
     #[cfg(target_vendor = "apple")]
-    // SAFETY: 集合はこの関数の局所変数で、`sigpending` と `pthread_sigmask` は書くだけ、`sigismember` は読むだけで
-    // ある。`sigwait` は、このスレッドが塞いでいて保留になっているシグナルだけを待つので、すぐに戻る
+    // SAFETY: 集合はこの関数の局所変数で、`sigpending`と`pthread_sigmask`は書くだけ、`sigismember`は読むだけで
+    // ある。`sigwait`は、このスレッドが塞いでいて保留になっているシグナルだけを待つので、すぐに戻る
     unsafe {
         let mut pending: libc::sigset_t = std::mem::zeroed();
         let mut mask: libc::sigset_t = std::mem::zeroed();
@@ -117,7 +169,7 @@ fn repost(signals: &[libc::c_int]) {
     let _ = signals;
 }
 
-/// 今のスレッドでSIGINTとSIGTERMを塞ぎ、戻さない。unix でない OS と Miri では何もしない。
+/// 今のスレッドでSIGINTとSIGTERMを塞ぎ、戻さない。unixでないOSとMiriでは何もしない。
 fn block_for_good() {
     #[cfg(all(unix, not(miri)))]
     block(&SIGNALS);
@@ -125,8 +177,8 @@ fn block_for_good() {
 
 /// `body`を動かす前にSIGINTとSIGTERMを塞ぐスレッドを始める。呼んだスレッドの塞ぎには触れないので、worker 0は
 /// スレッドを始める間も2つのシグナルを受けられる。監視のスレッド、driverのプールと名前の解決のスレッド、
-/// `CaptureHost`の読むスレッドがこれで始まる (docs/spec/vm.md の「上限と割り込み」)。unix でない OS では、ふつうの
-/// `spawn` と同じである。
+/// `CaptureHost`の読むスレッドがこれで始まる (docs/spec/vm.mdの「上限と割り込み」)。unixでないOSでは、ふつうの
+/// `spawn`と同じである。
 pub fn spawn_masked<F, T>(
     builder: std::thread::Builder,
     body: F,
@@ -141,7 +193,7 @@ where
     })
 }
 
-/// `spawn_masked` の scoped 版。`thread::scope` の中で、借りた値を使うスレッドを塞いで始める。
+/// `spawn_masked`のscoped版。`thread::scope`の中で、借りた値を使うスレッドを塞いで始める。
 pub fn spawn_scoped_masked<'scope, 'env, F, T>(
     scope: &'scope std::thread::Scope<'scope, 'env>,
     builder: std::thread::Builder,
@@ -168,13 +220,13 @@ mod tests {
     static HANDLED_ON: AtomicUsize = AtomicUsize::new(0);
 
     extern "C" fn count(_: libc::c_int) {
-        // SAFETY: `pthread_self` は引数を持たず、失敗しない
+        // SAFETY: `pthread_self`は引数を持たず、失敗しない
         HANDLED_ON.store(unsafe { libc::pthread_self() } as usize, Ordering::SeqCst);
         HANDLED.fetch_add(1, Ordering::SeqCst);
     }
 
     fn pending_here(signal: libc::c_int) -> bool {
-        // SAFETY: 集合はこの関数の局所変数で、`sigpending` は書くだけである
+        // SAFETY: 集合はこの関数の局所変数で、`sigpending`は書くだけである
         unsafe {
             let mut pending: libc::sigset_t = std::mem::zeroed();
             assert_eq!(libc::sigpending(&mut pending), 0);
@@ -184,7 +236,7 @@ mod tests {
 
     fn mask(how: libc::c_int, signal: libc::c_int) {
         let set = set_of(&[signal]);
-        // SAFETY: 集合はこの関数の局所変数で、`pthread_sigmask` は読むだけである
+        // SAFETY: 集合はこの関数の局所変数で、`pthread_sigmask`は読むだけである
         let status = unsafe { libc::pthread_sigmask(how, &set, std::ptr::null_mut()) };
         assert_eq!(status, 0);
     }
@@ -192,7 +244,7 @@ mod tests {
     /// 塞いだスレッドの保留に残ったシグナルは、送り直すと、塞いでいないスレッドに届く。
     #[test]
     fn a_pinned_signal_is_reposted_to_another_thread() {
-        // SAFETY: `count` はアトミックな書き込みだけをし、`action` はこの関数の局所変数である
+        // SAFETY: `count`はアトミックな書き込みだけをし、`action`はこの関数の局所変数である
         unsafe {
             let mut action: libc::sigaction = std::mem::zeroed();
             action.sa_sigaction = count as *const () as libc::sighandler_t;
@@ -202,7 +254,8 @@ mod tests {
                 0
             );
         }
-        // 塞ぐ前に作るので、このスレッドは塞がずに待ち、送り直したシグナルの行き先になる
+        // 塞ぐ前に作るので、このスレッドは塞がずに、ハンドラが動くまで待つ。送り直したシグナルは塞いでいないスレッドの
+        // どれかが受ける。macOSでは、いちばん古いテストのハーネスのメインスレッドが受ける
         let waiter = std::thread::spawn(|| {
             let deadline = Instant::now() + Duration::from_secs(1);
             while HANDLED.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
@@ -221,7 +274,7 @@ mod tests {
         waiter.join().unwrap();
         mask(libc::SIG_UNBLOCK, libc::SIGUSR2);
         assert_eq!(HANDLED.load(Ordering::SeqCst), 1);
-        // SAFETY: `pthread_self` は引数を持たず、失敗しない
+        // SAFETY: `pthread_self`は引数を持たず、失敗しない
         let here = unsafe { libc::pthread_self() } as usize;
         assert_ne!(HANDLED_ON.load(Ordering::SeqCst), here);
     }
