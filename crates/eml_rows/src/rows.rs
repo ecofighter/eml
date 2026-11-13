@@ -3,7 +3,7 @@
 //! ネイティブのエントリを1つ作る (docs/spec/native.md の「externの失敗」)。
 
 use eml_extern::{Extern, FunctionRow, OpRet, Repr};
-use eml_rt::{Ctx, Mode, Stream, Word, externs};
+use eml_rt::{Ctx, Form, Handle, Mode, ReadAmount, Stream, Word, Write, WriteMode, externs};
 
 use eml_sched::error::RunFault;
 
@@ -359,6 +359,119 @@ macro_rules! extern_rows {
                 fn StrByteAt(ctx, i: int, s: obj) -> int { Ok(ctx.string_byte_at(i, s)?) }
                 fn BytesLength | ShowBytesLength(ctx, b: obj) -> int { Ok(ctx.bytes_length(b)?) }
                 fn BytesGet | ShowBytesGet(ctx, i: int, b: obj) -> int { Ok(ctx.bytes_get(i, b)?) }
+                fn Open(ctx, path: obj) -> obj { Ok(ctx.fs_open(path, externs::Open::Read)?) }
+                fn FileOutCreate(ctx, path: obj) -> obj {
+                    Ok(ctx.fs_open(path, externs::Open::Write(WriteMode::Truncate))?)
+                }
+                fn FileOutAppend(ctx, path: obj) -> obj {
+                    Ok(ctx.fs_open(path, externs::Open::Write(WriteMode::Append))?)
+                }
+                fn ReadAll(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::FileIn, ReadAmount::All, Form::Text)?)
+                }
+                fn ReadLine(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::FileIn, ReadAmount::Line, Form::Text)?)
+                }
+                fn ReadAllBytes(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::FileIn, ReadAmount::All, Form::Bytes)?)
+                }
+                fn ReadLineBytes(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::FileIn, ReadAmount::Line, Form::Bytes)?)
+                }
+                fn StdinReadAll(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Stdin, ReadAmount::All, Form::Text)?)
+                }
+                fn StdinReadLine(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Stdin, ReadAmount::Line, Form::Text)?)
+                }
+                fn StdinReadAllBytes(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Stdin, ReadAmount::All, Form::Bytes)?)
+                }
+                fn StdinReadLineBytes(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Stdin, ReadAmount::Line, Form::Bytes)?)
+                }
+                fn ProcReadAll(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Child, ReadAmount::All, Form::Text)?)
+                }
+                fn ProcReadLine(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Child, ReadAmount::Line, Form::Text)?)
+                }
+                fn ProcReadAllBytes(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Child, ReadAmount::All, Form::Bytes)?)
+                }
+                fn ProcReadLineBytes(ctx, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Child, ReadAmount::Line, Form::Bytes)?)
+                }
+                fn ReadChunk(ctx, chunk: obj, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::FileIn, ReadAmount::Chunk(chunk), Form::Bytes)?)
+                }
+                fn StdinReadChunk(ctx, chunk: obj, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Stdin, ReadAmount::Chunk(chunk), Form::Bytes)?)
+                }
+                fn ProcReadChunk(ctx, chunk: obj, h: obj) -> obj {
+                    Ok(ctx.handle_read(h, Handle::Child, ReadAmount::Chunk(chunk), Form::Bytes)?)
+                }
+                fn Close(ctx, h: obj) -> unit {
+                    ctx.handle_close(h, Handle::FileIn)?;
+                    Ok(())
+                }
+                fn FileOutCloseRaw(ctx, h: obj) -> unit {
+                    ctx.handle_close(h, Handle::FileOut)?;
+                    Ok(())
+                }
+                fn StdinClose(ctx, h: obj) -> unit {
+                    ctx.handle_close(h, Handle::Stdin)?;
+                    Ok(())
+                }
+                fn StdoutClose(ctx, h: obj) -> unit {
+                    ctx.handle_close(h, Handle::Stdout)?;
+                    Ok(())
+                }
+                fn StderrClose(ctx, h: obj) -> unit {
+                    ctx.handle_close(h, Handle::Stderr)?;
+                    Ok(())
+                }
+                fn StdinOpen(ctx, _u: unit) -> obj { Ok(ctx.handle_open(Handle::Stdin)?) }
+                fn StdoutOpen(ctx, _u: unit) -> obj { Ok(ctx.handle_open(Handle::Stdout)?) }
+                fn StderrOpen(ctx, _u: unit) -> obj { Ok(ctx.handle_open(Handle::Stderr)?) }
+                fn FileOutWrite(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::FileOut, text, Write::Text)?)
+                }
+                fn FileOutWriteBytes(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::FileOut, text, Write::Bytes)?)
+                }
+                fn FileOutWriteLine(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::FileOut, text, Write::Line)?)
+                }
+                fn StdoutWrite(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::Stdout, text, Write::Text)?)
+                }
+                fn StdoutWriteBytes(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::Stdout, text, Write::Bytes)?)
+                }
+                fn StdoutWriteLine(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::Stdout, text, Write::Line)?)
+                }
+                fn StderrWrite(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::Stderr, text, Write::Text)?)
+                }
+                fn StderrWriteBytes(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::Stderr, text, Write::Bytes)?)
+                }
+                fn StderrWriteLine(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::Stderr, text, Write::Line)?)
+                }
+                fn ProcWrite(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::Child, text, Write::Text)?)
+                }
+                fn ProcWriteBytes(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::Child, text, Write::Bytes)?)
+                }
+                fn ProcWriteLine(ctx, text: obj, h: obj) -> obj {
+                    Ok(ctx.handle_write(h, Handle::Child, text, Write::Line)?)
+                }
+                fn StdoutFlush(ctx, h: obj) -> obj { Ok(ctx.handle_flush(h, Handle::Stdout)?) }
+                fn FileOutFlush(ctx, h: obj) -> obj { Ok(ctx.handle_flush(h, Handle::FileOut)?) }
             }
             engine { Panic, Exit }
             lir { Par }
@@ -466,55 +579,15 @@ macro_rules! extern_rows {
                 GuiIsGuiTaskRaw,
             }
             pending {
-                Open,
-                ReadAll,
-                ReadLine,
-                ReadChunk,
-                ReadAllBytes,
-                ReadLineBytes,
-                Close,
                 EnvArgCount,
                 EnvArg,
                 EnvHas,
                 EnvLookup,
-                StdinOpen,
-                StdinClose,
-                StdinReadChunk,
-                StdinReadAllBytes,
-                StdinReadAll,
-                StdinReadLineBytes,
-                StdinReadLine,
-                StdoutOpen,
-                StdoutClose,
-                StdoutWriteBytes,
-                StdoutWrite,
-                StdoutWriteLine,
-                StdoutFlush,
-                StderrOpen,
-                StderrClose,
-                StderrWriteBytes,
-                StderrWrite,
-                StderrWriteLine,
-                FileOutCreate,
-                FileOutAppend,
-                FileOutWrite,
-                FileOutWriteBytes,
-                FileOutWriteLine,
-                FileOutFlush,
-                FileOutCloseRaw,
                 ProcSpawn,
                 ProcWait,
                 ProcCloseStdin,
                 ProcStageCount,
                 ProcWaitStage,
-                ProcWrite,
-                ProcWriteBytes,
-                ProcWriteLine,
-                ProcReadChunk,
-                ProcReadAllBytes,
-                ProcReadAll,
-                ProcReadLineBytes,
-                ProcReadLine,
                 FailIo,
                 AsyncJobCell,
                 ChanToCell,

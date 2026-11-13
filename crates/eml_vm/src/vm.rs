@@ -11,10 +11,7 @@ use eml_rows::rows::{Args, Value};
 use eml_rows::{gui, tls};
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::layout::data_first;
-use eml_rt::{
-    Ctx, Form, Handle, MaskItem, Mode, Open, PipeEnd, RawResource, ReadAmount, Stop, Token, Word,
-    Write, WriteMode,
-};
+use eml_rt::{Ctx, MaskItem, Mode, PipeEnd, RawResource, Stop, Token, Word};
 
 use crate::apply;
 use crate::cells::{self, CellRef, JobSource, Raise, Runnable, Take, WaitToken};
@@ -4236,116 +4233,6 @@ fn run_extern<R: Exec>(
         match ext {
             // channel の即値をそのまま `Cell` の即値にする (docs/spec/vm.md の「命令」)
             Extern::ChanToCell | Extern::AsyncJobCell => task.set_raw(dst, task.raw(arg(0))),
-            Extern::Open | Extern::FileOutCreate | Extern::FileOutAppend => {
-                let open = match ext {
-                    Extern::Open => Open::Read,
-                    Extern::FileOutCreate => Open::Write(WriteMode::Truncate),
-                    _ => Open::Write(WriteMode::Append),
-                };
-                let w = ctx.fs_open(task.get(arg(0)), open)?;
-                task.set(dst, w);
-            }
-            Extern::ReadAll
-            | Extern::ReadLine
-            | Extern::ReadAllBytes
-            | Extern::ReadLineBytes
-            | Extern::StdinReadAll
-            | Extern::StdinReadLine
-            | Extern::StdinReadAllBytes
-            | Extern::StdinReadLineBytes
-            | Extern::ProcReadAll
-            | Extern::ProcReadLine
-            | Extern::ProcReadAllBytes
-            | Extern::ProcReadLineBytes => {
-                let (handle, read, form) = match ext {
-                    Extern::ReadAll => (Handle::FileIn, ReadAmount::All, Form::Text),
-                    Extern::ReadLine => (Handle::FileIn, ReadAmount::Line, Form::Text),
-                    Extern::ReadAllBytes => (Handle::FileIn, ReadAmount::All, Form::Bytes),
-                    Extern::ReadLineBytes => (Handle::FileIn, ReadAmount::Line, Form::Bytes),
-                    Extern::StdinReadAll => (Handle::Stdin, ReadAmount::All, Form::Text),
-                    Extern::StdinReadLine => (Handle::Stdin, ReadAmount::Line, Form::Text),
-                    Extern::StdinReadAllBytes => (Handle::Stdin, ReadAmount::All, Form::Bytes),
-                    Extern::StdinReadLineBytes => (Handle::Stdin, ReadAmount::Line, Form::Bytes),
-                    Extern::ProcReadAll => (Handle::Child, ReadAmount::All, Form::Text),
-                    Extern::ProcReadLine => (Handle::Child, ReadAmount::Line, Form::Text),
-                    Extern::ProcReadAllBytes => (Handle::Child, ReadAmount::All, Form::Bytes),
-                    _ => (Handle::Child, ReadAmount::Line, Form::Bytes),
-                };
-                let w = ctx.handle_read(task.get(arg(0)), handle, read, form)?;
-                task.set(dst, w);
-            }
-            Extern::ReadChunk | Extern::StdinReadChunk | Extern::ProcReadChunk => {
-                let handle = match ext {
-                    Extern::ReadChunk => Handle::FileIn,
-                    Extern::StdinReadChunk => Handle::Stdin,
-                    _ => Handle::Child,
-                };
-                let chunk = ReadAmount::Chunk(task.get(arg(0)));
-                let w = ctx.handle_read(task.get(arg(1)), handle, chunk, Form::Bytes)?;
-                task.set(dst, w);
-            }
-            Extern::Close
-            | Extern::FileOutCloseRaw
-            | Extern::StdinClose
-            | Extern::StdoutClose
-            | Extern::StderrClose => {
-                let handle = match ext {
-                    Extern::Close => Handle::FileIn,
-                    Extern::FileOutCloseRaw => Handle::FileOut,
-                    Extern::StdinClose => Handle::Stdin,
-                    Extern::StdoutClose => Handle::Stdout,
-                    _ => Handle::Stderr,
-                };
-                ctx.handle_close(task.get(arg(0)), handle)?;
-                task.set(dst, Word::UNIT);
-            }
-            Extern::StdinOpen | Extern::StdoutOpen | Extern::StderrOpen => {
-                let handle = match ext {
-                    Extern::StdinOpen => Handle::Stdin,
-                    Extern::StdoutOpen => Handle::Stdout,
-                    _ => Handle::Stderr,
-                };
-                let w = ctx.handle_open(handle)?;
-                task.set(dst, w);
-            }
-            Extern::FileOutWrite
-            | Extern::FileOutWriteBytes
-            | Extern::FileOutWriteLine
-            | Extern::StdoutWrite
-            | Extern::StdoutWriteBytes
-            | Extern::StdoutWriteLine
-            | Extern::StderrWrite
-            | Extern::StderrWriteBytes
-            | Extern::StderrWriteLine
-            | Extern::ProcWrite
-            | Extern::ProcWriteBytes
-            | Extern::ProcWriteLine => {
-                let (handle, write) = match ext {
-                    Extern::FileOutWrite => (Handle::FileOut, Write::Text),
-                    Extern::FileOutWriteBytes => (Handle::FileOut, Write::Bytes),
-                    Extern::FileOutWriteLine => (Handle::FileOut, Write::Line),
-                    Extern::StdoutWrite => (Handle::Stdout, Write::Text),
-                    Extern::StdoutWriteBytes => (Handle::Stdout, Write::Bytes),
-                    Extern::StdoutWriteLine => (Handle::Stdout, Write::Line),
-                    Extern::StderrWrite => (Handle::Stderr, Write::Text),
-                    Extern::StderrWriteBytes => (Handle::Stderr, Write::Bytes),
-                    Extern::StderrWriteLine => (Handle::Stderr, Write::Line),
-                    Extern::ProcWrite => (Handle::Child, Write::Text),
-                    Extern::ProcWriteBytes => (Handle::Child, Write::Bytes),
-                    _ => (Handle::Child, Write::Line),
-                };
-                let w = ctx.handle_write(task.get(arg(1)), handle, task.get(arg(0)), write)?;
-                task.set(dst, w);
-            }
-            Extern::StdoutFlush | Extern::FileOutFlush => {
-                let handle = if ext == Extern::StdoutFlush {
-                    Handle::Stdout
-                } else {
-                    Handle::FileOut
-                };
-                let w = ctx.handle_flush(task.get(arg(0)), handle)?;
-                task.set(dst, w);
-            }
             Extern::EnvArgCount => task.set_raw(dst, ctx.env_arg_count()),
             Extern::EnvArg => {
                 let w = ctx.env_arg(task.raw(arg(0)))?;
