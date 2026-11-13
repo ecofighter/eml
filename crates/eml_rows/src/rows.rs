@@ -8,6 +8,8 @@ use eml_rt::{Ctx, Form, Handle, Mode, ReadAmount, Stream, Word, Write, WriteMode
 
 use eml_sched::error::RunFault;
 
+use crate::{gui, tls};
+
 const fn repr_eq(a: Repr, b: Repr) -> bool {
     matches!(
         (a, b),
@@ -494,6 +496,79 @@ macro_rules! extern_rows {
                 }
                 // channelの即値をそのまま`Cell`の即値にする (docs/spec/vm.md の「命令」)
                 fn ChanToCell | AsyncJobCell(_, a: int) -> int { Ok(a) }
+                // TLSの状態の行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Tls`」)
+                fn TlsPushTls(ctx, bytes: obj, conn: obj) -> obj { tls::push_tls(ctx, bytes, conn) }
+                fn TlsWritePlain(ctx, bytes: obj, conn: obj) -> obj {
+                    tls::write_plain(ctx, bytes, conn)
+                }
+                fn TlsPushEof(ctx, conn: obj) -> obj { tls::push_eof(ctx, conn) }
+                fn TlsSendCloseNotify(ctx, conn: obj) -> obj { tls::send_close_notify(ctx, conn) }
+                fn TlsPullTls(ctx, conn: obj) -> obj { tls::pull_tls(ctx, conn) }
+                fn TlsReadPlain(ctx, buf: obj, conn: obj) -> obj { tls::read_plain(ctx, buf, conn) }
+                fn TlsStatus(ctx, conn: obj) -> int { tls::status(ctx, conn) }
+                fn TlsErrorMessage(ctx, conn: obj) -> obj { tls::error_message(ctx, conn) }
+                fn TlsLineReady(ctx, conn: obj) -> int { tls::line_ready(ctx, conn) }
+                fn TlsTakeLine(ctx, conn: obj) -> obj { tls::take_line(ctx, conn) }
+                // toolkitに触れる行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Gui`」)
+                fn GuiCloseUi(ctx, ui: obj) -> unit {
+                    gui::arm(ctx, Extern::GuiCloseUi, &[ui])?;
+                    Ok(())
+                }
+                fn GuiBeginWindowRaw(ctx, title: obj, ui: obj) -> int {
+                    Ok(gui::arm(ctx, Extern::GuiBeginWindowRaw, &[title, ui])?.bits() as i64)
+                }
+                fn GuiBeginGridRaw(ctx, cols: obj, rows: obj, ui: obj) -> int {
+                    Ok(gui::arm(ctx, Extern::GuiBeginGridRaw, &[cols, rows, ui])?.bits() as i64)
+                }
+                fn GuiEndRaw(ctx, ui: obj) -> obj { gui::arm(ctx, Extern::GuiEndRaw, &[ui]) }
+                fn GuiNextCellRaw(
+                    ctx, col_span: int, row_span: int, halign: int, valign: int, ui: obj
+                ) -> obj {
+                    let args = [
+                        Word::from_bits(col_span as usize),
+                        Word::from_bits(row_span as usize),
+                        Word::from_bits(halign as usize),
+                        Word::from_bits(valign as usize),
+                        ui,
+                    ];
+                    gui::arm(ctx, Extern::GuiNextCellRaw, &args)
+                }
+                fn GuiCreateRaw(ctx, kind: int, text: obj, n: int, ui: obj) -> int {
+                    let args =
+                        [Word::from_bits(kind as usize), text, Word::from_bits(n as usize), ui];
+                    Ok(gui::arm(ctx, Extern::GuiCreateRaw, &args)?.bits() as i64)
+                }
+                fn GuiAddItemRaw(ctx, id: int, item: obj, ui: obj) -> obj {
+                    gui::arm(ctx, Extern::GuiAddItemRaw, &[Word::from_bits(id as usize), item, ui])
+                }
+                fn GuiSetTextRaw(ctx, id: int, text: obj, ui: obj) -> obj {
+                    gui::arm(ctx, Extern::GuiSetTextRaw, &[Word::from_bits(id as usize), text, ui])
+                }
+                fn GuiSetIntRaw(ctx, id: int, prop: int, value: int, ui: obj) -> obj {
+                    let args = [
+                        Word::from_bits(id as usize),
+                        Word::from_bits(prop as usize),
+                        Word::from_bits(value as usize),
+                        ui,
+                    ];
+                    gui::arm(ctx, Extern::GuiSetIntRaw, &args)
+                }
+                fn GuiCloseWindowRaw(ctx, id: int, ui: obj) -> obj {
+                    gui::arm(ctx, Extern::GuiCloseWindowRaw, &[Word::from_bits(id as usize), ui])
+                }
+                fn GuiOpenWindowsRaw(ctx, ui: obj) -> int {
+                    Ok(gui::arm(ctx, Extern::GuiOpenWindowsRaw, &[ui])?.bits() as i64)
+                }
+                fn GuiFlushRaw(ctx, ui: obj) -> obj { gui::arm(ctx, Extern::GuiFlushRaw, &[ui]) }
+                fn GuiPollRaw(ctx, ui: obj) -> int {
+                    Ok(gui::arm(ctx, Extern::GuiPollRaw, &[ui])?.bits() as i64)
+                }
+                fn GuiEventIntRaw(ctx, ui: obj) -> int {
+                    Ok(gui::arm(ctx, Extern::GuiEventIntRaw, &[ui])?.bits() as i64)
+                }
+                fn GuiEventTextRaw(ctx, ui: obj) -> obj {
+                    gui::arm(ctx, Extern::GuiEventTextRaw, &[ui])
+                }
             }
             engine { Panic, Exit }
             lir { Par }
@@ -601,31 +676,6 @@ macro_rules! extern_rows {
                 GuiIsGuiTaskRaw,
             }
             pending {
-                TlsPushTls,
-                TlsPushEof,
-                TlsPullTls,
-                TlsWritePlain,
-                TlsReadPlain,
-                TlsStatus,
-                TlsErrorMessage,
-                TlsSendCloseNotify,
-                TlsLineReady,
-                TlsTakeLine,
-                GuiCloseUi,
-                GuiBeginWindowRaw,
-                GuiBeginGridRaw,
-                GuiEndRaw,
-                GuiNextCellRaw,
-                GuiCreateRaw,
-                GuiAddItemRaw,
-                GuiSetTextRaw,
-                GuiSetIntRaw,
-                GuiCloseWindowRaw,
-                GuiOpenWindowsRaw,
-                GuiFlushRaw,
-                GuiPollRaw,
-                GuiEventIntRaw,
-                GuiEventTextRaw,
             }
         }
     };
@@ -727,7 +777,7 @@ macro_rules! defs {
                 $(Extern::$engine)|* => Err(RunFault::Internal("Panic and Exit run in the engine")),
                 $(Extern::$lir)|* => Err(RunFault::Internal("`Std.Par.par` is not an extern instruction")),
                 $(Extern::$task)|* => Err(RunFault::Internal("Async externs run through Op::Async")),
-                $(Extern::$pending)|* => Err(RunFault::Internal("the row has no shared body yet")),
+                $(Extern::$pending => Err(RunFault::Internal("the row has no shared body yet")),)*
             }
         }
     };

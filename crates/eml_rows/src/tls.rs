@@ -186,7 +186,7 @@ pub fn push_conn(mut c: TlsConn, b: Vec<u8>) -> TlsConn {
 ///
 /// # Safety
 /// `bytes` は生きた `Bytes` で、`conn` は `tls_conn` の前提を守る。
-pub unsafe fn push_tls<M: Mode>(
+pub(crate) unsafe fn push_tls<M: Mode>(
     ctx: &mut Ctx<M>,
     bytes: Word,
     conn: Word,
@@ -209,7 +209,7 @@ pub unsafe fn push_tls<M: Mode>(
 ///
 /// # Safety
 /// `push_tls` と同じ。
-pub unsafe fn write_plain<M: Mode>(
+pub(crate) unsafe fn write_plain<M: Mode>(
     ctx: &mut Ctx<M>,
     bytes: Word,
     conn: Word,
@@ -224,7 +224,7 @@ pub unsafe fn write_plain<M: Mode>(
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub unsafe fn push_eof<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
+pub(crate) unsafe fn push_eof<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     unsafe { (*tls_conn(ctx, conn)?).conn.push_eof() };
     Ok(conn)
 }
@@ -233,7 +233,10 @@ pub unsafe fn push_eof<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, Ru
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub unsafe fn send_close_notify<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
+pub(crate) unsafe fn send_close_notify<M: Mode>(
+    ctx: &mut Ctx<M>,
+    conn: Word,
+) -> Result<Word, RunFault> {
     unsafe { (*tls_conn(ctx, conn)?).conn.send_close_notify() };
     Ok(conn)
 }
@@ -242,7 +245,7 @@ pub unsafe fn send_close_notify<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub unsafe fn pull_tls<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
+pub(crate) unsafe fn pull_tls<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     let mut out = Vec::new();
     unsafe { (*tls_conn(ctx, conn)?).conn.pull_tls(&mut out) };
     Ok(unsafe { ctx.heap_mut() }.alloc_bytes(&out))
@@ -252,7 +255,7 @@ pub unsafe fn pull_tls<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, Ru
 ///
 /// # Safety
 /// `buf` は呼ぶ側が持つ `Bytes` の参照で、`conn` は `tls_conn` の前提を守る。
-pub unsafe fn read_plain<M: Mode>(
+pub(crate) unsafe fn read_plain<M: Mode>(
     ctx: &mut Ctx<M>,
     buf: Word,
     conn: Word,
@@ -272,7 +275,7 @@ pub unsafe fn read_plain<M: Mode>(
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub unsafe fn status<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
+pub(crate) unsafe fn status<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
     Ok(i64::from(unsafe { (*tls_conn(ctx, conn)?).conn.status() }))
 }
 
@@ -280,7 +283,10 @@ pub unsafe fn status<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFa
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub unsafe fn error_message<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
+pub(crate) unsafe fn error_message<M: Mode>(
+    ctx: &mut Ctx<M>,
+    conn: Word,
+) -> Result<Word, RunFault> {
     let message = unsafe { (*tls_conn(ctx, conn)?).conn.error_message() };
     Ok(ctx.fresh_string(&message))
 }
@@ -298,7 +304,7 @@ fn ready_line(c: &mut TlsConn) -> Line {
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub unsafe fn line_ready<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
+pub(crate) unsafe fn line_ready<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
     Ok(match ready_line(c) {
         Line::More => 0,
@@ -312,7 +318,7 @@ pub unsafe fn line_ready<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, R
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub unsafe fn take_line<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
+pub(crate) unsafe fn take_line<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
     let Line::Ready(n) = ready_line(c) else {
         return Err(RunFault::Internal(

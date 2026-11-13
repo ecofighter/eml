@@ -111,7 +111,11 @@ mod off {
     ///
     /// # Safety
     /// `args`は行の引数の語である。
-    pub unsafe fn arm<M: Mode>(_: &mut Ctx<M>, _: Extern, _: &[Word]) -> Result<Word, RunFault> {
+    pub(crate) unsafe fn arm<M: Mode>(
+        _: &mut Ctx<M>,
+        _: Extern,
+        _: &[Word],
+    ) -> Result<Word, RunFault> {
         let _ = raised;
         Err(RunFault::Internal("a Std.Gui row runs without the GUI"))
     }
@@ -647,7 +651,7 @@ mod on {
     ///
     /// # Safety
     /// `args`は行の引数の語で、`Ui`は呼ぶ側が持つ生きた`Std.Gui.Ui`、文字列は生きた文字列である。
-    pub unsafe fn arm<M: Mode>(
+    pub(crate) unsafe fn arm<M: Mode>(
         ctx: &mut Ctx<M>,
         ext: Extern,
         args: &[Word],

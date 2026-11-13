@@ -4195,8 +4195,8 @@ impl Args for At<'_> {
     }
 }
 
-/// 一覧にまだ共有の本体がない行はここで `match` して `Ctx` のメソッドを呼び、それ以外の行はすべて
-/// `eml_rows::rows::call` を通す (docs/spec/object-model.md の「extern」)。
+/// `Panic`と`Exit`の行はここで流し、それ以外の行はすべて`eml_rows::rows::call`を通す
+/// (docs/spec/object-model.md の「extern」)。
 fn run_extern<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -4227,78 +4227,13 @@ fn run_extern<R: Exec>(
         let dummy = ctx.heap().dummy();
         return unwind::<R>(code, ctx, task, counts, dummy);
     }
-    unsafe {
-        // 借りる引数 (`FunctionRow::borrowed`) の行は、引数を手放さない。失敗しても、借りた値は呼んだ側の
-        // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.md の「extern の借用」)
-        match ext {
-            // TLSの状態の行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Tls`」)
-            Extern::TlsPushTls => {
-                let w = tls::push_tls(ctx, task.get(arg(0)), task.get(arg(1)))?;
-                task.set(dst, w);
-            }
-            Extern::TlsWritePlain => {
-                let w = tls::write_plain(ctx, task.get(arg(0)), task.get(arg(1)))?;
-                task.set(dst, w);
-            }
-            Extern::TlsPushEof => {
-                let w = tls::push_eof(ctx, task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::TlsSendCloseNotify => {
-                let w = tls::send_close_notify(ctx, task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::TlsPullTls => {
-                let w = tls::pull_tls(ctx, task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::TlsReadPlain => {
-                let w = tls::read_plain(ctx, task.get(arg(0)), task.get(arg(1)))?;
-                task.set(dst, w);
-            }
-            Extern::TlsStatus => task.set_raw(dst, tls::status(ctx, task.get(arg(0)))?),
-            Extern::TlsErrorMessage => {
-                let w = tls::error_message(ctx, task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::TlsLineReady => task.set_raw(dst, tls::line_ready(ctx, task.get(arg(0)))?),
-            Extern::TlsTakeLine => {
-                let w = tls::take_line(ctx, task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            // toolkitに触れる行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Gui`」)
-            Extern::GuiCloseUi
-            | Extern::GuiBeginWindowRaw
-            | Extern::GuiBeginGridRaw
-            | Extern::GuiEndRaw
-            | Extern::GuiNextCellRaw
-            | Extern::GuiCreateRaw
-            | Extern::GuiAddItemRaw
-            | Extern::GuiSetTextRaw
-            | Extern::GuiSetIntRaw
-            | Extern::GuiCloseWindowRaw
-            | Extern::GuiOpenWindowsRaw
-            | Extern::GuiFlushRaw
-            | Extern::GuiPollRaw
-            | Extern::GuiEventIntRaw
-            | Extern::GuiEventTextRaw => {
-                let n = ext.row().params.len();
-                let mut args = [Word::UNIT; 5];
-                for (i, w) in args.iter_mut().enumerate().take(n) {
-                    *w = task.get(arg(i));
-                }
-                let w = gui::arm(ctx, ext, &args[..n])?;
-                task.set(dst, w);
-            }
-            _ => {
-                let value = eml_rows::rows::call(ext, ctx, &At { task: &*task, ops })?;
-                match value {
-                    Value::Word(w) => task.set(dst, w),
-                    Value::Int(n) => task.set_raw(dst, n),
-                    Value::Float(x) => task.set_float(dst, x),
-                }
-            }
-        }
+    // 借りる引数 (`FunctionRow::borrowed`) の行は、引数を手放さない。失敗しても、借りた値は呼んだ側の
+    // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.md の「extern の借用」)
+    let value = unsafe { eml_rows::rows::call(ext, ctx, &At { task: &*task, ops }) }?;
+    match value {
+        Value::Word(w) => task.set(dst, w),
+        Value::Int(n) => task.set_raw(dst, n),
+        Value::Float(x) => task.set_float(dst, x),
     }
     Ok(())
 }
