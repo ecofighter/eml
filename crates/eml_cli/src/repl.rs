@@ -5,11 +5,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
+use eml_clink::{LinkError, Linker};
 use eml_diagnostics::{Diagnostic, SourceFiles, TextSize, has_errors};
 use eml_hir::{
     FunctionId, FunctionKind, ImportCache, InputForm, InputKind, ModuleSource, SessionInput,
 };
-use eml_native::{LinkError, Linker};
 use eml_types::{InputDisplay, InstanceNode, TypedProgram};
 use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RunFault, RuntimeError, SourceLocation};
 

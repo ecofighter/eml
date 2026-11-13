@@ -12,6 +12,7 @@ eml_diagnostics = { path = "crates/eml_diagnostics" }
 eml_syntax = { path = "crates/eml_syntax" }
 eml_extern = { path = "crates/eml_extern" }
 eml_cabi = { path = "crates/eml_cabi" }
+eml_clink = { path = "crates/eml_clink" }
 eml_native = { path = "crates/eml_native" }
 eml_nrt = { path = "crates/eml_nrt" }
 eml_hir = { path = "crates/eml_hir" }

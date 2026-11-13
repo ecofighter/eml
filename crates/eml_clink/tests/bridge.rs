@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use eml_cabi::{Bridge, CCall};
+use eml_clink::Bridges;
 use eml_extern::{CSignature, CType};
-use eml_native::Bridges;
 
 use crate::common::{add_i32, call, dot, half, neg, sum12};
 

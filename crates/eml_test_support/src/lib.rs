@@ -23,7 +23,7 @@ pub use fixtures::{eml_fixture_gate_open, eml_fixture_gate_wait, fixture_symbols
 #[cfg(feature = "run")]
 pub use eml_cli::Engine;
 #[cfg(feature = "run")]
-use eml_native::Linker;
+use eml_clink::Linker;
 #[cfg(feature = "run")]
 use eml_nrt::image::{Census, Options};
 #[cfg(feature = "run")]

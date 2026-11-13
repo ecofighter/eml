@@ -1,12 +1,10 @@
 mod abi;
 mod abort;
 mod apply;
-mod bridge;
 mod calls;
 mod clif;
 mod common;
 mod data;
-mod linker;
 mod machine;
 mod placement;
 mod rc;

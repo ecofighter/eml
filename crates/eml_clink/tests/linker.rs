@@ -1,5 +1,5 @@
+use eml_clink::{LinkError, Linker, candidates, running_os};
 use eml_extern::{CHandleId, CHandleType, CInt, CLibrary, CLink, CParam, CRet, Os};
-use eml_native::{LinkError, Linker, candidates, running_os};
 
 use crate::common::{c_library, call, function, half};
 

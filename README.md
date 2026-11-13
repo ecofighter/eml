@@ -128,8 +128,9 @@ claude plugin install ecoskills@ecoskills --scope user
 | `eml_sched` | VMとネイティブの実行系が共有する層 (タスクのセルの核、実行時エラーの型、実行の設定と結果の型、時計の選び方) |
 | `eml_io` | I/O の driver。OS ごとの backend (epoll、kqueue、IOCP) の上の本物の driver と、決定的なテストの driver |
 | `eml_tls` | rustlsの接続を包むTLSの状態 (I/Oを持たない。aws-lc-rsのprovider、rustls-platform-verifier) |
-| `eml_native` | C の関数を呼ぶ橋渡しの関数を Cranelift で作り、C のライブラリと記号を解決する |
-| `eml_cabi` | C の関数を呼ぶコードのポインタ (`eml_native` が作り、`eml_vm` が使う) |
+| `eml_clink` | C の関数を呼ぶ橋渡しの関数を Cranelift で作り、C のライブラリと記号を解決する |
+| `eml_native` | ネイティブのコード生成器。LIR を Cranelift で機械語にして JIT で動かす |
+| `eml_cabi` | C の関数を呼ぶコードのポインタ (`eml_clink` が作り、`eml_vm` が使う) |
 | `eml_rt` | VM とネイティブで共有するランタイムの核 (物体、ヒープ、参照カウント、検査モード、extern)。Verus で検証する |
 | `eml_core_ir` | 型付き HIR から Core IR (基本ブロックの列) への変換、evidence passing、LIR への変換 |
 | `eml_lir` | LIR と、`box` / `unbox` の挿入、縮約、`dup` / `decref` / `release` の挿入 |

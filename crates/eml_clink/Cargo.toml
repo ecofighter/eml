@@ -1,0 +1,26 @@
+[package]
+name = "eml_clink"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+[lib]
+doctest = false
+
+# workspaceのcrateではeml_cabiとeml_externだけに依存する。コード生成器 (eml_native) にも実行系 (eml_vm、eml_nrt) にも
+# 依存しない (docs/implementation/architecture.md の「crate の依存関係」)
+[dependencies]
+eml_cabi.workspace = true
+eml_extern.workspace = true
+cranelift-codegen.workspace = true
+cranelift-frontend.workspace = true
+cranelift-jit.workspace = true
+cranelift-module.workspace = true
+cranelift-native.workspace = true
+libloading.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

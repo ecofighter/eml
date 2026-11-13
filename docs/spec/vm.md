@@ -21,7 +21,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - VM の繰り返し (`vm::run`) は、モードと方針 (「タスクとスケジュール」) の組ごとに写しを作る。`step` から呼ぶ補助の関数 (`data`、`apply`、`vm` の中の関数) は、モード `M` でなく、モードと方針を束ねた1つの型 `R: Exec` (`R::M` と `R::P` を持つ) で総称にする。`M` だけで総称にすると、補助の関数の実体が逐次と seed の2つの写しから呼ばれ、呼び手が1つの関数を inline しやすくする LLVM の判断が外れる。`con`、`release`、`unpack` などが `vm::run` に展開されなくなり、逐次の `bench/run.sh` の実行の分が `records_wide` で 9.8% 増えた。`R` で総称にすれば、補助の関数の実体は写しごとにでき、呼び手は1つのままなので、写しごとの inline の判断は方針のない繰り返しと同じになる。上の `#[inline]` の規則もそのまま使える。測った数は [計測の基準](../implementation/benchmarks.md) の「モードと方針を束ねた型」にある
 - release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりしたためである ([計測の基準](../implementation/benchmarks.md) の「`codegen-units`」)
 - releaseのプロファイルはthin LTO (`lto = "thin"`) にする。crateをまたぐ関数 (`eml_rt`、`eml_sched`など) も、1つのcrateの中と同じようにインライン化されるためである。上の`#[inline]`の規則はそのまま使う。devとテストのビルドと、LTOが見通せないものに効くためである。`vm::run`から呼ぶ`eml_sched`の関数も、`eml_vm`の中の関数と同じ規則に従う。LTOの下でもインライン化の注釈が「definition is unavailable」を示し、付けると`bench/run.sh`で命令の数が減るときだけ`#[inline]`を付ける。速さのためにcrateの分け方を戻すことはしない。測った数は[計測の基準](../implementation/benchmarks.md)の「releaseのthin LTO」にある
-- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, linked: &Linked, config: &RunConfig, host: HostRef) -> Result<Finished, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、エントリを実行して閉じる (「追記」)。`linked` は、`eml_native` がプログラムの C の関数をつないだ結果である (「C の関数の命令」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) と、スケジュールの方針 (`sched: Sched`。「タスクとスケジュール」) と、タイマーが使う時計 (`clock: Clock`。「時計と driver」) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
+- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, linked: &Linked, config: &RunConfig, host: HostRef) -> Result<Finished, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、エントリを実行して閉じる (「追記」)。`linked` は、`eml_clink` がプログラムの C の関数をつないだ結果である (「C の関数の命令」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) と、スケジュールの方針 (`sched: Sched`。「タスクとスケジュール」) と、タイマーが使う時計 (`clock: Clock`。「時計と driver」) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
 - `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)`、`with_control(Arc<Control>)`、`with_sched(Sched)`、`with_clock(Clock)` で組み立てる。方針の既定は `Sched::Sequential` で、時計の既定は `Clock::Virtual` である
 - 1つの`Control`は1回の実行に使う。止める理由のビットは`Control::clear`でしか下りないので、使い回すと、前の実行で立ったビットで次の実行がすぐ止まるためである。終わりの欄 (`exit`の終了コード) と`NOTICE`は、`Machine::run`の始めに`Control::begin_run`が開いて下ろすので、使い回しの妨げにならない (「誤り、止めること、終わり」)。REPL (`eml_cli::Repl`) は1つの`Control`をセッション全体で使い、入力の始めに`clear`を呼ぶ。`RunConfig`を`clone`すると`Control`を共有するので、UIテストの仕組みと`eml_test_support`は実行ごとに新しい`RunConfig`を作る
 - `RunConfig` に `Control` を持たせるのは、CLI が Ctrl-C のハンドラに同じ `Control` を渡すためである。上限は `Control` が持つので、`RunConfig` に上限の欄は作らない ([オブジェクトモデル](object-model.md) の「実行の制御」)
@@ -1043,7 +1043,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 
 ## C の関数の呼び出し
 
-利用者の `extern "C"` の関数とハンドルの dtor は、`eml_native` がプログラムを読み込む前につなぐ。つないだ結果は `eml_cabi::Linked` の値で、C の関数ごとの `CCall` とハンドルの型ごとの dtor を、プログラムの C の関数の表とハンドルの型の表に並びをそろえて持つ。VM は橋渡しの関数を通して C の関数を呼ぶ。`eml_vm` は `eml_native` にも Cranelift にも依存せず、つなぐ処理を持たない。
+利用者の `extern "C"` の関数とハンドルの dtor は、`eml_clink` がプログラムを読み込む前につなぐ。つないだ結果は `eml_cabi::Linked` の値で、C の関数ごとの `CCall` とハンドルの型ごとの dtor を、プログラムの C の関数の表とハンドルの型の表に並びをそろえて持つ。VM は橋渡しの関数を通して C の関数を呼ぶ。`eml_vm` は `eml_clink` にも `eml_native` にも Cranelift にも依存せず、つなぐ処理を持たない。
 
 ### 橋渡しの関数
 
@@ -1056,7 +1056,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - コードは cranelift-jit が RW で確保して書き、命令の cache を消してから RX に変える。`MAP_JIT` を使わないので、macOS の hardened runtime の下では動かない。この処理系は hardened runtime を扱わない
 - 巻き戻しの情報を登録しないので、C の関数は橋渡しを通して巻き戻ってはならない (C++ の例外、SEH)
 - 橋渡しのコードは、プロセスが終わるまで解放しない。だから `CCall` は、作った `Linker` が消えた後も呼べる
-- `Linked` の欄は非公開で、作れるのは `unsafe fn Linked::new(calls, dtors)` と、空の `Linked::default()` だけである。`calls` は `(CFunction, CCall)` の組の列、`dtors` は `(CHandleType, Option<Dtor>)` の組の列で、`Linked` はつないだときの宣言の写しを持つ。VM は `Linked` のポインタを確かめずに呼ぶので、ポインタの正しさは `new` の呼び手が約束する。約束は次の3つで、`eml_native::Linker::link` とテストの道具が守る。読む側は `calls()`、`dtors()`、`fits` を使う
+- `Linked` の欄は非公開で、作れるのは `unsafe fn Linked::new(calls, dtors)` と、空の `Linked::default()` だけである。`calls` は `(CFunction, CCall)` の組の列、`dtors` は `(CHandleType, Option<Dtor>)` の組の列で、`Linked` はつないだときの宣言の写しを持つ。VM は `Linked` のポインタを確かめずに呼ぶので、ポインタの正しさは `new` の呼び手が約束する。約束は次の3つで、`eml_clink::Linker::link` とテストの道具が守る。読む側は `calls()`、`dtors()`、`fits` を使う
   - 各 `CCall` の `callee` は、組にした宣言の記号と `links` を解決した C の関数で、`bridge` はその宣言の `c_signature()` の橋渡しである
   - 各 dtor は、宣言が dtor を持つときに限りあり、その dtor の記号を解決した `void f(void*)` として呼べる関数である
   - どのポインタも、プロセスが終わるまで有効なコードを指す
@@ -1069,7 +1069,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
   2. 動いている OS の `link` の item のライブラリを、書いた順に。1 で見つからなかった記号では、動いている OS のライブラリを、記号がどこにあってもすべて開けなければならない。1つでも開けなければ `LinkError::Library` である。1 で見つかった記号では、ライブラリを開かない
   3. プロセスの範囲。unix では `dlopen(NULL)` の範囲 (`libloading::os::unix::Library::this()`)、Windows では実行ファイル、その次に `ucrtbase.dll` である
   4. どこにもなければ `LinkError::Symbol` である
-- ローダーに渡す名前は次のように飾る (`eml_native::candidates`)
+- ローダーに渡す名前は次のように飾る (`eml_clink::candidates`)
   - `/`、`\`、`.` を含む文字列は、そのまま渡す
   - ほかの名前は、Linux では `lib<name>.so`、macOS では `lib<name>.dylib`、Windows では `<name>.dll` にする
   - `framework "N"` は `/System/Library/Frameworks/N.framework/N` を、次に `/Library/Frameworks/N.framework/N` を試す。macOS の dlopen は framework の相対の道を開けないためである

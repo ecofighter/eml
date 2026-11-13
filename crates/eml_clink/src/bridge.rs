@@ -14,7 +14,7 @@ use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 use eml_cabi::Bridge;
 use eml_extern::{CSignature, CType};
 
-use crate::LinkError;
+use crate::error::LinkError;
 
 /// 使い終えた module を、プロセスが終わるまで持つ。cranelift-jit が module を落とすときにコードを解放するかどうかに
 /// 頼らず、返した `Bridge` がプロセスの間ずっと呼べるようにするためである。`ManuallyDrop` で手放すのでなく、ここに

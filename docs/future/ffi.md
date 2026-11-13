@@ -26,7 +26,7 @@
 | 8 | 扱わないもの | コールバック、C の構造体、可変長の引数、スカラーを指すポインタの専用の構文、32 ビットの要素の配列、`Bool` と enum (`Int` で渡す)、eml の物体の配列、NUL で終わる文字列は扱わない。これを超えるものは、今と同じく Rust で書いた std の extern の行にする |
 | 9 | 効果 | C の呼び出しは `pure` でなければ `<IO>` を持つ。範囲を確かめる引数かハンドルの結果を持つ行は `<Panic>` を持ち、中断を始めうる行 (`faults`) になる。`MutUnboxedArray` を貸す行は書き込む行 (`writes`) で、使われなくても消さない |
 | 10 | 長く走る呼び出し | `blocking` は型に `<IO, Async>` を要し、ブロックする呼び出しのプールへの受け付けと待ちと取り出しに下ろす |
-| 11 | VM からの呼び出し | `eml_native` が `cranelift-jit` で、C の型の並びごとの橋渡しの関数を作る。VM は読み込みの前につないだ `Linked` の値を受け取り、`Op::Ffi` で橋渡しを通して呼ぶ。libffi は使わない |
+| 11 | VM からの呼び出し | `eml_clink` が `cranelift-jit` で、C の型の並びごとの橋渡しの関数を作る。VM は読み込みの前につないだ `Linked` の値を受け取り、`Op::Ffi` で橋渡しを通して呼ぶ。libffi は使わない |
 | 12 | 拡張 | GUIは、Qt 6 (Linux)、Windows App SDK 2のWinUI 3 (Windows 11)、AppKit (macOS) を包むRustのtoolkitのcrate `eml_gui`である。ウィジェットはtoolkitのもので、`Send`でなく、メインのworkerの上でだけ触れる。toolkitの行は普通のexternの表の行で、腕は`eml_vm`の`gui.rs`にあり、`Std.Tls`と同じくcfgのfeatureで切り替える。`Plugin`のtraitは置かない |
 | 13 | GUIのスレッド | toolkitのイベントループは、runの間ずっと、メインのworkerの1回の`Park::wait`の中で回る ([マルチコア対応の設計](multicore.md)の「スレッドとworker」)。開くのはゲートのセルを通した2段で、toolkitの呼び出しはどれもネイティブのループの中で動く。ループは`Pending::io()` (epollかkqueueのfd) を通してメインのworkerのI/Oのdriverでも待つ。源がない所 (Windows) では、操作が保留の間は1回の待ちを10 msまでにする。ループは時計もデッドロックの判定も受け持たない。GUIを求めるか開いている間は判定を控え、worker 0はイベントごとでなくGUIの期間ごとに1回起きる。`eml_io`はどのtoolkitも参照しない。GUIのタスクとその子はそのスレッドから動かず、エフェクトを持つ仕事は`Async.start_off_main`でその外へ出す |
 
@@ -99,8 +99,8 @@ matmul n a b =
 ## VM からの呼び出し
 
 - 橋渡しの関数の型は `unsafe extern "C" fn(callee: *const (), args: *const u64) -> u64` である。C の型の並び `CSignature` (要素は `I32`、`I64`、`F64`) ごとに1つ作り、呼ぶ C の関数のアドレスを最初の引数で受ける。`Ctx`、ヒープの配置、スレッドに局所的な変数を参照しないので、プールのスレッドとネイティブのコードも同じ記述を使える ([VM](../spec/vm.md) の「橋渡しの関数」)
-- crate の依存は `eml_extern` ← `eml_cabi` ← {`eml_vm`、`eml_native`} である。`Bridge`、`Dtor`、`CCall`、`Linked` は葉の crate `eml_cabi` に置き、`eml_native` は `eml_extern`、`eml_cabi`、Cranelift、libloading に依存する。`eml_vm` は Cranelift に依存しない ([コンパイラの構成](../implementation/architecture.md) の「crate の依存関係」)
-- つなぐ作業を受け持つのは `eml_native` の `Linker` の1つで、呼ぶのは `eml run`、REPL、テストの道具の3つである。3つとも読み込みの前にプログラムを持っているので、境目は trait でなく結果の値 `Linked` で足りる。VM は linker も、それを作る関数も持たず、`load` が `Linked` を受け取る
+- crate の依存は `eml_extern` ← `eml_cabi` ← {`eml_vm`、`eml_clink`} である。`Bridge`、`Dtor`、`CCall`、`Linked` は葉の crate `eml_cabi` に置き、`eml_clink` は `eml_extern`、`eml_cabi`、Cranelift、libloading に依存する。`eml_vm` は Cranelift に依存しない ([コンパイラの構成](../implementation/architecture.md) の「crate の依存関係」)
+- つなぐ作業を受け持つのは `eml_clink` の `Linker` の1つで、呼ぶのは `eml run`、REPL、テストの道具の3つである。3つとも読み込みの前にプログラムを持っているので、境目は trait でなく結果の値 `Linked` で足りる。VM は linker も、それを作る関数も持たず、`load` が `Linked` を受け取る
 - ライブラリを閉じず、橋渡しのコードも解放しないので、`CCall` と dtor のポインタはプロセスの間ずっと有効である。`Linker` や `Machine` の寿命とつなぐ必要がない
 - 命令 `Op::Ffi` は、`load` が名前で振った `CodeBase` の C の関数の番号を指す。追記で作り直したコードを名前で比べる確かめに乗せるためである。行の番号のような生の番号を operand にすると、追記のたびに番号がずれる ([VM](../spec/vm.md) の「C の関数の命令」)
 - 値を C の型に直す変換は `eml_vm` の `ffi.rs` の1か所で、検査モードも速いモードも同じ橋渡しを使う
@@ -195,8 +195,8 @@ main () =
 - ヒープの外の配列 (OCaml の Bigarray の形): 物体の2つ目の世界ができる。見直す条件は上の「C のハンドル」にある
 - 配列の view: 小さい view が大きい buffer を生かし続け、物体の2つ目の形を作る ([ロードマップ](roadmap.md) の「処理系」の共有の O(1) の部分文字列の項目と同じ理由)
 - VM の FFI に libffi を使う案: C への依存が増え、値を C の型に直す実装が2つになる
-- `fn(ctx, argv: *const Word) -> Word` の形の橋渡し: `eml_native` を `eml_rt` と `Ctx` に縛り、ヒープの配置を CLIF に写し、プールのスレッドに `Ctx` を求める
-- linker の trait を `eml_extern` か新しい crate に置き、`RunConfig` に持たせる案: 葉の crate に lock と `unsafe` が入る。実装するのは `eml_native` だけで、テストの linker もただの `Linked` の値で足りる
+- `fn(ctx, argv: *const Word) -> Word` の形の橋渡し: `eml_clink` を `eml_rt` と `Ctx` に縛り、ヒープの配置を CLIF に写し、プールのスレッドに `Ctx` を求める
+- linker の trait を `eml_extern` か新しい crate に置き、`RunConfig` に持たせる案: 葉の crate に lock と `unsafe` が入る。実装するのは `eml_clink` だけで、テストの linker もただの `Linked` の値で足りる
 - つなぐ失敗に診断の番号を付ける案と、すべての宣言をつなぐ案: ライブラリがあるかは機械の事実で、ソースの診断ではない。すべてつなぐと、使わない記号が1つないだけでプログラムが動かなくなる
 - `blocking`の呼び出しで、どの物体の引数もそのページを留めて貸す案: 見捨てた呼び出しの小さい引数ごとに64 KiBのページが残る。空けた小さいブロックは同じページの中で使い回されるので、安全が待つタスクの継続の参照だけに頼る
 - 静止で`blocking`の仕事を見捨てない案 (`Machine`を使えなくするか、driverを落とすときに待つ): 戻らないCの呼び出しがあると、`exit`やCtrl-Cが止まるか、REPLのセッションが終わる

@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use eml_cabi::{CCall, Dtor, Linked};
 use eml_extern::{CFunction, CHandleType, CLibrary, CLink, Os};
 
-use crate::LinkError;
 use crate::bridge::Bridges;
+use crate::error::LinkError;
 use crate::library::{Libraries, running_os};
 
 /// 登録した記号のアドレス。

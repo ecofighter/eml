@@ -1,15 +1,11 @@
 //! `unsafe` の一覧のテスト (docs/implementation/testing.md の「`eml_native` の検証」)。`unsafe` を書いてよいファイルを
 //! ここで固定する。走査は `eml_io` の `trust.rs` と同じである。新しい `unsafe` が一覧の外に入ると、レビューを通らずに
-//! JIT のコードかライブラリを呼ぶ道が増えるためである。
+//! JIT のコードを実行する道が増えるためである。
 
 /// 調べるファイル。`src/` のこの module 以外をすべて載せる (`every_source_file_is_listed` が確かめる)。
 const FILES: &[(&str, &str)] = &[
     ("lib.rs", include_str!("lib.rs")),
-    ("bridge.rs", include_str!("bridge.rs")),
-    ("error.rs", include_str!("error.rs")),
     ("jit.rs", include_str!("jit.rs")),
-    ("library.rs", include_str!("library.rs")),
-    ("linker.rs", include_str!("linker.rs")),
     ("abi.rs", include_str!("abi.rs")),
     ("mem.rs", include_str!("mem.rs")),
     ("thunk.rs", include_str!("thunk.rs")),
@@ -31,7 +27,7 @@ const FILES: &[(&str, &str)] = &[
 const SKIPPED: &[&str] = &["trust.rs"];
 
 /// `unsafe` を持ち、先頭に `#![allow(unsafe_code)]` を置くファイル。
-const UNSAFE_FILES: &[&str] = &["bridge.rs", "jit.rs", "library.rs", "linker.rs"];
+const UNSAFE_FILES: &[&str] = &["jit.rs"];
 
 fn is_ident(c: char) -> bool {
     c.is_alphanumeric() || c == '_'

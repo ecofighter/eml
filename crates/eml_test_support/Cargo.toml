@@ -21,10 +21,11 @@ default = ["run"]
 hir = ["dep:eml_hir", "dep:eml_cli"]
 types = ["hir", "dep:eml_types", "eml_cli/types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir", "eml_cli/core"]
-run = ["core", "dep:eml_vm", "dep:eml_native", "dep:eml_nrt", "eml_cli/run"]
+run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_native", "dep:eml_nrt", "eml_cli/run"]
 
 [dependencies]
 eml_cli = { workspace = true, optional = true }
+eml_clink = { workspace = true, optional = true }
 eml_core_ir = { workspace = true, optional = true }
 eml_diagnostics.workspace = true
 eml_hir = { workspace = true, optional = true }

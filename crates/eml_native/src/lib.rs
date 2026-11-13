@@ -1,18 +1,11 @@
-//! 利用者の C の関数をつなぐ (docs/spec/vm.md の「C の関数の呼び出し」)。`CSignature` ごとの橋渡しの関数を
-//! Cranelift で作り、記号を宣言したモジュールの `link` から解決して、`eml_cabi::Linked` を返す。呼び手はプログラムを
-//! 読み込む前につなぎ、結果の値だけを VM に渡す。
-//!
-//! ネイティブのコード生成器の土台も持つ。Craneliftのフラグを作る唯一の関数、シグネチャ、thunkである
-//! (docs/spec/native.md の「`eml_enter`」)。
+//! ネイティブのコード生成器である。LIR から Cranelift で機械語を作り、JIT のホストで動かす。Cranelift のフラグを作る
+//! 唯一の関数、シグネチャ、thunk もここにある (docs/spec/native.md の「`eml_enter`」)。C の関数をつなぐ道は
+//! `eml_clink` の仕事で、ここには入らない (docs/implementation/architecture.md の「crate の依存関係」)。
 
 #![deny(unsafe_code)]
 
 pub mod abi;
-mod bridge;
-mod error;
 mod jit;
-mod library;
-mod linker;
 mod lower;
 mod mem;
 pub mod thunk;
@@ -20,12 +13,8 @@ pub mod thunk;
 mod trust;
 mod unsupported;
 
-pub use bridge::Bridges;
 pub use eml_nrt::SUPPORTED;
 pub use eml_nrt::image::Options;
-pub use error::LinkError;
 pub use jit::{Arg, LoadError, Loaded, NativeMachine, Symbol, execute};
-pub use library::{candidates, running_os};
-pub use linker::Linker;
 pub use lower::rows;
 pub use unsupported::{Form, Unsupported, unsupported};

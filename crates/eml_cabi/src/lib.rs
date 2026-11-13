@@ -1,4 +1,4 @@
-//! C の関数を呼ぶコードのポインタ。`eml_native` が作り、`eml_vm` が使う。
+//! C の関数を呼ぶコードのポインタ。`eml_clink` が作り、`eml_vm` が使う。
 //! `Ctx` に関わらないので、`eml_rt` に依存せず、`eml_extern` だけに依存する葉の crate にする。
 
 use eml_extern::{CFunction, CHandleType};

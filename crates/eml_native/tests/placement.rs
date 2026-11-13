@@ -262,11 +262,11 @@ fn the_tail_convention_is_named_only_in_abi() {
 }
 
 #[test]
-fn jit_module_is_named_only_in_jit_and_bridge() {
+fn jit_module_is_named_only_in_jit() {
     assert_eq!(
         files_with(&native(), "JITModule", false),
-        ["bridge.rs", "jit.rs"],
-        "JITModule is named only in bridge.rs and jit.rs ({NATIVE})"
+        ["jit.rs"],
+        "JITModule is named only in jit.rs ({NATIVE})"
     );
 }
 
@@ -311,7 +311,7 @@ fn eml_native_has_no_edge_to_the_shared_runtime() {
 }
 
 #[test]
-fn memory_is_touched_only_in_mem_thunk_and_bridge() {
+fn memory_is_touched_only_in_mem_and_thunk() {
     // Craneliftの命令のうち、メモリを読み書きするものの名前の頭。狭い幅の形 (`uload8`、`istore16`など)、アトミック、
     // スタックの枠への読み書きを含む
     let accesses = [
@@ -331,7 +331,7 @@ fn memory_is_touched_only_in_mem_thunk_and_bridge() {
         found.extend(files_with(&sources, access, false));
     }
     assert!(found.iter().any(|path| path == "mem.rs"));
-    found.retain(|path| !["mem.rs", "thunk.rs", "bridge.rs"].contains(&path.as_str()));
+    found.retain(|path| !["mem.rs", "thunk.rs"].contains(&path.as_str()));
     assert!(
         found.is_empty(),
         "memory is loaded or stored in {found:?} ({NATIVE})"
@@ -358,7 +358,13 @@ fn code_cites_only_spec_and_implementation() {
     let docs = ["docs", ""].join("/");
     let mut cited = 0;
     let mut found = Vec::new();
-    for name in ["eml_native", "eml_nrt", "eml_sched", "eml_rows"] {
+    for name in [
+        "eml_native",
+        "eml_nrt",
+        "eml_sched",
+        "eml_rows",
+        "eml_clink",
+    ] {
         let mut paths = Vec::new();
         walk(&crate_dir(name), &mut paths);
         for path in paths {
@@ -423,20 +429,20 @@ fn frame_pointers_are_set_only_in_abi() {
 }
 
 #[test]
-fn flags_are_built_only_in_abi_and_bridge() {
+fn flags_are_built_only_in_abi() {
     assert_eq!(
         files_with(&native(), "settings::builder", false),
-        ["abi.rs", "bridge.rs"],
-        "settings::builder appears only in abi.rs and bridge.rs ({NATIVE})"
+        ["abi.rs"],
+        "settings::builder appears only in abi.rs ({NATIVE})"
     );
 }
 
 #[test]
-fn indirect_calls_are_only_in_bridge_apply_and_thunk() {
+fn indirect_calls_are_only_in_apply_and_thunk() {
     assert_eq!(
         files_with(&native(), "call_indirect", false),
-        ["bridge.rs", "lower/apply.rs", "thunk.rs"],
-        "call_indirect appears only in bridge.rs, lower/apply.rs and thunk.rs ({NATIVE})"
+        ["lower/apply.rs", "thunk.rs"],
+        "call_indirect appears only in lower/apply.rs and thunk.rs ({NATIVE})"
     );
 }
 
