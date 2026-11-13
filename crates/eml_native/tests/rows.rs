@@ -6,8 +6,8 @@ use eml_lir::Repr;
 use eml_native::Arg;
 use eml_native::rows::INLINE;
 use eml_nrt::RunFault;
-use eml_rows::rows as shared;
-use eml_rt::{Control, Ctx, Fast, Limits};
+use eml_rows::rows::{self, Value};
+use eml_rt::{Control, Ctx, Fast, Limits, Word};
 
 use crate::common::native::{agree, clif, host, machine, native_options, program};
 
@@ -159,52 +159,6 @@ fn floats() -> [f64; 10] {
     ]
 }
 
-/// インラインの行の共有の関数。行の最初の変種の名前を持つ`eml_rows::rows`の関数で、VMの側もそれを呼ぶ。
-#[derive(Clone, Copy)]
-enum Shared {
-    Int(unsafe fn(&mut Ctx<Fast>, i64) -> Result<i64, RunFault>),
-    IntInt(unsafe fn(&mut Ctx<Fast>, i64, i64) -> Result<i64, RunFault>),
-    Float(unsafe fn(&mut Ctx<Fast>, f64) -> Result<f64, RunFault>),
-    FloatFloat(unsafe fn(&mut Ctx<Fast>, f64, f64) -> Result<f64, RunFault>),
-    FloatCmp(unsafe fn(&mut Ctx<Fast>, f64, f64) -> Result<i64, RunFault>),
-}
-
-/// 行の共有の関数。表にない行は`None`で、テストを落とす。
-fn shared_of(ext: Extern) -> Option<Shared> {
-    use Extern::*;
-    use Shared::*;
-    Some(match ext {
-        IntAdd => IntInt(shared::IntAdd::<Fast>),
-        IntSub => IntInt(shared::IntSub::<Fast>),
-        IntMul => IntInt(shared::IntMul::<Fast>),
-        IntDiv | ByteDiv => IntInt(shared::IntDiv::<Fast>),
-        IntMod | ByteMod => IntInt(shared::IntMod::<Fast>),
-        IntNeg => Int(shared::IntNeg::<Fast>),
-        IntEq | CharEq | ByteEq => IntInt(shared::IntEq::<Fast>),
-        IntNe | CharNe | ByteNe => IntInt(shared::IntNe::<Fast>),
-        IntLt | CharLt | ByteLt => IntInt(shared::IntLt::<Fast>),
-        IntLe | CharLe | ByteLe => IntInt(shared::IntLe::<Fast>),
-        IntGt | CharGt | ByteGt => IntInt(shared::IntGt::<Fast>),
-        IntGe | CharGe | ByteGe => IntInt(shared::IntGe::<Fast>),
-        IntCompare | CharCompare | ByteCompare => IntInt(shared::IntCompare::<Fast>),
-        CharToInt | ByteToInt | CharOfByte => Int(shared::CharToInt::<Fast>),
-        FloatAdd => FloatFloat(shared::FloatAdd::<Fast>),
-        FloatSub => FloatFloat(shared::FloatSub::<Fast>),
-        FloatMul => FloatFloat(shared::FloatMul::<Fast>),
-        FloatDiv => FloatFloat(shared::FloatDiv::<Fast>),
-        FloatNeg => Float(shared::FloatNeg::<Fast>),
-        FloatEq => FloatCmp(shared::FloatEq::<Fast>),
-        FloatNe => FloatCmp(shared::FloatNe::<Fast>),
-        FloatLt => FloatCmp(shared::FloatLt::<Fast>),
-        FloatLe => FloatCmp(shared::FloatLe::<Fast>),
-        FloatGt => FloatCmp(shared::FloatGt::<Fast>),
-        FloatGe => FloatCmp(shared::FloatGe::<Fast>),
-        BoolEq => IntInt(shared::BoolEq::<Fast>),
-        BoolNe => IntInt(shared::BoolNe::<Fast>),
-        _ => return None,
-    })
-}
-
 fn repr_text(repr: Repr) -> &'static str {
     match repr {
         Repr::Int => "int",
@@ -241,48 +195,62 @@ fn one_row_functions() -> String {
     text
 }
 
-/// 行の引数の組と、共有の関数の答え。
-fn cases(shared: Shared) -> Vec<(Vec<Arg>, Result<Arg, RunFault>)> {
-    let mut ctx = Ctx::<Fast>::new(std::sync::Arc::new(Control::new(Limits::default())), host());
-    let ctx = &mut ctx;
-    let mut cases = Vec::new();
-    // SAFETY: インラインの行は物体を取らず、`ctx`を使わない
-    unsafe {
-        match shared {
-            Shared::Int(f) => {
-                for a in INTS {
-                    cases.push((vec![Arg::I64(a)], f(ctx, a).map(Arg::I64)));
-                }
-            }
-            Shared::IntInt(f) => {
-                for a in INTS {
-                    for b in INTS {
-                        cases.push((vec![Arg::I64(a), Arg::I64(b)], f(ctx, a, b).map(Arg::I64)));
-                    }
-                }
-            }
-            Shared::Float(f) => {
-                for a in floats() {
-                    cases.push((vec![Arg::F64(a)], f(ctx, a).map(Arg::F64)));
-                }
-            }
-            Shared::FloatFloat(f) => {
-                for a in floats() {
-                    for b in floats() {
-                        cases.push((vec![Arg::F64(a), Arg::F64(b)], f(ctx, a, b).map(Arg::F64)));
-                    }
-                }
-            }
-            Shared::FloatCmp(f) => {
-                for a in floats() {
-                    for b in floats() {
-                        cases.push((vec![Arg::F64(a), Arg::F64(b)], f(ctx, a, b).map(Arg::I64)));
-                    }
-                }
-            }
-        }
+/// `eml_rows::rows::call`へ渡す行の引数。VMの側も同じ`call`で行を流す。
+struct Args<'a>(&'a [Arg]);
+
+impl rows::Args for Args<'_> {
+    fn word(&self, i: usize) -> Word {
+        panic!("an inline row takes no word, argument {i}")
     }
-    cases
+
+    fn int(&self, i: usize) -> i64 {
+        let Arg::I64(n) = self.0[i] else {
+            panic!("argument {i} is not an int")
+        };
+        n
+    }
+
+    fn float(&self, i: usize) -> f64 {
+        let Arg::F64(x) = self.0[i] else {
+            panic!("argument {i} is not a float")
+        };
+        x
+    }
+}
+
+/// 行の引数の組と、共有の関数の答え。
+fn cases(ext: Extern) -> Vec<(Vec<Arg>, Result<Arg, RunFault>)> {
+    let mut ctx = Ctx::<Fast>::new(std::sync::Arc::new(Control::new(Limits::default())), host());
+    let mut combos: Vec<Vec<Arg>> = vec![Vec::new()];
+    for &repr in ext.row().params {
+        let values: Vec<Arg> = match repr {
+            Repr::Float => floats().into_iter().map(Arg::F64).collect(),
+            _ => INTS.into_iter().map(Arg::I64).collect(),
+        };
+        combos = combos
+            .into_iter()
+            .flat_map(|combo| {
+                values.iter().map(move |&v| {
+                    let mut next = combo.clone();
+                    next.push(v);
+                    next
+                })
+            })
+            .collect();
+    }
+    combos
+        .into_iter()
+        .map(|args| {
+            // SAFETY: インラインの行は物体を取らず、`ctx`を使わない
+            let result =
+                unsafe { rows::call(ext, &mut ctx, &Args(&args)) }.map(|value| match value {
+                    Value::Int(n) => Arg::I64(n),
+                    Value::Float(x) => Arg::F64(x),
+                    Value::Word(w) => panic!("`{ext:?}` gives the word {w:?}"),
+                });
+            (args, result)
+        })
+        .collect()
 }
 
 /// 値のビット。`F64`は`to_bits`で比べるので、NaNの中身と`-0.0`も区別する。
@@ -306,8 +274,8 @@ struct Case {
 fn every_case() -> Vec<Case> {
     let mut all = Vec::new();
     for (i, &(ext, _)) in INLINE.iter().enumerate() {
-        let shared = shared_of(ext).unwrap_or_else(|| panic!("`{ext:?}` has no shared function"));
-        for (args, expected) in cases(shared) {
+        assert!(rows::SHARED.contains(&ext), "`{ext:?}` has no shared body");
+        for (args, expected) in cases(ext) {
             all.push(Case {
                 ext,
                 name: format!("r{i}"),

@@ -60,6 +60,21 @@ eml_nrt::entries! {
         -1
     }
 
+    plain fn eml_t_echo_f_f(ctx, a: f64) -> f64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe { *out = a.to_bits() };
+        -1.5
+    }
+
+    plain fn eml_t_echo_ff_i(ctx, a: f64, b: f64) -> i64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe {
+            *out = a.to_bits();
+            *out.add(1) = b.to_bits();
+        }
+        -2
+    }
+
     plain fn eml_t_echo_ff_f(ctx, a: f64, b: f64) -> f64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
@@ -272,7 +287,8 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
         assert_eq!(r, Ok(()), "{}", entry.symbol);
         assert_eq!(seen, sent, "{}", entry.symbol);
         match entry.symbol {
-            "eml_t_echo_ii_i" => assert_eq!(argv[0] as i64, -2),
+            "eml_t_echo_ii_i" | "eml_t_echo_ff_i" => assert_eq!(argv[0] as i64, -2),
+            "eml_t_echo_f_f" => assert_eq!(f64::from_bits(argv[0]), -1.5),
             "eml_t_echo_iii_i" => assert_eq!(argv[0] as i64, -3),
             "eml_t_echo_obj_tobj" => assert_eq!(
                 eml_rt::Word::from_bits(argv[0] as usize),

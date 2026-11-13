@@ -163,11 +163,12 @@ macro_rules! __entry {
 
 /// エントリの関数と記述子の表を一緒に宣言する。宣言が1つなので、関数と、生成したコードが作る呼び出しの型が食い違わない
 /// (docs/spec/native.md の「記述子の表」)。結果の`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、
-/// 安定版のRustでは`R`に`!`を書けないためである。
+/// 安定版のRustでは`R`に`!`を書けないためである。`const NAME = "接頭辞";`の形では、記号は接頭辞に関数の識別子を
+/// 続けたものになり、`const NAME;`の形では識別子そのものになる。
 #[macro_export]
 macro_rules! entries {
     (
-        $(#[$tm:meta])* $tv:vis const $table:ident;
+        $(#[$tm:meta])* $tv:vis const $table:ident = $prefix:literal;
         $(
             $(#[$m:meta])*
             $v:vis $form:ident fn $name:ident($ctx:ident $(, $p:ident : $t:tt)* $(,)?) $(-> $r:tt)? $body:block
@@ -180,13 +181,16 @@ macro_rules! entries {
         $tv const $table: &[$crate::Entry] = &[
             $(
                 $crate::Entry {
-                    symbol: stringify!($name),
+                    symbol: concat!($prefix, stringify!($name)),
                     address: || $name as *const u8,
                     params: &[$($crate::__kind!($t)),*],
                     result: $crate::__result!($($r)?),
                 },
             )*
         ];
+    };
+    ($(#[$tm:meta])* $tv:vis const $table:ident; $($rest:tt)*) => {
+        $crate::entries! { $(#[$tm])* $tv const $table = ""; $($rest)* }
     };
 }
 
@@ -756,23 +760,35 @@ mod tests {
 
     #[test]
     fn every_row_entry_is_named_after_its_variant() {
-        use eml_rows::rows::{LISTED, Section};
-        let mut expected: Vec<String> = LISTED
+        use eml_extern::{OpRet, Repr};
+        use eml_rows::rows::SHARED;
+        let kind = |repr: Repr| match repr {
+            Repr::Float => Kind::F64,
+            _ => Kind::I64,
+        };
+        let rows: Vec<_> = SHARED
             .iter()
-            .filter(|l| !l.inline && matches!(l.section, Section::Generic | Section::Dedicated))
-            .map(|l| format!("eml_x_{:?}", l.row))
+            .chain(&[eml_extern::Extern::Exit, eml_extern::Extern::Panic])
+            .map(|row| {
+                let desc = row.row();
+                let params: Vec<Kind> = desc.params.iter().map(|&r| kind(r)).collect();
+                let result = match desc.ret {
+                    OpRet::Never => None,
+                    OpRet::Repr(r) => Some(kind(r)),
+                };
+                (format!("eml_x_{row:?}"), params, result)
+            })
             .collect();
-        expected.extend(["eml_x_Exit".to_string(), "eml_x_Panic".to_string()]);
-        let symbols: Vec<&str> = crate::rows::ROWS.iter().map(|e| e.symbol).collect();
-        assert_eq!(symbols, expected);
-        for l in LISTED.iter().filter(|l| l.entry.is_some()) {
-            assert_eq!(l.entry, Some(format!("eml_x_{:?}", l.row).as_str()));
-        }
+        let entries: Vec<_> = crate::rows::ROWS
+            .iter()
+            .map(|e| (e.symbol.to_string(), e.params.to_vec(), e.result))
+            .collect();
+        assert_eq!(entries, rows);
     }
 
     #[test]
     fn x_println_parks_a_write_failure() {
-        use crate::rows::eml_x_Println;
+        use crate::rows::Println;
         let host = StdHost::new(
             Box::new(Broken),
             Box::new(std::io::sink()),
@@ -785,7 +801,7 @@ mod tests {
         // SAFETY: 上と同じ。行は文字列の参照を受け取り、書けなくても手放す
         unsafe {
             let line = (*c).fresh_string("hello");
-            assert_eq!(eml_x_Println(c, line), Word::UNIT.bits() as i64);
+            assert_eq!(Println(c, line), Word::UNIT.bits() as i64);
             let fault = c.cast::<u8>().add(eml_rt::CTX_FAULT).cast::<u64>().read();
             assert_ne!(fault, 0);
             assert!(matches!((*c).take_fault(), Some(Fault::Output(_))));
@@ -795,13 +811,13 @@ mod tests {
 
     #[test]
     fn x_str_concat_returns() {
-        use crate::rows::eml_x_StrConcat;
+        use crate::rows::StrConcat;
         let mut ctx = ctx();
         let c: *mut Ctx<Fast> = &mut *ctx;
         // SAFETY: 上と同じ。行は両辺の参照を受け取り、結果の参照を返す
         unsafe {
             let (a, b) = ((*c).fresh_string("ab"), (*c).fresh_string("cd"));
-            let joined = eml_x_StrConcat(c, a, b);
+            let joined = StrConcat(c, a, b);
             assert_eq!((*c).copy_string(joined, usize::MAX), Ok("abcd".to_string()));
             assert_eq!((*c).take_fault(), None);
             assert_eq!(live(&mut *c), []);
@@ -809,28 +825,69 @@ mod tests {
     }
 
     #[test]
-    fn x_float_mod() {
-        use crate::rows::eml_x_FloatMod;
+    fn x_int_add_parks_an_overflow() {
+        use crate::rows::IntAdd;
         let mut ctx = ctx();
         let c: *mut Ctx<Fast> = &mut *ctx;
         // SAFETY: 上と同じ
         unsafe {
-            assert_eq!(eml_x_FloatMod(c, 7.5, 2.0), 1.5);
-            assert!(eml_x_FloatMod(c, 1.0, 0.0).is_nan());
+            assert_eq!(IntAdd(c, 1, 2), 3);
+            assert_eq!((*c).take_fault(), None);
+            assert_eq!(IntAdd(c, i64::MAX, 1), 0);
+            let fault = c.cast::<u8>().add(eml_rt::CTX_FAULT).cast::<u64>().read();
+            assert_ne!(fault, 0);
+            assert_eq!(
+                (*c).take_fault(),
+                Some(Fault::Arith(ArithFault::IntegerOverflow))
+            );
+        }
+    }
+
+    #[test]
+    fn x_str_eq_returns_an_enum() {
+        use crate::rows::StrEq;
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。行は両辺を借りるので、テストは後で自分の参照を手放す
+        unsafe {
+            let (a, b, d) = (
+                (*c).fresh_string("ab"),
+                (*c).fresh_string("ab"),
+                (*c).fresh_string("cd"),
+            );
+            assert_eq!(StrEq(c, a, b), 1);
+            assert_eq!(StrEq(c, a, d), 0);
+            assert_eq!((*c).take_fault(), None);
+            for s in [a, b, d] {
+                (*c).copy_string(s, usize::MAX).unwrap();
+            }
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn x_float_mod() {
+        use crate::rows::FloatMod;
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ
+        unsafe {
+            assert_eq!(FloatMod(c, 7.5, 2.0), 1.5);
+            assert!(FloatMod(c, 1.0, 0.0).is_nan());
             assert_eq!((*c).take_fault(), None);
         }
     }
 
     #[test]
     fn x_exit_starts_the_abort_and_returns() {
-        use crate::rows::eml_x_Exit;
+        use crate::rows::Exit;
         let mut ctx = ctx();
         let c: *mut Ctx<Fast> = &mut *ctx;
         // SAFETY: 上と同じ。workerの構造体は`with_worker`が置き、その前提を満たす。`exit_abort`は速いモードで失敗せず、
         // 呼び出しは致命的な誤りの道を通らないので、`enter`の中でなくてよい
         unsafe {
             let exit = with_worker(c, |worker| {
-                eml_x_Exit(c, 3);
+                Exit(c, 3);
                 (*worker).exit
             });
             assert_eq!(exit, Some(3));
@@ -844,7 +901,7 @@ mod tests {
 
     #[test]
     fn x_panic_parks_the_message_and_returns() {
-        use crate::rows::eml_x_Panic;
+        use crate::rows::Panic;
         let mut ctx = ctx();
         let c: *mut Ctx<Fast> = &mut *ctx;
         // SAFETY: 上と同じ。workerの構造体は`with_worker`が置き、その前提を満たす。`park_panic`は失敗せず、呼び出しは
@@ -852,7 +909,7 @@ mod tests {
         unsafe {
             let message = (*c).fresh_string("boom");
             let parked = with_worker(c, |worker| {
-                eml_x_Panic(c, message);
+                Panic(c, message);
                 (*worker).panic.take()
             });
             assert_eq!(parked, Some(message));

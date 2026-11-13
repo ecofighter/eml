@@ -1,5 +1,5 @@
 //! stdのexternの行のエントリ`eml_x_*` (docs/spec/native.md の「externの失敗」)。行の一覧`extern_rows!`の展開`entries`が、
-//! `inline`でない行の変種ごとに、共有の行の関数を呼ぶ`shim`のエントリを作る。`Exit`と`Panic`はエンジンごとに違うので、
+//! 組`rows`の変種ごとに、共有の行の関数を呼ぶ`shim`のエントリを作る。`Exit`と`Panic`はエンジンごとに違うので、
 //! ここで手で書く。
 #![allow(unsafe_code)]
 
@@ -48,78 +48,26 @@ macro_rules! placeholder {
     };
 }
 
-/// 一覧の展開。`inline`の行を飛ばし、ほかの行の変種ごとに1つのエントリを作る。行の本体は読まず、一覧の最初の変種の
-/// 名前の行の関数を`$rows`から呼ぶ。本体は`eml_rows`の中の名前を修飾せずに書くためである。作ったエントリは、
-/// 最後に`$done!`へ渡して1つの表にする。
-macro_rules! entries {
-    (
-        generic { $($generic:tt)* }
-        dedicated { $($dedicated:tt)* }
-        engine { $($engine:tt)* }
-        lir { $($lir:tt)* }
-        task { $($task:tt)* }
-    ) => {
-        entries!(@lines [eml_rows::rows] rows_table [] $($generic)* $($dedicated)*);
-    };
-    (@lines [$($rows:ident)::+] $done:ident [$($acc:tt)*]) => {
-        $done! { $($acc)* }
-    };
-    (@lines $rows:tt $done:ident $acc:tt
-        inline fn $first:ident $(| $rest:ident)* ( $ctx:tt $(, $arg:ident : $kind:tt)* ) -> $ret:tt $body:block
-        $($tail:tt)*
-    ) => {
-        entries!(@lines $rows $done $acc $($tail)*);
-    };
-    (@lines $rows:tt $done:ident $acc:tt
-        fn $first:ident as $entry:ident $(| $rest:ident as $rest_entry:ident)*
-        ( $ctx:tt $(, $arg:ident : $kind:tt)* ) -> $ret:tt $body:block
-        $($tail:tt)*
-    ) => {
-        entries!(@variants $rows $done $acc $first [$first $entry $(, $rest $rest_entry)*]
-            ($($arg : $kind),*) $ret [$($tail)*]);
-    };
-    (@variants $rows:tt $done:ident $acc:tt $first:ident [] $args:tt $ret:tt [$($tail:tt)*]) => {
-        entries!(@lines $rows $done $acc $($tail)*);
-    };
-    (@variants [$($rows:ident)::+] $done:ident [$($acc:tt)*] $first:ident
-        [$variant:ident $entry:ident $(, $more:ident $more_entry:ident)*]
-        ($($arg:ident : $kind:tt),*) $ret:tt $tail:tt
-    ) => {
-        entries!(@variants [$($rows)::+] $done [
-            $($acc)*
-            #[allow(non_snake_case)]
-            pub(crate) shim fn $entry(ctx $(, $arg: $kind)*) -> $ret {
-                // SAFETY: 生成したコードは、行の関数が求めるとおりの語を渡す (docs/spec/lir.md の「extern の借用」)
-                match unsafe { $($rows)::+::$first(ctx $(, $arg)*) } {
-                    Ok(value) => Ok(entry_value!($ret, value)),
-                    Err(::eml_sched::error::RunFault::Extern(fault))
-                        if const { ::eml_extern::Extern::$variant.row().faults } =>
-                    {
-                        let previous = ctx.set_fault(fault);
-                        debug_assert!(previous.is_none(), "a fault was already parked");
-                        Ok(placeholder!($ret))
-                    }
-                    // 内部の類の誤りは、`Err`が`shim`に届く前にworkerの構造体へ移す (docs/spec/native.md の「externの失敗」)
-                    // SAFETY: 行のエントリは、`ctx.runtime()`が生きている`Worker`を指し、呼び出しの間ほかの誰もそれに
-                    // 触れないときだけ呼ぶ (docs/spec/native.md の「実行の始めと終わり」)
-                    Err(error) => Err(unsafe { $crate::worker::record(ctx, error, None) }),
-                }
-            }
-        ] $first [$($more $more_entry),*] ($($arg : $kind),*) $ret $tail);
+/// 行の関数の道。`$path`は道を1つのトークン木で持ち、変種の繰り返しの中でも使えるようにする。
+macro_rules! row_fn {
+    ([$($path:ident)::+] $first:ident) => {
+        $($path)::+::$first
     };
 }
 
-/// 一覧のエントリに`Exit`と`Panic`を足して、表`ROWS`にする。
-macro_rules! rows_table {
-    ($($rows:tt)*) => {
-        crate::entries! {
-            pub(crate) const ROWS;
-
-            $($rows)*
-
+/// 一覧の展開。`rows`の変種ごとに1つのエントリを作り、`Exit`と`Panic`を足して表`ROWS`にする。ほかの組はエントリを
+/// 持たない。
+///
+/// `@table`の形は、`$lines`の変種ごとに1つのエントリを作り、`$extra`とともに表`$table`に入れる。記号は`$prefix`に変種の
+/// 名前を続けたものである。エントリは本体を読まず、一覧の最初の変種の名前の行の関数を`$path`から呼ぶ。本体は`eml_rows`の
+/// 中の名前を修飾せずに書くためである。テストは自分の行を渡して、自分の表を作る。展開は`eml_rows`の`defs`と同じく再帰せず
+/// 3段で進み、行の引数の組は1つのトークン木で渡して、変種の繰り返しの中で初めて引数に分ける。
+macro_rules! entries {
+    (rows { $($lines:tt)* } engine $engine:tt lir $lir:tt task $task:tt pending $pending:tt) => {
+        entries!(@table [pub(crate)] ROWS "eml_x_" [eml_rows::rows] [
             /// 終了コードをworkerの構造体に置き、`exit`の中断を始めて戻る。生成したコードは、戻った後で巻き戻しへ分岐する。
             #[allow(non_snake_case)]
-            pub(crate) shim fn eml_x_Exit(ctx, code: int) -> never {
+            pub(crate) shim fn Exit(ctx, code: int) -> never {
                 // SAFETY: 行のエントリは、`ctx.runtime()`が生きている`Worker`を指し、呼び出しの間ほかの誰もそれに触れない
                 // ときだけ呼ぶ (docs/spec/native.md の「実行の始めと終わり」)
                 let worker = unsafe { worker::of(ctx) };
@@ -133,13 +81,52 @@ macro_rules! rows_table {
             /// メッセージをworkerの構造体に置いて戻る。`message`の参照はworkerの構造体へ移るので、生成したコードは
             /// 呼び出しの後でこれを手放さない。
             #[allow(non_snake_case)]
-            pub(crate) shim fn eml_x_Panic(ctx, message: obj) -> never {
+            pub(crate) shim fn Panic(ctx, message: obj) -> never {
                 // SAFETY: 行のエントリは、`ctx.runtime()`が生きている`Worker`を指し、呼び出しの間ほかの誰もそれに触れない
                 // ときだけ呼ぶ (docs/spec/native.md の「実行の始めと終わり」)。
                 // 生成したコードは、生きている文字列の参照を1つ渡し、その後この語を使わない。失敗を置いたままでは呼ばない
                 unsafe { worker::park_panic(ctx, message) };
                 Ok::<(), Fatal>(())
             }
+        ] $($lines)*);
+    };
+    (@table [$($vis:tt)*] $table:ident $prefix:literal [$($path:ident)::+] [$($extra:tt)*]
+        $(fn $first:ident $(| $rest:ident)* ( $($sig:tt)* ) -> $ret:tt $body:block)*
+    ) => {
+        entries!(@variants [$($vis)* $table $prefix [$($path)::+] [$($extra)*]]
+            $($first [$first $($rest)*] ($($sig)*) $ret)*);
+    };
+    (@variants $head:tt $($first:ident [$($variant:ident)*] $sig:tt $ret:tt)*) => {
+        entries!(@shims $head $($($variant $first $sig $ret)*)*);
+    };
+    (@shims [$vis:vis $table:ident $prefix:literal $path:tt [$($extra:tt)*]]
+        $($variant:ident $first:ident ($ctx:tt $(, $arg:ident : $kind:tt)*) $ret:tt)*
+    ) => {
+        crate::entries! {
+            $vis const $table = $prefix;
+
+            $(
+                #[allow(non_snake_case)]
+                $vis shim fn $variant(ctx $(, $arg: $kind)*) -> $ret {
+                    // SAFETY: 生成したコードは、行の関数が求めるとおりの語を渡す (docs/spec/lir.md の「extern の借用」)
+                    match unsafe { row_fn!($path $first)(ctx $(, $arg)*) } {
+                        Ok(value) => Ok(entry_value!($ret, value)),
+                        Err(::eml_sched::error::RunFault::Extern(fault))
+                            if const { ::eml_extern::Extern::$variant.row().faults } =>
+                        {
+                            let previous = ctx.set_fault(fault);
+                            debug_assert!(previous.is_none(), "a fault was already parked");
+                            Ok(placeholder!($ret))
+                        }
+                        // 内部の類の誤りは、`Err`が`shim`に届く前にworkerの構造体へ移す (docs/spec/native.md の「externの失敗」)
+                        // SAFETY: 行のエントリは、`ctx.runtime()`が生きている`Worker`を指し、呼び出しの間ほかの誰もそれに
+                        // 触れないときだけ呼ぶ (docs/spec/native.md の「実行の始めと終わり」)
+                        Err(error) => Err(unsafe { $crate::worker::record(ctx, error, None) }),
+                    }
+                }
+            )*
+
+            $($extra)*
         }
     };
 }
@@ -168,24 +155,15 @@ mod fatal {
         }
     }
 
-    macro_rules! test_table {
-        ($($rows:tt)*) => {
-            crate::entries! {
-                const TEST_ROWS;
-                $($rows)*
-            }
-        };
-    }
-
-    entries!(@lines [test_rows] test_table []
-        fn IntShow as eml_x_IntShow(ctx, n: int) -> obj {
+    entries!(@table [] TEST_ROWS "eml_t_" [test_rows] []
+        fn IntShow(ctx, n: int) -> obj {
             Err(RunFault::Internal("a test row failed"))
         }
     );
 
     unsafe extern "C" fn call_row(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
         // SAFETY: `enter`は生きている`Ctx`を渡し、`argv`はテストの語を指す。エントリは戻らない
-        unsafe { *argv = eml_x_IntShow(ctx, 5).bits() as u64 };
+        unsafe { *argv = IntShow(ctx, 5).bits() as u64 };
     }
 
     #[test]

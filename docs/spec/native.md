@@ -19,7 +19,7 @@
 
 ### 記述子の表
 
-- `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`Entry`の欄は、`symbol` (関数の識別子)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
+- `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`const NAME = "接頭辞";`の形では、エントリの記号は接頭辞に関数の識別子を続けたものになり、`const NAME;`の形では識別子そのものになる。`Entry`の欄は、`symbol` (記号)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
 - `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`のRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`も受ける。その`Kind`は`I64`で、Rustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
 - エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は5つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`closures.rs`の`CLOSURES`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
 - 生成したコードは、エントリを記号で取り込み、呼び出しの型を行だけから作る。宣言が1つなので、関数と呼び出しの型が食い違うことはない
@@ -201,12 +201,12 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## externの失敗
 
-行のエントリ`eml_x_<Variant>`は、`eml_nrt/src/rows.rs`の表`ROWS`にある。行の一覧`extern_rows!` (`eml_rows/src/rows.rs`) の展開`entries`が、`inline`の印のない行の変種ごとに`shim`のエントリを1つ作る。エントリの識別子は行の`as`の識別子で、`eml_x_`に変種の名前を続けたものである。引数と結果の種類は、行の種類のトークンをそのまま使う。エントリは行の本体を読まず、行の最初の変種の名前を持つ`eml_rows::rows`の行の関数を呼ぶ。だから行の実装は、どちらのエンジンでも1つである。
+行のエントリ`eml_x_<Variant>`は、`eml_nrt/src/rows.rs`の表`ROWS`にある。行の一覧`extern_rows!` (`eml_rows/src/rows.rs`) の展開`entries`が、組`rows`の変種ごとに`shim`のエントリを1つ作る。一覧は印もエントリの識別子も持たない。表は接頭辞`eml_x_`を持ち、エントリの関数は変種の名前を持つので、記号は`eml_x_`に変種の名前を続けたものになる。引数と結果の種類は、行の種類のトークンをそのまま使う。エントリは行の本体を読まず、行の最初の変種の名前を持つ`eml_rows::rows`の行の関数を呼ぶ。だから行の実装は、どちらのエンジンでも1つである。
 
 - 行の関数が`Ok(v)`を返したら、エントリは`v`を返す。`unit`の行はUnitの語を返し、`never`の行は結果なしでふつうに戻る
 - `Err(RunFault::Extern(fault))`を返し、行の`faults`が真なら、エントリは`ctx.set_fault`でfaultを置き、仮の値 (語の結果ならUnitの語、整数なら0、`float`なら0.0) を返す。生成したコードは呼び出しのすぐ後でfaultの語を確かめ、仮の値を使わない
 - ほかの`Err`は内部の類である。エントリは`worker::record(ctx, fault, None)`でそれを記録して、返った`Fatal`を返し、`shim`は`FATAL_RECORDED`で致命的な誤りの道からrunを終える。誤りは関数を`<native code>`と名指し、位置を持たない。包みの本体は`eml_fatal`を名指さない
-- `eml_x_Exit(ctx, code: int) -> never`と`eml_x_Panic(ctx, message: obj) -> never`は、エンジンごとに違うので手で書く。`eml_x_Exit`は終了コードをworkerの構造体に置き、`exit_abort`で`exit`の中断を始めて戻る。`eml_x_Panic`は`worker::park_panic`でメッセージを置いて戻るので、faultは`Fault::Engine`になる。`eml_x_Panic`は`message`を消費する。呼ぶ側の参照1つがworkerの構造体へ移るので、生成したコードは、地点の後始末も含めて、呼び出しの後で`message`を手放さない
+- `eml_x_Exit(ctx, code: int) -> never`と`eml_x_Panic(ctx, message: obj) -> never`は、エンジンごとに違うので、同じ表に手で書く。`eml_x_Exit`は終了コードをworkerの構造体に置き、`exit_abort`で`exit`の中断を始めて戻る。`eml_x_Panic`は`worker::park_panic`でメッセージを置いて戻るので、faultは`Fault::Engine`になる。`eml_x_Panic`は`message`を消費する。呼ぶ側の参照1つがworkerの構造体へ移るので、生成したコードは、地点の後始末も含めて、呼び出しの後で`message`を手放さない
 - 行のエントリは、サービスと同じく、`run`が入ったコードからだけ呼ぶ
 - 生成したコードは、`rows::CALLED`の行を`eml_x_<Variant>(ctx, 引数...)`の呼び出しに下ろし、各引数を行の引数のReprで作る。戻る`faults`の行の後には「巻き戻しの地点」の`Faults`のコードを、`faults`のない行の後には何も出さない。結果が`never`の行の後には`Never`のコードを出す。`eml_x_Exit`の後は何も上げずに後始末へ進み、`eml_x_Panic`の後は行の純粋さで上げる。`eml_x_Panic`に渡したメッセージは、行が消費するので地点の所有に入らず、後始末はそれを手放さない
 
@@ -220,7 +220,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## 行の下ろし方
 
-`eml_rows::rows`の一覧`extern_rows!`の行は、印`inline`の有無で下ろし方が分かれる。印のある行はエントリを持たず、`Listed`の記録は`inline`が真で`entry`が`None`である。eml_nativeの`rows::INLINE` (「断る形」) は、印のある行の集まりと等しい。印のない行は、エントリ`eml_x_<Variant>`を持つ (「externの失敗」)。eml_nativeの`rows::CALLED`のどの行にもエントリがあり、その記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、行の関数も一覧も再エクスポートしない。eml_nativeのテストは、dev-dependencyの`eml_rows`からこれらを読む。
+`eml_rows::rows`の一覧`extern_rows!`の組`rows`の変種は、どれもエントリ`eml_x_<Variant>`を持つ (「externの失敗」)。一覧は、ネイティブのコードが行をどう下ろすかの印を持たない。どの行を命令に展開するかは、eml_nativeの`rows::INLINE` (「断る形」) だけが決める。その行もエントリを持つが、生成したコードはそれを呼ばない。eml_nativeの`rows::CALLED`のどの行にもエントリがあり、その記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、行の関数も一覧も再エクスポートしない。eml_nativeのテストは、dev-dependencyの`eml_rows`からこれらを読む。
 
 生成したコードは、`rows::INLINE`の行を、その文の位置でCLIFの命令に展開する。結果は、行の共有の関数 (`eml_rows::rows`の関数) の結果とビット単位で等しい。
 

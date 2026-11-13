@@ -291,16 +291,3 @@ fn every_called_row_has_an_entry() {
         );
     }
 }
-
-#[test]
-fn the_inline_table_is_the_marked_set() {
-    let mut marked: Vec<Extern> = eml_rows::rows::LISTED
-        .iter()
-        .filter(|l| l.inline)
-        .map(|l| l.row)
-        .collect();
-    let mut rows: Vec<Extern> = INLINE.iter().map(|&(row, _)| row).collect();
-    marked.sort_by_key(|row| *row as usize);
-    rows.sort_by_key(|row| *row as usize);
-    assert_eq!(rows, marked);
-}

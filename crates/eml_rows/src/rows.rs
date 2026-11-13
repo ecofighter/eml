@@ -1,36 +1,11 @@
 //! extern の行の一覧。どちらのエンジンも行の本体をここの1つのテキストから取るので、行の実装は1つで済む。展開`defs`が
-//! 行ごとの関数を、展開`names`が行の名前と置き場所の表`LISTED`を、同じ一覧から作る。
+//! 一覧から、行ごとの関数と、表`SHARED`と、変種で行を流す関数`call`を作る。`eml_nrt`の展開`entries`は、変種ごとに
+//! ネイティブのエントリを1つ作る (docs/spec/native.md の「externの失敗」)。
 
 use eml_extern::{Extern, FunctionRow, OpRet, Repr};
 use eml_rt::{Ctx, Mode, Stream, Word, externs};
 
 use eml_sched::error::RunFault;
-
-/// 一覧の中の行の置き場所。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Section {
-    /// VMの汎用のextern命令が呼ぶ行で、ネイティブでは呼び出しになる。
-    Generic,
-    /// VMの専用の命令が呼ぶ行。
-    Dedicated,
-    /// 両方のエンジンが手で書く行。
-    Engine,
-    /// extern の呼び出しにならない行。
-    Lir,
-    /// 本体を共有しない、タスクの行。
-    Task,
-}
-
-/// 一覧の1行が持つ、1つの変種の記録。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Listed {
-    pub row: Extern,
-    pub section: Section,
-    /// ネイティブのエントリの名前。`inline`の行と、本体を共有しない節の行は持たない。
-    pub entry: Option<&'static str>,
-    /// ネイティブが命令へ展開する行で、エントリを持たない。
-    pub inline: bool,
-}
 
 const fn repr_eq(a: Repr, b: Repr) -> bool {
     matches!(
@@ -41,7 +16,6 @@ const fn repr_eq(a: Repr, b: Repr) -> bool {
             | (Repr::Float, Repr::Float)
             | (Repr::Enum, Repr::Enum)
             | (Repr::Unit, Repr::Unit)
-            | (Repr::Token, Repr::Token)
     )
 }
 
@@ -70,9 +44,6 @@ macro_rules! arg_ty {
         Word
     };
     (tobj) => {
-        Word
-    };
-    (token) => {
         Word
     };
     (unit) => {
@@ -120,9 +91,6 @@ macro_rules! repr_of {
     (tobj) => {
         Repr::TObj
     };
-    (token) => {
-        Repr::Token
-    };
     (unit) => {
         Repr::Unit
     };
@@ -146,229 +114,499 @@ macro_rules! ret_of {
     };
 }
 
-macro_rules! section_of {
-    (generic) => {
-        Section::Generic
+macro_rules! read_arg {
+    ($args:ident, $i:expr, obj) => {
+        $args.word($i)
     };
-    (dedicated) => {
-        Section::Dedicated
+    ($args:ident, $i:expr, tobj) => {
+        $args.word($i)
     };
-    (engine) => {
-        Section::Engine
+    ($args:ident, $i:expr, unit) => {
+        $args.int($i)
     };
-    (lir) => {
-        Section::Lir
+    ($args:ident, $i:expr, int) => {
+        $args.int($i)
     };
-    (task) => {
-        Section::Task
+    ($args:ident, $i:expr, enum) => {
+        $args.int($i)
+    };
+    ($args:ident, $i:expr, float) => {
+        $args.float($i)
     };
 }
 
-/// 行の一覧。`$site`は一覧を読む展開で、同じ一覧からエンジンごとの表と関数を作る。行は`fn 変種 as エントリ (ctx, 引数: 種類, ..)
-/// -> 種類 { 本体 }`の形で、変種を`|`でつなぐと1つの関数を共有する。`inline`の行はエントリを持たない。エントリの名前は
-/// `macro_rules!`が識別子を作れないので書き下す。
+macro_rules! value_of {
+    (obj, $v:ident) => {
+        Ok(Value::Word($v))
+    };
+    (tobj, $v:ident) => {
+        Ok(Value::Word($v))
+    };
+    (unit, $v:ident) => {{
+        let () = $v;
+        Ok(Value::Word(Word::UNIT))
+    }};
+    (int, $v:ident) => {
+        Ok(Value::Int($v))
+    };
+    (enum, $v:ident) => {
+        Ok(Value::Int($v))
+    };
+    (float, $v:ident) => {
+        Ok(Value::Float($v))
+    };
+    (never, $v:ident) => {
+        match $v {}
+    };
+}
+
+/// 行の一覧。`$site`は一覧を読む展開である。行は`fn 変種(ctx, 引数: 種類, ..) -> 種類 { 本体 }`の形で、変種を`|`で
+/// つなぐと1つの関数を共有する。名前の組は、共有の本体を持たない行を並べる。`engine`は各エンジンが自分で書く行、`lir`は
+/// externの呼び出しにならない行、`task`はタスクの行、`pending`は本体がまだVMにある行である。
 #[macro_export]
 macro_rules! extern_rows {
     ($site:path) => {
         $site! {
-            generic {
-                fn Println as eml_x_Println(ctx, s: obj) -> unit {
+            rows {
+                fn Println(ctx, s: obj) -> unit {
                     ctx.println(Stream::Out, s)?;
                     Ok(())
                 }
-                fn Eprintln as eml_x_Eprintln(ctx, s: obj) -> unit {
+                fn Eprintln(ctx, s: obj) -> unit {
                     ctx.println(Stream::Err, s)?;
                     Ok(())
                 }
-                fn IntShow as eml_x_IntShow(ctx, n: int) -> obj { Ok(ctx.int_show(n)) }
-                fn StrShow as eml_x_StrShow(ctx, s: obj) -> obj { Ok(ctx.string_show(s)?) }
-                fn FloatShow as eml_x_FloatShow(ctx, x: float) -> obj { Ok(ctx.float_show(x)) }
-                fn StrConcat as eml_x_StrConcat(ctx, a: obj, b: obj) -> obj {
-                    Ok(ctx.string_append(a, b)?)
-                }
-                fn StrEq as eml_x_StrEq(ctx, a: obj, b: obj) -> enum { Ok(ctx.string_eq(a, b)?) }
-                fn StrCompare as eml_x_StrCompare(ctx, a: obj, b: obj) -> enum {
-                    Ok(ctx.string_compare(a, b)?)
-                }
-            }
-            dedicated {
-                fn FloatMod as eml_x_FloatMod(_, a: float, b: float) -> float {
-                    Ok(externs::float_rem(a, b))
-                }
-                inline fn IntNeg(_, a: int) -> int { Ok(externs::int_negate(a)?) }
-                inline fn CharToInt | ByteToInt | CharOfByte(_, a: int) -> int { Ok(a) }
-                inline fn FloatNeg(_, a: float) -> float { Ok(externs::float_negate(a)) }
-                inline fn IntAdd(_, a: int, b: int) -> int { Ok(externs::int_add(a, b)?) }
-                inline fn IntSub(_, a: int, b: int) -> int { Ok(externs::int_sub(a, b)?) }
-                inline fn IntMul(_, a: int, b: int) -> int { Ok(externs::int_mul(a, b)?) }
-                inline fn IntDiv | ByteDiv(_, a: int, b: int) -> int {
-                    Ok(externs::int_div(a, b)?)
-                }
-                inline fn IntMod | ByteMod(_, a: int, b: int) -> int {
-                    Ok(externs::int_rem(a, b)?)
-                }
-                inline fn IntEq | CharEq | ByteEq(_, a: int, b: int) -> enum {
-                    Ok(externs::int_eq(a, b))
-                }
-                inline fn IntNe | CharNe | ByteNe(_, a: int, b: int) -> enum {
-                    Ok(externs::int_ne(a, b))
-                }
-                inline fn IntLt | CharLt | ByteLt(_, a: int, b: int) -> enum {
-                    Ok(externs::int_lt(a, b))
-                }
-                inline fn IntLe | CharLe | ByteLe(_, a: int, b: int) -> enum {
-                    Ok(externs::int_le(a, b))
-                }
-                inline fn IntGt | CharGt | ByteGt(_, a: int, b: int) -> enum {
-                    Ok(externs::int_gt(a, b))
-                }
-                inline fn IntGe | CharGe | ByteGe(_, a: int, b: int) -> enum {
-                    Ok(externs::int_ge(a, b))
-                }
-                inline fn IntCompare | CharCompare | ByteCompare(_, a: int, b: int) -> enum {
+                fn IntShow(ctx, n: int) -> obj { Ok(ctx.int_show(n)) }
+                fn StrShow(ctx, s: obj) -> obj { Ok(ctx.string_show(s)?) }
+                fn FloatShow(ctx, x: float) -> obj { Ok(ctx.float_show(x)) }
+                fn StrConcat(ctx, a: obj, b: obj) -> obj { Ok(ctx.string_append(a, b)?) }
+                fn StrEq(ctx, a: obj, b: obj) -> enum { Ok(ctx.string_eq(a, b)?) }
+                fn StrCompare(ctx, a: obj, b: obj) -> enum { Ok(ctx.string_compare(a, b)?) }
+                fn FloatMod(_, a: float, b: float) -> float { Ok(externs::float_rem(a, b)) }
+                fn IntNeg(_, a: int) -> int { Ok(externs::int_negate(a)?) }
+                fn CharToInt | ByteToInt | CharOfByte(_, a: int) -> int { Ok(a) }
+                fn FloatNeg(_, a: float) -> float { Ok(externs::float_negate(a)) }
+                fn IntAdd(_, a: int, b: int) -> int { Ok(externs::int_add(a, b)?) }
+                fn IntSub(_, a: int, b: int) -> int { Ok(externs::int_sub(a, b)?) }
+                fn IntMul(_, a: int, b: int) -> int { Ok(externs::int_mul(a, b)?) }
+                fn IntDiv | ByteDiv(_, a: int, b: int) -> int { Ok(externs::int_div(a, b)?) }
+                fn IntMod | ByteMod(_, a: int, b: int) -> int { Ok(externs::int_rem(a, b)?) }
+                fn IntEq | CharEq | ByteEq(_, a: int, b: int) -> enum { Ok(externs::int_eq(a, b)) }
+                fn IntNe | CharNe | ByteNe(_, a: int, b: int) -> enum { Ok(externs::int_ne(a, b)) }
+                fn IntLt | CharLt | ByteLt(_, a: int, b: int) -> enum { Ok(externs::int_lt(a, b)) }
+                fn IntLe | CharLe | ByteLe(_, a: int, b: int) -> enum { Ok(externs::int_le(a, b)) }
+                fn IntGt | CharGt | ByteGt(_, a: int, b: int) -> enum { Ok(externs::int_gt(a, b)) }
+                fn IntGe | CharGe | ByteGe(_, a: int, b: int) -> enum { Ok(externs::int_ge(a, b)) }
+                fn IntCompare | CharCompare | ByteCompare(_, a: int, b: int) -> enum {
                     Ok(externs::int_compare(a, b))
                 }
-                inline fn FloatAdd(_, a: float, b: float) -> float { Ok(externs::float_add(a, b)) }
-                inline fn FloatSub(_, a: float, b: float) -> float { Ok(externs::float_sub(a, b)) }
-                inline fn FloatMul(_, a: float, b: float) -> float { Ok(externs::float_mul(a, b)) }
-                inline fn FloatDiv(_, a: float, b: float) -> float { Ok(externs::float_div(a, b)) }
-                inline fn FloatEq(_, a: float, b: float) -> enum { Ok(externs::float_eq(a, b)) }
-                inline fn FloatNe(_, a: float, b: float) -> enum { Ok(externs::float_ne(a, b)) }
-                inline fn FloatLt(_, a: float, b: float) -> enum { Ok(externs::float_lt(a, b)) }
-                inline fn FloatLe(_, a: float, b: float) -> enum { Ok(externs::float_le(a, b)) }
-                inline fn FloatGt(_, a: float, b: float) -> enum { Ok(externs::float_gt(a, b)) }
-                inline fn FloatGe(_, a: float, b: float) -> enum { Ok(externs::float_ge(a, b)) }
-                inline fn BoolEq(_, a: enum, b: enum) -> enum { Ok(externs::bool_eq(a, b)) }
-                inline fn BoolNe(_, a: enum, b: enum) -> enum { Ok(externs::bool_ne(a, b)) }
+                fn FloatAdd(_, a: float, b: float) -> float { Ok(externs::float_add(a, b)) }
+                fn FloatSub(_, a: float, b: float) -> float { Ok(externs::float_sub(a, b)) }
+                fn FloatMul(_, a: float, b: float) -> float { Ok(externs::float_mul(a, b)) }
+                fn FloatDiv(_, a: float, b: float) -> float { Ok(externs::float_div(a, b)) }
+                fn FloatEq(_, a: float, b: float) -> enum { Ok(externs::float_eq(a, b)) }
+                fn FloatNe(_, a: float, b: float) -> enum { Ok(externs::float_ne(a, b)) }
+                fn FloatLt(_, a: float, b: float) -> enum { Ok(externs::float_lt(a, b)) }
+                fn FloatLe(_, a: float, b: float) -> enum { Ok(externs::float_le(a, b)) }
+                fn FloatGt(_, a: float, b: float) -> enum { Ok(externs::float_gt(a, b)) }
+                fn FloatGe(_, a: float, b: float) -> enum { Ok(externs::float_ge(a, b)) }
+                fn BoolEq(_, a: enum, b: enum) -> enum { Ok(externs::bool_eq(a, b)) }
+                fn BoolNe(_, a: enum, b: enum) -> enum { Ok(externs::bool_ne(a, b)) }
             }
-            engine {}
-            lir {}
-            task {}
+            engine { Panic, Exit }
+            lir { Par }
+            task {
+                AsyncStartRaw,
+                AsyncStartMainRaw,
+                AsyncStartOffMainRaw,
+                AsyncRunRaw,
+                AsyncPark,
+                AsyncParkTime,
+                AsyncReady,
+                AsyncFinishOk,
+                AsyncFinishIo,
+                AsyncFinishPanic,
+                AsyncTaskCell,
+                AsyncTakeResult,
+                AsyncRunResult,
+                AsyncDetach,
+                AsyncCancelRaw,
+                AsyncStartInRaw,
+                AsyncOpenScope,
+                AsyncCloseScope,
+                AsyncLeaveScope,
+                AsyncCancelScopeRaw,
+                AsyncFailScopeIo,
+                AsyncFailScopePanic,
+                AsyncCancelPoint,
+                AsyncSpendBudget,
+                AsyncShieldEnter,
+                AsyncShieldLeave,
+                AsyncClaimScope,
+                AsyncParkDrain,
+                AsyncCancelMembers,
+                AsyncParkSend,
+                AsyncParkRecv,
+                AsyncParkIo,
+                AsyncParkIoUntil,
+                AsyncParkSignal,
+                AsyncOpReady,
+                AsyncForkJob,
+                AsyncTakeJob,
+                AsyncDropJob,
+                ChanNewRaw,
+                ChanReserveSend,
+                ChanPushRaw,
+                ChanReserveRecv,
+                ChanPopRaw,
+                ChanCloseRaw,
+                AtomicNew,
+                AtomicAdd,
+                AtomicLoad,
+                AtomicStore,
+                NetSubmitListen,
+                NetSubmitAccept,
+                NetSubmitConnect,
+                NetSubmitRead,
+                NetSubmitReadLine,
+                NetSubmitWrite,
+                NetOpListener,
+                NetOpStream,
+                NetOpOutcome,
+                NetOpDone,
+                NetTakeListener,
+                NetTakeStream,
+                NetTakeBytes,
+                NetTakeLine,
+                NetFinish,
+                NetLocalPort,
+                NetPeerAddr,
+                NetSubmitShutdownWrite,
+                NetSubmitSetNodelay,
+                StreamSubmitOpen,
+                StreamSubmitRead,
+                StreamSubmitReadLine,
+                StreamSubmitWrite,
+                StreamOpReader,
+                StreamOpWriter,
+                StreamOpOutcome,
+                StreamOpPrefix,
+                StreamTakeReader,
+                StreamTakeWriter,
+                StreamTakeBytes,
+                StreamTakeLine,
+                StreamTakeLineBytes,
+                StreamFinish,
+                StreamSource,
+                ExecSpawnRaw,
+                ExecStdin,
+                ExecStdout,
+                ExecStderr,
+                ExecStageCount,
+                ExecSubmitWait,
+                ExecOpChild,
+                ExecOpOutcome,
+                ExecOpPrefix,
+                ExecFinish,
+                ExecReap,
+                TlsSubmitClient,
+                TlsSubmitPush,
+                TlsTakeConn,
+                GuiWantRaw,
+                GuiOpenUiRaw,
+                GuiPokeRaw,
+                GuiAbandonRaw,
+                GuiIsGuiTaskRaw,
+            }
+            pending {
+                Open,
+                ReadAll,
+                ReadLine,
+                ReadChunk,
+                ReadAllBytes,
+                ReadLineBytes,
+                Close,
+                CharOfInt,
+                CharShow,
+                CharDisplay,
+                ByteNeg,
+                ByteAdd,
+                ByteSub,
+                ByteMul,
+                ByteDisplay,
+                ByteOfInt,
+                ByteWrap,
+                IntAnd,
+                IntOr,
+                IntXor,
+                IntComplement,
+                IntShl,
+                IntShr,
+                ByteAnd,
+                ByteOr,
+                ByteXor,
+                ByteComplement,
+                ByteShl,
+                ByteShr,
+                FloatCompare,
+                FloatShowsMinus,
+                FloatOfInt,
+                FloatTruncate,
+                FloatFloor,
+                FloatCeil,
+                FloatRound,
+                FloatSqrt,
+                FloatAbs,
+                FloatSin,
+                FloatCos,
+                FloatExp,
+                FloatLog,
+                FloatPow,
+                FloatInfinity,
+                FloatNan,
+                FloatToFixed,
+                FloatCanParse,
+                FloatParseRaw,
+                StrNe,
+                StrByteLength,
+                StrByteAt,
+                StrCharAt,
+                StrSlice,
+                StrPush,
+                StrFindFrom,
+                BytesEmpty,
+                BytesLength,
+                BytesAppend,
+                BytesAppendSlice,
+                BytesSlice,
+                BytesTruncate,
+                BytesOfString,
+                BytesEq,
+                BytesNe,
+                BytesCompare,
+                BytesFindFrom,
+                BytesMake,
+                BytesWithCapacity,
+                BytesGet,
+                BytesSet,
+                BytesPush,
+                BytesFindByte,
+                ShowBytesLength,
+                ShowBytesGet,
+                StringDecode,
+                EnvArgCount,
+                EnvArg,
+                EnvHas,
+                EnvLookup,
+                StdinOpen,
+                StdinClose,
+                StdinReadChunk,
+                StdinReadAllBytes,
+                StdinReadAll,
+                StdinReadLineBytes,
+                StdinReadLine,
+                StdoutOpen,
+                StdoutClose,
+                StdoutWriteBytes,
+                StdoutWrite,
+                StdoutWriteLine,
+                StdoutFlush,
+                StderrOpen,
+                StderrClose,
+                StderrWriteBytes,
+                StderrWrite,
+                StderrWriteLine,
+                FileOutCreate,
+                FileOutAppend,
+                FileOutWrite,
+                FileOutWriteBytes,
+                FileOutWriteLine,
+                FileOutFlush,
+                FileOutCloseRaw,
+                ProcSpawn,
+                ProcWait,
+                ProcCloseStdin,
+                ProcStageCount,
+                ProcWaitStage,
+                ProcWrite,
+                ProcWriteBytes,
+                ProcWriteLine,
+                ProcReadChunk,
+                ProcReadAllBytes,
+                ProcReadAll,
+                ProcReadLineBytes,
+                ProcReadLine,
+                FailIo,
+                ArrayMake,
+                ArrayLength,
+                ArrayGet,
+                ArraySet,
+                ArrayThaw,
+                MutArrayMake,
+                MutArrayEmpty,
+                MutArrayLength,
+                MutArrayRead,
+                MutArrayWrite,
+                MutArrayFreeze,
+                UnboxedArrayLength,
+                UnboxedArrayThaw,
+                MutUnboxedArrayEmpty,
+                MutUnboxedArrayLength,
+                MutUnboxedArrayFreeze,
+                UnboxedArrayMakeFloat,
+                UnboxedArrayMakeInt,
+                UnboxedArrayGetFloat,
+                UnboxedArrayGetInt,
+                UnboxedArraySetFloat,
+                UnboxedArraySetInt,
+                MutUnboxedArrayMakeFloat,
+                MutUnboxedArrayMakeInt,
+                MutUnboxedArrayReadFloat,
+                MutUnboxedArrayReadInt,
+                MutUnboxedArrayWriteFloat,
+                MutUnboxedArrayWriteInt,
+                MutUnboxedArrayFillFloat,
+                MutUnboxedArrayFillInt,
+                CheckIndex,
+                AsyncJobCell,
+                ChanToCell,
+                TlsPushTls,
+                TlsPushEof,
+                TlsPullTls,
+                TlsWritePlain,
+                TlsReadPlain,
+                TlsStatus,
+                TlsErrorMessage,
+                TlsSendCloseNotify,
+                TlsLineReady,
+                TlsTakeLine,
+                GuiCloseUi,
+                GuiBeginWindowRaw,
+                GuiBeginGridRaw,
+                GuiEndRaw,
+                GuiNextCellRaw,
+                GuiCreateRaw,
+                GuiAddItemRaw,
+                GuiSetTextRaw,
+                GuiSetIntRaw,
+                GuiCloseWindowRaw,
+                GuiOpenWindowsRaw,
+                GuiFlushRaw,
+                GuiPollRaw,
+                GuiEventIntRaw,
+                GuiEventTextRaw,
+            }
         }
     };
 }
 
-/// 行ごとに、一覧の最初の変種の名前の関数を1つ作る。変種ごとに、行の種類が`Extern::<変種>.row()`と等しいことをconstで確かめる。
+/// 行の引数。位置と種類で読む。
+pub trait Args {
+    fn word(&self, i: usize) -> Word;
+    fn int(&self, i: usize) -> i64;
+    fn float(&self, i: usize) -> f64;
+}
+
+/// 行の結果を種類で分けたもの。`unit`の行はUnitの語を返す。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Value {
+    Word(Word),
+    Int(i64),
+    Float(f64),
+}
+
+/// 行ごとに、一覧の最初の変種の名前の関数を1つ作る。変種ごとに、行の種類が`Extern::<変種>.row()`と等しいことをconstで
+/// 確かめる。`call`はワイルドカードの腕を持たないので、一覧にない`Extern`の行があるとコンパイルできず、2度並べた変種は
+/// 到達しない形になる。
+///
+/// 展開は再帰せず、3段で進む。行の引数の組は、まずただのトークンとして取って1つのトークン木で渡し、変種ごとの繰り返しが
+/// それぞれの引数を持つところで初めて引数に分ける。変種の繰り返しの中に引数の繰り返しを置くと、2つが歩調を合わせて
+/// 進まなければならないためである。
 macro_rules! defs {
     (
-        generic { $($generic:tt)* }
-        dedicated { $($dedicated:tt)* }
-        engine { $($engine:tt)* }
-        lir { $($lir:tt)* }
-        task { $($task:tt)* }
-    ) => {
-        defs!(@lines $($generic)*);
-        defs!(@lines $($dedicated)*);
-    };
-    (@lines) => {};
-    (@lines
-        inline fn $first:ident $(| $rest:ident)* ( $ctx:tt $(, $arg:ident : $kind:tt)* ) -> $ret:tt $body:block
-        $($tail:tt)*
-    ) => {
-        defs!(@function $first ($ctx $(, $arg : $kind)*) $ret $body);
-        defs!(@check [$($kind)*] $ret $first $($rest)*);
-        defs!(@lines $($tail)*);
-    };
-    (@lines
-        fn $first:ident as $entry:ident $(| $rest:ident as $rest_entry:ident)*
-        ( $ctx:tt $(, $arg:ident : $kind:tt)* ) -> $ret:tt $body:block
-        $($tail:tt)*
-    ) => {
-        defs!(@function $first ($ctx $(, $arg : $kind)*) $ret $body);
-        defs!(@check [$($kind)*] $ret $first $($rest)*);
-        defs!(@lines $($tail)*);
-    };
-    (@function $first:ident ($ctx:tt $(, $arg:ident : $kind:tt)*) $ret:tt $body:block) => {
-        /// # Safety
-        /// 引数の語は生きている物体で、`Ctx`の対応する操作が求める条件を満たす。借りない引数は行が消費する
-        /// (docs/spec/lir.md の「extern の借用」)。
-        #[inline]
-        #[allow(unused_unsafe, non_snake_case)]
-        pub unsafe fn $first<M: Mode>(
-            $ctx: &mut Ctx<M>
-            $(, $arg: arg_ty!($kind))*
-        ) -> Result<ret_ty!($ret), RunFault> {
-            unsafe { $body }
-        }
-    };
-    (@check $kinds:tt $ret:tt) => {};
-    (@check [$($kind:tt)*] $ret:tt $variant:ident $($rest:ident)*) => {
-        const _: () = assert!(kinds_match(
-            Extern::$variant.row(),
-            &[$(repr_of!($kind)),*],
-            ret_of!($ret),
-        ));
-        defs!(@check [$($kind)*] $ret $($rest)*);
-    };
-}
-
-/// 一覧の全変種を、置き場所とエントリの名前とともに`LISTED`に並べる。
-macro_rules! names {
-    (
-        generic { $($generic:tt)* }
-        dedicated { $($dedicated:tt)* }
+        rows { $(fn $first:ident $(| $rest:ident)* ( $($sig:tt)* ) -> $ret:tt $body:block)* }
         engine { $($engine:ident),* $(,)? }
         lir { $($lir:ident),* $(,)? }
         task { $($task:ident),* $(,)? }
+        pending { $($pending:ident),* $(,)? }
     ) => {
-        names!(@go []
-            generic lines [$($generic)*]
-            dedicated lines [$($dedicated)*]
-            engine names [$($engine)*]
-            lir names [$($lir)*]
-            task names [$($task)*]
-        );
+        defs!(@lines [[$($engine)*] [$($lir)*] [$($task)*] [$($pending)*]]
+            $($first [$first $($rest)*] ($($sig)*) $ret $body)*);
     };
-    (@go [$($listed:tt)*]) => {
-        pub const LISTED: &[Listed] = &[$($listed)*];
+    (@lines $groups:tt $($first:ident [$($variant:ident)*] $sig:tt $ret:tt $body:block)*) => {
+        defs!(@functions $($first $sig $ret $body)*);
+        defs!(@checks $($($variant $sig $ret)*)*);
+        defs!(@call $groups $([$($variant)*] $first $sig $ret)*);
     };
-    (@go $listed:tt $section:ident $form:ident [] $($next:tt)*) => {
-        names!(@go $listed $($next)*);
+    (@functions $($first:ident ($ctx:tt $(, $arg:ident : $kind:tt)*) $ret:tt $body:block)*) => {
+        $(
+            /// # Safety
+            /// 引数の語は生きている物体で、`Ctx`の対応する操作が求める条件を満たす。借りない引数は行が消費する
+            /// (docs/spec/lir.md の「extern の借用」)。
+            #[inline]
+            #[allow(unused_unsafe, non_snake_case)]
+            pub unsafe fn $first<M: Mode>(
+                $ctx: &mut Ctx<M>
+                $(, $arg: arg_ty!($kind))*
+            ) -> Result<ret_ty!($ret), RunFault> {
+                unsafe { $body }
+            }
+        )*
     };
-    (@go [$($listed:tt)*] $section:ident lines [
-        inline fn $first:ident $(| $rest:ident)* ( $ctx:tt $(, $arg:ident : $kind:tt)* ) -> $ret:tt $body:block
-        $($tail:tt)*
-    ] $($next:tt)*) => {
-        names!(@go [
-            $($listed)*
-            Listed { row: Extern::$first, section: section_of!($section), entry: None, inline: true },
-            $(Listed { row: Extern::$rest, section: section_of!($section), entry: None, inline: true },)*
-        ] $section lines [$($tail)*] $($next)*);
+    (@checks $($variant:ident ($ctx:tt $(, $arg:ident : $kind:tt)*) $ret:tt)*) => {
+        $(
+            const _: () = assert!(kinds_match(
+                Extern::$variant.row(),
+                &[$(repr_of!($kind)),*],
+                ret_of!($ret),
+            ));
+        )*
+
+        /// 共有の本体を持つ行。一覧の`rows`の変種を、一覧の順に並べる。
+        pub const SHARED: &[Extern] = &[$(Extern::$variant),*];
     };
-    (@go [$($listed:tt)*] $section:ident lines [
-        fn $first:ident as $entry:ident $(| $rest:ident as $rest_entry:ident)*
-        ( $ctx:tt $(, $arg:ident : $kind:tt)* ) -> $ret:tt $body:block
-        $($tail:tt)*
-    ] $($next:tt)*) => {
-        names!(@go [
-            $($listed)*
-            Listed {
-                row: Extern::$first,
-                section: section_of!($section),
-                entry: Some(stringify!($entry)),
-                inline: false,
-            },
-            $(Listed {
-                row: Extern::$rest,
-                section: section_of!($section),
-                entry: Some(stringify!($rest_entry)),
-                inline: false,
-            },)*
-        ] $section lines [$($tail)*] $($next)*);
-    };
-    (@go [$($listed:tt)*] $section:ident names [$first:ident $($rest:ident)*] $($next:tt)*) => {
-        names!(@go [
-            $($listed)*
-            Listed { row: Extern::$first, section: section_of!($section), entry: None, inline: false },
-        ] $section names [$($rest)*] $($next)*);
+    (@call
+        [[$($engine:ident)*] [$($lir:ident)*] [$($task:ident)*] [$($pending:ident)*]]
+        $([$($variant:ident)*] $first:ident ($ctx:tt $(, $arg:ident : $kind:tt)*) $ret:tt)*
+    ) => {
+        /// 行`ext`を引数`args`で流す。共有の本体を持たない行は内部の誤りになる。
+        ///
+        /// # Safety
+        /// 引数は行`ext`の種類に合い、その行の関数が求める条件を満たす。
+        #[deny(unreachable_patterns)]
+        #[allow(unused_mut, unused_variables, unused_assignments)]
+        pub unsafe fn call<M: Mode>(
+            ext: Extern,
+            ctx: &mut Ctx<M>,
+            args: &impl Args,
+        ) -> Result<Value, RunFault> {
+            match ext {
+                $(
+                    $(Extern::$variant)|* => {
+                        let mut at = 0;
+                        $(
+                            let $arg = read_arg!(args, at, $kind);
+                            at += 1;
+                        )*
+                        // SAFETY: 呼ぶ側の約束
+                        let value = unsafe { $first::<M>(ctx $(, $arg)*) }?;
+                        value_of!($ret, value)
+                    }
+                )*
+                $(Extern::$engine)|* => Err(RunFault::Internal("Panic and Exit run in the engine")),
+                $(Extern::$lir)|* => Err(RunFault::Internal("`Std.Par.par` is not an extern instruction")),
+                $(Extern::$task)|* => Err(RunFault::Internal("Async externs run through Op::Async")),
+                $(Extern::$pending)|* => Err(RunFault::Internal("the row has no shared body yet")),
+            }
+        }
     };
 }
 
 extern_rows!(defs);
-extern_rows!(names);
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
 
@@ -391,140 +629,110 @@ mod tests {
         }
     }
 
-    #[test]
-    fn println_writes_a_line() {
-        let out = Capture::default();
+    fn ctx_on(out: Capture) -> Ctx<Fast> {
         let host = StdHost::new(
-            Box::new(out.clone()),
+            Box::new(out),
             Box::new(io::sink()),
             Default::default(),
             Buffering::Line,
         );
-        let mut ctx = Ctx::<Fast>::new(
+        Ctx::<Fast>::new(
             Arc::new(Control::new(Limits::default())),
             HostRef::new(Arc::new(host)),
-        );
+        )
+    }
+
+    #[test]
+    fn println_writes_a_line() {
+        let out = Capture::default();
+        let mut ctx = ctx_on(out.clone());
         let line = ctx.fresh_string("hello");
         unsafe { Println::<Fast>(&mut ctx, line) }.unwrap();
         assert_eq!(out.0.lock().unwrap().as_slice(), b"hello\n");
     }
 
     #[test]
-    fn the_listed_rows_are_the_seed_and_the_inline_rows() {
-        use Extern::*;
-        let generic = [
-            Println, Eprintln, IntShow, StrShow, FloatShow, StrConcat, StrEq, StrCompare,
-        ];
-        let inline = [
-            IntNeg,
-            CharToInt,
-            ByteToInt,
-            CharOfByte,
-            FloatNeg,
-            IntAdd,
-            IntSub,
-            IntMul,
-            IntDiv,
-            ByteDiv,
-            IntMod,
-            ByteMod,
-            IntEq,
-            CharEq,
-            ByteEq,
-            IntNe,
-            CharNe,
-            ByteNe,
-            IntLt,
-            CharLt,
-            ByteLt,
-            IntLe,
-            CharLe,
-            ByteLe,
-            IntGt,
-            CharGt,
-            ByteGt,
-            IntGe,
-            CharGe,
-            ByteGe,
-            IntCompare,
-            CharCompare,
-            ByteCompare,
-            FloatAdd,
-            FloatSub,
-            FloatMul,
-            FloatDiv,
-            FloatEq,
-            FloatNe,
-            FloatLt,
-            FloatLe,
-            FloatGt,
-            FloatGe,
-            BoolEq,
-            BoolNe,
-        ];
-        assert_eq!(inline.len(), 45);
+    fn shared_lists_each_row_with_a_body_once() {
+        let distinct: HashSet<Extern> = SHARED.iter().copied().collect();
+        assert_eq!(distinct.len(), SHARED.len());
+        for row in SHARED {
+            assert!(!row.is_async(), "{row:?}");
+            assert!(
+                !matches!(row, Extern::Par | Extern::Exit | Extern::Panic),
+                "{row:?}"
+            );
+        }
+    }
 
-        let of_section = |section| -> Vec<Listed> {
-            LISTED
-                .iter()
-                .copied()
-                .filter(|l| l.section == section)
-                .collect()
-        };
-        assert_eq!(LISTED.len(), 54);
-        assert!(of_section(Section::Engine).is_empty());
-        assert!(of_section(Section::Lir).is_empty());
-        assert!(of_section(Section::Task).is_empty());
+    /// テストの引数。
+    #[derive(Clone, Copy)]
+    enum Arg {
+        Word(Word),
+        Int(i64),
+        Float(f64),
+    }
 
-        let generic_listed = of_section(Section::Generic);
-        assert_eq!(
-            generic_listed.iter().map(|l| l.row).collect::<Vec<_>>(),
-            generic
-        );
-        for l in &generic_listed {
-            assert!(!l.inline);
-            assert_eq!(l.entry, Some(format!("eml_x_{:?}", l.row).as_str()));
+    struct Slots<'a>(&'a [Arg]);
+
+    impl Args for Slots<'_> {
+        fn word(&self, i: usize) -> Word {
+            let Arg::Word(w) = self.0[i] else {
+                panic!("argument {i} is not a word")
+            };
+            w
         }
 
-        let dedicated = of_section(Section::Dedicated);
-        let (called, inlined): (Vec<Listed>, Vec<Listed>) =
-            dedicated.iter().partition(|l| !l.inline);
-        assert_eq!(called.len(), 1);
-        assert_eq!(called[0].row, FloatMod);
-        assert_eq!(called[0].entry, Some("eml_x_FloatMod"));
-        let mut listed_inline: Vec<Extern> = inlined.iter().map(|l| l.row).collect();
-        for l in &inlined {
-            assert_eq!(l.entry, None);
+        fn int(&self, i: usize) -> i64 {
+            let Arg::Int(n) = self.0[i] else {
+                panic!("argument {i} is not an int")
+            };
+            n
         }
-        let mut expected = inline.to_vec();
-        listed_inline.sort_by_key(|e| *e as usize);
-        expected.sort_by_key(|e| *e as usize);
-        assert_eq!(listed_inline, expected);
+
+        fn float(&self, i: usize) -> f64 {
+            let Arg::Float(x) = self.0[i] else {
+                panic!("argument {i} is not a float")
+            };
+            x
+        }
     }
 
     #[test]
-    fn a_names_row_has_no_entry() {
-        mod listed {
-            use super::super::*;
-            names! {
-                generic {}
-                dedicated {}
-                engine { Panic, Exit }
-                lir { Par }
-                task {}
+    fn call_runs_a_row_by_its_variant() {
+        let mut ctx = ctx_on(Capture::default());
+        // SAFETY: 引数は行の種類に合い、文字列は生きている。`StrConcat`は両辺の参照を受け取る
+        unsafe {
+            let (a, b) = (ctx.fresh_string("ab"), ctx.fresh_string("cd"));
+            let Ok(Value::Word(joined)) = call(
+                Extern::StrConcat,
+                &mut ctx,
+                &Slots(&[Arg::Word(a), Arg::Word(b)]),
+            ) else {
+                panic!("`StrConcat` gives a word")
+            };
+            assert_eq!(ctx.copy_string(joined, usize::MAX), Ok("abcd".to_string()));
+            assert_eq!(
+                call(
+                    Extern::IntAdd,
+                    &mut ctx,
+                    &Slots(&[Arg::Int(1), Arg::Int(2)])
+                ),
+                Ok(Value::Int(3))
+            );
+            assert_eq!(
+                call(
+                    Extern::FloatMod,
+                    &mut ctx,
+                    &Slots(&[Arg::Float(7.5), Arg::Float(2.0)])
+                ),
+                Ok(Value::Float(1.5))
+            );
+            for row in [Extern::Exit, Extern::Par, Extern::AsyncPark] {
+                assert!(
+                    matches!(call(row, &mut ctx, &Slots(&[])), Err(RunFault::Internal(_))),
+                    "{row:?}"
+                );
             }
         }
-        let rows: Vec<_> = listed::LISTED
-            .iter()
-            .map(|l| (l.row, l.section, l.entry, l.inline))
-            .collect();
-        assert_eq!(
-            rows,
-            [
-                (Extern::Panic, Section::Engine, None, false),
-                (Extern::Exit, Section::Engine, None, false),
-                (Extern::Par, Section::Lir, None, false),
-            ]
-        );
     }
 }
