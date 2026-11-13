@@ -5,11 +5,11 @@
 use std::sync::Arc;
 use std::thread::ThreadId;
 
+use eml_sched::driver::{Clock, Signal, VirtualSignal};
+use eml_sched::park::{DefaultPark, ParkFactory};
+use eml_sched::{Control, Limits};
 use eml_vm::eml_gui::{Backend, Script, stub};
-use eml_vm::{
-    Clock, Control, DefaultPark, Finished, Limits, ParkFactory, RunConfig, RuntimeError, Signal,
-    VirtualSignal,
-};
+use eml_vm::{Finished, RunConfig, RuntimeError};
 
 use crate::common::RecordingHost;
 

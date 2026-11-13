@@ -24,6 +24,7 @@ cranelift-module.workspace = true
 cranelift-native.workspace = true
 
 [dev-dependencies]
+eml_rows.workspace = true
 eml_test_support = { workspace = true, features = ["run"] }
 insta.workspace = true
 

@@ -18,20 +18,27 @@ use eml_diagnostics::has_errors;
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles, sort_diagnostics};
 
 #[cfg(feature = "run")]
-pub use eml_clink::{LinkError, Linker};
+pub use eml_clink::{LinkError, Linked, Linker};
 pub use eml_hir::{MemorySource, ModulePath, ModuleSource, ReadError};
 #[cfg(feature = "run")]
-pub use eml_io::{script_host, stdio_host};
+pub use eml_io::{Masked, script_host, stdio_host};
+#[cfg(feature = "run")]
+pub use eml_sched::config::{Finished, RunConfig, RunStats, Sched};
+#[cfg(feature = "run")]
+pub use eml_sched::doorbell::Doorbell;
+#[cfg(feature = "run")]
+pub use eml_sched::driver::{Clock, Signal, VirtualSignal};
+#[cfg(feature = "run")]
+pub use eml_sched::error::{RunFault, RuntimeError, SourceLocation};
+#[cfg(feature = "gui")]
+pub use eml_sched::park::ParkFactory;
+#[cfg(feature = "run")]
+pub use eml_sched::{Control, HostRef, Limits, Stop};
 pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
-pub use eml_vm::{
-    Capture, CaptureHost, Clock, Control, Doorbell, Finished, HostRef, Limits, Linked, Masked,
-    RunConfig, RunFault, RunStats, RuntimeError, Sched, Signal, SourceLocation, Stop,
-    VirtualSignal, Written, capture_host, execute,
-};
+pub use eml_vm::{Capture, CaptureHost, Written, capture_host, execute};
 #[cfg(feature = "gui")]
 pub use eml_vm::{
-    ParkFactory,
     eml_gui::{Backend, Script},
     gui_park,
 };

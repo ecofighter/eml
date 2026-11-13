@@ -9,10 +9,10 @@ use std::thread::ThreadId;
 use std::time::Duration;
 
 use eml_rt::{Checked, IoWaker};
-use eml_vm::{
-    Clock, Control, DefaultPark, Finished, Limits, Machine, Park, ParkFactory, Pending, Progress,
-    RunConfig, RuntimeError,
-};
+use eml_sched::driver::Clock;
+use eml_sched::park::{DefaultPark, Park, ParkFactory, Pending, Progress};
+use eml_sched::{Control, Limits};
+use eml_vm::{Finished, Machine, RunConfig, RuntimeError};
 
 use crate::common::RecordingHost;
 
@@ -1255,7 +1255,7 @@ mod io_source {
     use std::os::unix::net::UnixStream;
     use std::time::Instant;
 
-    use eml_vm::PollSource;
+    use eml_sched::park::PollSource;
 
     use super::*;
 

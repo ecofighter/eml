@@ -6,7 +6,7 @@ use eml_lir::Repr;
 use eml_native::Arg;
 use eml_native::rows::INLINE;
 use eml_nrt::RunFault;
-use eml_nrt::shared_rows as shared;
+use eml_rows::rows as shared;
 use eml_rt::{Control, Ctx, Fast, Limits};
 
 use crate::common::native::{agree, clif, host, machine, native_options, program};

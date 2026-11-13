@@ -2,8 +2,9 @@
 //! 終わりの処理 (docs/spec/vm.md の「呼び出しと戻り」と「誤り、止めること、終わり」)。
 
 use eml_rt::{ArithFault, Fault, HeapError};
+use eml_sched::error::{RunFault, SourceLocation};
 use eml_test_support::{execute, run_stats};
-use eml_vm::{RunFault, RuntimeError, SourceLocation};
+use eml_vm::RuntimeError;
 
 use crate::common::{parse, run_lir, run_unverified};
 

@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 
 # 直接の辺 (normal、optional、target 固有)。crate ごとに1行
 EDGES='eml_cabi: eml_extern
-eml_cli: eml_clink eml_core_ir eml_diagnostics eml_hir eml_io eml_lir eml_native eml_syntax eml_tls eml_types eml_vm
+eml_cli: eml_clink eml_core_ir eml_diagnostics eml_hir eml_io eml_lir eml_native eml_sched eml_syntax eml_tls eml_types eml_vm
 eml_clink: eml_cabi eml_extern
 eml_core_ir: eml_diagnostics eml_extern eml_hir eml_lir eml_types
 eml_diagnostics:
@@ -25,7 +25,7 @@ eml_rows: eml_extern eml_rt eml_sched
 eml_rt:
 eml_sched: eml_io eml_rt
 eml_syntax: eml_diagnostics
-eml_test_support: eml_cli eml_clink eml_core_ir eml_diagnostics eml_hir eml_lir eml_native eml_nrt eml_syntax eml_types eml_vm
+eml_test_support: eml_cli eml_clink eml_core_ir eml_diagnostics eml_hir eml_lir eml_native eml_nrt eml_sched eml_syntax eml_types eml_vm
 eml_tls:
 eml_types: eml_diagnostics eml_extern eml_hir
 eml_vm: eml_cabi eml_extern eml_gui eml_io eml_lir eml_rows eml_rt eml_sched eml_tls'
@@ -35,7 +35,7 @@ FEATURES='[eml_cli]
 default = ["run", "tls", "gui"]
 types = ["dep:eml_types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
-run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_io", "dep:eml_native", "dep:libc", "dep:rustyline", "dep:windows-sys"]
+run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_io", "dep:eml_native", "dep:eml_sched", "dep:libc", "dep:rustyline", "dep:windows-sys"]
 tls = ["run", "eml_vm/tls", "dep:eml_tls"]
 gui = ["run", "eml_vm/gui"]
 gui-native = ["gui", "eml_vm/gui-native"]
@@ -62,11 +62,27 @@ default = ["run"]
 hir = ["dep:eml_hir", "dep:eml_cli"]
 types = ["hir", "dep:eml_types", "eml_cli/types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir", "eml_cli/core"]
-run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_native", "dep:eml_nrt", "eml_cli/run"]
+run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_native", "dep:eml_nrt", "dep:eml_sched", "eml_cli/run"]
 [eml_vm]
 tls = ["dep:eml_tls", "eml_io/tls"]
 gui = ["dep:eml_gui"]
 gui-native = ["gui", "eml_gui/native"]'
+
+# eml_cliとeml_test_support以外のcrateが、ほかのworkspaceのcrateから再exportする項目。再exportするのは自分の公開の
+# シグネチャの型だけで、moduleはeml_nrtの__rtだけである
+REEXPORTS='crates/eml_clink/src/lib.rs: pub use eml_cabi::Linked;
+crates/eml_lir/src/lib.rs: pub use eml_extern::{FloatBits, Mark, OpRet, Repr, StructId};
+crates/eml_native/src/lib.rs: pub use eml_nrt::image::Options;
+crates/eml_nrt/src/lib.rs: pub use eml_rt as __rt;
+crates/eml_nrt/src/lib.rs: pub use eml_rt::HostRef;
+crates/eml_nrt/src/lib.rs: pub use eml_sched::config::{Finished, RunConfig};
+crates/eml_nrt/src/lib.rs: pub use eml_sched::error::{RunFault, RuntimeError};
+crates/eml_sched/src/lib.rs: pub use eml_rt::{Control, HostRef, Limits, Stop};
+crates/eml_vm/src/lib.rs: pub use eml_cabi::Linked;
+crates/eml_vm/src/lib.rs: pub use eml_gui;
+crates/eml_vm/src/lib.rs: pub use eml_rt::HostRef;
+crates/eml_vm/src/lib.rs: pub use eml_sched::config::{Finished, RunConfig};
+crates/eml_vm/src/lib.rs: pub use eml_sched::error::RuntimeError;'
 
 failed=0
 
@@ -107,11 +123,34 @@ features() {
   done
 }
 
+# 文は1行にまとめてから比べる。rustfmtが複数の行に折った`{..}`の並びも、文の全体として見るためである
+reexports() {
+  local f
+  for f in $(grep -rlE '^[[:space:]]*pub use eml_' crates/*/src | tr -d '\r' |
+    { grep -vE '^crates/eml_(cli|test_support)/' || true; }); do
+    tr -d '\r' <"$f" | awk -v file="$f" '
+      !open && /^[[:space:]]*pub use eml_/ { open = 1; text = "" }
+      open {
+        text = text " " $0
+        if ($0 ~ /;/) {
+          gsub(/[[:space:]]+/, " ", text)
+          sub(/^ /, "", text)
+          gsub(/\{ /, "{", text)
+          gsub(/,? \}/, "}", text)
+          print file ": " text
+          open = 0
+        }
+      }'
+  done | sort
+}
+
 if [ "${1:-}" != "--check" ]; then
   echo "EDGES"
   edges
   echo "FEATURES"
   features
+  echo "REEXPORTS"
+  reexports
   exit 0
 fi
 
@@ -124,6 +163,12 @@ compare() {
 
 compare EDGES "$EDGES" "$(edges)"
 compare FEATURES "$FEATURES" "$(features)"
+compare REEXPORTS "$REEXPORTS" "$(reexports)"
+
+# eml_vmは、eml_schedのmoduleの別名を通して何も再exportしない
+if grep -rnE '^[[:space:]]*pub use ((crate|self)::)?(cells|doorbell|driver|error|park)::' crates/eml_vm/src; then
+  fail "crates/eml_vm/src re-exports through an alias of an eml_sched module"
+fi
 
 # cargo tree の結果のうち、行頭が PATTERN に合う行の数が WANT に等しいことを調べる
 expect_tree() {

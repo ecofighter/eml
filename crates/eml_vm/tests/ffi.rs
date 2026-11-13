@@ -12,9 +12,10 @@ use eml_rt::{
     Checked, Completion, Control, Done, Fast, HandleBin, IoDriver, IoHandle, IoWaker, Limits, Op,
     OpKey, Submit,
 };
+use eml_sched::driver::Clock;
 use eml_vm::{
-    Clock, CodeBase, CompileError, Finished, Linked, Machine, RunConfig, RuntimeError,
-    capture_host, disassemble,
+    CodeBase, CompileError, Finished, Linked, Machine, RunConfig, RuntimeError, capture_host,
+    disassemble,
 };
 
 use crate::common::c::{

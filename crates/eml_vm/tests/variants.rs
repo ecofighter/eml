@@ -1,8 +1,8 @@
 //! 型どおりの関数を値として使うときの一様な変種 `<f>$uniform` (docs/spec/lir.md の「関数の ABI」)。薄い形と写しの形、
 //! 薄い形のフレームを通る yield と再開、変種のフレームを通る巻き戻しを、ソースから作ったプログラムで確かめる。
 
+use eml_sched::config::RunStats;
 use eml_test_support::{lir, run_stats};
-use eml_vm::RunStats;
 
 const HIDE: &str = "\
 data Box a = | Box a

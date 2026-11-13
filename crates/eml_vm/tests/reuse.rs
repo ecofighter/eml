@@ -3,8 +3,9 @@
 //! 文字列はみな定数なので、確保の回数は `con` の分と、ヒープが最初に作る不死のダミーの1回だけになる
 //! (docs/spec/vm.md の「`RunStats`」)。
 
+use eml_sched::config::RunStats;
 use eml_test_support::execute;
-use eml_vm::{RunConfig, RunStats, capture_host};
+use eml_vm::{RunConfig, capture_host};
 
 use crate::common::{parse, run_lir};
 

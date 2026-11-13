@@ -160,8 +160,8 @@ impl<M: Module> FnLower<'_, '_, M> {
 }
 
 impl<M: Module> FnLower<'_, '_, M> {
-    /// インラインの行`ext`の文`let var = extern ext(args)`。結果は行の共有の関数 (`eml_nrt::shared_rows`) とビット単位で
-    /// 等しい。失敗する行は、失敗の条件で冷たい`arith`のブロックへ分岐する (docs/spec/native.mdの「行の下ろし方」)。
+    /// インラインの行`ext`の文`let var = extern ext(args)`。結果は行の共有の関数とビット単位で等しい。失敗する行は、
+    /// 失敗の条件で冷たい`arith`のブロックへ分岐する (docs/spec/native.mdの「行の下ろし方」)。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn inline_row(
         &mut self,

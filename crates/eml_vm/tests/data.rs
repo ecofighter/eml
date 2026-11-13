@@ -2,7 +2,8 @@
 //! (docs/spec/lir.md)。共有された値の分解や、`tobj` の変数に入った引数のないコンストラクタは、ソースの `match`
 //! からは狙って作りにくいので、ここで書く。
 
-use eml_vm::{RunFault, RuntimeError};
+use eml_sched::error::RunFault;
+use eml_vm::RuntimeError;
 
 use crate::common::{run_lir, run_unverified};
 

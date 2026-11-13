@@ -2,7 +2,8 @@
 //! (docs/spec/core-ir.md の「evidence passing」と docs/spec/lir.md の「基本操作」)。
 
 use eml_rt::{Fault, HeapError};
-use eml_vm::{RunFault, RuntimeError};
+use eml_sched::error::RunFault;
+use eml_vm::RuntimeError;
 
 use crate::common::run_lir;
 

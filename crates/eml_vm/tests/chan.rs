@@ -5,8 +5,9 @@
 
 use std::sync::Arc;
 
+use eml_sched::{Control, Limits};
 use eml_test_support::{execute, lir, run, run_stats};
-use eml_vm::{Control, Finished, Limits, RunConfig};
+use eml_vm::{Finished, RunConfig};
 
 /// 検査モードと速いモードで流し、どちらも成功して同じ標準出力を返すことを確かめて、その出力を返す。
 fn run_both(src: &str) -> String {

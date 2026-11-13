@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use eml_lir::Program;
 use eml_rt::{Control, Fast, Limits};
+use eml_sched::config::RunStats;
 use eml_test_support::execute;
-use eml_vm::{CodeBase, CompileError, RunStats, RuntimeError, disassemble};
+use eml_vm::{CodeBase, CompileError, RuntimeError, disassemble};
 
 pub fn parse(text: &str) -> Program {
     eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"))
@@ -167,7 +168,7 @@ impl eml_rt::Host for RecordingHost {
 fn run_merged(program: &Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
     let config = eml_vm::RunConfig::default()
         .with_debug_heap(debug_heap)
-        .with_seat(eml_vm::Seat::Merged);
+        .with_seat(eml_sched::config::Seat::Merged);
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = eml_vm::AnyMachine::new(&config, host);
     let mut run = || {

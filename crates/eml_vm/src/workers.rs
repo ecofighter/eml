@@ -21,8 +21,9 @@ use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, MadeDriver, RunClock, ceil_ms
 use crate::park::Park;
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
-use crate::{HeapWork, RunCounts, RunFault, RuntimeError, WORKER_STACK};
-pub use eml_sched::config::Seat;
+use crate::{HeapWork, RunCounts, RuntimeError, WORKER_STACK};
+use eml_sched::config::Seat;
+use eml_sched::error::RunFault;
 
 // 6つの型はどれも、スレッドをまたいで渡すか共有する (docs/spec/vm.md の「タスクとスケジュール」)
 const _: () = {

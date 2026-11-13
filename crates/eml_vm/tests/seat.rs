@@ -4,7 +4,11 @@
 use std::sync::Arc;
 
 use eml_rt::Checked;
-use eml_vm::{Clock, Control, Limits, Machine, RunConfig, RunFault, RuntimeError, Seat};
+use eml_sched::config::Seat;
+use eml_sched::driver::Clock;
+use eml_sched::error::RunFault;
+use eml_sched::{Control, Limits};
+use eml_vm::{Machine, RunConfig, RuntimeError};
 
 use crate::common::{RecordingHost, parse};
 
@@ -111,9 +115,9 @@ fn a_separate_machine_runs_twice() {
         .unwrap()
         .entry;
     machine.run(entry).unwrap_or_else(|error| panic!("{error}"));
-    let mut machine = machine.with_signals(vec![eml_vm::VirtualSignal {
+    let mut machine = machine.with_signals(vec![eml_sched::driver::VirtualSignal {
         at_ms: 15,
-        signal: eml_vm::Signal::Interrupt,
+        signal: eml_sched::driver::Signal::Interrupt,
     }]);
     let error = machine.run(entry).unwrap_err();
     assert!(error.interrupted(), "{error:?}");

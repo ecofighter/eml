@@ -27,7 +27,13 @@ use eml_clink::Linker;
 #[cfg(feature = "run")]
 use eml_nrt::image::{Census, Options};
 #[cfg(feature = "run")]
-use eml_vm::{CaptureHost, Finished, HostRef, Linked, RunConfig, RunStats, RuntimeError};
+use eml_sched::HostRef;
+#[cfg(feature = "run")]
+use eml_sched::config::{Finished, RunConfig, RunStats};
+#[cfg(feature = "run")]
+use eml_sched::error::RuntimeError;
+#[cfg(feature = "run")]
+use eml_vm::{CaptureHost, Linked};
 
 pub struct Parsed {
     pub files: SourceFiles,

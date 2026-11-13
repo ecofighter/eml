@@ -187,7 +187,7 @@ fn stub_park(path: &Path) -> eml_cli::ParkFactory {
 }
 
 #[cfg(not(feature = "gui"))]
-fn stub_park(path: &Path) -> eml_vm::ParkFactory {
+fn stub_park(path: &Path) -> eml_sched::park::ParkFactory {
     panic!(
         "{}: the gui mark needs eml_cli's gui feature",
         path.display()

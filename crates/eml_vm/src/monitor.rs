@@ -226,7 +226,8 @@ mod tests {
     use super::{Monitor, Relay, bell_timeout, choose, pressure_tick};
     use crate::cells::{self, CellRef, MailItem, Registry, Shared};
     use crate::sched::{Normal, Scheduler};
-    use crate::workers::{NO_CELL, Run, Seat, cell_word};
+    use crate::workers::{NO_CELL, Run, cell_word};
+    use eml_sched::config::Seat;
 
     /// 鳴らされた回数を数える waker。
     #[derive(Default)]

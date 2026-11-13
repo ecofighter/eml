@@ -6,7 +6,9 @@
 //! 変換、`par` のタスクの切り替えと子の中断、C の関数の呼び出し (Rust の橋渡しと、整数を詰めたハンドル)、両方のモード。
 //! テストの driver の仕事にした `blocking` の C の呼び出しは、検査モードだけで流す。
 
-use eml_vm::{AnyMachine, RunConfig, RunFault, RuntimeError, Sched, capture_host, execute};
+use eml_sched::config::Sched;
+use eml_sched::error::RunFault;
+use eml_vm::{AnyMachine, RunConfig, RuntimeError, capture_host, execute};
 
 fn run_both(text: &str) -> String {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));

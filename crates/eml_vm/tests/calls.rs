@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use eml_rt::{Control, Limits, Stop};
-use eml_vm::{RunFault, RuntimeError};
+use eml_sched::error::RunFault;
+use eml_vm::RuntimeError;
 
 use crate::common::{parse, run_lir, run_unverified};
 

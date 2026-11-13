@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use eml_lir::Program;
 use eml_rt::{Checked, Control, Limits};
-use eml_vm::{Capture, Clock, Linked, Machine, RunConfig, RuntimeError, capture_host};
+use eml_sched::driver::Clock;
+use eml_vm::{Capture, Linked, Machine, RunConfig, RuntimeError, capture_host};
 
 use crate::common::c::{calls, dtors, linked, published, rs_frees, rs_gate_open, rs_gate_wait};
 

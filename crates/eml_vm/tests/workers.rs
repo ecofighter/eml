@@ -5,7 +5,11 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use eml_rt::{Checked, Fault};
-use eml_vm::{Clock, Control, Finished, Limits, Machine, RunConfig, RunFault, RuntimeError, Sched};
+use eml_sched::config::Sched;
+use eml_sched::driver::Clock;
+use eml_sched::error::RunFault;
+use eml_sched::{Control, Limits};
+use eml_vm::{Finished, Machine, RunConfig, RuntimeError};
 
 use eml_test_support::schedule_independent;
 

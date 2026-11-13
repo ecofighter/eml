@@ -3,8 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
+use eml_sched::config::{RunStats, Sched};
 use eml_test_support::{capture, lir, run_stats, run_stats_on, schedule_independent, with_modules};
-use eml_vm::{RunConfig, RunStats, Sched};
+use eml_vm::RunConfig;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
 const PROGRAMS: [&str; 42] = [

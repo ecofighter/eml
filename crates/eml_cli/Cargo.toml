@@ -27,7 +27,7 @@ required-features = ["run"]
 default = ["run", "tls", "gui"]
 types = ["dep:eml_types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
-run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_io", "dep:eml_native", "dep:libc", "dep:rustyline", "dep:windows-sys"]
+run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_io", "dep:eml_native", "dep:eml_sched", "dep:libc", "dep:rustyline", "dep:windows-sys"]
 tls = ["run", "eml_vm/tls", "dep:eml_tls"]
 gui = ["run", "eml_vm/gui"]
 gui-native = ["gui", "eml_vm/gui-native"]
@@ -41,6 +41,7 @@ eml_hir.workspace = true
 eml_io = { workspace = true, optional = true }
 eml_lir = { workspace = true, optional = true }
 eml_native = { workspace = true, optional = true }
+eml_sched = { workspace = true, optional = true }
 eml_syntax.workspace = true
 eml_tls = { workspace = true, optional = true }
 eml_types = { workspace = true, optional = true }

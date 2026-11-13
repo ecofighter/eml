@@ -10,8 +10,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
+use eml_cabi::{Bridge, CCall, Dtor};
 use eml_lir::Program;
-use eml_vm::{Bridge, CCall, Dtor, Linked};
+use eml_vm::Linked;
 
 /// `program` の C の表に並びをそろえた `Linked`。関数は `symbol`、dtor は `dtor` の名前で `calls` と `dtors` から引き、
 /// 見つからなければ panic する。テストは `calls` と `dtors` に、このファイルの `calls()` と `dtors()` の項だけを渡す。

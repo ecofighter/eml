@@ -13,8 +13,10 @@ pub mod thunk;
 mod trust;
 mod unsupported;
 
-pub use eml_nrt::SUPPORTED;
 pub use eml_nrt::image::Options;
+/// この機械でネイティブのコードを走らせられるとき、つまり対象にエントリのstubがあるときに真である
+/// (docs/spec/native.mdの「対象」)。
+pub const SUPPORTED: bool = eml_nrt::SUPPORTED;
 pub use jit::{Arg, LoadError, Loaded, NativeMachine, Symbol, execute};
 pub use lower::rows;
 pub use unsupported::{Form, Unsupported, unsupported};

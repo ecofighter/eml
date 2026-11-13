@@ -294,7 +294,7 @@ fn every_called_row_has_an_entry() {
 
 #[test]
 fn the_inline_table_is_the_marked_set() {
-    let mut marked: Vec<Extern> = eml_nrt::LISTED
+    let mut marked: Vec<Extern> = eml_rows::rows::LISTED
         .iter()
         .filter(|l| l.inline)
         .map(|l| l.row)

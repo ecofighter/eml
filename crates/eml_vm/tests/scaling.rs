@@ -4,8 +4,8 @@
 
 use std::fmt::Write;
 
+use eml_sched::config::RunStats;
 use eml_test_support::{capture, execute, lir, run, run_stats, run_stats_on};
-use eml_vm::RunStats;
 
 /// 正常に終わった実行の回数。生成したソースが意図どおりに走ったことを、出力でも確かめる。
 fn stats(text: &str, expected: &str) -> RunStats {
@@ -1488,11 +1488,12 @@ b2:
         "{short:?} {long:?}"
     );
 
-    let limited =
-        checked().with_control(std::sync::Arc::new(eml_vm::Control::new(eml_vm::Limits {
+    let limited = checked().with_control(std::sync::Arc::new(eml_sched::Control::new(
+        eml_sched::Limits {
             max_depth: 1000,
-            ..eml_vm::Limits::default()
-        })));
+            ..eml_sched::Limits::default()
+        },
+    )));
     let (_, result) = run(100_000, &limited);
     assert_eq!(
         result.unwrap_err().to_string(),

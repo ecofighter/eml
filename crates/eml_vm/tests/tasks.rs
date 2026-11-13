@@ -1,8 +1,9 @@
 //! `Std.Async` のタスクの始めと終わり、待ち、失敗と `Async.run` (docs/spec/vm.md の「`Async` のタスク」)。どのプログラムも検査モードの
 //! 逐次と速いモードで流し、標準出力を比べる。
 
+use eml_sched::config::Sched;
 use eml_test_support::{execute, lir, run, run_stats, schedule_independent};
-use eml_vm::{RunConfig, Sched};
+use eml_vm::RunConfig;
 
 /// 検査モードと速いモードで流し、どちらも成功して同じ標準出力を返すことを確かめて、その出力を返す。
 fn run_both(src: &str) -> String {

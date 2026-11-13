@@ -10,9 +10,10 @@ use eml_rt::{
     ArithFault, Checked, Completion, Done, Fast, Fault, HandleBin, HeapError, IoDriver, IoHandle,
     IoWaker, Op, OpKey, Submit,
 };
+use eml_sched::error::{RunFault, SourceLocation};
+use eml_sched::{Control, Limits};
 use eml_vm::{
-    AnyMachine, CompileError, Control, Limits, Machine, RunConfig, RunFault, RuntimeError,
-    SourceLocation, capture_host, disassemble,
+    AnyMachine, CompileError, Machine, RunConfig, RuntimeError, capture_host, disassemble,
 };
 
 use crate::common::parse;

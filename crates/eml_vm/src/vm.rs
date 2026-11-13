@@ -4978,7 +4978,7 @@ fn f(p.0: unit) -> unit {
             Box::new(driver),
             Arc::new(crate::workers::Run::new(
                 1,
-                crate::workers::Seat::Merged,
+                eml_sched::config::Seat::Merged,
                 None,
                 clock,
                 Arc::default(),
@@ -5063,7 +5063,7 @@ fn f(p.0: unit) -> unit {
             Box::new(driver),
             Arc::new(crate::workers::Run::new(
                 1,
-                crate::workers::Seat::Merged,
+                eml_sched::config::Seat::Merged,
                 None,
                 clock,
                 Arc::default(),

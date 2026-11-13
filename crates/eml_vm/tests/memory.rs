@@ -3,7 +3,10 @@
 
 use std::sync::Arc;
 
-use eml_vm::{Control, Finished, Limits, RunConfig, RunFault, RuntimeError, Sched, Stop};
+use eml_sched::config::Sched;
+use eml_sched::error::RunFault;
+use eml_sched::{Control, Limits, Stop};
+use eml_vm::{Finished, RunConfig, RuntimeError};
 
 const MIB: usize = 1 << 20;
 

@@ -7,15 +7,14 @@ use std::sync::atomic::{Ordering, fence};
 
 use eml_rt::{Completion, Control, Ctx, IoDriver, Mode, Stop};
 
-use crate::RunFault;
 use crate::cells::{self, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken};
 use crate::driver::DriverKind;
 use crate::monitor::{self, Monitor};
 use crate::park::{Guard, PollSource};
 use crate::vm::Task;
 use crate::workers::{Mailer, NO_CELL, Notice, Ready, Run, Workers, cell_word};
-pub use eml_sched::config::Sched;
 pub(crate) use eml_sched::driver::NO_DRIVER;
+use eml_sched::error::RunFault;
 
 /// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを、すべての
 /// worker の止める語に立てるので、`eml run` の次の同じシグナルはその場で終わらせ、どの worker も次の安全点で止まる
@@ -1061,8 +1060,8 @@ mod tests {
     use crate::cells::{CancelPath, MailItem, Registry, Woken};
     use crate::doorbell::Doorbell;
     use crate::driver::RunClock;
-    use crate::workers::Seat;
     use eml_rt::Word;
+    use eml_sched::config::Seat;
 
     /// 監視のスレッドでメモリを見るのは `Normal` だけで、決定的な方針は集める地点で見る。
     #[test]

@@ -6,7 +6,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eml_rt::Checked;
-use eml_vm::{Clock, Control, Doorbell, Limits, Machine, RunConfig, Sched, Signal, VirtualSignal};
+use eml_sched::config::Sched;
+use eml_sched::doorbell::Doorbell;
+use eml_sched::driver::{Clock, Signal, VirtualSignal};
+use eml_sched::{Control, Limits};
+use eml_vm::{Machine, RunConfig};
 
 /// 保留のシグナルは監視のスレッドが中継し、待つタスクがいなければ集める地点で run を止める。自己パイプがないので、
 /// 監視のスレッドは刻みで保留を見に行く。

@@ -10,8 +10,11 @@ use eml_diagnostics::{Diagnostic, SourceFiles, TextSize, has_errors};
 use eml_hir::{
     FunctionId, FunctionKind, ImportCache, InputForm, InputKind, ModuleSource, SessionInput,
 };
+use eml_sched::config::RunConfig;
+use eml_sched::error::{RunFault, RuntimeError, SourceLocation};
+use eml_sched::{Control, HostRef};
 use eml_types::{InputDisplay, InstanceNode, TypedProgram};
-use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RunFault, RuntimeError, SourceLocation};
+use eml_vm::AnyMachine;
 
 use crate::{Session, pretty};
 

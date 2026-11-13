@@ -6,7 +6,10 @@
 use std::sync::Arc;
 
 use eml_rt::{Fault, HeapError};
-use eml_vm::{Control, Finished, Limits, RunConfig, RunFault, RuntimeError, Sched};
+use eml_sched::config::Sched;
+use eml_sched::error::RunFault;
+use eml_sched::{Control, Limits};
+use eml_vm::{Finished, RunConfig, RuntimeError};
 
 use crate::common::parse;
 
@@ -242,7 +245,7 @@ fn run_par_program(
 }
 
 /// 方針によらない結果。誤りは文言で、成功はスケジュールによらない `RunStats` で比べる。
-fn summary(result: &Result<Finished, RuntimeError>) -> Result<eml_vm::RunStats, String> {
+fn summary(result: &Result<Finished, RuntimeError>) -> Result<eml_sched::config::RunStats, String> {
     match result {
         Ok(finished) => Ok(eml_test_support::schedule_independent(finished.stats)),
         Err(error) => Err(error.to_string()),

@@ -7,7 +7,14 @@ use std::thread;
 use std::time::Duration;
 
 use eml_lir::Program;
-use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Stats};
+use eml_rt::{
+    Checked, Control, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Stats, Stop,
+};
+use eml_sched::config::{RunStats, Sched, Seat};
+use eml_sched::doorbell::Doorbell;
+use eml_sched::driver::{Clock, VirtualSignal};
+use eml_sched::error::RunFault;
+use eml_sched::park::{DefaultPark, Park, ParkFactory};
 
 use crate::cells::{Registry, Shared, TaskStats};
 use crate::counters::Counters;
@@ -36,24 +43,20 @@ mod workers;
 
 pub use code::{CodeBase, CompileError, FnEntry};
 pub use disasm::disassemble;
-pub use doorbell::Doorbell;
-pub use driver::{Clock, Signal, VirtualSignal};
-pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
+pub use eml_cabi::Linked;
 /// GUIのtoolkitの層。`eml run`はここのbackendと筋書きでGUIの`Park`を作る (docs/spec/vm.mdの「GUIのPark」)。
 #[cfg(feature = "gui")]
 pub use eml_gui;
-pub use eml_io::Masked;
-pub use eml_rt::{Control, HostRef, Limits, Stop};
-pub use eml_sched::config::{Finished, RunConfig, RunStats};
+pub use eml_rt::HostRef;
+pub use eml_sched::config::{Finished, RunConfig};
+pub use eml_sched::error::RuntimeError;
 pub(crate) use eml_sched::{cells, doorbell, driver, error, park};
-pub use error::{RunFault, RuntimeError, SourceLocation};
 #[cfg(feature = "gui")]
 pub use gui::park as gui_park;
 pub use hosts::{Capture, CaptureHost, Written, capture_host};
-pub use park::{DefaultPark, Park, ParkFactory, Pending, PollSource, Progress};
-pub use sched::{Memory, Normal, Policy, Sched, Scheduler, Seeded, Sequential};
+pub use sched::{Memory, Normal, Policy, Scheduler, Seeded, Sequential};
 pub use vm::Task;
-pub use workers::{Entry, Ready, Seat};
+pub use workers::{Entry, Ready};
 
 /// VM だけが知る仕事の回数。検査モードだけで数える。
 #[derive(Debug, Default)]

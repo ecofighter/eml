@@ -5,10 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eml_rt::{Checked, Fast, Fault};
-use eml_vm::{
-    Clock, CodeBase, Control, Entry, Finished, Limits, Machine, Normal, ParkFactory, Ready,
-    RunConfig, RunFault, RunStats, RuntimeError, Sched, Stop, Task,
-};
+use eml_sched::config::{RunStats, Sched};
+use eml_sched::driver::Clock;
+use eml_sched::error::RunFault;
+use eml_sched::park::ParkFactory;
+use eml_sched::{Control, Limits, Stop};
+use eml_vm::{CodeBase, Entry, Finished, Machine, Normal, Ready, RunConfig, RuntimeError, Task};
 
 use crate::common::parse;
 
@@ -474,7 +476,7 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
 ";
     let program = eml_test_support::lir(src);
     let control = Arc::new(Control::new(Limits::default()));
-    let doorbell = eml_vm::Doorbell::new().unwrap();
+    let doorbell = eml_sched::doorbell::Doorbell::new().unwrap();
     let runner = {
         let control = Arc::clone(&control);
         let doorbell = Arc::clone(&doorbell);

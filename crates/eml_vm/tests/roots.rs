@@ -2,7 +2,9 @@
 //! 手放すので、検査モードのリークの検査も通る。
 
 use eml_rt::{Fault, HeapError};
-use eml_vm::{AnyMachine, RunConfig, RunFault, RuntimeError, Sched, capture_host};
+use eml_sched::config::Sched;
+use eml_sched::error::RunFault;
+use eml_vm::{AnyMachine, RunConfig, RuntimeError, capture_host};
 
 use crate::common::{disasm, parse, run_lir_merged};
 

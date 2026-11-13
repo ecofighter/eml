@@ -13,8 +13,11 @@ use std::time::Duration;
 use eml_rt::{
     Checked, Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit,
 };
+use eml_sched::config::Sched;
+use eml_sched::driver::Clock;
+use eml_sched::{Control, Limits};
 use eml_test_support::{run, run_stats};
-use eml_vm::{Clock, Control, Finished, Limits, Machine, RunConfig, Sched, capture_host};
+use eml_vm::{Finished, Machine, RunConfig, capture_host};
 
 /// `Net` のつながった2つのストリーム `a` (接続した側) と `b` (受けた側) を作る本体の頭。待ち受け、受け、接続の完了を
 /// 1つずつ受け、待ちは3つの操作と `await` の4回である。
@@ -37,7 +40,7 @@ main () = Async.run (fn () ->
 ";
 
 /// `CONNECTED` の後ろに `rest` を足したプログラムの検査モードの `RunStats`。
-fn connected_stats(rest: &str) -> (String, eml_vm::RunStats) {
+fn connected_stats(rest: &str) -> (String, eml_sched::config::RunStats) {
     let src = format!("{CONNECTED}{rest}");
     let (out, stats) = run_stats(src.as_str());
     (out, stats.unwrap_or_else(|error| panic!("{error}")))
@@ -1110,9 +1113,9 @@ fn a_probe_done_at_submit_reads_at_once() {
 
 /// 検査モードで、worker を `workers` 個まで持てる run を1回行う。`config` は時計と方針を決める。
 fn run_on(src: &str, workers: usize, config: RunConfig) -> (String, eml_vm::Finished) {
-    let control = Arc::new(eml_vm::Control::new(eml_vm::Limits {
+    let control = Arc::new(eml_sched::Control::new(eml_sched::Limits {
         workers,
-        ..eml_vm::Limits::default()
+        ..eml_sched::Limits::default()
     }));
     let config = config.with_debug_heap(true).with_control(control);
     let (host, out) = capture_host(Default::default());
@@ -1259,7 +1262,7 @@ main () = Async.run (fn () ->
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let config = RunConfig::default()
-            .with_clock(eml_vm::Clock::Real)
+            .with_clock(eml_sched::driver::Clock::Real)
             .with_sched(Sched::Normal);
         let _ = done.send(run_on(src, 2, config));
     });
@@ -1306,7 +1309,7 @@ main () = Async.run (fn () ->
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let config = RunConfig::default()
-            .with_clock(eml_vm::Clock::Real)
+            .with_clock(eml_sched::driver::Clock::Real)
             .with_sched(Sched::Normal);
         let _ = done.send(run_on(src, 2, config));
     });
@@ -1375,7 +1378,7 @@ main () = Async.run (fn () ->
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let config = RunConfig::default()
-            .with_clock(eml_vm::Clock::Real)
+            .with_clock(eml_sched::driver::Clock::Real)
             .with_sched(Sched::Normal);
         let _ = done.send(run_on(src, 2, config));
     });
@@ -1423,7 +1426,7 @@ main () = Async.run (fn () ->
     std::thread::spawn(move || {
         let real = || {
             RunConfig::default()
-                .with_clock(eml_vm::Clock::Real)
+                .with_clock(eml_sched::driver::Clock::Real)
                 .with_sched(Sched::Normal)
         };
         let _ = done.send((run_on(src, 1, real()), run_on(src, 2, real())));
@@ -1475,7 +1478,7 @@ main () = Async.run (fn () ->
     std::thread::spawn(move || {
         let real = || {
             RunConfig::default()
-                .with_clock(eml_vm::Clock::Real)
+                .with_clock(eml_sched::driver::Clock::Real)
                 .with_sched(Sched::Normal)
         };
         let _ = done.send((run_on(src, 1, real()), run_on(src, 2, real())));
@@ -1526,7 +1529,7 @@ main () = Async.run (fn () ->
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let config = RunConfig::default()
-            .with_clock(eml_vm::Clock::Real)
+            .with_clock(eml_sched::driver::Clock::Real)
             .with_sched(Sched::Normal);
         let _ = done.send(run_on(src, 2, config));
     });
@@ -1572,7 +1575,7 @@ main () = Async.run (fn () ->
     std::thread::spawn(move || {
         let real = || {
             RunConfig::default()
-                .with_clock(eml_vm::Clock::Real)
+                .with_clock(eml_sched::driver::Clock::Real)
                 .with_sched(Sched::Normal)
         };
         let _ = done.send((run_on(src, 1, real()), run_on(src, 2, real())));
@@ -1610,12 +1613,12 @@ main () = Async.run (fn () ->
     let host = host.into_ref();
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let control = Arc::new(eml_vm::Control::new(eml_vm::Limits {
+        let control = Arc::new(eml_sched::Control::new(eml_sched::Limits {
             workers: 2,
-            ..eml_vm::Limits::default()
+            ..eml_sched::Limits::default()
         }));
         let config = RunConfig::default()
-            .with_clock(eml_vm::Clock::Real)
+            .with_clock(eml_sched::driver::Clock::Real)
             .with_sched(Sched::Normal)
             .with_debug_heap(true)
             .with_control(control);
