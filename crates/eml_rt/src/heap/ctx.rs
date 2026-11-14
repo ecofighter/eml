@@ -418,6 +418,255 @@ fn tag_of_effect(effect: u16) -> (t: u16)
     }
 }
 
+// evidenceと節点の欄の役割と`table_ok`はこのモジュールでだけ名前を持つので、forkの表と末尾はここで作る
+// (docs/spec/object-model.mdの「evidence の3つの物体」)
+impl<M: Mode> Heap<M> {
+    /// forkの表。不死のエントリの表で、エントリはどれも即値か不死の物体である。このヒープの物体でも、付けた塊の物体でも
+    /// よい。
+    pub closed spec fn fork_table(&self, t: Word) -> bool {
+        &&& table_ok(*self, t)
+        &&& self.rc_value(t) == 0
+        &&& forall|i: int|
+            0 <= i < self.count_of(t) ==> self.immortal_word(#[trigger] self.scanned_word(t, i))
+    }
+
+    /// `Panic`の末尾。不死の節点`n`が、forkの表`table`を持つtagが`panic + 1`の不死のfork evidenceを持ち、次の節点はない。
+    pub closed spec fn fork_tail(&self, n: Word, panic: u16, table: Word) -> bool {
+        let ev = self.scanned_word(n, NODE_EV as int);
+        &&& node_ok(*self, n)
+        &&& self.rc_value(n) == 0
+        &&& self.tag_of(n) == panic + 1
+        &&& self.scanned_word(n, NODE_NEXT as int).bits_spec() == 1
+        &&& ev_ok(*self, ev)
+        &&& self.rc_value(ev) == 0
+        &&& self.tag_of(ev) == panic + 1
+        &&& self.scanned_word(ev, EV_TABLE as int) == table
+        &&& self.fork_table(table)
+    }
+
+    /// エフェクトのforkの表を作る。走査する語に`entries`を操作の順に並べたtag 0の不死の`Data`で、evidenceのエントリの表と
+    /// 同じ形である (docs/spec/object-model.mdの「evidence の3つの物体」)。エントリはどれも即値か不死の物体でなければならない。
+    /// 表は凍結されてどのworkerからも読まれ、不死でないエントリは表が指したまま空きうるので、どちらのモードでも確保の前に
+    /// 確かめ、違えば`NotImmortal`を返す。表はロードで1回だけ作るので、この確かめは速い道にない。
+    ///
+    /// # Safety
+    /// エントリはどれも即値か、このヒープの生きている物体で、`lin`ビットを持たない。エントリは255個より少ない。どちらの
+    /// モードもこれらを確かめない。
+    pub unsafe fn alloc_fork_table(&mut self, entries: &[Word]) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+            !crate::layout::data_extended_spec(entries@.len() as nat, false),
+            forall|i: int|
+                0 <= i < entries@.len() ==> old(self).of_this_heap(#[trigger] entries@[i]),
+            forall|i: int|
+                0 <= i < entries@.len() && (#[trigger] entries@[i]).is_ptr_spec() ==> !old(
+                    self,
+                ).lin_of(entries@[i]),
+        ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == *old(self) && r == Err::<Word, HeapError>(
+                HeapError::NotImmortal,
+            ),
+            r is Ok <==> forall|i: int|
+                0 <= i < entries@.len() ==> old(self).immortal_word(#[trigger] entries@[i]),
+            r matches Ok(t) ==> final(self).settled() && final(self).immortal_data(t, 0, entries@),
+            old(self).consistent() && old(self).settleable() ==> (r matches Ok(t)
+                ==> final(self).fork_table(t)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let mut i: usize = 0;
+        while i < entries.len()
+            invariant
+                self.wf(),
+                0 <= i <= entries@.len(),
+                forall|j: int|
+                    0 <= j < entries@.len() ==> self.of_this_heap(#[trigger] entries@[j]),
+                forall|j: int| 0 <= j < i ==> self.immortal_word(#[trigger] entries@[j]),
+            decreases entries.len() - i,
+        {
+            let e = entries[i];
+            proof {
+                assert(self.of_this_heap(entries@[i as int]));
+            }
+            if e.is_ptr() && !unsafe { self.is_immortal(e) } {
+                return Err(HeapError::NotImmortal);
+            }
+            i += 1;
+        }
+        let t = self.alloc_immortal_data(0, entries)?;
+        proof {
+            if old(self).consistent() && old(self).settleable() {
+                assert forall|i: int| 0 <= i < self.count_of(t) implies dupable(
+                    *self,
+                    #[trigger] self.scanned_word(t, i),
+                ) && self.immortal_word(self.scanned_word(t, i)) by {
+                    let e = entries@[i];
+                    assert(self.scanned_word(t, i) == e);
+                    assert(old(self).of_this_heap(e));
+                    self.lemma_grown(*old(self), t, e);
+                }
+            }
+        }
+        Ok(t)
+    }
+
+    /// `par`の子の`evv`の`Panic`の末尾を作る。tagが`panic + 1`の不死のfork evidence `[table, 即値 0, ()]`と、同じtagの
+    /// 不死の節点`[ev, ()]`を作り、節点を返す。`Panic`はmaskされないので深さはいつも0で、1つの末尾をどのforkでも使える
+    /// (docs/spec/vm.mdの「`par` の fork と join」)。どちらのモードでも、何も確保する前に、tagのない`panic == 65535`には
+    /// `BadEvidence`を、不死でない`table`には`NotImmortal`を返す。
+    ///
+    /// # Safety
+    /// `table`はこのヒープの生きている物体を指す。その物体が不死なら、forkの表である。つまり、`lin`ビットを持たないtag 0の
+    /// `Data`で、エントリはどれも即値か、`lin`ビットを持たない不死の物体である。どちらのモードも、不死かのほかはこれを
+    /// 確かめない。
+    pub unsafe fn alloc_fork_tail(&mut self, panic: u16, table: Word) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+            table.is_ptr_spec(),
+            old(self).of_this_heap(table),
+            old(self).immortal_word(table) ==> old(self).fork_table(table),
+        ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
+            panic == u16::MAX ==> r == Err::<Word, HeapError>(HeapError::BadEvidence),
+            panic < u16::MAX && !old(self).immortal_word(table) ==> r == Err::<Word, HeapError>(
+                HeapError::NotImmortal,
+            ),
+            panic < u16::MAX && old(self).immortal_word(table) ==> r is Ok,
+            r matches Ok(n) ==> {
+                &&& final(self).settled()
+                &&& n.is_ptr_spec()
+                &&& final(self).word_in(n)
+                &&& final(self).rc_value(n) == 0
+                &&& final(self).kind_of(n) == Kind::Data
+                &&& final(self).tag_of(n) == panic + 1
+            },
+            old(self).consistent() && old(self).settleable() ==> (r matches Ok(n)
+                ==> final(self).fork_tail(n, panic, table)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        if panic == u16::MAX {
+            return Err(HeapError::BadEvidence);
+        }
+        if !unsafe { self.is_immortal(table) } {
+            return Err(HeapError::NotImmortal);
+        }
+        let ghost c = old(self).consistent() && old(self).settleable();
+        let tag = panic + 1;
+        let depth = Word::imm(0);
+        let fields: [Word; EV_WORDS] = [table, depth, Word::UNIT];
+        proof {
+            assert(((0i64 << 1) | 1) as usize == 1) by (bit_vector);
+            lemma_unit_bits();
+            assert(fields@[EV_TABLE as int] == table);
+            assert(fields@[EV_STATE as int] == depth);
+            assert(fields@[EV_OUTER as int].bits_spec() == 1);
+            assert(forall|i: int|
+                0 <= i < EV_WORDS ==> self.of_this_heap(#[trigger] fields@[i])
+                    && self.immortal_word(fields@[i]));
+            assert(forall|i: int| 0 <= i < EV_WORDS ==> self.readable(#[trigger] fields@[i]));
+        }
+        let ev = self.alloc_immortal_data(tag, &fields)?;
+        let ghost h1 = *self;
+        let next: [Word; NODE_WORDS] = [ev, Word::UNIT];
+        proof {
+            assert(next@[NODE_EV as int] == ev);
+            assert(next@[NODE_NEXT as int].bits_spec() == 1);
+            assert(forall|i: int|
+                0 <= i < NODE_WORDS ==> self.of_this_heap(#[trigger] next@[i])
+                    && self.immortal_word(next@[i]));
+            assert(forall|i: int| 0 <= i < NODE_WORDS ==> self.readable(#[trigger] next@[i]));
+        }
+        let node = self.alloc_immortal_data(tag, &next)?;
+        proof {
+            if M::CHECKED {
+                assert forall|w: Word| #[trigger] old(self).word_in(w) implies self.word_in(w) by {
+                    assert(h1.word_in(w));
+                }
+            }
+            if c {
+                h1.lemma_fork_table_grown(*old(self), ev, table);
+                self.lemma_fork_table_grown(h1, node, table);
+                self.lemma_grown(h1, node, ev);
+                assert(self.scanned_word(node, NODE_EV as int) == ev);
+                assert(self.scanned_word(ev, EV_TABLE as int) == table);
+                assert(self.scanned_word(ev, EV_STATE as int) == depth);
+                assert(self.scanned_word(ev, EV_OUTER as int).bits_spec() == 1);
+                assert(table_ok(*self, table));
+                assert(data_obj(*self, ev, EV_WORDS as u8));
+                assert(ev_ok(*self, ev));
+                assert(node_ok(*self, node));
+            }
+        }
+        Ok(node)
+    }
+
+    /// forkの表は、別の物体を確保した後もforkの表である。
+    proof fn lemma_fork_table_grown(&self, old: Heap<M>, w: Word, t: Word)
+        requires
+            self.wf(),
+            old.wf(),
+            self.grown(old, w),
+            self.settled(),
+            old.consistent(),
+            old.settleable(),
+            old.fork_table(t),
+        ensures
+            self.fork_table(t),
+    {
+        self.lemma_grown_readable(old, w, t);
+        assert forall|i: int| 0 <= i < self.count_of(t) implies dupable(
+            *self,
+            #[trigger] self.scanned_word(t, i),
+        ) && self.immortal_word(self.scanned_word(t, i)) by {
+            let e = old.scanned_word(t, i);
+            assert(self.scanned_word(t, i) == e);
+            assert(dupable(old, e));
+            assert(old.immortal_word(e));
+            old.lemma_readable_scanned(t, i);
+            self.lemma_grown_readable(old, w, e);
+        }
+    }
+
+    /// forkの表は、`alloc_data`などが別の物体を確保した後もforkの表である。
+    pub proof fn lemma_fork_table_grew(&self, old: Heap<M>, w: Word, t: Word)
+        requires
+            self.grew(old, w),
+            old.consistent(),
+            old.settleable(),
+            old.fork_table(t),
+        ensures
+            self.fork_table(t),
+    {
+        let b = t.bits_spec();
+        assert(old.core.has(b) && old.core.settled_state(b) == BlockState::Live);
+        assert(self.grown_block(old, b));
+        assert(self.readable(t));
+        assert forall|i: int| 0 <= i < self.count_of(t) implies dupable(
+            *self,
+            #[trigger] self.scanned_word(t, i),
+        ) && self.immortal_word(self.scanned_word(t, i)) by {
+            let e = old.scanned_word(t, i);
+            assert(self.scanned_word(t, i) == e);
+            assert(dupable(old, e));
+            assert(old.immortal_word(e));
+            old.lemma_readable_scanned(t, i);
+            if e.is_ptr_spec() {
+                let c = e.bits_spec();
+                assert(old.core.has(c) && old.core.settled_state(c) == BlockState::Live);
+                assert(self.grown_block(old, c));
+            }
+        }
+    }
+}
+
 /// 先頭から見て、tag が `tag` の最初の evidence。
 spec fn find(s: Seq<(u16, Word)>, tag: u16) -> Option<Word>
     decreases s.len(),

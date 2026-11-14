@@ -90,6 +90,81 @@ impl<M: Mode> Heap<M> {
     {
     }
 
+    /// 確保の後も、このヒープの生きていた語は生きていて、rc、`meta`、走査する語も変わらない。
+    pub(super) proof fn lemma_grown(&self, old: Heap<M>, w: Word, u: Word)
+        requires
+            self.grown(old, w),
+            self.settled(),
+            old.of_this_heap(u),
+        ensures
+            self.of_this_heap(u),
+            old.readable(u) ==> self.readable(u),
+            self.word_in(u),
+            u.is_ptr_spec() ==> {
+                &&& u.bits_spec() != w.bits_spec()
+                &&& self.rc_value(u) == old.rc_value(u)
+                &&& self.lin_of(u) == old.lin_of(u)
+                &&& self.kind_of(u) == old.kind_of(u)
+                &&& self.tag_of(u) == old.tag_of(u)
+                &&& self.scan_of(u) == old.scan_of(u)
+                &&& self.count_of(u) == old.count_of(u)
+                &&& forall|i: int| #[trigger] self.scanned_word(u, i) == old.scanned_word(u, i)
+            },
+            self.immortal_word(u) == old.immortal_word(u),
+    {
+        if u.is_ptr_spec() {
+            let b = u.bits_spec();
+            old.lemma_live_block(b);
+            self.lemma_live_block(b);
+            assert(old.core.dom().contains(b));
+            assert(self.core.dom().contains(b));
+            assert(self.word_in(u));
+            assert(old.core.settled_view().state(b) == old.core.settled_state(b));
+            assert(M::CHECKED ==> self.core.state(b) != BlockState::Freed);
+            assert(!M::CHECKED ==> self.readable(u));
+            assert(self.live_block(b));
+        }
+    }
+
+    /// 確保の後も、読めていた語は読めて、rc、`meta`、走査する語も変わらない。付けた塊の物体にも成り立つ。
+    pub(super) proof fn lemma_grown_readable(&self, old: Heap<M>, w: Word, u: Word)
+        requires
+            self.wf(),
+            old.wf(),
+            self.grown(old, w),
+            self.settled(),
+            old.readable(u),
+        ensures
+            self.readable(u),
+            u.is_ptr_spec() ==> {
+                &&& u.bits_spec() != w.bits_spec()
+                &&& self.rc_value(u) == old.rc_value(u)
+                &&& self.lin_of(u) == old.lin_of(u)
+                &&& self.kind_of(u) == old.kind_of(u)
+                &&& self.tag_of(u) == old.tag_of(u)
+                &&& self.scan_of(u) == old.scan_of(u)
+                &&& self.count_of(u) == old.count_of(u)
+                &&& forall|i: int| #[trigger] self.scanned_word(u, i) == old.scanned_word(u, i)
+            },
+    {
+        if u.is_ptr_spec() {
+            let b = u.bits_spec();
+            assert(old.core.has(b));
+            assert(b != w.bits_spec());
+            if old.core.dom().contains(b) {
+                assert(self.core.dom().contains(b));
+                assert(old.core.settled_view().state(b) == old.core.settled_state(b));
+            } else {
+                assert(old.core.region_has(b));
+                assert(!self.core.dom().contains(b));
+                assert(self.core.region_has(b));
+                assert(self.core.in_region(b) && old.core.in_region(b));
+                assert(self.core.perm(b) == old.core.perm(b));
+                assert(self.core.block(b) == old.core.block(b));
+            }
+        }
+    }
+
     /// 凍結の確かめを通るブロック。rc が 0 の `Foreign` でない物体で、検査モードでは生存の状態で、走査する語の行き先も
     /// 生存の状態である。
     pub(super) open spec fn freezable_block(&self, h: usize) -> bool {

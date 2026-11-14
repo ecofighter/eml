@@ -1200,6 +1200,224 @@ impl<M: Mode> Heap<M> {
         self.alloc_building(payload_words, 0, meta)
     }
 
+    /// `w`は即値か、このヒープの生きている物体を指す。付けた塊の物体は含まない。速いモードは書く語を確かめないので、読める
+    /// ことも求める。
+    pub closed spec fn of_this_heap(&self, w: Word) -> bool {
+        &&& self.word_in(w)
+        &&& w.is_ptr_spec() ==> self.live_block(w.bits_spec())
+        &&& !M::CHECKED ==> self.readable(w)
+    }
+
+    /// `w`は即値か、不死の物体 (rc 0) を指す。
+    pub closed spec fn immortal_word(&self, w: Word) -> bool {
+        w.is_ptr_spec() ==> self.rc_value(w) == 0
+    }
+
+    /// `w`は、このヒープの生きている不死の`Data` (rc 0) で、tagが`tag`で`lin`ビットを持たず、走査する語が順に`words`である。
+    pub closed spec fn immortal_data(&self, w: Word, tag: u16, words: Seq<Word>) -> bool {
+        &&& w.is_ptr_spec()
+        &&& self.word_in(w)
+        &&& self.live_block(w.bits_spec())
+        &&& self.readable(w)
+        &&& self.rc_value(w) == 0
+        &&& self.scan_of(w) == words.len()
+        &&& self.kind_of(w) == Kind::Data
+        &&& self.tag_of(w) == tag
+        &&& !self.lin_of(w)
+        &&& self.count_of(w) == words.len()
+        &&& forall|i: int| 0 <= i < words.len() ==> #[trigger] self.scanned_word(w, i) == words[i]
+    }
+
+    /// `old`のブロックは、`w`の新しい物体を作った後も、同じ中身と同じ状態で残っている。
+    pub closed spec fn grown(&self, old: Heap<M>, w: Word) -> bool {
+        &&& self.worker == old.worker
+        &&& self.region == old.region
+        &&& !old.core.has(w.bits_spec())
+        &&& self.core.dom() == old.core.dom().insert(w.bits_spec())
+        &&& forall|b: usize| #[trigger]
+            old.core.dom().contains(b) ==> {
+                &&& self.core.dom().contains(b)
+                &&& self.core.perm(b) == old.core.perm(b)
+                &&& self.core.state(b) == old.core.settled_view().state(b)
+                &&& self.core.block(b) == old.core.block(b)
+            }
+    }
+
+    /// 走査する語が`words`で、tagが`tag`の不死の`Data`を作り、生きている物体にする。不死の物体に書けるのは構築中の間だけ
+    /// なので、語は構築中に書く (docs/spec/object-model.mdの「核の操作」)。
+    fn alloc_immortal_data(&mut self, tag: u16, words: &[Word]) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+            !crate::layout::data_extended_spec(words@.len() as nat, false),
+            forall|i: int|
+                0 <= i < words@.len() ==> old(self).of_this_heap(#[trigger] words@[i]) && old(
+                    self,
+                ).immortal_word(words@[i]),
+        ensures
+            final(self).wf(),
+            r matches Ok(w) && final(self).settled() && final(self).immortal_data(w, tag, words@)
+                && (old(self).consistent() && old(self).settleable() ==> final(self).grown(
+                *old(self),
+                w,
+            )),
+            old(self).consistent() && old(self).settleable() && (forall|i: int|
+                0 <= i < words@.len() ==> old(self).readable(#[trigger] words@[i]))
+                ==> final(self).consistent() && final(self).settleable(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let ghost g0 = *old(self);
+        let ghost c = g0.consistent() && g0.settleable();
+        let ghost c2 = c && forall|i: int|
+            0 <= i < words@.len() ==> g0.readable(#[trigger] words@[i]);
+        let n = words.len();
+        let meta = crate::layout::data_meta(tag, n, false);
+        proof {
+            meta.lemma_fields();
+        }
+        let w = unsafe { self.alloc_immortal(n, meta) };
+        let ghost h = w.bits_spec();
+        proof {
+            assert forall|j: int| 0 <= j < n implies #[trigger] self.word_in(words@[j]) && (
+            !M::CHECKED ==> self.readable(words@[j]) && self.immortal_word(words@[j])) by {
+                let u = words@[j];
+                assert(old(self).of_this_heap(u) && old(self).immortal_word(u));
+                if !M::CHECKED {
+                    self.lemma_built_keeps(*old(self), w, meta, n, u);
+                }
+            }
+            if c2 {
+                assert forall|j: int| 0 <= j < n implies #[trigger] self.readable(words@[j])
+                    && self.immortal_word(words@[j]) by {
+                    let u = words@[j];
+                    assert(g0.of_this_heap(u) && g0.immortal_word(u) && g0.readable(u));
+                    self.lemma_built_keeps(g0, w, meta, n, u);
+                }
+            }
+            reveal(Core::building_wf);
+            assert(!g0.core.region_has(h));
+        }
+        let mut k: usize = 0;
+        while k < n
+            invariant
+                n == words@.len(),
+                n < crate::layout::INLINE_SCAN_LIMIT,
+                meta.kind_spec() == Kind::Data,
+                bits_kind(meta.bits_spec()) == Kind::Data,
+                bits_scan(meta.bits_spec()) == n,
+                bits_tag(meta.bits_spec()) == tag,
+                !bits_lin(meta.bits_spec()),
+                0 <= k <= n,
+                self.wf(),
+                w.is_ptr_spec(),
+                h == w.bits_spec(),
+                self.word_in(w),
+                self.core.dom().contains(h),
+                self.core.model@.building == Some(h),
+                self.core.state(h) == BlockState::Building,
+                self.core.meta_bits(h) == meta.bits_spec(),
+                self.core.rc_of(h) == 0,
+                self.worker == g0.worker,
+                self.region == g0.region,
+                !g0.core.has(h),
+                self.core.dom() == g0.core.dom().insert(h),
+                c2 ==> self.consistent(),
+                c2 ==> forall|j: int|
+                    0 <= j < n ==> #[trigger] self.readable(words@[j]) && self.immortal_word(
+                        words@[j],
+                    ),
+                c ==> forall|b: usize| #[trigger]
+                    g0.core.dom().contains(b) ==> {
+                        &&& self.core.dom().contains(b)
+                        &&& self.core.perm(b) == g0.core.perm(b)
+                        &&& self.core.state(b) == g0.core.settled_view().state(b)
+                        &&& self.core.block(b) == g0.core.block(b)
+                    },
+                forall|j: int| 0 <= j < k ==> #[trigger] self.core.model@.written[h].contains(j),
+                forall|j: int| 0 <= j < k ==> #[trigger] p_word(self.core.perm(h), j) == words@[j],
+                forall|j: int|
+                    0 <= j < n ==> #[trigger] self.word_in(words@[j]) && (!M::CHECKED
+                        ==> self.readable(words@[j]) && self.immortal_word(words@[j])),
+                M::CHECKED ==> self.words_kept(*old(self)),
+            decreases n - k,
+        {
+            let v = words[k];
+            let ghost before = *self;
+            proof {
+                assert(self.word_in(words@[k as int]));
+                assert(self.core.scanned(h, k as int));
+                if !M::CHECKED {
+                    assert(self.core.settled_view().readable(v));
+                }
+                if c2 {
+                    assert(self.readable(words@[k as int]) && self.immortal_word(words@[k as int]));
+                    assert(self.writable(w));
+                    assert(self.holds(v));
+                    assert(self.scanned_at(w, k as int));
+                    assert(self.owned(w));
+                }
+            }
+            (unsafe { self.set_field(w, k, v) })?;
+            proof {
+                self.lemma_field_set_keeps(before, w, k as int, v);
+                if c {
+                    assert forall|b: usize| #[trigger] g0.core.dom().contains(b) implies ({
+                        &&& self.core.dom().contains(b)
+                        &&& self.core.perm(b) == g0.core.perm(b)
+                        &&& self.core.state(b) == g0.core.settled_view().state(b)
+                        &&& self.core.block(b) == g0.core.block(b)
+                    }) by {
+                        assert(b != h);
+                        assert(before.core.dom().contains(b));
+                        assert(self.core.perms@[b] == before.core.perms@[b]);
+                    }
+                }
+                assert(p_word(self.core.perm(h), k as int) == words@[k as int]);
+                assert forall|j: int| 0 <= j < k + 1 implies #[trigger] p_word(self.core.perm(h), j)
+                    == words@[j] by {
+                    if j != k {
+                        assert(self.core.perm(h).slots[j] == before.core.perm(h).slots[j]);
+                        assert(p_word(before.core.perm(h), j) == words@[j]);
+                    }
+                }
+                assert forall|j: int|
+                    0 <= j < k + 1 implies #[trigger] self.core.model@.written[h].contains(j) by {
+                    if j != k {
+                        assert(before.core.model@.written[h].contains(j));
+                    }
+                }
+            }
+            k += 1;
+        }
+        proof {
+            self.lemma_built_settleable(w, n);
+        }
+        let ghost s2 = *self;
+        self.settle();
+        proof {
+            assert(self.core.perm(h) == s2.core.perm(h));
+            assert(self.core.state(h) == BlockState::Live);
+            self.lemma_live_block(h);
+            if c {
+                assert forall|b: usize| #[trigger] g0.core.dom().contains(b) implies ({
+                    &&& self.core.dom().contains(b)
+                    &&& self.core.perm(b) == g0.core.perm(b)
+                    &&& self.core.state(b) == g0.core.settled_view().state(b)
+                    &&& self.core.block(b) == g0.core.block(b)
+                }) by {
+                    assert(b != h);
+                    assert(s2.core.dom().contains(b));
+                }
+            }
+            assert forall|i: int| 0 <= i < n implies #[trigger] self.scanned_word(w, i)
+                == words@[i] by {
+                assert(p_word(s2.core.perm(h), i) == words@[i]);
+            }
+        }
+        Ok(w)
+    }
+
     #[inline]
     fn alloc_building(&mut self, payload_words: usize, rc: i32, meta: Meta) -> (w: Word)
         requires
@@ -3516,6 +3734,15 @@ impl<M: Mode> Heap<M> {
         &&& p_owner(self.core.perm(h)) == self.worker
     }
 
+    /// 検査モードの`set_field`の確かめは、`alloc_immortal`で作った構築中の物体のi語目が走査する語なら通る。
+    pub closed spec fn immortal_set_passes(&self, w: Word, i: int) -> bool {
+        let h = w.bits_spec();
+        &&& w.is_ptr_spec()
+        &&& self.core.model@.building == Some(h)
+        &&& self.core.rc_of(h) == 0
+        &&& self.core.scanned(h, i)
+    }
+
     pub closed spec fn tag_of(&self, w: Word) -> u16 {
         bits_tag(self.core.meta_bits(w.bits_spec()))
     }
@@ -3779,6 +4006,7 @@ impl<M: Mode> Heap<M> {
             self.consistent() && self.writable(w) && self.owned(w) ==> r is Ok,
             self.core.rc_of(h@.addr) > 0 && p_owner(self.core.perm(h@.addr)) == self.worker
                 ==> r is Ok,
+            self.core.rc_of(h@.addr) <= 0 && w.bits_spec() == self.building ==> r is Ok,
     {
         let rc = self.core.rc_get(h);
         proof {
@@ -3928,6 +4156,7 @@ impl<M: Mode> Heap<M> {
                 self,
             ).scanned_at(w, i as int) && old(self).owned(w) ==> r is Ok && final(self).consistent(),
             M::CHECKED && old(self).set_passes(w, i as int) ==> r is Ok,
+            M::CHECKED && old(self).immortal_set_passes(w, i as int) ==> r is Ok,
     {
         let h = self.header_of(w);
         let ghost c = self.consistent() && self.writable(w) && self.holds(v) && self.scanned_at(
@@ -3936,6 +4165,9 @@ impl<M: Mode> Heap<M> {
         ) && self.owned(w);
         proof {
             self.lemma_checks_pass(w);
+            if M::CHECKED && self.immortal_set_passes(w, i as int) {
+                reveal(Core::building_wf);
+            }
         }
         self.checked_live(h)?;
         self.scanned_check(h, i)?;

@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use super::host::{MemoryHost, host};
 use crate::{
-    Control, Ctx, Fault, Form, Handle, HeapError, Limits, MaskItem, Mode, ReadAmount, Stop, Word,
+    Control, Ctx, Fault, Form, Handle, Heap, HeapError, Kind, Limits, MaskItem, Mode, ReadAmount,
+    Stop, Word,
 };
 
 pub(super) const UNIT: Word = Word::imm(0);
@@ -893,6 +894,76 @@ fn evv_word_reads_the_list_without_rc_work<M: Mode>() {
     assert_eq!(super::mortal(&mut ctx), 0);
 }
 
+/// forkの表は、走査する語にエントリを順に並べた、tag 0の不死の`Data`である。エントリは即値か不死の物体である
+/// (docs/spec/object-model.mdの「evidence の3つの物体」)。
+fn fork_table_holds_its_immortal_entries<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let s = heap.alloc_string_immortal("clause");
+    let entries = [Word::imm(1), s, Word::imm(2)];
+    unsafe {
+        let t = heap.alloc_fork_table(&entries).unwrap();
+        assert_eq!(
+            heap.meta(t).map(|m| (m.tag(), m.kind())),
+            Ok((0, Kind::Data))
+        );
+        for (i, &e) in entries.iter().enumerate() {
+            assert_eq!(heap.field(t, i), Ok(e));
+        }
+        assert!(heap.is_immortal(t));
+    }
+}
+
+/// 不死でないエントリは確保の前に断るので、ヒープの物体は増えない。
+fn fork_table_refuses_a_mortal_entry<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let cell = heap.alloc_data(0, 0, 0, false);
+    let live = heap.live_objects().len();
+    assert_eq!(
+        unsafe { heap.alloc_fork_table(&[Word::imm(1), cell]) },
+        Err(HeapError::NotImmortal)
+    );
+    assert_eq!(heap.live_objects().len(), live);
+    unsafe { heap.decref(cell) }.unwrap();
+}
+
+/// `Panic`の末尾は、不死のfork evidence `[table, 即値 0, ()]`を指す不死の節点`[ev, ()]`である。どちらのtagも
+/// エフェクトの番号に1を足した値で、不死の物体だけを持つヒープは凍結できる。
+fn fork_tail_is_an_immortal_node_of_a_fork_evidence<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let panic = 4;
+    unsafe {
+        let table = heap.alloc_fork_table(&[Word::imm(1)]).unwrap();
+        let node = heap.alloc_fork_tail(panic, table).unwrap();
+        assert_eq!(heap.meta(node).map(|m| m.tag()), Ok(panic + 1));
+        assert!(heap.is_immortal(node));
+        let ev = heap.field(node, 0).unwrap();
+        assert_eq!(heap.field(node, 1), Ok(Word::UNIT));
+        assert_eq!(heap.meta(ev).map(|m| m.tag()), Ok(panic + 1));
+        assert!(heap.is_immortal(ev));
+        assert_eq!(
+            [heap.field(ev, 0), heap.field(ev, 1), heap.field(ev, 2)],
+            [Ok(table), Ok(Word::imm(0)), Ok(Word::UNIT)]
+        );
+    }
+    heap.freeze().unwrap();
+}
+
+/// エフェクトの番号65535にはtagがなく、不死でない表も断る。どちらもモードによらず確かめる。
+fn fork_tail_refuses_the_last_effect_number<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let table = unsafe { heap.alloc_fork_table(&[Word::imm(1)]) }.unwrap();
+    assert_eq!(
+        unsafe { heap.alloc_fork_tail(u16::MAX, table) },
+        Err(HeapError::BadEvidence)
+    );
+    let mortal = heap.alloc_data(0, 1, 0, false);
+    assert_eq!(
+        unsafe { heap.alloc_fork_tail(0, mortal) },
+        Err(HeapError::NotImmortal)
+    );
+    unsafe { heap.decref(mortal) }.unwrap();
+}
+
 both_modes!(
     a_new_ctx_is_finished,
     an_engine_held_failure_is_parked_and_taken,
@@ -930,6 +1001,10 @@ both_modes!(
     taking_the_outer_list_leaves_a_retired_evidence,
     the_outer_list_of_a_shared_evidence_is_not_writable,
     evv_word_reads_the_list_without_rc_work,
+    fork_table_holds_its_immortal_entries,
+    fork_table_refuses_a_mortal_entry,
+    fork_tail_is_an_immortal_node_of_a_fork_evidence,
+    fork_tail_refuses_the_last_effect_number,
 );
 
 // ネイティブのコードはこれらの位置で読むので、値を変えるのはコード生成器の読みと一緒のときだけである

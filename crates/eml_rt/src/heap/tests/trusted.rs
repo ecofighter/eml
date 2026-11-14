@@ -398,6 +398,10 @@ fn every_core_operation_once<M: Mode>() {
     }
     // 生きているのは、ダミーと不死の物体だけである
     assert_eq!(heap.live_objects().len(), 2);
+    unsafe {
+        let table = heap.alloc_fork_table(&[Word::imm(1), imm]).unwrap();
+        heap.alloc_fork_tail(0, table).unwrap();
+    }
     every_primitive_once::<M>();
 }
 
