@@ -627,7 +627,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - fork の表は、エントリの表と同じ形の `Data(tag 0)` で、操作ごとに即値 `&fork$E.op` を並べる。子の中で `E` の evidence を探すと fork evidence が見つかり、その節のエントリは `fork$E.op` である。`fork$E.op` は `prim child_abort` で子を中断する (下の「子の中断」)
 - `Panic` の evidence は、子の `evv` の末尾の1つが受け持つ。extern のエフェクトは mask されないので ([エフェクトと handler](effects.md) の「組み込みの `IO`」)、深さはいつも 0 である。子の中の extern の `Panic` (`failed` と `panic`) は、子の中の `try_panic` か、末尾の `Panic` の fork evidence に届く
 - 凍結した部分: fork の表と末尾 (`Panic` の fork evidence `[Panic の表, 即値 0, ()]` を持つ節点) は、定数と同じく作業用のヒープに不死の物体として作り、凍結する。`CodeBase::load` は、読み込んだプログラムの never-only のエフェクトのうち、`fork$E.op` がすべて名前で引けるようになったものの表を作る。名前は前のロードの関数からも引く。操作のないエフェクトの表は空である。fork の関数は、プログラムが fork しうるとき (`eml_lir::Program::may_fork`) だけ作られるので、表は名前が初めてそろったロードで1回だけ作る。再開する操作を持つエフェクトは子の中で使えないので、表を持たない
-- fork ごとの部分: fork は、mask を当てた後の親の `evv` を頭からたどり、`Panic` を除く never-only のエフェクトの evidence ごとに fork evidence と節点を作って、凍結した末尾につなぐ。該当する evidence がなければ、子の `evv` は末尾そのもので、確保しない。表のない never-only のエフェクトの evidence があれば、内部の誤り (`a never-only evidence of a par parent has no fork table`) にする。親の evidence は子に渡さない。子は状態の欄を書き換える親の handler に届かないためである
+- forkごとの部分: forkは、maskを当てた後の親の`evv`を`Ctx::evv_step`で頭からたどり、`Panic`を除くnever-onlyのエフェクトのevidenceごとに`Ctx::fork_ev`でfork evidenceを作り、`Ctx::evv_push`で節点にして、凍結した末尾につなぐ。表は`Heap::alloc_fork_table`、末尾は`Heap::alloc_fork_tail`が作る。VMは物体の欄の位置を書かない ([オブジェクトモデル](object-model.md)の「evidence の3つの物体」)。該当するevidenceがなければ、子の`evv`は末尾そのもので、確保しない。表のないnever-onlyのエフェクトのevidenceがあれば、内部の誤り (`a never-only evidence of a par parent has no fork table`) にする。親のevidenceは子に渡さない。子は状態の欄を書き換える親のhandlerに届かないためである
 - fork evidence を包む `prompt$` はなく、`fork$E.op` の節は状態の欄を書かないので、fork evidence は `ev_take_state`、`ev_set_state`、`ev_take_evv` の的にならない ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)
 - `may_fork()` のプログラムで `fork$E.op` の名前が引けなければ、`load` は `CompileError::MissingFork` を返す (「`CodeBase` と `FnEntry`」)
 
@@ -667,7 +667,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 ### 子の中断
 
-- `prim child_abort(ev, c)` (`ChildAbort { ev, c }`) は、`fork$E.op` が呼ぶ。`ev` は節のエントリが持つ fork evidence で、`child_abort` は借りる。エフェクトを `meta(ev).tag() - 1` で、深さを `ev` の状態の欄の即値で読む。`c` (操作の引数を捕まえた `reperform$E.op` の閉包) は消費し、子の終わりの中断の記録に持たせる
+- `prim child_abort(ev, c)` (`ChildAbort { ev, c }`) は、`fork$E.op`が呼ぶ。`ev`は節のエントリが持つfork evidenceで、`child_abort`は借りる。エフェクトと深さを`Ctx::fork_of(ev)`で読む (エフェクトはtagから1を引いた値、深さは`ev`の状態の欄の即値である)。`c` (操作の引数を捕まえた`reperform$E.op`の閉包) は消費し、子の終わりの中断の記録に持たせる
 - `boundaries` が空なら、内部の誤り (`a child abort outside a par child`) にする
 - 不死のダミーを宛先にして巻き戻す (「巻き戻しの手順」)。宛先はどの着地の印とも合わないので、巻き戻しは子の境目の上で止まり、子の終わりを中断として `ChildDone` と同じ手順に渡す
 - 子の中の handler は子の中に着地するので、ほかの中断が子の境目に着くことはない。着けば内部の誤り (`an abort reached the boundary of a par child`) にする

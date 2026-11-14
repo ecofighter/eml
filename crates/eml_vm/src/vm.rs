@@ -1917,14 +1917,12 @@ fn fork_evv<R: Exec>(
     let forks = &code.forks;
     let mut mirrored: Vec<(u16, Word, u32)> = Vec::new();
     let mut ranks: Vec<(u16, u32)> = Vec::new();
-    let heap = ctx.heap();
     let mut node = parent;
-    // `parent` は `Ctx` が参照を持つ `evv` のリストで、節点も evidence も生きている
-    while node.is_ptr() {
-        let effect = unsafe { heap.meta(node) }?
-            .tag()
-            .checked_sub(1)
-            .ok_or(RunFault::Internal("an evv node has tag 0"))?;
+    while let Some((effect, rest)) =
+        // SAFETY: `node`は`parent`か、そこから辿った節点で、`parent`は`Ctx`が参照を持つ`evv`のリストなので、
+        // 節点もevidenceも生きている。読むだけなので`heap_mut`の前提を守る
+        unsafe { ctx.evv_step(node) }?
+    {
         if Some(effect) != forks.panic {
             match forks.tables.get(usize::from(effect)) {
                 Some(ForkTable::Resumable) => {}
@@ -1948,23 +1946,19 @@ fn fork_evv<R: Exec>(
                 }
             }
         }
-        node = unsafe { heap.scanned(node, 1) }?;
+        node = rest;
     }
-    // 作る物体だけに書き、`Ctx` の持つ語には触れない。表と末尾は凍結した塊の物体なので、参照を数えない
-    let heap = unsafe { ctx.heap_mut() };
+    // 下の呼び出しは`heap_mut`の前提を守る。作る物体だけに書き、`Ctx`の持つ語には触れない。表と末尾は凍結した塊の
+    // 物体なので、参照を数えない
     let mut next = forks.tail;
-    const EV: usize = data_first(3, false);
-    const NODE: usize = data_first(2, false);
     for &(effect, table, depth) in mirrored.iter().rev() {
-        let ev = heap.alloc_data(effect + 1, 3, 0, false);
-        let node = heap.alloc_data(effect + 1, 2, 0, false);
-        unsafe {
-            heap.set_field(ev, EV, table)?;
-            heap.set_field(ev, EV + 1, Word::imm(i64::from(depth)))?;
-            heap.set_field(node, NODE, ev)?;
-            heap.set_field(node, NODE + 1, next)?;
-        }
-        next = node;
+        // SAFETY: `table`は`alloc_fork_table`が作って凍結した表で、凍結した領域の物体である。`effect`は
+        // 親の`evv`の節点のtagから求めた番号で、65535より小さい
+        let ev = unsafe { ctx.fork_ev(effect, table, depth) }?;
+        // SAFETY: `next`は凍結した末尾か、直前に作った節点で、`ev`は作ったばかりのfork evidenceである。どちらも
+        // 参照を1つずつ持ち、不死の物体の参照は数えない。子のリストは親のリストより長くても節点1つ分で、VMは`max_evv`に
+        // 上限を置かないので (docs/spec/vm.mdの「上限と割り込み」)、長さは上限より短い
+        next = unsafe { ctx.evv_push(next, ev) }?;
     }
     Ok(next)
 }
@@ -2500,21 +2494,8 @@ fn child_abort<R: Exec>(
         return Err(RunFault::Internal("a child abort outside a par child"));
     }
     let ev = task.get(ev);
-    // `ev` は節のエントリが持つ fork evidence で、状態の欄は深さの即値である
-    let heap = ctx.heap();
-    let effect = unsafe { heap.meta(ev) }?
-        .tag()
-        .checked_sub(1)
-        .ok_or(RunFault::Internal(
-            "a child abort gets something other than evidence",
-        ))?;
-    let depth = unsafe { heap.scanned(ev, 1) }?;
-    let depth = u32::try_from(depth.imm_value())
-        .ok()
-        .filter(|_| depth.is_imm())
-        .ok_or(RunFault::Internal(
-            "a child abort gets evidence without a depth",
-        ))?;
+    // SAFETY: `ev`は節のエントリが持つfork evidenceで、状態の欄は深さの即値である。読むだけなので`heap_mut`の前提を守る
+    let (effect, depth) = unsafe { ctx.fork_of(ev) }?;
     let clause = task.get(c);
     let dummy = ctx.heap().dummy();
     unwind::<R>(code, ctx, task, counts, dummy)?;
