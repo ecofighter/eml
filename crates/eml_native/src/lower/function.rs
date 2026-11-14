@@ -248,6 +248,14 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             } => self.apply(block, position, *var, *callee, args),
             Stmt::Let {
                 var,
+                rhs: Rhs::Call(call @ Call::Clause { .. }),
+            } => self.clause(call, Some((block, position, std::slice::from_ref(var)))),
+            Stmt::LetMany {
+                vars,
+                call: call @ Call::Clause { .. },
+            } => self.clause(call, Some((block, position, vars))),
+            Stmt::Let {
+                var,
                 rhs: Rhs::Call(call),
             } => self.call(block, position, std::slice::from_ref(var), call),
             Stmt::LetMany { vars, call } => self.call(block, position, vars, call),
@@ -355,6 +363,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 yields: _,
                 prompt: None,
             }) => self.tail_apply(*callee, args),
+            Term::TailCall(call @ Call::Clause { .. }) => self.clause(call, None),
             Term::TailCall(call) => self.tail_call(call),
         }
     }

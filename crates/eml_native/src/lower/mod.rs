@@ -28,7 +28,7 @@ use eml_nrt::image::SiteRow;
 
 use self::apply::{ClosureEntries, ClosureEntry};
 use self::consts::{Data, Datum};
-use crate::abi::{Built, Import, declare_import, tail_signature};
+use crate::abi::{self, Built, Import, declare_import, tail_signature};
 
 pub struct Defined {
     pub id: FuncId,
@@ -195,16 +195,23 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     // どの関数の値もクロージャのエントリを持つので、エントリの待つ引数の数の最大が、関数の値の待ちうる数の最大である
     let mut largest = 0;
     for (closure, id) in closure_entries.declared() {
-        let args = apply::arity(
-            program.function(closure.function),
-            closure.captures as usize,
-        );
+        let function = program.function(closure.function);
+        let args = apply::arity(function, closure.captures as usize);
         largest = largest.max(args);
-        ctx.func.signature = apply::uniform(usize::from(args));
-        ctx.func.name = UserFuncName::testcase(names::closure_entry(
-            closure.captures,
-            &program.function(closure.function).name,
-        ));
+        let signature = abi::closure_entry_signature(function, closure.captures as usize);
+        // 節の呼び出しはシグネチャを操作の表から、エントリは関数から取るので、2つは等しくなければならない。どのビルド
+        // でも、エントリを定義する前に確かめる (docs/spec/native.mdの「関数の値」)
+        if let Some((effect, op)) = function.clause {
+            assert_eq!(
+                signature,
+                abi::clause_signature(program, effect, op),
+                "the closure entry of `{}` does not have the signature of its operation",
+                function.name
+            );
+        }
+        ctx.func.signature = signature;
+        ctx.func.name =
+            UserFuncName::testcase(names::closure_entry(closure.captures, &function.name));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
         apply::define_closure_entry(b, module, &imports, &callees, closure);
         closures.push((

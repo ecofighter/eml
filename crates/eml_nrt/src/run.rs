@@ -150,7 +150,7 @@ unsafe fn fill_data(
         DATUM_FLOAT => Ok(Datum::Float(row.bits)),
         DATUM_EMPTY_MUT_ARRAY => Ok(Datum::EmptyMutArray),
         DATUM_FN => match u16::try_from(row.bits) {
-            Ok(arity) if arity > 0 => Ok(Datum::Fn {
+            Ok(arity) => Ok(Datum::Fn {
                 arity,
                 code: row.code,
             }),

@@ -6,9 +6,10 @@ use cranelift_jit::{ArenaMemoryProvider, JITBuilder};
 use cranelift_module::{FuncId, Linkage, Module, ModuleError, default_libcall_names};
 use eml_clink::c_signature;
 use eml_extern::{CFunction, CHandleType};
+use eml_lir::{LirFn, OpRet, Program};
 use eml_nrt::{Entry, Kind};
 
-use crate::lower::names;
+use crate::lower::{self, names};
 
 /// Craneliftのmoduleの誤り。大きいので箱に入れて返す。
 pub type Built<T> = Result<T, Box<ModuleError>>;
@@ -66,6 +67,28 @@ pub fn tail_signature(params: &[Kind], rets: &[Kind]) -> Signature {
     sig.returns
         .extend(rets.iter().map(|&k| AbiParam::new(clif(k))));
     sig
+}
+
+/// 最初の`captures`個の引数を捕まえた関数`function`の値のエントリのシグネチャ`tail (ctx, clo, 残りの引数..) -> 関数の
+/// 結果..`。どの関数にも同じ規則で、値として使う関数では一様なシグネチャになり、節の関数ではその操作の
+/// `clause_signature`に等しい (docs/spec/native.mdの「関数の値」)。
+pub fn closure_entry_signature(function: &LirFn, captures: usize) -> Signature {
+    let mut params = vec![Kind::I64];
+    params.extend_from_slice(&lower::params(function)[captures..]);
+    tail_signature(&params, &lower::rets(function))
+}
+
+/// エフェクト`effect`の操作`op`の節の呼び出しのシグネチャ`tail (ctx, clo, ev, 操作の引数..) -> 操作の結果`。
+/// `never`の操作の節のエントリは`I64`の語を1つ返す (docs/spec/lir.mdの「`never` の操作」)。
+pub fn clause_signature(program: &Program, effect: u32, op: u32) -> Signature {
+    let operation = &program.effects[effect as usize].operations[op as usize];
+    let mut params = vec![Kind::I64, Kind::I64];
+    params.extend(operation.params.iter().map(|&repr| lower::kind(repr)));
+    let ret = match operation.ret {
+        OpRet::Repr(repr) => lower::kind(repr),
+        OpRet::Never => Kind::I64,
+    };
+    tail_signature(&params, &[ret])
 }
 
 /// エントリのシグネチャ。記述子だけから作る (docs/spec/native.md の「記述子の表」)。

@@ -1,7 +1,7 @@
 //! エフェクトの基本操作のテスト (docs/spec/native.md の「エフェクト」)。
 use eml_lir::{Prim, Repr};
 use eml_native::Arg;
-use eml_nrt::image::{DATUM_EFFECT, DATUM_MASK, DatumRow, MaskRow};
+use eml_nrt::image::{DATUM_EFFECT, DATUM_FN, DATUM_MASK, DatumRow, MaskRow};
 use eml_nrt::{RunFault, RuntimeError};
 use eml_rt::{Ctx, Fast, Fault, HeapError, Word};
 
@@ -528,4 +528,323 @@ fn main() -> unit {
 ",
     );
     assert_eq!(result, Err(format!("{ROOT_MISUSE} in `<native code>`")));
+}
+
+/// `Counter`のhandlerを1つ入れて`evv`に積み、`ev_lookup`で見つけたevidenceの`get`の節を`clause`で呼んで、結果を表示する
+/// `main`。`clause`は入れた節の値`value`を受け取り、節の関数`get`はプログラムの残り`rest`が定義する。
+fn run_get(value: &str, rest: &str) -> String {
+    format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  dup w.0
+  let s.1: tobj = box 41
+  let e.2: obj = prim ev_new[Counter](s.1, w.0)
+  let u.3: unit = prim ev_set_clause[Counter.get](e.2, {value})
+  let w.4: tobj = prim evv_push(w.0, e.2)
+  let u.5: unit = prim evv_set(w.4)
+  let f.6: obj = prim ev_lookup[Counter]()
+  let c.7: tobj = prim ev_clause[Counter.get](f.6)
+  let r.8: tobj = clause Counter.get c.7(f.6, ())
+  let u.9: unit = prim evv_set(w.0)
+  tail call show_boxed(r.8)
+}}
+{rest}{SHOW_BOXED}{SHOW}"
+    )
+}
+
+/// handlerの状態の写しを返す、その場で動く`Counter.get`の節。
+const GET: &str = "\
+internal clause Counter.get fn get(e.0: obj, u.1: unit) -> tobj {
+  let s.2: tobj = prim ev_take_state(e.0)
+  dup s.2
+  let u.3: unit = prim ev_set_state(e.0, s.2)
+  decref e.0
+  return s.2
+}
+";
+
+/// その場で動く節は、それを呼ぶフレームの上で動き、その値が節の呼び出しの結果として戻る。handlerの節は静的な
+/// クロージャで、そのタグは0である。
+#[test]
+fn an_in_place_clause_returns_its_value() {
+    agree(&run_get("&get", GET));
+}
+
+/// underの節は、動く間`evv`を自分のhandlerの`evv`にする。だから中の`ev_lookup`は、自分のhandler (状態2) でなく
+/// 外側のhandler (状態1) を見つける。
+#[test]
+fn an_under_clause_runs_with_its_handlers_evv() {
+    agree(&format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  dup w.0
+  let s.1: tobj = box 1
+  let a.2: obj = prim ev_new[Counter](s.1, w.0)
+  let w.3: tobj = prim evv_push(w.0, a.2)
+  dup w.3
+  let s.4: tobj = box 2
+  let b.5: obj = prim ev_new[Counter](s.4, w.3)
+  let u.6: unit = prim ev_set_clause[Counter.get](b.5, &under)
+  let w.7: tobj = prim evv_push(w.3, b.5)
+  let u.8: unit = prim evv_set(w.7)
+  let f.9: obj = prim ev_lookup[Counter]()
+  let c.10: tobj = prim ev_clause[Counter.get](f.9)
+  let r.11: tobj = clause Counter.get c.10(f.9, ())
+  let u.12: unit = prim evv_set(w.0)
+  tail call show_boxed(r.11)
+}}
+internal clause Counter.get fn under(e.0: obj, u.1: unit) -> tobj {{
+  let w.2: tobj = prim evv_get()
+  let o.3: tobj = prim ev_evv(e.0)
+  let u.4: unit = prim evv_set(o.3)
+  decref e.0
+  let f.5: obj = prim ev_lookup[Counter]()
+  let s.6: tobj = prim ev_take_state(f.5)
+  dup s.6
+  let u.7: unit = prim ev_set_state(f.5, s.6)
+  decref f.5
+  let u.8: unit = prim evv_set(w.2)
+  return s.6
+}}
+{SHOW_BOXED}{SHOW}"
+    ));
+}
+
+/// 末尾の位置の節の呼び出しは、クロージャのエントリの末尾呼び出しである。この節のクロージャは値を1つ捕まえていて、
+/// そのエントリは節の関数を呼ぶ前にそれをロードする。
+#[test]
+fn a_tail_clause_call() {
+    agree(&format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  dup w.0
+  let n.1: obj = extern \"Prelude.Show Int.show\"(7)
+  let k.2: tobj = closure captured(n.1)
+  let e.3: obj = prim ev_new[Counter]((), w.0)
+  let u.4: unit = prim ev_set_clause[Counter.get](e.3, k.2)
+  let w.5: tobj = prim evv_push(w.0, e.3)
+  let u.6: unit = prim evv_set(w.5)
+  let f.7: obj = prim ev_lookup[Counter]()
+  let c.8: tobj = prim ev_clause[Counter.get](f.7)
+  let r.9: tobj = call ask(c.8, f.7)
+  let u.10: unit = prim evv_set(w.0)
+  let u.11: unit = extern Prelude.println(r.9)
+  return u.11
+}}
+fn ask(c.0: tobj, e.1: obj) -> tobj {{
+  tail clause Counter.get c.0(e.1, ())
+}}
+internal clause Counter.get fn captured(n.0: tobj, e.1: obj, u.2: unit) -> tobj {{
+  decref e.1
+  return n.0
+}}
+"
+    ));
+}
+
+/// 節の呼び出しのシグネチャは操作のReprを持つ。`float`の引数と結果はF64で渡り、捕まえた値はevidenceより前に来る。
+#[test]
+fn a_clause_with_a_float_operand() {
+    agree(
+        "\
+effect Scale { scale(float) -> float }
+fn main() -> unit {
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  dup w.0
+  let k.1: tobj = box 2.5
+  let m.2: tobj = closure times(k.1)
+  let e.3: obj = prim ev_new[Scale]((), w.0)
+  let u.4: unit = prim ev_set_clause[Scale.scale](e.3, m.2)
+  let w.5: tobj = prim evv_push(w.0, e.3)
+  let u.6: unit = prim evv_set(w.5)
+  let f.7: obj = prim ev_lookup[Scale]()
+  let c.8: tobj = prim ev_clause[Scale.scale](f.7)
+  let x.9: float = clause Scale.scale c.8(f.7, 4.0)
+  let u.10: unit = prim evv_set(w.0)
+  let s.11: obj = extern \"Prelude.Show Float.show\"(x.9)
+  let u.12: unit = extern Prelude.println(s.11)
+  return u.12
+}
+internal clause Scale.scale fn times(k.0: tobj, e.1: obj, x.2: float) -> float {
+  decref e.1
+  let y.3: float = unbox k.0
+  decref k.0
+  let z.4: float = extern \"Prelude.Num Float.*\"(x.2, y.3)
+  return z.4
+}
+",
+    );
+}
+
+/// 節のクロージャのタグは0で、`apply`で呼ばれることはない。静的なクロージャの`DATUM_FN`の行の`bits`も0である。
+#[test]
+fn a_static_clause_closure_has_tag_0() {
+    let text = run_get("&g$entry", &GET.replace("fn get(", "fn g$entry("));
+    let rows: Vec<u64> = datum_rows(&text, DATUM_FN)
+        .iter()
+        .map(|row| row.bits)
+        .collect();
+    assert_eq!(rows, [0]);
+}
+
+/// 戻らない操作が1つだけのエフェクトと、その節`quit`。節は`exit`でrunを終える。`exit`は中断を始めるので、節の呼び出しは
+/// `abort`のバイトが立ったまま戻る。
+const FAIL: &str = "\
+effect Fail { never fail(tobj) -> never }
+";
+const QUIT: &str = "\
+internal clause Fail.fail fn quit(e.0: obj, a.1: tobj) -> obj {
+  decref e.0
+  decref a.1
+  let z.2: unit = extern Prelude.exit(3)
+  let d.3: obj = prim dummy()
+  return d.3
+}
+";
+
+/// `Fail`のhandlerを入れ、`call`で`fail`を呼ぶ`main`。`main`は`call`をまたいで文字列を持つので、後始末がそれを
+/// 手放さなければcensusが漏れを見つける。`call`の束縛は`bind`で、`fail`はプログラムの残り`rest`が定義する。
+fn run_fail(bind: &str, rest: &str) -> String {
+    format!(
+        "{FAIL}\
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  dup w.0
+  let e.1: obj = prim ev_new[Fail]((), w.0)
+  let u.2: unit = prim ev_set_clause[Fail.fail](e.1, &quit)
+  let w.3: tobj = prim evv_push(w.0, e.1)
+  let u.4: unit = prim evv_set(w.3)
+  let s.5: obj = extern \"Prelude.Show Int.show\"(5)
+  dup s.5
+  let u.6: unit = extern Prelude.println(s.5)
+  let f.7: obj = prim ev_lookup[Fail]()
+  let c.8: tobj = prim ev_clause[Fail.fail](f.7)
+  {bind} = call fail(c.8, f.7)
+  let u.9: unit = prim evv_set(w.0)
+  let u.10: unit = extern Prelude.println(s.5)
+  return u.10
+}}
+{rest}{QUIT}"
+    )
+}
+
+/// `agree`と同じく両方のエンジンで流し、ネイティブのrunが文字列を1回表示して、節の`exit`の終了コード3で終わったことを
+/// 確かめる。
+fn exits(text: &str) {
+    agree(text);
+    assert_eq!(native(text), ("5\n".to_string(), Ok(Some(3))));
+}
+
+/// `float`を返す関数の、戻らない操作の末尾の節の呼び出しは、末尾でない間接の呼び出しと、その後の中断の確かめである。
+/// 冷たい側は関数の結果の仮の値を返す。
+#[test]
+fn a_tail_never_clause_in_a_float_function() {
+    exits(&run_fail(
+        "let x.11: float",
+        "fn fail(c.0: tobj, e.1: obj) -> float {\n  tail clause Fail.fail c.0(e.1, ())\n}\n",
+    ));
+}
+
+/// 結果の葉が2つの関数でも同じである。冷たい側は葉ごとの仮の値を返す。
+#[test]
+fn a_tail_never_clause_in_a_function_returning_two_leaves() {
+    exits(&run_fail(
+        "let (x.11: float, n.12: int)",
+        "fn fail(c.0: tobj, e.1: obj) -> (float, int) {\n  tail clause Fail.fail c.0(e.1, ())\n}\n",
+    ));
+}
+
+/// `float`に束縛した戻らない節の呼び出しは、1語の結果を捨てる。冷たい側はフレームが持つ文字列を手放し、ブロックの残りは
+/// 仮の値で下ろす。
+#[test]
+fn a_never_clause_bound_to_a_float() {
+    exits(&run_fail(
+        "let x.11: float",
+        "\
+fn fail(c.0: tobj, e.1: obj) -> float {
+  let s.2: obj = extern \"Prelude.Show Int.show\"(6)
+  let x.3: float = clause Fail.fail c.0(e.1, ())
+  let u.4: unit = extern Prelude.println(s.2)
+  let y.5: float = extern \"Prelude.Num Float.+\"(x.3, 1.0)
+  return y.5
+}
+",
+    ));
+}
+
+/// verifierを通さずに読んだ`text`のプログラムを読み込み、`load`のpanicの文を返す。
+fn load_panic(text: &str) -> String {
+    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    let linked = eml_test_support::link(&program);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut machine = machine();
+        let _ = machine.load(&program, &linked);
+    }))
+    .expect_err("the load panics");
+    match panic.downcast::<String>() {
+        Ok(message) => *message,
+        Err(panic) => panic
+            .downcast::<&str>()
+            .map(|message| message.to_string())
+            .unwrap_or_default(),
+    }
+}
+
+/// 末尾の節の呼び出しで、操作の結果が呼ぶ側の結果と違うものは、どのビルドでも読み込みで断る。debugのビルドでは
+/// verifierが断る。releaseのビルドでは、下ろしがどのビルドでも走らせる`eml_lir::unwind::points`の検査が、末尾の節の
+/// 結果を呼ぶ側の`rets`と比べて断る。互換のReprは同じKindを持つので、シグネチャの結果についての下ろしの`assert`が
+/// 先に働くことは今はなく、2つ目の守りとして残る。
+#[test]
+fn release_check_a_tail_clause_result_mismatch_panics() {
+    let message = load_panic(&format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  return ()
+}}
+fn f(c.0: tobj, e.1: obj) -> float {{
+  tail clause Counter.get c.0(e.1, ())
+}}
+"
+    ));
+    let expected = if cfg!(debug_assertions) {
+        "invalid LIR at the native load"
+    } else {
+        "`f` has no unwind points: a tail clause of `Counter.get` returns tobj, but this function returns float"
+    };
+    assert!(message.contains(expected), "{message}");
+}
+
+/// 引数が操作のものと違う節の関数は、どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseのビルドでは
+/// クロージャのエントリを定義する繰り返しの`assert`が断る。
+#[test]
+fn release_check_a_clause_entry_signature_mismatch_panics() {
+    let message = load_panic(&format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  let e.1: obj = prim ev_new[Counter]((), w.0)
+  let u.2: unit = prim ev_set_clause[Counter.get](e.1, &g)
+  decref e.1
+  return ()
+}}
+internal clause Counter.get fn g(e.0: obj, x.1: float) -> tobj {{
+  decref e.0
+  return ()
+}}
+"
+    ));
+    let expected = if cfg!(debug_assertions) {
+        "invalid LIR at the native load"
+    } else {
+        "the closure entry of `g` does not have the signature of its operation"
+    };
+    assert!(message.contains(expected), "{message}");
 }

@@ -15,7 +15,7 @@ pub(crate) enum Datum<'a> {
     String(&'a str),
     BigInt(i64),
     Float(u64),
-    /// 関数の静的なクロージャ。`arity`個の引数を待ち、エントリのコードは`code`にある。
+    /// 関数の静的なクロージャ。`arity`個の引数を待ち (節の関数では0)、エントリのコードは`code`にある。
     Fn {
         arity: u16,
         code: *const u8,
@@ -55,7 +55,8 @@ pub(crate) fn build(control: &Arc<Control>, data: &[Datum]) -> Result<Built, Hea
     })
 }
 
-/// 不死のクロージャ`{ tag = arity, [code] }`。捕まえた値はない (docs/spec/native.md の「関数の値」)。
+/// 不死のクロージャ`{ tag = arity, [code] }`。捕まえた値はない。節の関数の値では`arity`が0である
+/// (docs/spec/native.mdの「関数の値」)。
 fn static_closure(heap: &mut Heap<Fast>, arity: u16, code: *const u8) -> Word {
     // SAFETY: 構築中の物体で、ほかの操作の前にコードの語を書き終える。コードの語は即値なので、参照を移さない
     unsafe {
