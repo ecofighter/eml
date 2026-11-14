@@ -397,6 +397,56 @@ fn prompt_drops_x_on_its_yield_paths_and_ret_on_abort() {
 }
 
 #[test]
+fn prompt_calls_nothing_before_yield_finish() {
+    // ネイティブのコードは呼び出しの後で`abort`のバイトだけを確かめるので、yieldと中断の道では、`prompt$`は
+    // `yield_finish`がyieldの状態を消すまで、呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない。着地から
+    // `prompt$`の呼び出しまでの呼ぶ側と同じ規則である (docs/spec/core-ir.md の「handle と `prompt$`」)
+    let mut program =
+        program("effect State { get(unit) -> tobj }\nfn main() -> unit {\n  return ()\n}\n");
+    Helpers::default().prompt(&mut program);
+    let prompt = program
+        .functions
+        .iter()
+        .find(|function| function.name == eml_lir::EP_PROMPT)
+        .expect("`prompt$` is made");
+    let crate::Term::Switch { cases, .. } = &prompt.blocks[0].term else {
+        panic!("`prompt$` switches on the status")
+    };
+    for status in [1, 2] {
+        let case = cases
+            .iter()
+            .find(|case| case.pattern == eml_lir::CasePattern::Int(status))
+            .unwrap_or_else(|| panic!("`prompt$` has no case {status}"));
+        let stmts = &prompt.blocks[case.target.0 as usize].stmts;
+        let finish = stmts
+            .iter()
+            .position(|stmt| {
+                matches!(
+                    stmt,
+                    crate::Stmt::Let {
+                        rhs: crate::Rhs::Prim(eml_lir::Prim::YieldFinish, _),
+                        ..
+                    }
+                )
+            })
+            .unwrap_or_else(|| panic!("case {status} has no `yield_finish`"));
+        assert!(
+            !stmts[..finish].iter().any(|stmt| matches!(
+                stmt,
+                crate::Stmt::Let {
+                    rhs: crate::Rhs::Call { .. }
+                        | crate::Rhs::Extern { .. }
+                        | crate::Rhs::Prim(eml_lir::Prim::YieldTo | eml_lir::Prim::YieldAbort, _),
+                    ..
+                }
+            )),
+            "case {status} calls, runs an extern row or yields before `yield_finish`\n{}",
+            pretty(&program)
+        );
+    }
+}
+
+#[test]
 fn compose_and_mask_drop_r_on_their_slow_paths() {
     // 遅い道の `r` は κ が yield したときのダミーである
     let mut program =

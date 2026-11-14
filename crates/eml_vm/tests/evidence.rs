@@ -13,9 +13,10 @@ const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n
 /// のは、継続の欄の `()` が「取り出した後」の印を兼ねるためである (docs/spec/core-ir.md の「EP が作る補助の関数」)。
 const ID: &str = "yields fn id(x.0: tobj) -> tobj {\n  return x.0\n}\n";
 
-/// yield_to で始めた yield を、yield_status と yield_finish で受け取る。yield_status は、yield の前と後は 0、
-/// 宛先の evidence では 1 (中断なら 2)、ほかの evidence では 3 である。`yield_abort` は戻らずに巻き戻すので、中断は
-/// 呼んだ関数の中で始め、着地の印の付いた `apply` から状態を読む。
+/// yield_toで始めたyieldを、yield_statusとyield_finishで受け取る。yield_statusは、yieldの前と後は0、宛先の
+/// evidenceでは1 (中断なら2)、ほかのevidenceでは3である。`yield_abort`は戻らずに巻き戻すので、中断は呼んだ関数の
+/// 中で始め、着地の印の付いた`apply`の直後に呼ぶ小さな`prompt$`で状態を読む。verifierがそこにその呼び出しを
+/// 求めるためである (docs/spec/lir.md の「着地の印」)。
 #[test]
 fn a_yield_reaches_the_status_of_its_target() {
     let text = format!(
@@ -42,11 +43,7 @@ fn main() -> unit {{
   let f.14: int = prim yield_status(e.1)
   let z.15: int = prim yielding()
   let u.16: tobj = apply &abort(e.1) prompt e.1
-  decref u.16
-  let g.17: int = prim yield_status(e.1)
-  decref e.1
-  let c.19: tobj = prim yield_finish()
-  decref c.19
+  let g.17: int = call prompt$(e.1, u.16)
   let p.20: unit = call show(a.3)
   let p.21: unit = call show(y.7)
   let p.22: unit = call show(b.8)
@@ -59,6 +56,14 @@ fn main() -> unit {{
 fn abort(e.0: tobj) -> tobj {{
   let u.1: unit = prim yield_abort(e.0, ())
   return u.1
+}}
+fn prompt$(ev.0: obj, x.1: tobj) -> int {{
+  decref x.1
+  let s.2: int = prim yield_status(ev.0)
+  decref ev.0
+  let c.3: tobj = prim yield_finish()
+  decref c.3
+  return s.2
 }}
 fn say(s.0: obj) -> unit {{
   let u.1: unit = extern Prelude.println(s.0)

@@ -969,6 +969,7 @@ translate の `let r = handle E(init, body) { c_0, .., c_n } return ret` を、�
 - `w0` と `ev` は2回以上消費するので、Perceus が `dup` を足す。`ev_set_clause` は `ev` を借りるだけなので、数に入らない ([LIR](lir.md) の「基本操作」)
 - `apply body(())` は yield の地点にしない。yield したかは `prompt$` が見る。`call prompt$` は、handle を含む関数が `yields` なら yield の地点である (その関数が `yields` でなければ、その row から外へ出る yield はない)
 - `apply body(())` には着地の印 `prompt ev` を付ける ([LIR](lir.md) の「着地の印」)。`ev` 宛ての中断は、VM の巻き戻しがこの `apply` の結果 x にダミーを書いて止まり、続く `prompt$` が状態 2 の経路に進む ([VM](vm.md) の「巻き戻し」)。印を付けるのは EP だけで、付ける所はここと、下の「再開と状態」の `resume$` の2か所である
+- 着地から`yield_finish`までの間に、呼び出しの巻き戻しの地点を通らない。印の付いた`apply`のすぐ後に`call prompt$`が続き、`prompt$`は状態1と2の経路で、`yield_finish`の前に呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを確かめるので、これに頼る ([ネイティブの実行系](native.md)の「巻き戻しの地点」)。前半はLIRのverifierが ([LIR](lir.md)の「着地の印」)、後半はEPの単体テストが確かめる。releaseのビルドでは、違反したときの動きは定まらない
 - `prompt$(ev, ret, x)` は、最初に `w = ev_take_evv(ev)` で `ev` の外側の `evv` を取り出し、`evv_set(w)` で `evv` に戻してから、`yield_status(ev)` で4つに分ける。外側の `evv` の参照は `dup` せずに `ev` から `evv` へ移る。`evv` を戻すときに、今の `evv` を手放す。中断が着地したときの `evv` は中断を始めた所の `evv` のままで意味がないが ([LIR](lir.md) の「`evv` の不変条件」)、ここで正しい `evv` に戻る
   - 0 (yield していない): `st = ev_take_state(ev)` で状態を取り出し、`apply ret(x, st)` を末尾で呼ぶ
   - 1 (`ev` 宛ての yield): `drop x` の後、`κ = yield_cont_take()`、`c = yield_finish()`、`st = ev_take_state(ev)` を得て、`k = closure resume$(ev, ret, κ)` を作り、`apply c(k, st)` を末尾で呼ぶ

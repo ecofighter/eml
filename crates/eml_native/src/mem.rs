@@ -7,7 +7,10 @@ use cranelift_codegen::ir::{
 use cranelift_frontend::FunctionBuilder;
 use eml_lir::Shape;
 use eml_rt::rc::{DECREF_FAST_BIAS, DECREF_FAST_SPAN, DUP_FAST_BIAS, DUP_FAST_SPAN};
-use eml_rt::{CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Kind, Meta, Word, layout};
+use eml_rt::{
+    CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_ABORT, CTX_YIELD_TARGET, Kind, Meta, Word,
+    layout,
+};
 
 // reuseは走査する語が`REUSE_SCANNED_LIMIT`個未満の形だけを組にし、ネイティブのコードはそれを数の語なしで`eml_rt`の上に
 // 下ろすので、上限は`eml_rt`の上限以下でなければならない (docs/spec/object-model.md の「ペイロード」)
@@ -233,13 +236,25 @@ fn in_span(b: &mut FunctionBuilder, rc: Value, bias: u32, span: u32) -> Value {
         .icmp_imm_u(IntCC::UnsignedLessThan, biased, i64::from(span))
 }
 
-/// `ctx`の`yielding.target`の語。yieldも中断もしていない間だけ`UNIT`である (docs/spec/native.md の「巻き戻しの地点」)。
+/// `ctx`の`yielding.target`の語。yieldも中断もしていない間は`UNIT`である。読むのは`eml$apply$m`の`n < m`の腕の
+/// 見張りだけで、最後でない部分から戻るyieldを見つける (docs/spec/native.md の「関数の値」)。
 pub fn yield_target(b: &mut FunctionBuilder, ctx: Value) -> Value {
     b.ins().load(
         types::I64,
         MemFlagsData::trusted(),
         ctx,
         CTX_YIELD_TARGET as i32,
+    )
+}
+
+/// `ctx`のyieldの状態の`abort`のバイト。中断の途中の間だけ0でなく、yieldはそれを立てない (docs/spec/native.md の
+/// 「巻き戻しの地点」)。
+pub fn yield_abort(b: &mut FunctionBuilder, ctx: Value) -> Value {
+    b.ins().load(
+        types::I8,
+        MemFlagsData::trusted(),
+        ctx,
+        CTX_YIELD_ABORT as i32,
     )
 }
 

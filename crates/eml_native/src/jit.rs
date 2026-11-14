@@ -255,6 +255,9 @@ impl NativeMachine {
                 return Err(module_error(*error));
             }
         };
+        if let Some(clif) = lowered.raise.clif {
+            self.clif.insert(names::RAISE.to_string(), clif);
+        }
         self.symbols.push(Symbol {
             name: names::RAISE.to_string(),
             address: module.get_finalized_function(lowered.raise.id),
@@ -302,6 +305,9 @@ impl NativeMachine {
             }
         }
         for (index, defined) in lowered.applies.into_iter().enumerate() {
+            if let Some(clif) = defined.clif {
+                self.clif.insert(names::apply(index + 1), clif);
+            }
             self.symbols.push(Symbol {
                 name: names::apply(index + 1),
                 address: module.get_finalized_function(defined.id),
@@ -431,7 +437,8 @@ impl NativeMachine {
         Ok((thunk, code))
     }
 
-    /// 読み込んだ関数`name`のコンパイルの前のCLIF。`new_with_clif`で作ったマシンだけが持つ。
+    /// 読み込んだ関数`name`、または補助の関数`eml$apply$<m>`か`eml$raise`の、コンパイルの前のCLIF。`new_with_clif`で
+    /// 作ったマシンだけが持つ。
     #[doc(hidden)]
     pub fn clif(&self, name: &str) -> Option<&str> {
         self.clif.get(name).map(String::as_str)

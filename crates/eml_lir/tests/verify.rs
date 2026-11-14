@@ -3006,6 +3006,10 @@ fn root_primitives_move_tobj_values() {
 
 // 着地の印 `prompt v`
 
+/// いちばん小さい`prompt$`。印の変数と、印の付いた`apply`の結果を受け取る。verifierは`apply`の直後にその呼び出しを
+/// 求める (docs/spec/lir.md の「着地の印」)。
+const PROMPT: &str = "fn prompt$(ev.0: obj, x.1: tobj) -> obj {\n  decref x.1\n  return ev.0\n}\n";
+
 /// `ev` を呼び出しの後も持ち続けて返す、印の付いた `apply`。
 fn marked(body: &str, ev: &str) -> String {
     format!("fn f(b.0: tobj, {ev}) -> obj {{\n{body}}}\n")
@@ -3014,9 +3018,9 @@ fn marked(body: &str, ev: &str) -> String {
 #[test]
 fn prompt_marker_is_accepted() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  let r.3: obj = call prompt$(ev.1, x.2)\n  return r.3\n",
         "ev.1: obj",
-    );
+    ) + PROMPT;
     assert_eq!(check(&text), Ok(()));
 }
 
@@ -3095,7 +3099,8 @@ b2:
 }
 
 #[test]
-fn prompt_marker_passed_only_to_a_jump_is_accepted() {
+fn prompt_marker_passed_only_to_a_jump_is_refused() {
+    // 呼び出しの後で印を`jump`だけが使うなら、`apply`の後に`prompt$`の呼び出しが続かないので、verifierが拒む
     let text = "fn f(b.0: tobj, ev.1: obj) -> obj {
   let x.2: tobj = yields apply b.0(()) prompt ev.1
   jump b1(ev.1)
@@ -3103,7 +3108,160 @@ b1(p.3: obj):
   return p.3
 }
 ";
-    assert_eq!(check_scopes(text), Ok(()));
+    assert_eq!(
+        check_scopes(text),
+        Err(
+            "the apply with the prompt marker `ev.1` is not followed by `prompt$` in `f`"
+                .to_string()
+        )
+    );
+}
+
+/// evidence passingの出力の形で書いた`Panic`の`try_panic`と`prompt$`と、何もしない関数`g`。
+const TRY_PANIC: &str = "\
+effect Prelude.Panic { never panicked(obj) -> never }
+fn main() -> unit {
+  let c.0: tobj = box 42
+  let r.1: tobj = call try_panic(&boom, c.0)
+  decref r.1
+  return ()
+}
+fn boom(p.0: unit) -> tobj {
+  let m.1: obj = const \"boom\"
+  let r.2: tobj = extern Prelude.panic(m.1)
+  return r.2
+}
+fn try_panic(f.0: tobj, c.1: tobj) -> tobj {
+  let w.2: tobj = prim evv_get()
+  dup w.2
+  let ev.3: obj = prim ev_new[Prelude.Panic](c.1, w.2)
+  let u.4: unit = prim ev_set_clause[Prelude.Panic.panicked](ev.3, &panicked$entry)
+  dup ev.3
+  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let u.6: unit = prim evv_set(w.5)
+  let x.7: tobj poly = yields apply f.0(()) prompt ev.3
+  tail call prompt$(ev.3, &return$, x.7)
+}
+clause Prelude.Panic.panicked fn panicked$entry(e.0: obj, m.1: obj) -> obj poly {
+  decref m.1
+  let u.2: unit = prim yield_abort(e.0, &panicked$clause)
+  let d.3: obj poly = prim dummy()
+  return d.3
+}
+fn panicked$clause(c.0: tobj) -> tobj {
+  return c.0
+}
+yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: tobj = prim ev_take_evv(ev.0)
+  let u.4: unit = prim evv_set(w.3)
+  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
+b1:
+  let st.6: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply ret.1(x.2, st.6)
+b2:
+  let u.8: unit = drop x.2
+  let k.9: tobj poly = prim yield_cont_take()
+  let c.10: tobj poly = prim yield_finish()
+  let st.11: tobj poly = prim ev_take_state(ev.0)
+  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  tail yields apply c.10(k.12, st.11)
+b3:
+  let u.14: unit = drop ret.1
+  let u.15: unit = drop x.2
+  let c.16: tobj poly = prim yield_finish()
+  let st.17: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply c.16(st.17)
+b4:
+  let u.19: unit = drop x.2
+  let st.20: tobj poly = prim ev_take_state(ev.0)
+  let k.21: tobj poly = prim yield_cont_take()
+  let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+  let u.23: unit = prim yield_cont_set(k.22)
+  let d.24: obj poly = prim dummy()
+  return d.24
+}
+yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: obj = prim ev_renew(ev.0, s.4)
+  decref ev.0
+  let w.6: tobj = prim evv_get()
+  dup e.5
+  let w.7: tobj = prim evv_push(w.6, e.5)
+  let u.8: unit = prim evv_set(w.7)
+  let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
+  tail call prompt$(e.5, ret.1, x.9)
+}
+yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+}
+fn return$(r.0: tobj, s.1: unit) -> tobj {
+  return r.0
+}
+fn g() -> unit {
+  return ()
+}
+";
+
+/// `TRY_PANIC`の印の付いた`apply`と`prompt$`の間に`stmt`を入れる。
+fn between_landing_and_prompt(stmt: &str) -> String {
+    let apply = "  let x.7: tobj poly = yields apply f.0(()) prompt ev.3\n";
+    assert!(TRY_PANIC.contains(apply));
+    TRY_PANIC.replace(apply, &format!("{apply}  {stmt}\n"))
+}
+
+#[test]
+fn a_prompted_apply_followed_by_prompt_is_accepted() {
+    assert_eq!(check(TRY_PANIC), Ok(()));
+}
+
+#[test]
+fn a_call_between_a_prompted_apply_and_prompt_is_refused() {
+    let text = between_landing_and_prompt("let z.9: unit = call g()");
+    let refused =
+        "the apply with the prompt marker `ev.3` is not followed by `prompt$` in `try_panic`";
+    assert_eq!(check(&text), Err(refused.to_string()));
+    // 複数の値の`let`で束縛した印の付いた`apply`も同じく確かめる。テキストの形は値が1つの`let`を括弧で書けないので、
+    // 読んだプログラムの文を置き換える
+    let mut program = read(&text);
+    let function = program
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "try_panic")
+        .expect("`try_panic` is in the program");
+    let stmt = function.blocks[0]
+        .stmts
+        .iter_mut()
+        .find(|stmt| matches!(stmt, Stmt::Let { rhs: Rhs::Call(call), .. } if call.prompt().is_some()))
+        .expect("`try_panic` has a marked apply");
+    let Stmt::Let {
+        var,
+        rhs: Rhs::Call(call),
+    } = stmt.clone()
+    else {
+        unreachable!()
+    };
+    *stmt = Stmt::LetMany {
+        vars: vec![var],
+        call,
+    };
+    assert_eq!(
+        verify(&program).map_err(|error| error.to_string()),
+        Err(refused.to_string())
+    );
+}
+
+#[test]
+fn an_extern_row_between_a_prompted_apply_and_prompt_is_refused() {
+    let text = between_landing_and_prompt("let z.9: int = extern \"Prelude.Num Int.+\"(1, 2)");
+    assert_eq!(
+        check(&text),
+        Err(
+            "the apply with the prompt marker `ev.3` is not followed by `prompt$` in `try_panic`"
+                .to_string()
+        )
+    );
 }
 
 const P2: &str = "layout P { P(obj, obj) }\n";

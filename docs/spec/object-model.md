@@ -863,7 +863,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `roots` | セッションの根の表 (下の「セッションの根」) |
 | `fault_value` | 置いた失敗 (下の「置いた失敗」)。`native.fault`が0の間は`None`である |
 
-- `Ctx`は`#[repr(C)]`である。`native`はどちらのモードでもずれ0にあり、`heap`はそのすぐ後の欄である。ネイティブのコードは`native`の欄を、`Ctx`の隣の`pub const`のずれ`CTX_YIELD_TARGET`、`CTX_FAULT`、`CTX_STOP`、`CTX_STACK_LIMIT`、`CTX_JMP`でだけ読む。コンパイル時のassertが`native`と`heap`のずれを固定し、どの定数も120以下で8の倍数であることを確かめる。こうすると、どの対象でも読みの符号がいちばん短くなる。`runtime`に定数はない。読むのはRustのコードだけだからである
+- `Ctx`は`#[repr(C)]`である。`native`はどちらのモードでもずれ0にあり、`heap`はそのすぐ後の欄である。ネイティブのコードは`native`の欄を、`Ctx`の隣の`pub const`のずれ`CTX_YIELD_TARGET`、`CTX_YIELD_ABORT`、`CTX_FAULT`、`CTX_STOP`、`CTX_STACK_LIMIT`、`CTX_JMP`でだけ読む。コンパイル時のassertが`native`と`heap`のずれを固定し、どの定数も120以下で8の倍数であることを確かめる。こうすると、どの対象でも読みの符号がいちばん短くなる。`runtime`に定数はない。読むのはRustのコードだけだからである。中断のバイト`CTX_YIELD_ABORT`はyieldの状態の`abort`の欄で、1バイトで読む。その後の7バイトは詰め物である。読むのは呼び出しの後の巻き戻しの確かめで、`eml$apply$m`の`n < m`の腕もそれを使う ([ネイティブの実行系](native.md)の「巻き戻しの地点」)
 - `jmp`と`stop`には書く関数がない。`jmp()`と`stop_word()`は読むだけである。3つのポインタの欄の約束は下の「`unsafe` の核」のT18にある
 - `eml_rt`は`extern "C"`、asm、`catch_unwind`を持たない。`trust.rs`のテスト`the_core_has_no_native_boundary`が確かめる。ネイティブのコードが呼ぶエントリとそのstubは、ネイティブの実行系に置く
 - `Ctx`は`Send`で`Sync`でない (`Heap`と同じ)。`Control`は`Send`と`Sync`である。どちらも型のassertで固定する

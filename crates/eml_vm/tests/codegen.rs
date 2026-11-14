@@ -493,11 +493,15 @@ fn main() -> unit {
 yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
   dup s.2
   let x.3: tobj = yields apply b.0(()) prompt ev.1
-  decref x.3
-  decref ev.1
+  let r.6: obj = call prompt$(ev.1, x.3)
+  decref r.6
   let t.4: obj = extern \"Prelude.++\"(s.2, s.2)
   let u.5: unit = extern Prelude.println(t.4)
   return u.5
+}
+fn prompt$(ev.0: obj, x.1: tobj) -> obj {
+  decref x.1
+  return ev.0
 }
 "), @"
     fn main (arity 0, frame 1)
@@ -507,11 +511,14 @@ yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
          5  dup s2
          6  load_imm s3, 0
          7  apply s0 = s0(s3) unwind [s1, s2*2] land s1
-         8  decref s0
-         9  decref s1
+         8  call s0 = prompt$(s1, s0) unwind [s2*2]
+         9  decref s0
         10  extern s0 = Prelude.++(s2, s2)
         11  extern s0 = Prelude.println(s0)
         12  ret s0
+    fn prompt$ (arity 2, frame 2) entry unwind [s0, s1]
+        13  decref s1
+        14  ret s0
     ");
 }
 

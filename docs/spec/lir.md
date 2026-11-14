@@ -414,6 +414,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - 印を付けるのは EP だけで、付ける所は2つである。handle の `apply body(())` (v は handle の evidence) と、`resume$` の `apply κ(v)` (v は再開で作り直した evidence) である。どちらも直後に `prompt$` の呼び出しが続き、`prompt$` が `yield_status` の状態 2 の経路に進む ([Core IR](core-ir.md) の「handle と `prompt$`」と「再開と状態」)
 - 印の付いた呼び出しは末尾の位置にない。直後に `prompt$` の呼び出しが続くので、縮約に印のための規則は要らず、verifier が確かめるだけにする (下の「verifier」)
 - 印は `apply` にだけ付く。EP が印を付ける2か所が、どちらも `apply` だからである
+- 印の付いた呼び出しの後、ブロックの次の呼び出し (呼び出しの`let`、複数の値の`let`、`tail`の呼び出し) は、最初の引数が印の変数vである`prompt$`の直接の呼び出しで、その間にexternの行も`prim yield_to`も`prim yield_abort`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを確かめるので ([ネイティブの実行系](native.md)の「巻き戻しの地点」)、着地から`prompt$`の`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない。verifierがこの規則を確かめる。releaseのビルドでは、違反したときの動きは定まらない
 
 ### エントリの関数の印
 
@@ -706,6 +707,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 末尾呼び出しの印は、呼び出しの検査の最初に拒む (``a tail apply has a prompt marker, but a tail call leaves no frame to land on``)。エントリの段は `tail` そのものを拒むので、この文言はエントリの段のほかで出る
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数 v が見えること、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
+  - 印のほかの検査の後に、印の付いた呼び出しに`prompt$`が続くことを確かめる (上の「着地の印」。`` the apply with the prompt marker `ev.1` is not followed by `prompt$` ``)
 - `eml_lir::unwind::points` は、所有の段の走査に、関数のエントリと巻き戻しの地点ごとの所有を書き留めさせる。VM のコード生成が、これで巻き戻しの表を作る ([VM](vm.md) の「巻き戻し」)。所有を求める走査を、verifier と巻き戻しの表で2つ持たないためである
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)
 - 境界の検査は、R7 と R8 の検査のうち、`jump`、`return`、`box`、`unbox` を除くものである。直接の呼び出しの引数と結果、`closure` の引数、`apply` の呼ばれる値と引数と結果 (`tobj` と比べる)、`par` の子 (`tobj` と比べる) と結果 (`obj`)、`clause` と `prim` のオペランドと結果、`clause` の印の関数の引数と `ret` が操作の表と互換であること、宣言した Repr が `tobj` のフィールドである。`tail` の結果は、呼び出し元の `rets` と Repr と印を比べる。translate と EP の出力は、box の挿入より前には境界に合わないので、Core IR の verifier と LIR のエントリの段は境界を見ない

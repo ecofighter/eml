@@ -36,8 +36,8 @@ use crate::reuse;
 use crate::syntax::{layout_text, operation_text, prim_text, repr_text, rets_text};
 use crate::unwind::{self, UnwindPoint, Unwinds};
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Lends, LirFn, Mark, OpRet, Prim, Program,
-    Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
+    Atom, Block, BlockId, Call, CasePattern, Ctor, EP_PROMPT, FnIdx, Lends, LirFn, Mark, OpRet,
+    Prim, Program, Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
 };
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
@@ -707,6 +707,17 @@ impl<'a> Checker<'a> {
                 index: at as i64,
             };
             self.check_stmt(&mut owned, stmt)?;
+            let marked = match stmt {
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Call(call),
+                }
+                | Stmt::LetMany { vars: _, call } => call.prompt(),
+                _ => None,
+            };
+            if let Some(marker) = marked {
+                self.check_landing(block, at, marker)?;
+            }
             if let Some(Recorder { entry: _, points }) = &mut self.unwind
                 && let Some((vars, landing)) = unwind::point(stmt, &self.program.c_functions)
             {
@@ -1767,6 +1778,50 @@ impl<'a> Checker<'a> {
         match call.prompt() {
             Some(marker) => self.check_prompt(owned, call, marker),
             None => Ok(()),
+        }
+    }
+
+    /// 着地の印`v`を持つ`apply`の後、ブロックの次の呼び出しは、最初の引数が`v`である`prompt$`の直接の呼び出しで、
+    /// その間にexternの行も`yield_to`も`yield_abort`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを
+    /// 確かめるので、着地から`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない
+    /// (docs/spec/lir.md の「着地の印」)。
+    fn check_landing(&self, block: &Block, at: usize, marker: VarId) -> Result<(), String> {
+        let refused = || {
+            format!(
+                "the apply with the prompt marker `{}` is not followed by `{EP_PROMPT}`",
+                self.cx.name(marker)
+            )
+        };
+        let mut calls = block.stmts[at + 1..]
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Call(call),
+                }
+                | Stmt::LetMany { vars: _, call } => Some(Some(call)),
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Extern { .. } | Rhs::Prim(Prim::YieldTo | Prim::YieldAbort, _),
+                } => Some(None),
+                _ => None,
+            })
+            .chain(match &block.term {
+                Term::TailCall(call) => Some(Some(call)),
+                _ => None,
+            });
+        match calls.next() {
+            Some(Some(Call::Direct(target, args)))
+                if self
+                    .program
+                    .functions
+                    .get(target.0 as usize)
+                    .is_some_and(|callee| callee.name == EP_PROMPT)
+                    && args.first() == Some(&Atom::Var(marker)) =>
+            {
+                Ok(())
+            }
+            _ => Err(refused()),
         }
     }
 

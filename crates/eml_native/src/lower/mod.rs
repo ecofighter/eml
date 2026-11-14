@@ -219,7 +219,7 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
         ctx.func.name = UserFuncName::testcase(names::apply(args));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
         apply::define_apply(b, module, &imports, args);
-        applies.push(define(module, &mut ctx, id, false, Vec::new())?);
+        applies.push(define(module, &mut ctx, id, keep_clif, Vec::new())?);
     }
     let mut paps = Vec::new();
     for rest in apply::pap_rests(largest) {

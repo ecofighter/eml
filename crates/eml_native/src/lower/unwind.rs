@@ -1,6 +1,5 @@
 //! 巻き戻しの地点の後のコード、地点の後始末、仮の値、`eml$raise`、関数の位置の行 (docs/spec/native.md の
 //! 「巻き戻しの地点」)。
-use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{Block, InstBuilder, Signature, Value, types};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::Module;
@@ -21,7 +20,7 @@ use crate::mem;
 /// 巻き戻しの地点の命令の後に出すもの。`site`は関数自身の位置の行 (`FnRow.sites`) の添字である。
 #[derive(Debug, Clone, Copy)]
 pub(super) enum After {
-    /// 末尾でない呼び出し。呼ばれた側が中断を始めたかを`yielding.target`で確かめる。
+    /// 末尾でない呼び出し。呼ばれた側が中断を始めたかを`abort`のバイトで確かめる。
     Call,
     /// `faults`の行の呼び出し。faultの語を確かめる。
     Faults { site: u32, purity: Purity },
@@ -52,6 +51,18 @@ impl<'a> From<&'a UnwindPoint> for Point<'a> {
             landing: point.landing,
         }
     }
+}
+
+/// `abort`のバイトをロードし、立っていれば新しい冷たいブロックへ、そうでなければ新しい熱いブロックへ分岐する。どちらの
+/// ブロックも選ばずに`(cold, hot)`を返す。呼び出しの後の巻き戻しの確かめは、どれもこの関数が出す
+/// (docs/spec/native.md の「巻き戻しの地点」)。
+pub(super) fn if_aborting(b: &mut FunctionBuilder, ctx: Value) -> (Block, Block) {
+    let aborting = mem::yield_abort(b, ctx);
+    let cold = b.create_block();
+    b.set_cold_block(cold);
+    let hot = b.create_block();
+    b.ins().brif(aborting, cold, &[], hot, &[]);
+    (cold, hot)
 }
 
 /// `eml$raise(ctx, function, site, purity)`のシグネチャ。
@@ -120,12 +131,7 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
     pub fn after_unwind_point(&mut self, point: &Point, after: After) {
         match after {
             After::Call => {
-                let target = mem::yield_target(&mut self.b, self.ctx);
-                let unit = self.b.ins().iconst(types::I64, mem::UNIT);
-                let aborting = self.b.ins().icmp(IntCC::NotEqual, target, unit);
-                let cleanup = self.cold_block();
-                let hot = self.b.create_block();
-                self.b.ins().brif(aborting, cleanup, &[], hot, &[]);
+                let (cleanup, hot) = if_aborting(&mut self.b, self.ctx);
                 self.fill_cleanup(cleanup, point);
                 self.b.switch_to_block(hot);
             }

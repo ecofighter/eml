@@ -313,7 +313,7 @@ fn f(s.0: obj) -> unit {
 
 #[test]
 fn a_call_and_its_unwind_check() {
-    // 呼び出しの後で`yielding.target`を確かめ、中断なら持っている`s.0`を手放して仮の値を返す。呼ぶ先はどれも
+    // 呼び出しの後で`abort`のバイトを確かめ、中断なら持っている`s.0`を手放して仮の値を返す。呼ぶ先はどれも
     // moduleの中の記号なので、`colocated`と出る
     let text = "\
 fn g(n.0: int) -> int {
@@ -367,15 +367,13 @@ fn f(s.0: obj, n.1: int) -> unit {
 
     block3:
         v17 = call fn3(v0, v2)
-        v18 = load.i64 notrap aligned v0
-        v19 = iconst.i64 1
-        v20 = icmp ne v18, v19  ; v19 = 1
-        brif v20, block4, block5
+        v18 = load.i8 notrap aligned v0+24
+        brif v18, block4, block5
 
     block4 cold:
         call fn2(v0, v1)
-        v21 = iconst.i64 1
-        return v21  ; v21 = 1
+        v19 = iconst.i64 1
+        return v19  ; v19 = 1
 
     block5:
         return_call fn4(v0, v1, v17)
@@ -692,37 +690,35 @@ fn f(s.0: obj, c.1: tobj, x.2: tobj) -> obj {
         jump block6(v38)
 
     block6(v23: i64):
-        v39 = load.i64 notrap aligned v0
-        v40 = iconst.i64 1
-        v41 = icmp ne v39, v40  ; v40 = 1
-        brif v41, block7, block8
+        v39 = load.i8 notrap aligned v0+24
+        brif v39, block7, block8
 
     block7 cold:
         call fn2(v0, v1)
-        v42 = iconst.i64 1
-        return v42  ; v42 = 1
+        v40 = iconst.i64 1
+        return v40  ; v40 = 1
 
     block8:
-        v43 = iconst.i64 1
-        v44 = band.i64 v23, v43  ; v43 = 1
-        brif v44, block12, block13
+        v41 = iconst.i64 1
+        v42 = band.i64 v23, v41  ; v41 = 1
+        brif v42, block12, block13
 
     block13:
-        v45 = load.i32 notrap aligned v23
-        v46 = iconst.i32 -2
-        v47 = iadd v45, v46  ; v46 = -2
-        v48 = iconst.i32 0x7fff_fffd
-        v49 = icmp ult v47, v48  ; v48 = 0x7fff_fffd
-        brif v49, block9, block10
+        v43 = load.i32 notrap aligned v23
+        v44 = iconst.i32 -2
+        v45 = iadd v43, v44  ; v44 = -2
+        v46 = iconst.i32 0x7fff_fffd
+        v47 = icmp ult v45, v46  ; v46 = 0x7fff_fffd
+        brif v47, block9, block10
 
     block9:
-        v50 = iconst.i32 -1
-        v51 = iadd.i32 v45, v50  ; v50 = -1
-        store notrap aligned v51, v23
+        v48 = iconst.i32 -1
+        v49 = iadd.i32 v43, v48  ; v48 = -1
+        store notrap aligned v49, v23
         jump block12
 
     block10:
-        brif.i32 v45, block11, block12
+        brif.i32 v43, block11, block12
 
     block11 cold:
         call fn2(v0, v23)
@@ -730,6 +726,117 @@ fn f(s.0: obj, c.1: tobj, x.2: tobj) -> obj {
 
     block12:
         return v1
+    }
+    ");
+}
+
+#[test]
+fn an_over_application() {
+    // `eml$apply$2`の`n < m`の腕は、内の適用の後で呼び出しの地点と同じく`abort`のバイトを確かめ、その冷たい
+    // ブロックが最後の引数を手放す。熱い側では`yielding.target`をロードし、Unitでなければtrapする。1つの`apply`の
+    // うちyieldしうるのは最後の部分だけだからである
+    let text = "\
+fn f(x.0: tobj) -> tobj {
+  return x.0
+}
+fn g(a.0: tobj, b.1: tobj) -> tobj {
+  tail apply &f(a.0, b.1)
+}
+";
+    insta::assert_snapshot!(clif(text, "eml$apply$2"), @"
+    function %eml$apply$2(i64, i64, i64, i64) -> i64 tail {
+        ss0 = explicit_slot 16, align = 8
+        sig0 = (i64, i64, i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64, i64) -> i64 c
+        sig2 = (i64, i64, i64, i64) -> i64 tail
+        sig3 = (i64, i64, i64) -> i64 c
+        sig4 = (i64, i64, i64) -> i64 tail
+        sig5 = (i64, i64) c
+        sig6 = (i64, i64, i64) -> i64 tail
+        fn0 = %eml_nrt_pap sig1
+        fn1 = colocated %eml$apply$2 sig2
+        fn2 = %eml_nrt_safepoint sig3
+        fn3 = colocated %eml$apply$1 sig4
+        fn4 = %eml_rt_decref sig5
+        fn5 = colocated %eml$apply$1 sig6
+
+    block0(v0: i64, v1: i64, v2: i64, v3: i64):
+        v4 = load.i32 notrap aligned v1+4
+        v5 = iconst.i32 0xffff
+        v6 = band v4, v5  ; v5 = 0xffff
+        v7 = iconst.i32 2
+        v8 = icmp eq v6, v7  ; v7 = 2
+        brif v8, block1, block2
+
+    block1:
+        v9 = iconst.i32 16
+        v10 = ushr.i32 v4, v9  ; v9 = 16
+        v11 = iconst.i32 255
+        v12 = band v10, v11  ; v11 = 255
+        v13 = iconst.i32 255
+        v14 = icmp eq v12, v13  ; v13 = 255
+        v15 = iconst.i64 8
+        v16 = iconst.i64 16
+        v17 = select v14, v16, v15  ; v16 = 16, v15 = 8
+        v18 = iadd.i64 v1, v17
+        v19 = load.i64 notrap aligned v18
+        v20 = iconst.i64 1
+        v21 = sshr v19, v20  ; v20 = 1
+        return_call_indirect sig0, v21(v0, v1, v2, v3)
+
+    block2:
+        v22 = iconst.i32 2
+        v23 = icmp.i32 ugt v6, v22  ; v22 = 2
+        brif v23, block3, block4
+
+    block3:
+        v24 = stack_addr.i64 ss0
+        store.i64 notrap v2, v24
+        v25 = stack_addr.i64 ss0+8
+        store.i64 notrap v3, v25
+        v26 = stack_addr.i64 ss0
+        v27 = iconst.i64 2
+        v28 = call fn0(v0, v1, v26, v27)  ; v27 = 2
+        return v28
+
+    block4:
+        v29 = get_stack_pointer.i64 
+        v30 = load.i64 notrap aligned v0+48
+        v31 = icmp ult v29, v30
+        brif v31, block5, block6
+
+    block5 cold:
+        v32 = func_addr.i64 fn1
+        v33 = iconst.i64 0
+        v34 = call fn2(v0, v32, v33)  ; v33 = 0
+        v35 = iconst.i64 0
+        v36 = icmp eq v34, v35  ; v35 = 0
+        brif v36, block6, block7
+
+    block7 cold:
+        trap user1
+
+    block6:
+        v37 = call fn3(v0, v1, v2)
+        v38 = load.i8 notrap aligned v0+24
+        brif v38, block8, block9
+
+    block8 cold:
+        call fn4(v0, v3)
+        v39 = iconst.i64 1
+        return v39  ; v39 = 1
+
+    block9:
+        v40 = load.i64 notrap aligned v0
+        v41 = iconst.i64 1
+        v42 = icmp ne v40, v41  ; v41 = 1
+        brif v42, block10, block11
+
+    block10 cold:
+        trap user1
+
+    block11:
+        return_call fn5(v0, v37, v3)
     }
     ");
 }

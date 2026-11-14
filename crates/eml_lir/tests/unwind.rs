@@ -172,11 +172,18 @@ fn landing_is_the_prompt_variable() {
     let text = "\
 yields fn f(b.0: tobj, ev.1: obj) -> obj {
   let x.2: tobj = yields apply b.0(()) prompt ev.1
-  decref x.2
-  return ev.1
+  let r.3: obj = call prompt$(ev.1, x.2)
+  return r.3
+}
+fn prompt$(ev.0: obj, x.1: tobj) -> obj {
+  decref x.1
+  return ev.0
 }
 ";
-    assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], Some(1))]);
+    assert_eq!(
+        points_of(text, "f"),
+        [point(0, 0, &[(1, 1)], Some(1)), point(0, 1, &[], None)]
+    );
 }
 
 #[test]

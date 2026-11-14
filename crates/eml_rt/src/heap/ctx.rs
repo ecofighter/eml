@@ -4379,6 +4379,9 @@ unsafe impl Send for RtPtr {}
 pub const CTX_YIELD_TARGET: usize = core::mem::offset_of!(Ctx<Fast>, native)
     + core::mem::offset_of!(Native, yielding)
     + core::mem::offset_of!(YieldState, target);
+pub const CTX_YIELD_ABORT: usize = core::mem::offset_of!(Ctx<Fast>, native)
+    + core::mem::offset_of!(Native, yielding)
+    + core::mem::offset_of!(YieldState, abort);
 pub const CTX_FAULT: usize =
     core::mem::offset_of!(Ctx<Fast>, native) + core::mem::offset_of!(Native, fault);
 pub const CTX_STOP: usize =
@@ -4400,6 +4403,7 @@ const _: () = {
     assert!(core::mem::size_of::<Native>() == 72);
     let consts = [
         CTX_YIELD_TARGET,
+        CTX_YIELD_ABORT,
         CTX_FAULT,
         CTX_STOP,
         CTX_STACK_LIMIT,

@@ -14,7 +14,7 @@ use eml_nrt::image::ACTION_CONTINUE;
 
 use super::function::FnLower;
 use super::rc::{self, Step};
-use super::unwind::{After, Point};
+use super::unwind::{self, After, Point};
 use super::{Callees, Imports, kind, names};
 use crate::abi::{clif, tail_signature};
 use crate::mem;
@@ -369,19 +369,25 @@ pub(super) fn define_apply<M: Module>(
         // 内の適用の中で中断が始まったら、最後の引数を1回手放し、仮の値を返す。中断しうるのは1つの`apply`の最後の
         // 矢印だけだが、その矢印がどの部分に来るかは実行時に決まる。残りの引数は、内の段がそれぞれ1回ずつ手放す
         // (docs/spec/native.md の「関数の値」)
-        let target = mem::yield_target(&mut b, ctx);
-        let unit = b.ins().iconst(types::I64, mem::UNIT);
-        let aborting = b.ins().icmp(IntCC::NotEqual, target, unit);
-        let cleanup = b.create_block();
-        b.set_cold_block(cleanup);
-        let hot = b.create_block();
-        b.ins().brif(aborting, cleanup, &[], hot, &[]);
+        let (cleanup, hot) = unwind::if_aborting(&mut b, ctx);
         b.switch_to_block(cleanup);
         let decref = module.declare_func_in_func(imports.entry("eml_rt_decref"), b.func);
         b.ins().call(decref, &[ctx, last]);
         let placeholder = b.ins().iconst(types::I64, mem::UNIT);
         b.ins().return_(&[placeholder]);
         b.switch_to_block(hot);
+        // 1つの`apply`のうちyieldしうるのは最後の矢印だけなので、最後でない部分からyieldが戻ることはない。ここで
+        // `target`がUnitでなければそういうyieldなので、そのダミーを関数の値として渡す代わりにtrapする
+        // (docs/spec/native.md の「関数の値」)
+        let target = mem::yield_target(&mut b, ctx);
+        let yielding = b.ins().icmp_imm_u(IntCC::NotEqual, target, mem::UNIT);
+        let misplaced = b.create_block();
+        b.set_cold_block(misplaced);
+        let apply = b.create_block();
+        b.ins().brif(yielding, misplaced, &[], apply, &[]);
+        b.switch_to_block(misplaced);
+        b.ins().trap(TrapCode::unwrap_user(1));
+        b.switch_to_block(apply);
         let next = module.declare_func_in_func(imports.apply(1), b.func);
         b.ins().return_call(next, &[ctx, result, last]);
     }
