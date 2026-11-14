@@ -43,7 +43,7 @@ All facts at be1b1de5 [V: fact dossiers of the refresh].
 | Needed | For | How to check | If missing |
 |---|---|---|---|
 | The dev shell (Rust 1.99.1, nextest, insta, clippy) | every unit | `cargo --version` → `cargo 1.99.1`; `cargo nextest --version` exit 0 | stop |
-| Verus and verusfmt (default devShell, macOS or x86_64 Linux) | R1, R2, R3, R4, N1 (EG) | `cargo verus --version` exit 0; `verusfmt --version` exit 0 | stop: eml_rt units cannot be gated |
+| Verus and verusfmt (default devShell, macOS or x86_64 Linux) | R1, R2, R3, R4, R5, N1 (EG) | `cargo verus --version` exit 0; `verusfmt --version` exit 0 | stop: eml_rt units cannot be gated |
 | The `.#miri` shell | EG, V1, N2..N6 | `nix develop .#miri -c cargo miri --version` exit 0 | stop |
 | macOS (for `bench/rt-gate.sh`, `bench/*.sh`) | EG, Z | `uname` → `Darwin` | rt-gate: stop; Z: `Measure jit-effects` commit later (K-9) |
 | The `.#cross` shell | checkpoint extras | `nix develop .#cross -c rustc --print target-list \| grep -c x86_64-pc-windows-msvc` → 1 | stop before CP-B |
@@ -93,7 +93,7 @@ Conformance criteria (verbatim from 08 §8; "unit 8 / unit 9 / section 5" there 
 | G-14 | MUST NOT: a new `Native` field, thread-local or eml_sched edge in this stage | N-5; crate graph | jit-effects | `nix/crate-graph.sh --check`; `size_of::<Native>() == 72` assert unchanged |
 | G-15 | MUST: each commit touching `crates/eml_rt` passes Verus, verusfmt, Miri `trusted::` (two settings), `bench/rt-gate.sh` and carries the table | N-29 | jit-effects | commit messages |
 | G-16 | MUST: after the stage `Form` is exactly `Par, AsyncRow, BlockingC, ChildAbort`, and no file of `effects/`, `unwind/`, `panic/` is rejected or marked `native: skip` | completion condition | jit-effects | snapshots; `grep -rln 'native: skip' tests/ui/run/effects tests/ui/run/unwind tests/ui/run/panic tests/ui/run-fail/panic` -> no output |
-| G-17 | MUST: a check that keeps a `call_indirect` signature or a raw-memory size right runs in release builds (the Prelude shape at `load`, the clause-entry signature assert, the non-empty mask assert, `alloc_fork_table`'s immortality check). MUST NOT: rely on `debug_assert!` or on the debug-only `eml_lir::verify` for them | an unsafe boundary a std or compiler edit can reach | jit-effects on | `grep -n 'LoadError::Prelude' crates/eml_native/src/jit.rs` is outside any `cfg!(debug_assertions)` block (review of `load`); unit 9's refusal tests run in `--release` too (`cargo nextest run -p eml_native --release -E 'test(/::prelude_/) | test(release_check)'`) |
+| G-17 | MUST: a check that keeps a `call_indirect` signature or a raw-memory size right runs in release builds (the Prelude shape at `load`, the clause-entry signature assert, the non-empty mask assert, the tail-clause result assert, the I-land shape after a marked `apply`, `alloc_fork_table`'s immortality check). MUST NOT: rely on `debug_assert!` or on the debug-only `eml_lir::verify` for them | an unsafe boundary a std or compiler edit can reach | jit-effects on | `grep -n 'LoadError::Prelude' crates/eml_native/src/jit.rs` is outside any `cfg!(debug_assertions)` block (review of `load`); unit 9's refusal tests run in `--release` too (`cargo nextest run -p eml_native --release -E 'test(/::prelude_/) | test(release_check)'`) |
 | G-18 | MUST: the new eml_rt operations are verified inside `verus!` with the contract of E-D2. MUST NOT: `external_body`, `assume`, or a move out of `verus!` to pass the gate | the shape of evidence objects is what verified operations assume | jit-effects | `git diff <stage base> -- crates/eml_rt | grep -cE '^\+.*(external_body|assume\()'` -> `0`; `src/trust.rs` unchanged |
 
 Kept in the repository: each rule is written into `docs/spec/` (native.md, object-model.md, vm.md, lir.md, core-ir.md) by the unit that implements it (section 7 names the sections); G-13's and G-10's jit-tasks halves stay in 08 until jit-repl's Close deletes the appendix directory, by which point jit-tasks has written them into spec.
@@ -130,7 +130,8 @@ Kept in the repository: each rule is written into `docs/spec/` (native.md, objec
 | CP-A | CI of V1 | V1 | | orchestrator |
 | N1 | `Test the abort byte after a call` | CP-A | E-D6 (no landing yet), 00 E-2 (`CTX_YIELD_ABORT` with its first reader); G-3, G-4, G-14, G-15 | Opus |
 | V2 | `Attach the code's region on every worker heap` | N1 | 00 G.3 U-N | Sonnet |
-| N2 | `Add the effect entries` | V2 | E-D3 (entries), E-D8; G-8 | Sonnet |
+| R5 | `Pin the counted-immortal refusal under a concurrent owner` | V2 | 00 G.3 (i) U-O (SA-audit F2); G-15 | Sonnet |
+| N2 | `Add the effect entries` | R5 | E-D3 (entries), E-D8; G-8 | Sonnet |
 | N3 | `Lower the effect prims` | N2 | E-D3 (lowering), E-D4 (`e:`, `m:`, machine numbers), E-D8; G-6, G-7, G-17 | Opus |
 | CP-B | CI of N3 | N3 | | orchestrator |
 | N4 | `Call clauses natively` | CP-B | E-D5; G-9, G-17 | Opus |
@@ -288,6 +289,7 @@ eml_rt unit tests live in `crates/eml_rt/src/heap/tests/ctx.rs` and are listed i
 ### R4: `Refuse a counted immortal that crosses workers in checked mode`
 
 - **Purpose:** make the R3 spec rule ("a counted immortal object is reachable only from its own heap's worker") a checked precondition. Checked mode only; fast mode is unchanged.
+- **Superseded in part by R5 (SA-audit F2, 00 G.3 (i)):** the wording below that calls the cross-heap count read "a diagnosis, not a guarantee", or says it "reads the other heap's count without an atomic" (the 「不死の物体の数え方」 bullet, the Inbound refusal bullet and the spec text they ask for), is wrong: the reads are `Relaxed` atomics (`cell.rs` `u32_load`) and the refusal is exact. R5 pins that with a test and corrects the spec sentences; when R4 is executed first, write the spec sentences as R5 gives them.
 - **Files:**
   - `crates/eml_rt/src/error.rs` (enum :15, `Display` :49-112)
   - `crates/eml_rt/src/heap/check.rs` (`checked_dup` rc-0 branch :370-372, `checked_decref` rc-0 branch :409-414, `immortal_counted` :240)
@@ -428,16 +430,83 @@ Push `plan/jit-effects` (with the user's permission unless given for this stage'
   - TSan `-p eml_vm --test integration -- workers::` (the V1 command) → pass.
   - G (7.3.1) and SC lines in force.
 
+### R5: `Pin the counted-immortal refusal under a concurrent owner`
+
+- Purpose: 00 G.3 (i) U-O, SA-audit F2. R4 recorded the checked-mode refusal of a counted immortal on another heap's page as a diagnosis that races with the owner's count writes. It does not: the five cross-heap count reads (`check.rs` `foreign_counted` through `prefix_first_get`, `mod.rs` `acquire_immortal`, `Objects::counted` for `share` and `transfer_back`) all go through `u32_load` / `u32_store` (`crates/eml_rt/src/cell.rs:96-119`), which are `AtomicU32::from_ptr(p).load / store(Ordering::Relaxed)`, and a counted prefix is always below `UNCOUNTED - 1` (`too_many_acquires` stops first, `check.rs:257-276`), so `first != UNCOUNTED` does not depend on which count value a racing load sees; `UNCOUNTED` is written only for the dummy and at `freeze`, before the chunk is published. The refusal is therefore a guarantee, there is no data race, and the accepted risk of 00 G.3 (e) / (f) does not exist. This unit pins that with a test and fixes the spec text. No change to the verified code.
+- Files: `crates/eml_rt/src/heap/tests/trusted.rs` (the test, listed in `both_modes!` after `a_counted_immortal_of_another_heap_is_refused`); `docs/spec/object-model.md`.
+- Test (kind 3 otherwise; the one new test, a `trusted::` test, so Miri and ThreadSanitizer run it). The owner loops `dup` / `decref` on its own counted immortal while another heap's thread loops `dup`, `decref` and `acquire_immortal` on it and gets `CountedImmortal` every time in checked mode (`Ok` in fast mode); afterwards the owner's second `decref` is `ImmortalOverRelease`, so the other thread wrote nothing. Verified by the audit (cargo test, ThreadSanitizer on aarch64-apple-darwin, Miri Stacked Borrows: pass, no report); this is the prototype to insert (difftastic form; the comment is in Japanese as the file's are):
+  ```
+  trusted.rs, after `a_counted_immortal_of_another_heap_is_refused` (ends `drop(a);\n}` near line 1058):
+
+  // 持ち主が数を書いている最中にも、ほかのヒープの`dup`、`decref`、`acquire_immortal`は数を読むだけで断られる
+  fn a_counted_immortal_is_refused_while_its_owner_counts<M: Mode>() {
+      const ROUNDS: usize = 200;
+      let (mut a, b) = two_heaps::<M>(Limits::default());
+      let s = a.alloc_string_immortal("constant");
+      unsafe { a.acquire_immortal(s) }.unwrap();
+      let start = std::sync::Barrier::new(2);
+      let b = std::thread::scope(|scope| {
+          let other = scope.spawn(|| {
+              let mut b = b;
+              start.wait();
+              for _ in 0..ROUNDS {
+                  let results = unsafe { [b.dup(s), b.decref(s), b.acquire_immortal(s)] };
+                  for r in results {
+                      if M::CHECKED {
+                          assert_eq!(r, Err(HeapError::CountedImmortal));
+                      } else {
+                          r.unwrap();
+                      }
+                  }
+              }
+              b
+          });
+          start.wait();
+          for _ in 0..ROUNDS {
+              unsafe {
+                  a.dup(s).unwrap();
+                  a.decref(s).unwrap();
+              }
+          }
+          other.join().unwrap()
+      });
+      if M::CHECKED {
+          unsafe { a.decref(s) }.unwrap();
+          assert_eq!(unsafe { a.decref(s) }, Err(HeapError::ImmortalOverRelease));
+      }
+      drop(b);
+      drop(a);
+  }
+
+  and in the `both_modes!` list of the file, after `a_counted_immortal_of_another_heap_is_refused,`:
+      a_counted_immortal_is_refused_while_its_owner_counts,
+  ```
+  Adapt names only if the file's helpers differ (`two_heaps` and `Limits` are the ones `a_counted_immortal_of_another_heap_is_refused` uses). Do not shrink `ROUNDS` under `cfg!(miri)` (eml_rt CLAUDE.md); the audit's Miri run took 5.17 s for it.
+- docs (`docs/spec/object-model.md`; Japanese via PLaMo, plain style; draft in English first). The exact sentences, English draft:
+  - 「核の操作」 (:398 in the audit's tree; the sentence that says checked `dup` / `decref` write the count "前置きにatomicでなく" and that a cross-worker access "データ競合になる"): the count is written "with a `Relaxed` atomic of T2 (`u32_store`); only the owner may write it"; replace "is a data race" by "makes the counts disagree" (数が食い違う). In Japanese the replacement is: 「数を前置きにT2のRelaxedのatomicで書く。書くのは持ち主だけでなければならない」 and 「データ競合になる」 -> 「数が食い違う」.
+  - 「不死の物体の数え方」 / 「報告する誤り」 (:766; and the bullet R4 asked for there, "reads the other heap's count without an atomic ... a diagnosis"): replace with 「その読みはT2のatomicで、数える前置きは`UNCOUNTED`にならないので、結果は持ち主の書き込みと競合しても変わらない。断りは保証である」 (English: "the read is T2's atomic, and a counted prefix never becomes `UNCOUNTED`, so the result does not change when it races with the owner's write; the refusal is a guarantee").
+  - The R4 / U-L wording "a refusal that reads a count on another heap's page ... is a diagnosis, not a guarantee" (the Inbound refusal bullet's spec text, and the corresponding sentence if R4 already wrote it into 「核の操作」 or T14): same replacement, for all five reads (`dup`, `decref`, `acquire_immortal`, `share`, `transfer_back`).
+  - T2's test list: add "the concurrent refusal (`a_counted_immortal_is_refused_while_its_owner_counts`)". T14 (iv): unchanged in meaning (no thread but the owner's writes a count).
+  - `grep -n 'データ競合になる\|atomicでなく' docs/spec/object-model.md` must show no hit that refers to the count read or write of a counted immortal; the page header's `sink` read (`page_sink_of`) stays as T14 describes it (written before the page is published).
+- Gate: EG applies because the commit touches `crates/eml_rt` (tests only: the Verus count must equal V2's, which is R4's value, and every `bench/rt-gate.sh` row must be unchanged).
+- Completion:
+  - EG (7.3.3): `N verified, 0 errors` with N equal to R4's value; verusfmt exit 0; Miri `trusted::` under both settings within the budgets (+5 s allowance under Tree Borrows for the one test); `bench/rt-gate.sh <parent>` exit 0.
+  - `cargo nextest run -p eml_rt -E 'test(a_counted_immortal_is_refused_while_its_owner_counts)'` → `2 tests run: 2 passed` (one test, both modes). The wider filter `test(a_counted_immortal)` → `8 tests run: 8 passed` (R4's three `a_counted_immortal_*` tests and this one, each in both modes; the audit's "4" counted this test and one other only).
+  - ThreadSanitizer: the CLAUDE.md line `... -p eml_rt trusted::` → pass, no report.
+  - G (7.3.1) and the SC lines in force. `git diff --name-only HEAD~1 HEAD | sort` → `crates/eml_rt/src/heap/tests/trusted.rs`, `docs/spec/object-model.md`.
+- Stop rule: if the new test fails, or ThreadSanitizer or Miri reports anything, stop and report: that falsifies F2 (the reads are not atomic or the refusal is not exact), which is a soundness finding for a strong advisor (CLAUDE.md). Do not weaken the test, change a `requires`, or edit verified code to make it pass.
+- Left to the implementer: the Japanese wording.
+
 ### N2: `Add the effect entries`
 
 - Purpose: E-D3's 21 `shim` entries `eml_rt_<Prim::name()>`, table `EFFECTS`.
-- Files: new `crates/eml_nrt/src/effects.rs` (`crate::entries! { pub(crate) const EFFECTS = "eml_rt_"; pub(crate) shim fn evv_get(ctx) -> tobj { .. } … }`; parameters exactly 08 E-D3's table; conversions with `try_from`, failure `Err(BadEvidence)`, `Err(RootMisuse)` for a root index); `crates/eml_nrt/src/lib.rs` (`mod effects;`, `TABLES` :38 gains `effects::EFFECTS`); `crates/eml_nrt/src/trust.rs` `FILES` and `UNSAFE_FILES` gain `effects.rs`; `crates/eml_lir/src/prim.rs` `kinds!` (:76-80) emits `impl Prim { pub const KINDS: [Prim; N] }` and `by_name` uses `Self::KINDS` (G.2). `evv_mask`'s `# Safety` names `items` / `n`.
+- Files: new `crates/eml_nrt/src/effects.rs` (`crate::entries! { pub(crate) const EFFECTS = "eml_rt_"; pub(crate) shim fn evv_get(ctx) -> tobj { .. } … }`; parameters exactly 08 E-D3's table; conversions with `try_from`, failure `Err(BadEvidence)`, `Err(RootMisuse)` for a root index; the effect number converts with `u16::try_from(x).ok().filter(|e| *e != u16::MAX)`, else `Err(BadEvidence)`, because `Ctx::ev_new` and `Ctx::fork_ev` require `effect < u16::MAX` in fast mode and `effect + 1` would wrap to tag 0 (SA-audit F4); each effect entry's `# Safety` states that the caller meets the fast-mode preconditions of the `Ctx` method it calls (docs/spec/object-model.md 「基本操作の契約」), not only `evv_mask`'s `items` / `n`); `crates/eml_nrt/src/lib.rs` (`mod effects;`, `TABLES` :38 gains `effects::EFFECTS`); `crates/eml_nrt/src/trust.rs` `FILES` and `UNSAFE_FILES` gain `effects.rs`; `crates/eml_lir/src/prim.rs` `kinds!` (:76-80) emits `impl Prim { pub const KINDS: [Prim; N] }` and `by_name` uses `Self::KINDS` (G.2). `evv_mask`'s `# Safety` names `items` / `n`.
 - Entries (21): `evv_get, evv_set, evv_push, evv_mask, ev_new, ev_set_clause, ev_renew, ev_lookup, ev_clause, ev_evv, ev_take_evv, ev_take_state, ev_set_state, yield_to, yield_abort, yield_cont_take, yield_cont_set, yield_finish, dummy, root_get, root_set`. None for `yielding`, `yield_status`, `empty_mut_array`, `child_abort`.
 - New tests:
   - new `crates/eml_native/tests/effects.rs` (`mod effects;` in `tests/main.rs`): `every_prim_entry_is_named_after_its_prim` (G-8): for each of `Prim::KINDS` other than the four, `eml_nrt::entries()` has `eml_rt_<name>` with `params.len()` = immediates (`evv_mask` 2, `ev_new` 2, `ev_set_clause` / `ev_lookup` / `ev_clause` / `root_get` / `root_set` 1, else 0) + `row().params.len()` and `result.is_none()` iff the row's result Repr is `Unit`; none for the four.
-  - `crates/eml_nrt/src/entries.rs` tests module (the Miri filter `entries::` runs it): `the_effect_entries_install_and_find_a_handler` (direct calls `ev_new`, `ev_set_clause`, `evv_get`, `evv_push`, `evv_set`, `ev_lookup`, `ev_clause`, then releases; `live` empty, no fault parked).
+  - `crates/eml_nrt/src/entries.rs` tests module (the Miri filter `entries::` runs it): `the_effect_entries_install_and_find_a_handler` (direct calls `ev_new`, `ev_set_clause`, `evv_get`, `evv_push`, `evv_set`, `ev_lookup`, `ev_clause`, then releases; `live` empty, no fault parked); in the same module `an_effect_number_of_65535_is_refused` (F4: `ev_new` with effect 65535 through `enter`; the run ends with the fatal error).
 - docs: native.md new 「エフェクト」 after 「行の下ろし方」 (entries: prefix, symbol from `Prim::name()`, parameters, conversions); architecture.md `eml_nrt` (`effects.rs`, `EFFECTS`); CLAUDE.md Architecture `eml_nrt` line: tables `ENTRIES`, `SERVICES`, `HEAP`, `ROWS`, `EFFECTS`, `CLOSURES`, `C`.
-- Completion: G; `cargo nextest run -p eml_native -E 'test(effects::)'` → `1 passed`; `cargo nextest run -p eml_nrt` → no failed (incl. `the_table_has_only_named_prefixes`, which also checks uniqueness); Miri eml_nrt both settings → pass; `grep -c 'fn eml_rt_' crates/eml_nrt/src/effects.rs` → `0`.
+- Completion: G; `cargo nextest run -p eml_native -E 'test(effects::)'` → `1 passed`; `cargo nextest run -p eml_nrt` → no failed (incl. `the_table_has_only_named_prefixes`, which also checks uniqueness, and `an_effect_number_of_65535_is_refused`); Miri eml_nrt both settings → pass; `grep -c 'fn eml_rt_' crates/eml_nrt/src/effects.rs` → `0`.
 
 ### N3: `Lower the effect prims`
 
@@ -448,7 +517,7 @@ Push `plan/jit-effects` (with the user's permission unless given for this stage'
   - `crates/eml_native/src/lower/names.rs`: `effect(text) = "e:" + text`, `mask(text) = "m:" + text` (texts from `eml_lir::syntax::effect_text` / `mask_text`, `syntax.rs:23`, `:30`).
   - `crates/eml_native/src/lower/consts.rs` (:19-120): `Datum::Effect(u32)`, `Datum::Mask(Vec<eml_lir::MaskItem>)`, `Datum::bytes()`; `define` sizes each object by `bytes()`; `assert!(!items.is_empty())` at the mask use (every build; G-17).
   - `crates/eml_native/src/jit.rs`: `NativeMachine.effects: HashMap<String, u16>` assigned at `load` in `program.effects` order; past 65534 panic with the VM's text (`crates/eml_vm/src/compile/emit.rs:1048-1053`); `Tables::new` (:108-163) writes `DATUM_EFFECT` rows (`bits` = machine number) and `DATUM_MASK` rows (`items` → `MaskRow`s with machine numbers).
-  - `crates/eml_nrt/src/image.rs` (:98-130): `DATUM_EFFECT = 5`, `DATUM_MASK = 6`, `#[repr(C)] MaskRow { effect: u16, keep: u32, skip: u32 }`, `DatumRow.items: Slice<MaskRow>`, `pub fn mask_bytes(n: usize) -> usize`; `crates/eml_nrt/src/run.rs` `fill_data` (:135-176): kinds 5 and 6 written directly (raw `u64`; typed `MaskItem` writes), kinds 0..4 through `constants::build`; `fill_data`'s and `run`'s `# Safety` and the `Sync` comment of `Image` cover the mask slot (`mask_bytes(items.len)` bytes, not one word); the pairing of rows with built words skips the raw rows; `const _: () = assert!(align_of::<MaskItem>() <= 8)` in image.rs.
+  - `crates/eml_nrt/src/image.rs` (:98-130): `DATUM_EFFECT = 5`, `DATUM_MASK = 6`, `#[repr(C)] MaskRow { effect: u16, keep: u32, skip: u32 }`, `DatumRow.items: Slice<MaskRow>`, `pub fn mask_bytes(n: usize) -> usize`; `crates/eml_nrt/src/run.rs` `fill_data` (:135-176): kinds 5 and 6 written directly (raw `u64`; typed `MaskItem` writes), kinds 0..4 through `constants::build`; `fill_data`'s and `run`'s `# Safety` and the `Sync` comment of `Image` cover the mask slot (`mask_bytes(items.len)` bytes, not one word) and state that the `e:` / `m:` slots and constants are written before the first entry of their load and never after, and that every native worker heap attaches the load's region before it runs code (the rule V2 states for the VM; native.md 「実行の始めと終わり」 already says it for the one worker), so jit-tasks and jit-repl inherit it (SA-audit B3); the pairing of rows with built words skips the raw rows; `const _: () = assert!(align_of::<MaskItem>() <= 8)` in image.rs.
 - Kind 3: every `DatumRow { … }` literal gains `items` (empty `Slice`): `crates/eml_nrt/tests/run.rs` :203, :210, :217, `crates/eml_native/src/jit.rs` :138.
 - New tests (`crates/eml_native/tests/effects.rs`; LIR text; `agree(text)` where the text is a whole run):
   - `yield_status_reads_as_the_runtime_does` (`yield_to` then `yield_status` of the same / another evidence → 1 / 3; `yield_finish` → 0; after `yield_abort` → 2).
@@ -471,40 +540,41 @@ As CP-A, on N3's commit. Before it: the Windows and Linux cross clippy lines (7.
 - Purpose: E-D5.
 - Files and items:
   - `crates/eml_native/src/abi.rs`: `closure_entry_signature(function: &LirFn, captures: usize) -> Signature` (tail `(ctx, clo, kinds(params[captures..])) -> kinds(rets)`) and `clause_signature(program, effect, op) -> Signature` (`(ctx, clo, ev, op params) -> op ret`; a `never` op returns one `I64`).
-  - `crates/eml_native/src/lower/apply.rs`: `arity` (:65-89) drops the clause assert and returns 0 for a clause function (no uniform assert for it); `ClosureEntries::id` (:123-147) declares with `closure_entry_signature` and names no clause; one helper `call_closure_code(b, ctx, callee, sig, args, tail)` (meta, `closure_code`, `call_indirect` / `return_call_indirect`) used by the exact arm of `apply`, `Call::Clause`, and N6's `eml$raise`; `FnLower::clause` (non-tail, then `After::Call`) and the tail form.
+  - `crates/eml_native/src/lower/apply.rs`: `arity` (:65-89) drops the clause assert and returns 0 for a clause function (no uniform assert for it); `ClosureEntries::id` (:123-147) declares with `closure_entry_signature` and names no clause; one helper `call_closure_code(b, ctx, callee, sig, args, tail)` (meta, `closure_code`, `call_indirect` / `return_call_indirect`) used by the exact arm of `apply`, `Call::Clause`, and N6's `eml$raise`. `FnLower::clause` lowers a clause call of an operation that returns as before (non-tail: `call_indirect` then `After::Call`; tail: `return_call_indirect`), and asserts with `assert_eq!` in every build that the clause signature's results equal the caller's results (G-17: Cranelift's verifier rejects a tail call whose results differ from the caller's, but its flag is not relied on). A clause call of an operation with `OpRet::Never` is lowered the same way in tail and non-tail position (SA-audit F1; a `never` clause's binding keeps the Repr translate chose, and contraction makes a tail-position `never` clause a tail call whatever the Repr, docs/spec/lir.md 「着地の印」 / contract): (1) `call_indirect` with `clause_signature` (never `return_call_indirect`), the result discarded; (2) `unwind::if_aborting`: the cold side is the point's cleanup (in tail position nothing is owned, so it returns placeholders of the caller's results), the hot side traps (`TrapCode::unwrap_user(1)`), as `eml$raise` does; (3) continue in a new block with no predecessor and bind the statement's variables to placeholders of their own Reprs, as `After::Never` does for rows (docs/spec/native.md 「巻き戻しの地点」).
   - `crates/eml_native/src/lower/mod.rs` closure loop (:197-215): signature from `closure_entry_signature`; for a function with `clause = Some((e, op))`, `assert_eq!(signature, abi::clause_signature(program, e, op), …)` before the entry is defined (every build; G.2).
   - `crates/eml_native/src/lower/function.rs` / `call.rs`: `Call::Clause` in `Rhs::Call` and `Term::TailCall` goes to `FnLower::clause`.
   - `crates/eml_nrt/src/run.rs:146-153`: `DATUM_FN` accepts `bits == 0`; `crates/eml_nrt/src/constants.rs` `static_closure`: `data_meta(0, 1, false)` for arity 0.
-- New tests (`effects.rs`; `agree` on LIR text that installs the handler with prims and has no `prompt` marker): `an_in_place_clause_returns_its_value`, `an_under_clause_runs_with_its_handlers_evv`, `a_tail_clause_call`, `a_clause_with_a_float_operand`, `a_static_clause_closure_has_tag_0` (`DatumRow` `(DATUM_FN, 0)` for `&g$entry`). Release check (G-17): `release_check_a_clause_entry_signature_mismatch_panics` (an `eml_lir::parse`d program, not verified, whose clause function's parameters differ from its operation's; `NativeMachine::load` under `catch_unwind` panics; the message is the assert's in a release build and the verifier's (`invalid LIR at the native load`) in a debug build (`cfg!(debug_assertions)` picks the expected text)).
+- New tests (`effects.rs`; `agree` on LIR text that installs the handler with prims and has no `prompt` marker): `an_in_place_clause_returns_its_value`, `an_under_clause_runs_with_its_handlers_evv`, `a_tail_clause_call`, `a_clause_with_a_float_operand`, `a_static_clause_closure_has_tag_0` (`DatumRow` `(DATUM_FN, 0)` for `&g$entry`); F1's three `agree` tests on LIR text, `a_tail_never_clause_in_a_float_function`, `a_tail_never_clause_in_a_function_returning_two_leaves` and `a_never_clause_bound_to_a_float`. Release checks (G-17): `release_check_a_tail_clause_result_mismatch_panics` (a parsed, unverified program whose tail clause call's signature results differ from the caller's; `load` under `catch_unwind` panics; the message is the assert's in a release build and the verifier's in a debug build, `cfg!(debug_assertions)` picks the text) and `release_check_a_clause_entry_signature_mismatch_panics` (an `eml_lir::parse`d program, not verified, whose clause function's parameters differ from its operation's; `NativeMachine::load` under `catch_unwind` panics; the message is the assert's in a release build and the verifier's (`invalid LIR at the native load`) in a debug build (`cfg!(debug_assertions)` picks the expected text)).
 - Test changes: none (no test pins arity 0 as `Internal` [V: `grep -rn arity crates/eml_nrt/tests crates/eml_native/tests` → only `apply.rs:58` `(DATUM_FN, 1)`, unaffected]).
-- docs: native.md 「関数の値」 (signature rule, tag 0, `Call::Clause`, ownership of `clo`, where the clause-signature assert runs).
-- Completion: G; `cargo nextest run -p eml_native -E 'test(effects::) | test(apply::) | test(placement::)'` → no failed; `awk '/fn id</,/^    }$/' crates/eml_native/src/lower/apply.rs | grep -c clause` → `0` (G-9: no clause branch in `ClosureEntries::id`); `grep -c 'clause_signature' crates/eml_native/src/lower/mod.rs` → `1`; Miri eml_nrt both settings → pass.
+- docs: native.md 「関数の値」 (signature rule, tag 0, `Call::Clause`, ownership of `clo`, where the clause-signature assert runs, and the rule for a `never` operation's clause: `call_indirect` in both positions, then the abort test, a trap on the hot side and placeholders), 「巻き戻しの地点」 (one sentence: a `never` clause call is followed by the abort test and a trap); 08 E-D5 carries the same rule.
+- Completion: G; `cargo nextest run -p eml_native -E 'test(effects::) | test(apply::) | test(placement::)'` → no failed; `cargo nextest run -p eml_native -E 'test(never_clause)'` → `3 tests run: 3 passed`; `awk '/fn id</,/^    }$/' crates/eml_native/src/lower/apply.rs | grep -c clause` → `0` (G-9: no clause branch in `ClosureEntries::id`); `grep -c 'clause_signature' crates/eml_native/src/lower/mod.rs` → `1`; Miri eml_nrt both settings → pass.
 
 ### N5: `Land aborts at prompt`
 
 - Purpose: E-D6 landing; `eml_nrt_landed`.
-- Files and items: `crates/eml_nrt/src/services.rs`: `pub shim fn eml_nrt_landed(ctx) -> obj` (the heap's dummy), in `SERVICES`; `crates/eml_native/src/lower/unwind.rs` `fill_cleanup` (:211) loses the assert; for a point with landing `v` the cold block is `t = mem::yield_target; brif t == v → land, other`; `land`: `call eml_nrt_landed`, bind the call's result var, `jump hot`; `other`: `call_entry(&effects::entry(&Prim::EvTakeState), [v])`, `eml_rt_decref` of the result, then the cleanup; `crates/eml_native/src/lower/function.rs` (:233-243, :342-349) accepts `Call::Apply { prompt: Some(_) }`.
+- Files and items: `crates/eml_nrt/src/services.rs`: `pub shim fn eml_nrt_landed(ctx) -> obj` (the heap's dummy), in `SERVICES`; `crates/eml_native/src/lower/unwind.rs` `fill_cleanup` (:211) loses the assert; for a point with landing `v` the cold block is `t = mem::yield_target; brif t == v → land, other`; `land`: `call eml_nrt_landed`, bind the call's result var, `jump hot`; `other`: `call_entry(&effects::entry(&Prim::EvTakeState), [v])`, `eml_rt_decref` of the result, then the cleanup; `crates/eml_native/src/lower/function.rs` (:233-243, :342-349) accepts `Call::Apply { prompt: Some(_) }`; when a block lowers `Call::Apply { prompt: Some(v) }` it keeps `landed = Some(v)` and `assert!`s in every build that, until the direct call of `prompt$` whose first argument is `v`, the block lowers no `Rhs::Call`, `Rhs::Extern`, `prim yield_to` or `prim yield_abort`, and that the block does not end with `landed` set; message: the verifier's (`` the apply with the prompt marker `ev.2` is not followed by `prompt$` ``) (SA-audit F3: I-land's first half is checked in every build where the code depends on it; about 15 lines, no run-time cost).
 - New tests (`effects.rs`; LIR text or `agree_source`, since a whole `handle` lowers from here on):
   - `an_abort_lands_and_the_clause_returns` (G-4's named test).
   - `an_abort_unwinds_three_frames_and_lands` (owned values and a token in each frame; census empty).
   - `a_resumable_yield_passes_three_frames`, `a_multi_shot_continuation`, `a_masked_perform_skips_the_inner_handler`.
   - `an_abort_through_a_handler_frame_releases_its_state` (stand-in thunk + `Heap::live_objects` before the run ends; G-5).
   - `crates/eml_native/tests/clif.rs` `a_yield_point_call` (one `load.i8 … v0+24` before the `brif`; `target` loaded only in EP's `yielding`) and `a_landing_point` (G-5: for `let x = yields apply f(()) prompt ev` the cold block loads `target`, compares with `ev`; the `land` block calls `%eml_nrt_landed` then jumps to the hot block; the `other` block calls `%eml_rt_ev_take_state`, `%eml_rt_decref`, then the frame's cleanup, then `return`).
-- docs: native.md 「巻き戻しの地点」 (landing block, order, `eml_nrt_landed`; delete 「着地の印を持つ地点は下ろさない…」), 「エントリ」 service list.
-- Completion: G; `cargo nextest run -p eml_native -E 'test(=effects::an_abort_lands_and_the_clause_returns)'` → 1 passed; `cargo nextest run -p eml_native` → no failed; `grep -c 'landing.is_none' crates/eml_native/src/lower/unwind.rs` → `0`; SC lines of N5.
+  - `release_check_a_marked_apply_not_followed_by_prompt_panics` (a parsed, unverified LIR program; `load` under `catch_unwind` panics; a debug build expects the verifier's message, a release build the assert's, `cfg!(debug_assertions)` picks the text).
+- docs: native.md 「巻き戻しの地点」 (landing block, order, `eml_nrt_landed`; delete 「着地の印を持つ地点は下ろさない…」; I-land's first half "前半は、debugのビルドでLIRのverifierが、どのビルドでも下ろしが確かめる" so that the 「releaseでは定まらない」 sentence (native.md:182 in the audit's tree) covers only the `prompt$` half; and, for jit-tasks, "a row that can run eml code is followed by the `Call` test as well as the `Faults` test" (SA-audit B2: `unwind::if_aborting` stays the only emitter and is usable after any call-like instruction; no code in this stage)), 「エントリ」 service list.
+- Completion: G; `cargo nextest run -p eml_native -E 'test(=effects::an_abort_lands_and_the_clause_returns)'` → 1 passed; `cargo nextest run -p eml_native --release -E 'test(release_check)'` → `3 tests run: 3 passed` (N4's two and this one); `cargo nextest run -p eml_native` → no failed; `grep -c 'landing.is_none' crates/eml_native/src/lower/unwind.rs` → `0`; SC lines of N5.
 
 ### N6: `Catch extern failures natively`
 
 - Purpose: E-D7; `Image.panic_effect` / `io_effect`; `LoadError::Prelude`.
 - Files and items:
-  - `crates/eml_nrt/src/services.rs` `eml_nrt_failed` (:51): `(ctx, function, site, purity, out: ptr) -> i64`, steps 1-5 of 08 E-D7; its `# Safety` names `out` (4 writable words; the `ptr` kind is `*const Word`, so the service casts to `*mut`); `crates/eml_nrt/src/image.rs`: `RAISE_PANIC = 0`, `RAISE_IO = 1`, `NO_EFFECT = u32::MAX`, `Image.panic_effect: u32`, `Image.io_effect: u32`.
+  - `crates/eml_nrt/src/services.rs` `eml_nrt_failed` (:51): `(ctx, function, site, purity, out: ptr) -> i64`, steps 1-5 of 08 E-D7; `eml_nrt_failed` is entered only with no yield or abort in flight (the clause entry's `yield_abort` requires `!is_yielding()`), which holds because cleanups run no row and I-land forbids rows between a landing and `yield_finish`; a later raise at a function entry (`ENTRY_SITE`, jit-tasks) must test `ctx.yielding()` first and continue when it is set, because `yield_abort` in fast mode overwrites the yield state without releasing it (SA-audit F6 / B1; state both in native.md 「externの失敗」); its `# Safety` names `out` (4 writable words; the `ptr` kind is `*const Word`, so the service casts to `*mut`); `crates/eml_nrt/src/image.rs`: `RAISE_PANIC = 0`, `RAISE_IO = 1`, `NO_EFFECT = u32::MAX`, `Image.panic_effect: u32`, `Image.io_effect: u32`.
   - `crates/eml_native/src/mem.rs`: a 4-word stack slot helper and a load from it.
   - `crates/eml_native/src/lower/unwind.rs` `define_raise` (:63-74): slot, call, two arms calling `apply::call_closure_code` with `uniform(2)` / `uniform(3)`, else nothing, `return`; after either clause call, `eml$raise` tests the abort byte with `unwind::if_aborting` and traps (`TrapCode::unwrap_user(1)`) when it is clear (08 E-D7).
   - `crates/eml_native/src/jit.rs`: `LoadError::Prelude { effect: String }` (:37-57 and `what()`), checked in `load` right after the `Loaded` check (:216-218), outside `cfg!(debug_assertions)` (the check reads each operation's `params` and `ret`: `[Obj]` / `[Enum, Obj]` and `ret == OpRet::Never`); `Tables::new` fills the two `Image` fields from the machine table (`ExternEffect::{Panic, Io}.row().name`).
 - Kind 3: `crates/eml_nrt/tests/services.rs` :119, :164, :197 pass a 4-word buffer (from `as_mut_ptr()`) as `out`; every `Image { … }` literal gains `panic_effect: NO_EFFECT, io_effect: NO_EFFECT`: `crates/eml_nrt/tests/run.rs` :27, :225, :352, :406, `crates/eml_nrt/tests/services.rs` :37, `crates/eml_nrt/src/rows.rs` :188, `crates/eml_nrt/src/entries.rs` :532 (plus `jit.rs` :147, the producer). Assertions unchanged.
 - New tests (new `crates/eml_native/tests/raise.rs`, in `tests/main.rs`): `prelude_with_two_panic_operations_is_refused`, `prelude_whose_panicked_takes_two_objects_is_refused`, `prelude_whose_panicked_returns_a_value_is_refused`, `try_io_sees_the_vm_kind_for_not_found_and_permission_denied`, `an_overflow_without_prelude_panic_ends_with_the_vm_text`, `try_panic_catches_inline_overflow`, `try_panic_catches_an_index_row`, `try_panic_catches_the_panic_row`, `try_panic_catches_a_c_row_narrowing_panic`, `try_io_catches_a_failing_open`, `a_stop_is_never_caught`, `a_pure_rows_fault_is_not_caught`, `no_handler_gives_the_vm_text`, `cleanups_run_after_raise_returns` (each `agree` / `agree_source`, census empty: G-11, G-12); `release_check_an_empty_mask_panics` (a parsed, unverified program whose `evv_mask` list is emptied after parsing; `load` panics; the message is the assert's in a release build and the verifier's (`invalid LIR at the native load`) in a debug build, `cfg!(debug_assertions)` picks the expected text); `crates/eml_native/tests/clif.rs` `the_raise_helper` (pin of `clif(text, "eml$raise")`: one `call %eml_nrt_failed`, two `call_indirect`, two `load.i8 ... v0+24`, one `trap user1`, no `iconst` but the two class values; G-10).
 - docs: native.md 「externの失敗」 (classes, order, `out`, ownership; delete 「失敗を捕まえるハンドラはないので…」), 「Image」 (two fields), 「関数の形」 (`LoadError::Prelude`).
-- Completion: G; `cargo nextest run -p eml_native -E 'test(raise::) | test(clif::)'` → no failed; `cargo nextest run -p eml_native --release -E 'test(/::prelude_/) | test(release_check)'` → `5 tests run: 5 passed` (G-17: the three `prelude_` tests of N6, N4's `release_check_a_clause_entry_signature_mismatch_panics`, N6's `release_check_an_empty_mask_panics`); `grep -rn 'debug_assert\|cfg!(debug_assertions)' crates/eml_native/src/jit.rs | grep -ci prelude` → `0`; SC lines of N6; Miri eml_nrt both settings → pass; ASan (CLAUDE.md command) `-p eml_native -- --skip fatal::` and `-p eml_nrt -- --skip fatal::` → pass.
+- Completion: G; `cargo nextest run -p eml_native -E 'test(raise::) | test(clif::)'` → no failed; `cargo nextest run -p eml_native --release -E 'test(/::prelude_/) | test(release_check)'` → `7 tests run: 7 passed` (G-17: the three `prelude_` tests of N6, N4's `release_check_a_clause_entry_signature_mismatch_panics` and `release_check_a_tail_clause_result_mismatch_panics`, N5's `release_check_a_marked_apply_not_followed_by_prompt_panics`, N6's `release_check_an_empty_mask_panics`: 3 + 2 + 1 + 1 = 7); `grep -rn 'debug_assert\|cfg!(debug_assertions)' crates/eml_native/src/jit.rs | grep -ci prelude` → `0`; SC lines of N6; Miri eml_nrt both settings → pass; ASan (CLAUDE.md command) `-p eml_native -- --skip fatal::` and `-p eml_nrt -- --skip fatal::` → pass.
 
 ### CP-C
 
@@ -516,10 +586,11 @@ As CP-A, on N6's commit; before it the cross clippy lines (7.3.4).
 - Work:
   1. Apply the `Form` change locally and run `cargo nextest run -p eml_cli --test integration -E 'test(=ui::run_native) | test(=ui::run_fail_native)'`. A disagreement or native panic stops N7: fix it in its own commit `Fix native <topic>` with a regression test in `crates/eml_native/tests` (reviewed), then resume. No `native: skip` mark (G-16).
   2. `crates/eml_native/src/unsupported.rs`: `Form` = `Par, AsyncRow, BlockingC, ChildAbort` (label `child abort`, trigger `Rhs::Prim(Prim::ChildAbort, _)`); delete `Clause` / `Prompt` and their detection; `crates/eml_cli/src/lib.rs` `rejected_what` (:288-300): `ChildAbort` → e.g. "the abort of a `par` child".
+  2a. New test `crates/eml_native/tests/unsupported.rs` `every_row_with_a_held_argument_is_rejected` (SA-audit F5: for each `Extern`, `row().held.iter().any(|h| *h)` implies `is_async()` or `Par`). Native code has no handling of held arguments and no row that calls an eml closure from Rust; that is sound only because every such row is `Par` or `is_async()` and so rejected, and this test states it.
   3. `cargo insta accept`.
 - Test changes: kind 1 (7.4); kind 2: the two snapshots.
 - docs: native.md 「断る形」 (four forms); status.md L46 (native code runs effects and handlers; rejects `par`, task rows, `blocking` C) and L63 (drop エフェクト); testing.md 「ネイティブで流す」 L536 (residual rows occur only in std functions that hold a task row).
-- Completion: G; the snapshots equal 7.5 (their counts can differ only through a fix commit that changes a file's forms, which its review states); `cargo nextest run -p eml_native -E 'test(unsupported::)'` → `8 tests run: 8 passed` (10 − 3 + 1); `grep -cE 'Form::(Prim|Clause|Prompt)' crates/eml_native/src/unsupported.rs crates/eml_cli/src/lib.rs` → `0` each; SC lines of N7; `cargo nextest run --profile timing -j 1 -p eml_cli --test integration -E 'test(=ui::run_native) | test(=ui::run_fail_native)'` → both PASS, no `SLOW`.
+- Completion: G; the snapshots equal 7.5 (their counts can differ only through a fix commit that changes a file's forms, which its review states); `cargo nextest run -p eml_native -E 'test(unsupported::)'` → `9 tests run: 9 passed` (10 − 3 + 1 + 1); `grep -cE 'Form::(Prim|Clause|Prompt)' crates/eml_native/src/unsupported.rs crates/eml_cli/src/lib.rs` → `0` each; SC lines of N7; `cargo nextest run --profile timing -j 1 -p eml_cli --test integration -E 'test(=ui::run_native) | test(=ui::run_fail_native)'` → both PASS, no `SLOW`.
 
 ### CP-D
 
@@ -529,6 +600,17 @@ As CP-A, on N7's commit (the native UI on the four OS).
 
 Roadmap 「進め方」, one commit:
 1. spec: `grep -rnE 'jit-(effects|tasks|repl)' docs/spec docs/implementation` → empty; no 「今は〜、後で〜」 in the sections the stage wrote. Each prints ≥ 1: `sed -n '/^## エフェクト/,/^## /p' docs/spec/native.md | grep -c 'e:'`; same with `'m:'`; `sed -n '/^## externの失敗/,/^## /p' docs/spec/native.md | grep -c RAISE_PANIC`; `sed -n '/^### 欄/,/^### /p' docs/spec/object-model.md | grep -c CTX_YIELD_ABORT`; `grep -c fork_ev docs/spec/object-model.md`; `grep -c fork_ev docs/spec/vm.md`.
+1a. Wording checks (SA-audit; 00 G.3 (i)): `grep -n 'superseded by R5' docs/plans/2026-11-11-jit/00-decisions.md` shows (e) and (f) (and this plan's R4 text still carries its line); `grep -n 'データ競合になる\|atomicでなく' docs/spec/object-model.md` has no hit about a counted immortal's count; docs/spec/native.md 「巻き戻しの地点」 says I-land's first half is checked "どのビルドでも下ろしが確かめる" and its 「releaseでは定まらない」 sentence covers only the `prompt$` half; docs/spec/native.md 「externの失敗」 states that `eml_nrt_failed` is entered only with no yield or abort in flight (N6), and 「巻き戻しの地点」 the `Call` test after a row that can run eml code (N5, B2) and the `never` clause rule (N4); the `e:` / `m:` / "every worker attaches the region" sentence of N3. Fix any that is missing in this commit.
+1b. docs/future guidance (SA-audit C1-C7; not normative; Japanese via PLaMo, plain style, no stage names, no plan citations; the English text below is the draft; a roadmap or `docs/future/` sentence may name `jit-tasks` / `jit-repl` / `native-par` as the roadmap does):
+   - C1 `docs/future/engine-trust.md` 「保証」 (the list of promises): add the native load's promises this stage leaves to the caller: the LIR execution premises behind every effect entry's fast-mode precondition (`Ctx` operations' preconditions, docs/spec/object-model.md 「基本操作の契約」), I-land's `prompt$` half (the fixed body of `prompt$`, checked by a unit test, not at load), and "a value reaches only retired evidence" (an invariant `par`'s `share` relies on and nothing checks at run time). State which ones `load` now checks in every build: the Prelude shape (`LoadError::Prelude`), the clause signatures, the marked-`apply` shape (I-land's first half), non-empty masks.
+   - C2 `docs/future/native.md` 「中断と実行時エラー」 (the part that remains future): the `n < m` arm of `eml$apply$m` traps on any action but continue. State the rule that closes it for the task limits: the arm asks for a depth-only check, or gets an owned-cleanup path through `unwind::if_aborting`.
+   - C3 re-entry, written once, in `docs/future/native.md` 「並列の実行」 and pointed at from `docs/future/multicore.md` 「スレッドと worker」 (the bullet that says an extern never re-enters eml code, which the tasks stage contradicts for rows that run closures): a re-entering row holds only `Copy` values across `enter`; it returns normally when the nested code returns with the abort byte set (the row is followed by the `Call` test as well as the `Faults` test); a resumable yield never crosses it (the row's signature must handle every resumable effect of its closure).
+   - C4 `docs/future/native.md` (the jit-repl paragraph, 「確定した設計判断」 or 「未決の論点と将来の拡張」): a fork table of a later load that names `fork$E.op` of an earlier load builds a new static closure (`DATUM_FN`, a static closure is only `{tag, code}`) in the current load; it does not weaken `alloc_fork_table`'s `of_this_heap` requirement.
+   - C5 `docs/future/roadmap.md` `rt-concurrent-proofs` item (:365-366, 「見直す条件」): the condition "before native code shares `eml_rt`" fires at `jit-tasks` (native code gets a second worker), not at `native-par`; say so there and in the `jit-tasks` item's prerequisites.
+   - C6 `docs/future/ffi.md` 「未決の論点と将来の拡張」 (the 同期のコールバック bullet): a callback that returns with the abort byte set cannot unwind through C frames by returning; the design must either forbid `never` operations that escape the callback (a row bound like `par`'s) or end the process, as it already says for fatal errors.
+   - C7 `docs/future/native.md` 「並列の実行」 (the native `par` part, `native-par`): the child boundary is an `unwind::if_aborting` site whose landing test is "target is the dummy and this join is the innermost boundary"; `exit_abort` uses the same dummy target, so the boundary tells them apart by the worker's exit code, as `finish` does.
+   - Also (SA-audit, cleared items that the tasks stage must keep): in the `jit-tasks` item or `docs/future/native.md` 「中断と実行時エラー」: `Prim::ChildAbort` between a landing and `prompt$` is a rejected form today (not reachable natively) and I-land must cover it when `par` is lowered; and the SA-audit's B1 rule (a function-entry raise tests `ctx.yielding()` first).
+   - Also add one bullet group headed "From the jit-effects soundness audit" to the plans of the later stages (English, plan files, not docs/): `docs/plans/2026-11-11-jit-tasks.md` gets C2, C3, C5 (prerequisite), B1 (the entry-site raise tests `ctx.yielding()` first) and B2 (a re-entering row is followed by the `Call` test), and the `Prim::ChildAbort` / I-land item; `docs/plans/2026-11-11-jit-repl.md` gets C4. Point each at the `docs/future/` text written above.
 2. Measure (eml_rt, eml_vm, eml_lir changed): `bench/scripts.sh` first (a row out of range → `Resize bench rows` commit); then `bench/run.sh`, `bench/rt.sh`, `bench/scripts.sh` on the clean tree of the last code commit → replace the three tables of benchmarks.md 「今の数値」; `bench/native.sh` → replace 「ネイティブの数値」 (the `nrt_bench` rows and the native table); name `state`, `state_loop`, `state_loop_by_hand`, `state_nested`, `fold_state`, `ep_float`, `nbody`, `iter_generate`, `iter_pipeline`, `iter_pipeline_by_hand` in the prose. Without macOS: `Measure jit-effects` right after Z.
 3. status.md: check N7's text.
 4. architecture.md / CLAUDE.md check: `grep -c EFFECTS CLAUDE.md docs/implementation/architecture.md` ≥ 1 each; `grep -c 'effects.rs' docs/implementation/architecture.md` ≥ 1.
@@ -582,7 +664,7 @@ grep -rln 'native: skip' tests/ui/run/effects tests/ui/run/unwind tests/ui/run/p
 ```
 `docs/future` is not in the "always" list: 9 citations of `docs/future/multicore.md` exist in eml_rt / eml_vm today [V]; new code adds none (review).
 
-#### 7.3.3 EG (commits touching `crates/eml_rt`: R1, R2, R3, R4, N1; G-15)
+#### 7.3.3 EG (commits touching `crates/eml_rt`: R1, R2, R3, R4, R5, N1; G-15)
 
 ```sh
 cargo verus verify -p eml_rt                                         # verification results:: N verified, 0 errors; no warning
@@ -628,7 +710,12 @@ No `native: skip` mark is added.
 
 **Kind 3 (byte-identical expected values):** R1 (rename); V1 (reroute); N3 `DatumRow` literals (`crates/eml_nrt/tests/run.rs` :203, :210, :217); N6 `eml_nrt_failed` callers (`crates/eml_nrt/tests/services.rs` :119, :164, :197) and `Image` literals (`crates/eml_nrt/tests/run.rs` :27, :225, :352, :406; `crates/eml_nrt/tests/services.rs` :37; `crates/eml_nrt/src/rows.rs` :188; `crates/eml_nrt/src/entries.rs` :532) [V: grep of `DatumRow {` / `Image {`].
 
-**New tests:** R2 4 (×2 modes), R3 4 (×2), N1 6, N2 2, N3 10, N4 6, N5 8, N6 16, N7 1 (and 3 deleted): 62 more in the run [I], so ≥ 5205 after the stage.
+**New tests:** R2 4 (×2 modes), R3 4 (×2), R5 1 (×2), N1 6, N2 3, N3 10, N4 10, N5 9, N6 16, N7 2 (and 3 deleted): 8 + 8 + 2 + 6 + 3 + 10 + 10 + 9 + 16 + 2 − 3 = 71 more in the run [I], so ≥ 5214 after the stage (5143 + 71). `both_modes!` counts a test twice; only the eml_rt tests (R2, R3, R5) use it, every other new test counts once. Per unit (SA-audit, 00 G.3 (i)):
+- R5 (kind 3 otherwise): `heap::tests::trusted::{fast,checked}::a_counted_immortal_is_refused_while_its_owner_counts`.
+- N2: `an_effect_number_of_65535_is_refused` (F4; in the `entries::` tests module of eml_nrt, so Miri runs it).
+- N4: `a_tail_never_clause_in_a_float_function`, `a_tail_never_clause_in_a_function_returning_two_leaves`, `a_never_clause_bound_to_a_float`, `release_check_a_tail_clause_result_mismatch_panics` (F1; `crates/eml_native/tests/effects.rs`).
+- N5: `release_check_a_marked_apply_not_followed_by_prompt_panics` (F3).
+- N7: `unsupported::every_row_with_a_held_argument_is_rejected` (F5).
 
 ### 7.5 Expected values (S-1)
 
@@ -683,14 +770,14 @@ rejected 34
 - Newly accepted: 155 files, all previously `prim` (153 run + 2 run-fail) [V]. By directory: run/effects 33, run/unwind 15, run/panic 15, run/io 14, run/linearity 10, run/std 10, run/var 9, run/bytes 7, run/files 7, run/kinds 5, run/scripts 5, run/unboxed 5, run/arrays 4, run/ffi 3, run/borrow 2, run/byte 2, run/chars 2, run-fail/io 2, and 1 each in run/float, run/functions, run/records, run/reuse, run/strings. Full list: appendix A.
 - All 111 entry files of `run/{effects,unwind,panic}` and `run-fail/panic` are accepted [V].
 - `bench/native.sh` after the stage: 42 rows, 41 with numbers, `rejected` only for `par_tree` [V: the probe binary reaches lowering for `ep_float` and `nbody` and rejects `par_tree` with E0004 `par`]; `differs` 0 [I].
-- Tests: ≥ 5205 run, 23 skipped [I]. Verus: R1 1250 [V]; R2, R3 strictly larger [I]; N1 equal to R3.
+- Tests: ≥ 5214 run, 23 skipped [I]. Verus: R1 1250 [V]; R2, R3 strictly larger [I]; N1 equal to R3.
 - Native UI timing: base 1.14 s / 0.95 s [V]; after N7 within the 10 s timing override [I].
 
 ## 8. Execution order
 
 ```
 S0 → R1 → R2 → R3 → R4 → V1 → [CP-A]
-   → N1 → V2 → N2 → N3 → [CP-B]
+   → N1 → V2 → R5 → N2 → N3 → [CP-B]
    → N4 → N5 → N6 → [CP-C]
    → (fix commits, if any) → N7 → [CP-D]
    → Z → [CP-Z] → merge
@@ -729,7 +816,7 @@ Order rationale: eml_rt first (08 U-5 default), so the gate runs on R1..R4 and N
 
 - Per unit: the unit's completion criteria, G (7.3.1), the SC lines in force (7.3.2), EG for eml_rt commits (7.3.3), the checkpoint extras before CP-B / CP-C / CP-D (7.3.4).
 - Overall (after Z, on the Close commit):
-  - `cargo nextest run` → `N tests run: N passed, 23 skipped`, N ≥ 5205 [I: 5143 + 62 new].
+  - `cargo nextest run` → `N tests run: N passed, 23 skipped`, N ≥ 5214 [I: 5143 + 71 new].
   - `cargo nextest run -p eml_cli --test integration -E 'test(=ui::run_native) | test(=ui::run_fail_native)'` → pass with the bodies of 7.5 (S-1).
   - `cargo verus verify -p eml_rt` → `N verified, 0 errors`, N > 1250 (S-4).
   - every SC line of 7.3.2 → its stated value (S-5).
@@ -797,4 +884,4 @@ Only what keeps the implementer from relitigating.
   - The rename script is in R1 (no dependence on a scratch commit); it also renames the leftover literal at `proof.rs:524`.
   - The landing block gets its own CLIF pin (`a_landing_point`); N1 gets a run-time test of the `n < m` arm's cold path.
   - An extra checkpoint after N3 shortens the bisect window.
-- Execution amendments (2026-11-14): the fork constructors and `Ctx` fork operations are `pub unsafe fn` (U-I), N6's Prelude check also covers `ret == OpRet::Never` and `eml$raise` traps when the abort byte is clear (U-J), N1's verifier rule is widened (U-J), plus mechanical corrections to tests and counts. Full list with old -> new lines: 00 G.3.
+- Execution amendments (2026-11-14): the fork constructors and `Ctx` fork operations are `pub unsafe fn` (U-I), N6's Prelude check also covers `ret == OpRet::Never` and `eml$raise` traps when the abort byte is clear (U-J), N1's verifier rule is widened (U-J), plus mechanical corrections to tests and counts. Full list with old -> new lines: 00 G.3. The whole-stage soundness audit (SA-audit, user-approved 2026-11-14: fix every finding in this stage) adds unit R5 and amendments to N2-N7 and Z: 00 G.3 (i).
