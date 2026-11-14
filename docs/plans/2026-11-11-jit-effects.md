@@ -574,7 +574,11 @@ ASan before CP-C (N6's completion).
 
 ### 7.4 Test changes by kind
 
-**Kind 1 (pass / fail), one by one (N7):**
+**Kind 1 (pass / fail), one by one (N1, N7):**
+
+- N1 (user-approved, 00 G.3 U-M): `eml_lir` `verify::prompt_marker_passed_only_to_a_jump_is_accepted` is rewritten as a refusal test of the new I-land message (renamed accordingly): once `prompt$` must follow a marked `apply`, a marker used only by a jump cannot occur in an accepted program.
+
+N7:
 
 | Test | Change | Reason |
 |---|---|---|
@@ -588,7 +592,7 @@ No `native: skip` mark is added.
 
 **Kind 2 (expected values), scope:**
 - R4 (user-approved, 00 G.3 U-K): `heap::tests::share::checked::share_stops_at_immortal_objects`, `heap::tests::share::share_leaves_an_immortal_lin_object_alone`, `heap::tests::transfer::checked::shared_counts_above_one_and_immortal_objects_stop` keep their claims on an uncounted immortal (frozen and attached, or the dummy), because sharing a value that reaches a counted immortal is now refused; if one cannot, stop (kind 1 for the user). The `fast::` variants of the two `both_modes!` tests change too (`mortal()` 1 → 0, the immortal now lives in a frozen region). In `share_leaves_an_immortal_lin_object_alone` the sub-claim "releasing a shared parent gives back a counted child's reference" is dropped: that state is now illegal in checked mode (reviewed as within kind 2).
-- N1: `clif::a_call_and_its_unwind_check`, `clif::an_apply_site`; eml_rt `the_native_offsets_are_pinned`.
+- N1: `clif::a_call_and_its_unwind_check`, `clif::an_apply_site`; eml_rt `the_native_offsets_are_pinned`. Also (00 G.3 U-M), because the I-land rule refuses hand-written LIR whose marked `apply` is not followed by `prompt$`: `eml_lir` `unwind::landing_is_the_prompt_variable` and `eml_vm` `codegen::an_unwind_point_shows_its_owned_slots_and_landing` gain a `prompt$` function and its call (their point list / disassembly change); `eml_lir` `verify::prompt_marker_is_accepted` and `eml_vm` `evidence::a_yield_reaches_the_status_of_its_target` change their input only (a `prompt$` call; the status read moves into a small `prompt$`) and keep their expected values.
 - N7: `integration__ui__run_native.snap`, `integration__ui__run_fail_native.snap`.
 - Contingency V1: `crates/eml_vm/tests/bench.rs` `RunStats` of `bench/` programs that use `par` only (08 A-7).
 - Nothing else; another change stops the unit.
