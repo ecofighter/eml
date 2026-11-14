@@ -138,7 +138,8 @@ Kept in the repository: each rule is written into `docs/spec/` (native.md, objec
 | L1 | `Fix what a clause entry holds where it is filled` | N4 | 00 G.3 (j); G-17 | Sonnet |
 | L2 | `Check that every entry is filled and read under its name` | L1 | 00 G.3 (j), (k); G-17 | Opus |
 | N5 | `Land aborts at prompt` | L2 | E-D6 (landing), 08 U-2 = now; G-4, G-5 | Opus |
-| N6 | `Catch extern failures natively` | N5 | E-D7, E-D4 (`Image` effects); G-7, G-10, G-11, G-12, G-17 | Opus |
+| L3 | `Require a prompt marker to be an evidence made in its function` | N5 | 00 G.3 (l); G-17 | Opus |
+| N6 | `Catch extern failures natively` | L3 | E-D7, E-D4 (`Image` effects); G-7, G-10, G-11, G-12, G-17 | Opus |
 | CP-C | CI of N6 | N6 | | orchestrator |
 | N7 | `Accept effects natively` | CP-C | E-D9; G-16 | Opus (triage of disagreements) |
 | CP-D | CI of N7 | N7 | | orchestrator |
@@ -703,6 +704,18 @@ Stop and return a consultation request, without committing, when:
 - docs: native.md 「巻き戻しの地点」 (landing block, order, `eml_nrt_landed`; delete 「着地の印を持つ地点は下ろさない…」; I-land's first half "前半は、debugのビルドでLIRのverifierが、どのビルドでも下ろしが確かめる" so that the 「releaseでは定まらない」 sentence (native.md:182 in the audit's tree) covers only the `prompt$` half; and, for jit-tasks, "a row that can run eml code is followed by the `Call` test as well as the `Faults` test" (SA-audit B2: `unwind::if_aborting` stays the only emitter and is usable after any call-like instruction; no code in this stage)), 「エントリ」 service list.
 - Completion: G; `cargo nextest run -p eml_native -E 'test(=effects::an_abort_lands_and_the_clause_returns)'` → 1 passed; `cargo nextest run -p eml_native --release -E 'test(release_check)'` → `6 tests run: 6 passed` (N4's two, L1's one, L2's two and this one: 2 + 1 + 2 + 1 = 6); `cargo nextest run -p eml_native` → no failed; `grep -c 'landing.is_none' crates/eml_native/src/lower/unwind.rs` → `0`; SC lines of N5.
 
+### L3: `Require a prompt marker to be an evidence made in its function`
+
+- Place: after N5, before N6. Model: Opus (the N5 executor, who measured it).
+- Purpose: 00 G.3 (l). N5's landing block calls `ev_take_state` on the prompt marker when an abort passes a frame that does not land, and the VM's fast-mode unwinder does the same; in fast mode `Ctx::ev_take_state` requires an evidence (`ev_shape`) and writes a field unchecked. The only checks on a marker today are its Repr (`obj`) and that it is owned and used after the call (`check_prompt`, crates/eml_lir/src/verify.rs). This unit closes the premise in every build: a prompt marker is a variable bound in the same function by `prim ev_new[E]` or `prim ev_renew` (both return an evidence).
+- Measured (N5 executor, exec/n5/marker-renew2.txt): with the rule in the per-function checker, every compiled program passes (all UI run/run-fail/check-fail, REPL transcripts, bench, lowering, EP); `ev_new` alone is not enough (EP's `resume$` marks an apply with an `ev_renew` result). 16 hand-written tests fail, each with a parameter as the marker.
+- Files: `crates/eml_lir/src/check.rs` (the rule beside L1/L2's, fed by both verifiers, run by `eml_lir::unwind::points` in every build; message ``the prompt marker `ev.0` is not an evidence made by `ev_new` or `ev_renew` in this function``, or the nearest existing phrasing — state it in the commit); the native lowering's every-build I-land assert needs no change; docs: lir.md 「verifier」 and 「着地の印」, core-ir.md 「handle と `prompt$`」 (or its verifier section), native.md 「巻き戻しの地点」 (the landing's `ev_take_state` relies on it); drop "a prompt marker is an evidence" from the list of unchecked premises if any doc states it.
+- Tests:
+  - New (write first): `crates/eml_lir/tests/verify.rs` `a_prompt_marker_is_an_evidence_made_in_its_function` (a parameter marker and a marker from a call are refused with the message; an `ev_renew` marker is accepted).
+  - Kind 2 (approved under the user's standing rule, 00 G.3 (l)): the 16 tests whose marker is a parameter now make it with `ev_new` (input-only) unless the expected text changes: eml_core_ir tests/verify.rs the six `prompt_marker_*`; eml_lir `unwind::landing_is_the_prompt_variable` and six `verify::prompt_marker_*`; eml_native `clif::a_landing_point` (expected-value: the pin gains the `ev_new` lines) and `effects::release_check_a_marked_apply_not_followed_by_prompt_panics`; eml_vm `codegen::an_unwind_point_shows_its_owned_slots_and_landing` (expected-value: disassembly). Each keeps its claim; a test outside this list failing, or one that cannot keep its claim, stops the unit.
+- Counts: new tests +1 (82, floor ≥ 5225).
+- Completion: G; `cargo nextest run -p eml_lir -E 'test(a_prompt_marker_is_an_evidence)'` → 1 passed; `cargo nextest run -p eml_lir -p eml_core_ir -p eml_vm -p eml_native -p eml_cli` → no failed; `cargo nextest run -p eml_native --release -E 'test(release_check)'` → 6 passed; Miri eml_vm `miri::` both settings → pass.
+
 ### N6: `Catch extern failures natively`
 
 - Purpose: E-D7; `Image.panic_effect` / `io_effect`; `LoadError::Prelude`.
@@ -852,7 +865,7 @@ No `native: skip` mark is added.
 
 **Kind 3 (byte-identical expected values):** R1 (rename); V1 (reroute); N3 `DatumRow` literals (`crates/eml_nrt/tests/run.rs` :203, :210, :217); N6 `eml_nrt_failed` callers (`crates/eml_nrt/tests/services.rs` :119, :164, :197) and `Image` literals (`crates/eml_nrt/tests/run.rs` :27, :225, :352, :406; `crates/eml_nrt/tests/services.rs` :37; `crates/eml_nrt/src/rows.rs` :188; `crates/eml_nrt/src/entries.rs` :532) [V: grep of `DatumRow {` / `Image {`].
 
-**New tests:** R2 4 (×2 modes), R3 4 (×2), R5 1 (×2), N1 6, N2 3, N3 10, N4 10, L1 4, L2 5, N5 10, N6 16, N7 2 (and 3 deleted): 8 + 8 + 2 + 6 + 3 + 10 + 10 + 4 + 5 + 10 + 16 + 2 − 3 = 81 more in the run [I], so ≥ 5224 after the stage (5143 + 81). `both_modes!` counts a test twice; only the eml_rt tests (R2, R3, R5) use it, every other new test counts once. Per unit (SA-audit, 00 G.3 (i)):
+**New tests:** R2 4 (×2 modes), R3 4 (×2), R5 1 (×2), N1 6, N2 3, N3 10, N4 10, L1 4, L2 5, N5 10, L3 1, N6 16, N7 2 (and 3 deleted): 8 + 8 + 2 + 6 + 3 + 10 + 10 + 4 + 5 + 10 + 1 + 16 + 2 − 3 = 82 more in the run [I], so ≥ 5225 after the stage (5143 + 82). `both_modes!` counts a test twice; only the eml_rt tests (R2, R3, R5) use it, every other new test counts once. Per unit (SA-audit, 00 G.3 (i)):
 - R5 (kind 3 otherwise): `heap::tests::trusted::{fast,checked}::a_counted_immortal_is_refused_while_its_owner_counts`.
 - N2: `an_effect_number_of_65535_is_refused` (F4; in the `entries::` tests module of eml_nrt, so Miri runs it).
 - N4: `a_tail_never_clause_in_a_float_function`, `a_tail_never_clause_in_a_function_returning_two_leaves`, `a_never_clause_bound_to_a_float`, `release_check_a_tail_clause_result_mismatch_panics` (F1; `crates/eml_native/tests/effects.rs`).
@@ -914,7 +927,7 @@ rejected 34
 - Newly accepted: 155 files, all previously `prim` (153 run + 2 run-fail) [V]. By directory: run/effects 33, run/unwind 15, run/panic 15, run/io 14, run/linearity 10, run/std 10, run/var 9, run/bytes 7, run/files 7, run/kinds 5, run/scripts 5, run/unboxed 5, run/arrays 4, run/ffi 3, run/borrow 2, run/byte 2, run/chars 2, run-fail/io 2, and 1 each in run/float, run/functions, run/records, run/reuse, run/strings. Full list: appendix A.
 - All 111 entry files of `run/{effects,unwind,panic}` and `run-fail/panic` are accepted [V].
 - `bench/native.sh` after the stage: 42 rows, 41 with numbers, `rejected` only for `par_tree` [V: the probe binary reaches lowering for `ep_float` and `nbody` and rejects `par_tree` with E0004 `par`]; `differs` 0 [I].
-- Tests: ≥ 5224 run, 23 skipped [I]. Verus: R1 1250 [V]; R2, R3 strictly larger [I]; N1 equal to R3.
+- Tests: ≥ 5225 run, 23 skipped [I]. Verus: R1 1250 [V]; R2, R3 strictly larger [I]; N1 equal to R3.
 - Native UI timing: base 1.14 s / 0.95 s [V]; after N7 within the 10 s timing override [I].
 
 ## 8. Execution order
@@ -922,7 +935,7 @@ rejected 34
 ```
 S0 → R1 → R2 → R3 → R4 → V1 → [CP-A]
    → N1 → V2 → R5 → N2 → N3 → [CP-B]
-   → N4 → L1 → L2 → N5 → N6 → [CP-C]
+   → N4 → L1 → L2 → N5 → L3 → N6 → [CP-C]
    → (fix commits, if any) → N7 → [CP-D]
    → Z → [CP-Z] → merge
 ```
@@ -960,7 +973,7 @@ Order rationale: eml_rt first (08 U-5 default), so the gate runs on R1..R4 and N
 
 - Per unit: the unit's completion criteria, G (7.3.1), the SC lines in force (7.3.2), EG for eml_rt commits (7.3.3), the checkpoint extras before CP-B / CP-C / CP-D (7.3.4).
 - Overall (after Z, on the Close commit):
-  - `cargo nextest run` → `N tests run: N passed, 23 skipped`, N ≥ 5224 [I: 5143 + 81 new].
+  - `cargo nextest run` → `N tests run: N passed, 23 skipped`, N ≥ 5225 [I: 5143 + 82 new].
   - `cargo nextest run -p eml_cli --test integration -E 'test(=ui::run_native) | test(=ui::run_fail_native)'` → pass with the bodies of 7.5 (S-1).
   - `cargo verus verify -p eml_rt` → `N verified, 0 errors`, N > 1250 (S-4).
   - every SC line of 7.3.2 → its stated value (S-5).
