@@ -4,9 +4,10 @@
 use std::sync::Arc;
 
 use eml_rows::constants::{empty_mut_array, immortal_big_int, immortal_float};
-use eml_rt::{Control, Fast, Frozen, Heap, HeapError, Word, layout};
+use eml_rt::{Control, Fast, Frozen, Heap, HeapError, MaskItem, Word, layout};
 
 use crate::closures::code_word;
+use crate::image::{DATUM_EFFECT, DatumRow};
 
 /// 中身で表した読み込み時の値1つ。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,13 +66,42 @@ fn static_closure(heap: &mut Heap<Fast>, arity: u16, code: *const u8) -> Word {
     }
 }
 
+/// runが物体にしない値 (`DATUM_EFFECT`か`DATUM_MASK`の行) をそのslotに書く。エフェクトは番号そのものを、マスクは
+/// 項目を順に`MaskItem`として書く (docs/spec/native.mdの「`Image`」)。
+///
+/// # Safety
+/// `row.kind`は`DATUM_EFFECT`か`DATUM_MASK`である。`row.slot`は、ほかの誰も使わない書ける領域で、8にそろい、
+/// `DATUM_MASK`では`mask_bytes(row.items.len)`バイト、`DATUM_EFFECT`では1語である。`DATUM_MASK`の行の`items`は、
+/// 生きている行を指す。
+pub(crate) unsafe fn write_raw(row: &DatumRow) {
+    if row.kind == DATUM_EFFECT {
+        // SAFETY: 呼ぶ側の約束
+        unsafe { row.slot.write(row.bits) };
+        return;
+    }
+    let first = row.slot.cast::<MaskItem>();
+    // SAFETY: 呼ぶ側の約束。slotは8にそろい、`MaskItem`のそろえはそれ以下である (`image.rs`)
+    for (i, item) in unsafe { row.items.as_slice() }.iter().enumerate() {
+        let item = MaskItem {
+            effect: item.effect,
+            keep: item.keep,
+            skip: item.skip,
+        };
+        // SAFETY: 呼ぶ側の約束。slotは`mask_bytes(items.len)`バイトである
+        unsafe { first.add(i).write(item) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use eml_rt::{Buffering, Control, Ctx, Fast, HostRef, Kind, Limits, StdHost, layout};
 
-    use super::{Built, Datum, build};
+    use eml_rt::MaskItem;
+
+    use super::{Built, Datum, build, write_raw};
+    use crate::image::{DATUM_EFFECT, DATUM_MASK, DatumRow, MaskRow, Slice, Str, mask_bytes};
 
     fn ctx(control: &Arc<Control>) -> Ctx<Fast> {
         let host = StdHost::new(
@@ -134,5 +164,56 @@ mod tests {
             assert_eq!(heap.scanned_len(words[0]).unwrap(), 0);
             assert!(heap.is_immortal(words[0]));
         }
+    }
+
+    /// エフェクトの行は番号そのものを1語に、項目が2つのマスクの行は項目を`MaskItem`として順に書く。slotはRustの
+    /// バッファなので、Miriが書く範囲とそろえを確かめる。
+    #[test]
+    fn raw_rows_are_written_in_place() {
+        let mut effect = vec![0u64; 1];
+        let items = [
+            MaskRow {
+                effect: 3,
+                keep: 0,
+                skip: 1,
+            },
+            MaskRow {
+                effect: 7,
+                keep: 1,
+                skip: 2,
+            },
+        ];
+        let mut mask = vec![0u64; mask_bytes(items.len()).div_ceil(8)];
+        let row = |kind, bits, slot, items| DatumRow {
+            kind,
+            bits,
+            text: Str::new(""),
+            code: std::ptr::null(),
+            slot,
+            items,
+        };
+        // SAFETY: どちらのslotもこのテストのバッファで、8にそろい、種類の求める大きさがある
+        unsafe {
+            write_raw(&row(DATUM_EFFECT, 5, effect.as_mut_ptr(), Slice::new(&[])));
+            write_raw(&row(DATUM_MASK, 0, mask.as_mut_ptr(), Slice::new(&items)));
+        }
+        assert_eq!(effect, [5]);
+        // SAFETY: `write_raw`が`MaskItem`を2つ書いた
+        let written = unsafe { std::slice::from_raw_parts(mask.as_ptr().cast::<MaskItem>(), 2) };
+        assert_eq!(
+            written,
+            [
+                MaskItem {
+                    effect: 3,
+                    keep: 0,
+                    skip: 1
+                },
+                MaskItem {
+                    effect: 7,
+                    keep: 1,
+                    skip: 2
+                },
+            ]
+        );
     }
 }

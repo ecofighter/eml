@@ -14,8 +14,8 @@ use crate::census::census;
 use crate::constants::{self, Datum};
 use crate::enter::{FATAL_FAULT, FATAL_PANICKED, FATAL_RECORDED, Fatal, detached, enter};
 use crate::image::{
-    Census, DATUM_BIG_INT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow,
-    Image, Options, Start,
+    Census, DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
+    DATUM_STRING, DatumRow, Image, Options, Start,
 };
 use crate::worker::{NATIVE_CODE, Worker};
 
@@ -40,7 +40,8 @@ fn fault(fault: RunFault) -> RuntimeError {
 ///
 /// # Safety
 /// `image`の表は呼び出しの間生きていて変わらず、どの`Str`もUTF-8を持つ。どの`DatumRow.slot`も、ほかの誰も使わない
-/// 書ける語である。
+/// 書ける領域で、8にそろい、`DATUM_MASK`の行では`mask_bytes(items.len)`バイト、ほかの行では1語である。`DATUM_MASK`の
+/// 行の`items`は、生きている行を指す。呼び出しは、同じ`image`のほかのrunと重ならない。
 /// `start.thunk`を`start.entry`と`start.argv`で呼ぶことは、`image`のためにコンパイルしたemlのコードへの正しい呼び出しで
 /// あるか、そのコードの規則を守る代役を走らせる。代役は`ctx`をworkerのスレッドの上でだけ使い、emlのコードかエントリの
 /// 呼び出しをまたいでそれへの参照を持たない。panicで巻き戻らない。`eml_fatal`で終わりうる呼び出しをまたいで、デストラクタを
@@ -128,16 +129,21 @@ unsafe fn on_worker(
     }
 }
 
-/// 読み込み時の値を作り、最初のエントリの前にどのslotも書く (docs/spec/native.md の「`Image`」)。
+/// 読み込み時の値を作り、最初のエントリの前にどのslotも書く (docs/spec/native.mdの「`Image`」)。ヒープの種類の値は
+/// `constants::build`で物体にしてその語を書き、エフェクトは番号そのものを、マスクは項目を`MaskItem`として書く。
 ///
 /// # Safety
-/// `data`の文字列は正しく、どのslotもほかの誰も使わない書ける語である。
+/// `data`の文字列は正しく、どのslotも`run`の求めるとおりの、ほかの誰も使わない書ける領域である。これはrunごとに、その
+/// runの最初のエントリの前に走る。1つの`Image`のrunは重ならない (`run`の約束) ので、書く間にslotを読むコードはない。
+/// コードはslotと定数を同期なしに読むので、ネイティブのどのworkerのヒープも、コードを動かす前にそのrunでここが作る塊を
+/// 付ける。
 unsafe fn fill_data(
     ctx: &mut Ctx<Fast>,
     control: &Arc<Control>,
     data: &[DatumRow],
 ) -> Result<(), RuntimeError> {
-    let data_of = |row: &DatumRow| match row.kind {
+    let raw = |row: &&DatumRow| matches!(row.kind, DATUM_EFFECT | DATUM_MASK);
+    let data_of = |row: &&DatumRow| match row.kind {
         // SAFETY: 呼ぶ側の約束
         DATUM_STRING => Ok(Datum::String(unsafe { row.text.as_str() })),
         DATUM_BIG_INT => Ok(Datum::BigInt(row.bits as i64)),
@@ -154,16 +160,21 @@ unsafe fn fill_data(
         },
         _ => Err(fault(RunFault::Internal("a datum has an unknown kind"))),
     };
-    let datums = data.iter().map(data_of).collect::<Result<Vec<_>, _>>()?;
+    let objects: Vec<&DatumRow> = data.iter().filter(|row| !raw(row)).collect();
+    let datums = objects.iter().map(data_of).collect::<Result<Vec<_>, _>>()?;
     let built = constants::build(control, &datums)
         .map_err(|_| fault(RunFault::Internal("the constants cannot be frozen")))?;
     if let Some(region) = built.region {
         // SAFETY: 塊を付けても、`Ctx`の持つ語は変わらない
         unsafe { ctx.heap_mut() }.attach(region);
     }
-    for (row, w) in data.iter().zip(built.words) {
+    for (row, w) in objects.into_iter().zip(built.words) {
         // SAFETY: 呼ぶ側の約束
         unsafe { row.slot.cast::<Word>().write(w) };
+    }
+    for row in data.iter().filter(raw) {
+        // SAFETY: 呼ぶ側の約束。行の種類は`DATUM_EFFECT`か`DATUM_MASK`である
+        unsafe { constants::write_raw(row) };
     }
     Ok(())
 }

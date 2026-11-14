@@ -196,9 +196,7 @@ fn held(op: Op, class: Class) -> usize {
 
 /// 代役。記録の類ごとに、物体と対の物体を作り、物体を試す関数に渡し、対の物体には同じ操作を`Heap`で行う。`dup`の関数は
 /// 引数を借りて新しい参照を返し、`decref`の関数は引数を消費する。
-unsafe extern "C" fn each(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
-    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
-    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Probe>>() };
+unsafe fn each(ctx: *mut Ctx<Fast>, visit: &mut Visit<Probe>) {
     let op = visit.record.op;
     for class in visit.record.classes.clone() {
         let mut ok = true;

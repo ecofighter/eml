@@ -6,6 +6,7 @@ mod c;
 mod call;
 pub mod consts;
 mod data;
+mod effects;
 mod function;
 pub mod names;
 mod rc;

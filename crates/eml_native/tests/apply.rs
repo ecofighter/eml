@@ -740,9 +740,7 @@ fn entry$main() -> unit {
 ///
 /// # Safety
 /// `visit`が走らせる代役である。
-unsafe extern "C" fn chain_lins(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
-    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
-    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Vec<bool>>>() };
+unsafe fn chain_lins(ctx: *mut Ctx<Fast>, visit: &mut Visit<Vec<bool>>) {
     // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない。たどる語は、
     // 受け取ったPAPが持つ生きている物体である
     unsafe {

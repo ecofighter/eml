@@ -242,9 +242,7 @@ unsafe fn boxed(ctx: *mut Ctx<Fast>, w: Word, ok: &mut bool) -> Boxed {
 }
 
 /// 代役。`int`ごとに試す関数で箱を作り、対の箱を`Heap::alloc_int`で作って、両方の見え方を記録し、両方を手放す。
-unsafe extern "C" fn box_each(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
-    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
-    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Boxes>>() };
+unsafe fn box_each(ctx: *mut Ctx<Fast>, visit: &mut Visit<Boxes>) {
     for n in visit.record.ints.clone() {
         let mut ok = true;
         // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない
@@ -530,9 +528,7 @@ struct Empty {
 }
 
 /// 代役。試す関数を呼び、返った語を調べて手放す。
-unsafe extern "C" fn inspect_empty(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
-    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
-    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Empty>>() };
+unsafe fn inspect_empty(ctx: *mut Ctx<Fast>, visit: &mut Visit<Empty>) {
     // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない
     unsafe {
         let mut argv = [0u64; 1];

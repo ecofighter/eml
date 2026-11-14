@@ -46,6 +46,16 @@ pub fn float(bits: u64) -> String {
     format!("x:{bits:016x}")
 }
 
+/// エフェクト`text`のマシンの番号のデータの記号 (docs/spec/native.mdの「エフェクト」)。
+pub fn effect(text: &str) -> String {
+    format!("e:{text}")
+}
+
+/// 項目のテキストの形が`text`のマスクのデータの記号 (docs/spec/native.mdの「エフェクト」)。
+pub fn mask(text: &str) -> String {
+    format!("m:{text}")
+}
+
 /// 種類の並び`params -> rets`のthunkの記号。`eml$thunk$if$i`のようになる。
 pub fn thunk(params: &[Kind], rets: &[Kind]) -> String {
     let letters = |kinds: &[Kind]| -> String {

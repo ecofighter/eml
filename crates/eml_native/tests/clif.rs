@@ -958,3 +958,56 @@ fn f(n.0: int, borrowed s.1: obj) -> obj lin {
     }
     ");
 }
+
+#[test]
+fn an_effect_lookup() {
+    // エフェクトの番号は、データの記号`e:Counter`からロード1つで読んでエントリに渡す。エフェクトの番号を持つ即値はない
+    // (docs/spec/native.mdの「エフェクト」)。エントリの結果が文の値である
+    let text = "\
+effect Counter { get(unit) -> tobj }
+fn f() -> obj {
+  let e.0: obj = prim ev_lookup[Counter]()
+  return e.0
+}
+";
+    insta::assert_snapshot!(clif(text, "f"), @"
+    function %f:f(i64) -> i64 tail {
+        gv0 = symbol colocated %e:Counter
+        sig0 = (i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) -> i64 c
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_rt_ev_lookup sig2
+
+    block0(v0: i64):
+        v1 = load.i64 notrap aligned v0+40
+        v2 = load.i32 notrap aligned v1
+        v3 = iconst.i32 0
+        v4 = icmp ne v2, v3  ; v3 = 0
+        v5 = get_stack_pointer.i64 
+        v6 = load.i64 notrap aligned v0+48
+        v7 = icmp ult v5, v6
+        v8 = bor v4, v7
+        brif v8, block1, block3
+
+    block1 cold:
+        v9 = func_addr.i64 fn0
+        v10 = iconst.i64 0
+        v11 = call fn1(v0, v9, v10)  ; v10 = 0
+        v12 = iconst.i64 0
+        v13 = icmp eq v11, v12  ; v12 = 0
+        brif v13, block3, block2
+
+    block2 cold:
+        v14 = iconst.i64 1
+        return v14  ; v14 = 1
+
+    block3:
+        v15 = symbol_value.i64 gv0
+        v16 = load.i64 notrap aligned v15
+        v17 = call fn2(v0, v16)
+        return v17
+    }
+    ");
+}

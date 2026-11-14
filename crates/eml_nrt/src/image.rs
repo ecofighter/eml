@@ -1,6 +1,8 @@
 //! ネイティブの実行系がプログラムについて読む事実 (docs/spec/native.md の「`Image`」)。
 #![allow(unsafe_code)]
 
+use eml_rt::MaskItem;
+
 use crate::Thunk;
 use crate::run::WORKER_STACK;
 
@@ -100,9 +102,13 @@ pub const DATUM_BIG_INT: u32 = 1;
 pub const DATUM_FLOAT: u32 = 2;
 pub const DATUM_FN: u32 = 3;
 pub const DATUM_EMPTY_MUT_ARRAY: u32 = 4;
+pub const DATUM_EFFECT: u32 = 5;
+pub const DATUM_MASK: u32 = 6;
 
-/// 読み込み時の値1つ。種類、中身 (大きい`int`と`float`は`bits`、文字列は`text`、静的なクロージャは`bits`の引数の数と
-/// `code`のエントリのコード) と、runが物体の語で埋めるデータのslotである。
+/// 読み込み時の値1つ。種類、中身 (大きい`int`と`float`とエフェクトの番号は`bits`、文字列は`text`、静的なクロージャは
+/// `bits`の引数の数と`code`のエントリのコード、マスクは`items`) と、runが埋めるデータのslotである。runは、ヒープの
+/// 種類のslotには物体の語を、エフェクトのslotには番号そのものを、マスクのslotには項目を`MaskItem`として書く。マスクの
+/// slotは`mask_bytes(items.len)`バイトで、ほかのslotは1語である。
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct DatumRow {
@@ -111,6 +117,24 @@ pub struct DatumRow {
     pub text: Str,
     pub code: *const u8,
     pub slot: *mut u64,
+    pub items: Slice<MaskRow>,
+}
+
+/// マスクの項目1つ。`eml_rt::MaskItem`の欄で、エフェクトはマシンの番号である。
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaskRow {
+    pub effect: u16,
+    pub keep: u32,
+    pub skip: u32,
+}
+
+// マスクのデータの物は8にそろうので、runはそこへ`MaskItem`を書ける
+const _: () = assert!(align_of::<MaskItem>() <= 8);
+
+/// 項目を`n`個持つマスクのデータの物のバイト数。
+pub fn mask_bytes(n: usize) -> usize {
+    n * size_of::<MaskItem>()
 }
 
 /// PAPのアダプタ1つ。`rest`個の引数を待つPAPのエントリのコードである。
@@ -131,8 +155,11 @@ pub struct Image {
 }
 
 // SAFETY: 安全なAPIはどれも`Image`のポインタの先を読み書きしない。読み書きするのは`unsafe fn`の`run`だけで、呼ぶ側が
-// 待っている間に、workerのスレッドから読む。workerが書くのは最初のエントリの前の`DatumRow.slot`を通してだけで、ほかは
-// どれも読むだけである
+// 待っている間に、workerのスレッドから読む。workerが書くのは`DatumRow.slot`を通してだけで、書くのはrunごとに、その
+// runの最初のエントリの前である。1つの`Image`のrunは重ならない (`run`の約束で、JITのホストの`run`と`call`は
+// `&mut self`を取る) ので、書く間にslotを読むコードはない。書く大きさは、ヒープの種類とエフェクトでは1語、マスクでは
+// `mask_bytes(items.len)`バイトである。ほかはどれも読むだけである。コードはslotとその指す定数を同期なしに読むので、
+// runのコードを動かすどのworkerのヒープも、コードを動かす前にそのrunの塊を付ける
 unsafe impl Sync for Image {}
 
 /// runがコードに入る所。`eml_enter`の引数と、エントリの結果が数える語かどうかである。

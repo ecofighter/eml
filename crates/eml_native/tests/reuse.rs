@@ -326,9 +326,7 @@ unsafe fn finish(
 }
 
 /// 代役。記録の類ごとに親と対の親を作り、親を試す関数に、対の親を`Heap`の操作に通す。
-unsafe extern "C" fn each(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
-    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
-    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Probe>>() };
+unsafe fn each(ctx: *mut Ctx<Fast>, visit: &mut Visit<Probe>) {
     let form = visit.record.form;
     for class in visit.record.classes.clone() {
         let mut ok = true;
@@ -778,9 +776,7 @@ struct Dummy {
 }
 
 /// 代役。`2^62`の`BigInt`の箱 (ダミーと同じ種類の物体) を作り、構造体の箱として試す関数に渡す。
-unsafe extern "C" fn dummy_each(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
-    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
-    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<(bool, Dummy)>>() };
+unsafe fn dummy_each(ctx: *mut Ctx<Fast>, visit: &mut Visit<(bool, Dummy)>) {
     let gone = visit.record.0;
     let mut ok = true;
     // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない

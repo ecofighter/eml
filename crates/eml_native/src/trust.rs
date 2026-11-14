@@ -16,6 +16,7 @@ const FILES: &[(&str, &str)] = &[
     ("lower/call.rs", include_str!("lower/call.rs")),
     ("lower/consts.rs", include_str!("lower/consts.rs")),
     ("lower/data.rs", include_str!("lower/data.rs")),
+    ("lower/effects.rs", include_str!("lower/effects.rs")),
     ("lower/function.rs", include_str!("lower/function.rs")),
     ("lower/names.rs", include_str!("lower/names.rs")),
     ("lower/rc.rs", include_str!("lower/rc.rs")),

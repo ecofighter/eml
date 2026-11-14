@@ -190,8 +190,13 @@ pub fn load_box(b: &mut FunctionBuilder, obj: Value, ty: Type) -> Value {
 /// 読み込み時の値のデータの記号`slot`が持つ語を型`ty`で読む。記号のアドレスはPC相対で、ロードは1つである
 /// (docs/spec/native.md の「値と定数」)。
 pub fn data_word(b: &mut FunctionBuilder, slot: GlobalValue, ty: Type) -> Value {
-    let address = b.ins().symbol_value(types::I64, slot);
+    let address = data_address(b, slot);
     b.ins().load(ty, MemFlagsData::trusted(), address, 0)
+}
+
+/// 読み込み時の値のデータの記号`slot`のPC相対のアドレス。ロードはない (docs/spec/native.mdの「値と定数」)。
+pub fn data_address(b: &mut FunctionBuilder, slot: GlobalValue) -> Value {
+    b.ins().symbol_value(types::I64, slot)
 }
 
 /// 物体`obj`の数。ヘッダの先頭の`I32`である。
@@ -236,8 +241,9 @@ fn in_span(b: &mut FunctionBuilder, rc: Value, bias: u32, span: u32) -> Value {
         .icmp_imm_u(IntCC::UnsignedLessThan, biased, i64::from(span))
 }
 
-/// `ctx`の`yielding.target`の語。yieldも中断もしていない間は`UNIT`である。読むのは`eml$apply$m`の`n < m`の腕の
-/// 見張りだけで、最後でない部分から戻るyieldを見つける (docs/spec/native.md の「関数の値」)。
+/// `ctx`の`yielding.target`の語。yieldも中断もしていない間は`UNIT`である。読むのは、インラインの`yielding`と
+/// `yield_status`と、最後でない部分から戻るyieldを見つける`eml$apply$m`の`n < m`の腕の見張りである
+/// (docs/spec/native.mdの「エフェクト」「関数の値」)。
 pub fn yield_target(b: &mut FunctionBuilder, ctx: Value) -> Value {
     b.ins().load(
         types::I64,
@@ -247,8 +253,8 @@ pub fn yield_target(b: &mut FunctionBuilder, ctx: Value) -> Value {
     )
 }
 
-/// `ctx`のyieldの状態の`abort`のバイト。中断の途中の間だけ0でなく、yieldはそれを立てない (docs/spec/native.md の
-/// 「巻き戻しの地点」)。
+/// `ctx`のyieldの状態の`abort`のバイト。中断の途中の間だけ0でなく、yieldはそれを立てない。読むのは、呼び出しの後の
+/// 巻き戻しの確かめとインラインの`yield_status`である (docs/spec/native.mdの「巻き戻しの地点」「エフェクト」)。
 pub fn yield_abort(b: &mut FunctionBuilder, ctx: Value) -> Value {
     b.ins().load(
         types::I8,

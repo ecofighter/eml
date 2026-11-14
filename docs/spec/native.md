@@ -117,15 +117,15 @@
 - `FnRow { name, code, size, sites, value }`は関数1つで、名前、コードの範囲`[code, code + size)`、その関数自身のfaultの地点 (文の順)、その関数の静的なクロージャを持つ`DATUM_FN`の行のslot (なければnull。「関数の値」) を持つ。地点は、関数のコードのアドレスと、その関数の`sites`の添字の組で表す。だからプログラムのほかの部分で変わる番号はコードに現れない
 - `SiteRow { file, line, column }`は地点のソースの位置である。`file`は`files`の添字で、`NO_FILE` (`u32::MAX`) は位置のない地点を表す
 - 実行系は、コードのアドレスから関数を、`code`の順に並べた行の二分探索で探す。並べるのはrunごとに1回で、探すのは冷たい道だけである。どの行の範囲にもないアドレスは、関数`<native code>`として報告する
-- `DatumRow { kind, bits, text, code, slot }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`)、`DATUM_FN` (3。静的なクロージャで、`bits`は引数の数、`code`はエントリのコード。「関数の値」)、`DATUM_EMPTY_MUT_ARRAY` (4。空の`MutArray`で、中身はない) のどれかである。`slot`はmoduleの書ける8バイトのデータの物である。実行系は最初のエントリの前に、どの値も凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。定数は、VMが定数を作るのと同じ関数 (`eml_rows::constants`と、文字列には`alloc_string_immortal`) で作る。生成したコードは、値をそのslotからのロード1つで読む
+- `DatumRow { kind, bits, text, code, slot, items }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`)、`DATUM_FN` (3。静的なクロージャで、`bits`は引数の数、`code`はエントリのコード。「関数の値」)、`DATUM_EMPTY_MUT_ARRAY` (4。空の`MutArray`で、中身はない)、`DATUM_EFFECT` (5。エフェクトのマシンの番号で、`bits`)、`DATUM_MASK` (6。マスクの項目で、`items`。「エフェクト」) のどれかである。`items`は`Slice<MaskRow>`で、`MaskRow { effect, keep, skip }`は`eml_rt::MaskItem`の欄を持つ項目1つで、`effect`はマシンの番号である。ほかの種類の`items`は空である。`slot`はmoduleの書けるデータの物で、8バイトにそろい、`DATUM_MASK`では`mask_bytes(items.len)` (`MaskItem`の大きさの`items.len`倍) バイト、ほかの種類では8バイトである。実行系はrunごとに、最初のエントリの前に、ヒープの種類 (0から4) の値を凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。`DATUM_EFFECT`のslotには`bits`をそのまま書き、`DATUM_MASK`のslotには項目を`MaskItem`としてLIRの順に書く。定数は、VMが定数を作るのと同じ関数 (`eml_rows::constants`と、文字列には`alloc_string_immortal`) で作る。生成したコードは、値をそのslotからのロード1つで読む
 - `PapRow { rest, code }`は、`rest`個の引数を待つPAPのアダプタ1つのコードである (「関数の値」)
-- slotを書いた後、`Image`は読むだけになる。だから`Image`は`Sync`で、呼ぶ側が待っている間にworkerのスレッドがそれを読む
+- slotを書いた後、`Image`は読むだけになる。だから`Image`は`Sync`で、呼ぶ側が待っている間にworkerのスレッドがそれを読む。slotと定数を書くのは、runごとに、そのrunの最初のエントリの前である。1つの`Image`のrunは重ならない (`run`の約束で、`NativeMachine`の`run`と`call`は`&mut self`を取る) ので、書く間にslotを読むコードはない。コードはslotと、それが指す定数を同期なしに読むので、runのコードを動かすネイティブのどのworkerのヒープも、コードを動かす前にそのrunの塊を付ける。runのworkerは1つで、slotを書くときにそのヒープに付ける
 - `Start { thunk, entry, argv, result_rc }`は、runがコードに入る所である。`eml_enter`の引数と、エントリの結果がrunの手放す数える語かどうかを持つ
 - `Options { census, stack, masked }`。`census`は`Census::Skip`か`Census::Check`で、`stack`はworkerのスタックに予約するバイト数である。`masked`は、呼んだスレッドでSIGINTとSIGTERMを塞いだまま、渡したクロージャを1回動かすフックである。既定は`Skip`と`WORKER_STACK`と何も塞がないフックで、`eml_cli::execute_on`は`eml_io::Masked`で塞ぐフックを渡す ([VM](vm.md)の「上限と割り込み」)。`eml_nrt`は自分ではOSのシグナルの関数を呼ばない
 
 ## 実行の始めと終わり
 
-`eml_nrt::run::run(image, start, config, host, options) -> Result<Finished, RuntimeError>`がプログラムを走らせる。これは`unsafe fn`で、呼ぶ側は、`image`の表が呼び出しの間生きていること、どのslotもほかの誰も使わない語であること、`start`が`image`のためにコンパイルしたコードへの正しい呼び出しであることを約束する。手順は次のとおりである。
+`eml_nrt::run::run(image, start, config, host, options) -> Result<Finished, RuntimeError>`がプログラムを走らせる。これは`unsafe fn`で、呼ぶ側は、`image`の表が呼び出しの間生きていること、どのslotもほかの誰も使わない、その種類の大きさの書ける領域であること (同じ`image`のほかのrunと重ならないことを含む)、`start`が`image`のためにコンパイルしたコードへの正しい呼び出しであることを約束する。手順は次のとおりである。
 
 1. `config.control.begin_run()`で終わりの欄を開く ([VM](vm.md)の「誤り、止めること、終わり」)
 2. `options.stack`を予約したworkerのスレッド`eml-worker-0`を作る。workerは何かを動かす前に門で待つ。呼んだスレッドは`options.masked`の中で門を開けてworkerを待つので、workerは呼んだスレッドが2つのシグナルを塞ぐまでコードを動かさない。フックがクロージャを呼ばなければ、workerは何も動かさず、runは内部の誤り`the run's hook did not start the worker`で終わる
@@ -256,6 +256,14 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - メソッドがより狭い型で受ける引数は、エントリが変換する。変換に失敗すれば致命的で、正しく作ったコードはこれを起こさない。エフェクトの番号は`u16::try_from`で変換し、65535も断る。速いモードの`Ctx::ev_new`と`Ctx::ev_lookup`は65535より小さい番号を前提とし、65535では`+ 1`が0の印に回り込むためである (`BadEvidence`)。負の操作の添字と個数は`BadEvidence`で、負か32ビットを超える根の番号は`RootMisuse`である。空の根や表の外の根への`root_get`と、置いてある根への`root_set`も`RootMisuse`になる
 - `evv_mask`の項目は、`eml_rt::MaskItem`と同じ並びの行を並べた領域である。エントリは`items`と`n`から`MaskItem`の列を作るので、呼ぶ側は、`items`が生きている`n`個の項目の先頭であることを守る。項目の順には要件がない
 
+生成したコードは、`empty_mut_array` (「値と定数」) と`child_abort`を除く基本操作を次のとおり下ろす (`lower/effects.rs`)。`child_abort`は下ろさない。
+
+- `yielding`と`yield_status`はインラインで読む。`yielding`は`target`をロードして`UNIT`と比べる。`yield_status(ev)`は`target`と`abort`のバイトをロードし、分岐でなく`select`で、`Ctx::yield_status`と同じく、`target`が`UNIT`なら0、`ev`でなければ3、`abort`のバイトが立っていれば2、ほかは1を選ぶ。生成したコードで`target`を読むのは、これらと`eml$apply$m`の`n < m`の腕の見張り (「関数の値」) だけである
+- ほかの基本操作は、エントリ`eml_rt_<Prim::name()>`の呼び出し1つである。エントリの名前を綴るのは下ろしの1つの関数`lower::effects::entry`だけである。`yield_abort`はフレームに戻らないので、その後のコードは巻き戻しの地点の後始末へ進む (「巻き戻しの地点」の`Never`)
+- エフェクトの番号は、データの記号`e:<エフェクト>`からロード1つでだけエントリに届く。名前はエフェクトの名前 (`eml_lir::syntax::effect_text`) である。`evv_mask`の項目は、データの記号`m:<項目>`のアドレスとして、ロードなしでエントリに届き、個数は即値である。名前は項目のテキストの形 (`eml_lir::syntax::mask_text`) である。生成したコードはエフェクトの番号を即値として持たないので、関数のコードはプログラムのエフェクトの番号の振り方によらない。`ev_new`の操作の数、操作の添字、根の番号は即値である。エフェクトの宣言と関数のLIRがそれらを決めるためである
+- エフェクトの番号はマシンのものである。`NativeMachine`は`load`で、VMが読み込みのエフェクトに番号を振るのと同じく、`program.effects`の順に名前で番号を振る。番号は`Image` (`DATUM_EFFECT`の行の`bits`と`MaskRow.effect`) を通してだけ実行系に届く。番号は65535より小さく、それを超えれば`load`がVMと同じ文でpanicする
+- 項目のない`evv_mask`はない。LIRのverifierがそれを断り、下ろしもどのビルドでも項目の列が空でないことを確かめる。マスクのデータの物は0バイトにならない
+
 ## Cの関数の呼び出し
 
 生成したコードは、`blocking`でない利用者のCの関数`f`の文`let x = extern f(args)` (`ExternRef::C`) を、import`eml_c$<fの正規の名前>`の直接の呼び出しに下ろす。引数と結果は、VMと同じく変換する ([VM](vm.md)の「C の関数の命令」)。呼び出しの前後で走るのは、範囲の確かめと、貸すエントリと、「externの失敗」の補助だけである。
@@ -295,10 +303,10 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 - `int`の`box`は、値が63ビットに収まるとき、つまり1ビット左にずらして算術シフトで戻すと元の値になるとき、その即値の語である。収まらなければ、コードは`eml_rt_alloc_int`を呼び、`BigInt`の物体を作る。これは`Heap::alloc_int`の規則である。`enum`の`box`はいつも即値の語で、`float`の`box`は`eml_rt_alloc_float`を呼ぶ
 - `int`か`enum`への`unbox`は、即値の語なら算術シフトで値を取り、物体なら箱の値の語 (`layout::BOX_VALUE_WORD`) をロードする。`float`への`unbox`はいつも値の語をロードする。ダミーは値0の`BigInt`なので、0か0.0と読める ([オブジェクトモデル](object-model.md)の「ダミーの値」)
-- 収まる`int`の定数とタグは、コンパイルの時点で作る即値の語である。文字列の定数 (`const`)、収まらない`int`の定数、`box`する`float`の定数、`prim empty_mut_array`の空の`MutArray`は、読み込み時の値である
-- 読み込み時の値は、それぞれmoduleのデータの記号を1つ持つ。記号は8バイトの書ける物で、8バイトにそろえ、0で埋め、ローカルのリンケージを持つ。名前は中身だけで決まり、文字列は`s:<文字列>`、大きい`int`は`i:<10進数>`、`float`は`x:<ビット列の16桁の16進数>`、関数の静的なクロージャは`v:<関数の名前>`、空の`MutArray`は`a:mut`である (「関数の値」)。中身の等しい値は記号1つを共有する。下ろしは、moduleの中で値を初めて使うときに記号を1回宣言し、関数ごとに1回取り込む
-- 生成したコードは、値を記号のPC相対のアドレスとロード1つで読む。だから関数のコードは自分の使う値だけを名指し、プログラムのほかの部分で変わる番号を持たない
-- finalizeの後、JITのホストは記号ごとに`DatumRow`を1つ`Image.data`に置き、記号のアドレスをその`slot`にする (「`Image`」)。実行系はrunごとに、最初のエントリの前に、物体を凍結した領域の不死の物体として作り、その語をslotに書く。空の`MutArray`は、VMが定数にするのと同じ`eml_rows::constants::empty_mut_array`で作る。slotはマシンの領域とともに生きる
+- 収まる`int`の定数とタグは、コンパイルの時点で作る即値の語である。文字列の定数 (`const`)、収まらない`int`の定数、`box`する`float`の定数、`prim empty_mut_array`の空の`MutArray`、エフェクトの番号、`evv_mask`の項目は、読み込み時の値である
+- 読み込み時の値は、それぞれmoduleのデータの記号を1つ持つ。記号は書ける物で、8バイトにそろえ、0で埋め、ローカルのリンケージを持つ。大きさは8バイトで、マスクの項目だけは`mask_bytes(n)`バイトである。名前は中身だけで決まり、文字列は`s:<文字列>`、大きい`int`は`i:<10進数>`、`float`は`x:<ビット列の16桁の16進数>`、関数の静的なクロージャは`v:<関数の名前>`、空の`MutArray`は`a:mut`、エフェクトの番号は`e:<エフェクトの名前>`、マスクの項目は`m:<項目のテキストの形>`である (「関数の値」「エフェクト」)。中身の等しい値は記号1つを共有する。下ろしは、moduleの中で値を初めて使うときに記号を1回宣言し、関数ごとに1回取り込む
+- 生成したコードは、値を記号のPC相対のアドレスとロード1つで読む。マスクの項目は記号のアドレスだけを使い、ロードしない。だから関数のコードは自分の使う値だけを名指し、プログラムのほかの部分で変わる番号を持たない
+- finalizeの後、JITのホストは記号ごとに`DatumRow`を1つ`Image.data`に置き、記号のアドレスをその`slot`にする (「`Image`」)。実行系はrunごとに、最初のエントリの前に、物体を凍結した領域の不死の物体として作り、その語をslotに書く。エフェクトの番号とマスクの項目は物体にせず、そのままslotに書く。空の`MutArray`は、VMが定数にするのと同じ`eml_rows::constants::empty_mut_array`で作る。slotはマシンの領域とともに生きる
 - 物体は不死なので、インラインの`dup`と`decref`は0の数の枝を通り、何も呼ばない (「RC」)
 - マシンがテストのために残すCLIFの文 (`NativeMachine::clif`) は、関数もデータの記号も記号の名前で書く。だから関数の文は、moduleの中の宣言の順によらない
 
@@ -339,7 +347,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## 断る形
 
-ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。
+ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。ただし`Prim`の形のうち`child_abort`でない基本操作は、下ろしが下ろせる (「エフェクト」)。
 
 | `Form` | 名前 (`Form::label`) | LIRの形 |
 |---|---|---|

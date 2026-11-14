@@ -191,7 +191,11 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
         }
     }
 
-    fn atoms(&mut self, atoms: &[Atom], reprs: impl IntoIterator<Item = Repr>) -> Vec<Value> {
+    pub(super) fn atoms(
+        &mut self,
+        atoms: &[Atom],
+        reprs: impl IntoIterator<Item = Repr>,
+    ) -> Vec<Value> {
         atoms
             .iter()
             .zip(reprs)
@@ -262,6 +266,10 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 let w = self.datum_word(Datum::EmptyMutArray, types::I64);
                 self.bind(*var, w);
             }
+            Stmt::Let {
+                var,
+                rhs: Rhs::Prim(prim, args),
+            } if *prim != Prim::ChildAbort => self.prim(block, position, *var, prim, args),
             Stmt::Let {
                 var,
                 rhs: Rhs::Con { ctor, args, reuse },

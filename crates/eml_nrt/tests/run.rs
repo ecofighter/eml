@@ -4,13 +4,13 @@
 use std::sync::Arc;
 
 use eml_nrt::image::{
-    Census, DATUM_BIG_INT, DATUM_FLOAT, DATUM_STRING, DatumRow, FnRow, Image, NO_FILE, Options,
-    SiteRow, Slice, Start, Str,
+    Census, DATUM_BIG_INT, DATUM_EFFECT, DATUM_FLOAT, DATUM_MASK, DATUM_STRING, DatumRow, FnRow,
+    Image, MaskRow, NO_FILE, Options, SiteRow, Slice, Start, Str, mask_bytes,
 };
 use eml_nrt::run::{LIMIT_HEADROOM_BYTES, STACK_HARD_MARGIN, run};
 use eml_nrt::worker::park_panic;
 use eml_nrt::{Finished, HostRef, RunConfig, RunFault, RuntimeError, Thunk};
-use eml_rt::{Buffering, Ctx, Fast, Kind, StdHost, Word, layout};
+use eml_rt::{Buffering, Ctx, Fast, Kind, MaskItem, StdHost, Word, layout};
 
 use crate::regs::{deepest_frame, stack_pointer};
 
@@ -197,8 +197,23 @@ unsafe extern "C" fn read_slots(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *m
 
 #[test]
 fn data_slots_hold_immortal_objects() {
-    let mut slots = [0u64; 3];
+    let mut slots = [0u64; 4];
     let base = slots.as_mut_ptr();
+    // 物体にしない値も同じrunで書く。マスクのslotは項目の大きさだけのRustのバッファなので、AddressSanitizerが書く
+    // 範囲を確かめる
+    let items = [
+        MaskRow {
+            effect: 2,
+            keep: 0,
+            skip: 1,
+        },
+        MaskRow {
+            effect: 4,
+            keep: 1,
+            skip: 3,
+        },
+    ];
+    let mut mask = vec![0u64; mask_bytes(items.len()).div_ceil(8)];
     let data = [
         DatumRow {
             kind: DATUM_STRING,
@@ -206,6 +221,7 @@ fn data_slots_hold_immortal_objects() {
             text: Str::new("hello"),
             code: std::ptr::null(),
             slot: base,
+            items: Slice::new(&[]),
         },
         DatumRow {
             kind: DATUM_BIG_INT,
@@ -213,6 +229,7 @@ fn data_slots_hold_immortal_objects() {
             text: Str::new(""),
             code: std::ptr::null(),
             slot: base.wrapping_add(1),
+            items: Slice::new(&[]),
         },
         DatumRow {
             kind: DATUM_FLOAT,
@@ -220,6 +237,23 @@ fn data_slots_hold_immortal_objects() {
             text: Str::new(""),
             code: std::ptr::null(),
             slot: base.wrapping_add(2),
+            items: Slice::new(&[]),
+        },
+        DatumRow {
+            kind: DATUM_EFFECT,
+            bits: 6,
+            text: Str::new(""),
+            code: std::ptr::null(),
+            slot: base.wrapping_add(3),
+            items: Slice::new(&[]),
+        },
+        DatumRow {
+            kind: DATUM_MASK,
+            bits: 0,
+            text: Str::new(""),
+            code: std::ptr::null(),
+            slot: mask.as_mut_ptr(),
+            items: Slice::new(&items),
         },
     ];
     let image = Image {
@@ -231,6 +265,24 @@ fn data_slots_hold_immortal_objects() {
     unsafe { argv.as_mut_ptr().cast::<*const Word>().write(base.cast()) };
     run_with(&image, read_slots, &mut argv, false, options(Census::Check)).unwrap();
     assert_eq!(argv, [1, 1, 1, 1]);
+    assert_eq!(slots[3], 6);
+    // SAFETY: runが`mask`に`MaskItem`を2つ書いた
+    let written = unsafe { std::slice::from_raw_parts(mask.as_ptr().cast::<MaskItem>(), 2) };
+    assert_eq!(
+        written,
+        [
+            MaskItem {
+                effect: 2,
+                keep: 0,
+                skip: 1
+            },
+            MaskItem {
+                effect: 4,
+                keep: 1,
+                skip: 3
+            },
+        ]
+    );
 }
 
 /// 32 MiBのフレームを再帰し、降りた深さを`argv[0]`に書く。

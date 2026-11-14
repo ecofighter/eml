@@ -9,8 +9,8 @@ use cranelift_module::ModuleError;
 use eml_cabi::Linked;
 use eml_lir::{Program, Repr};
 use eml_nrt::image::{
-    DATUM_BIG_INT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow, FnRow,
-    Image, Options, PapRow, SiteRow, Slice, Start, Str,
+    DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
+    DATUM_STRING, DatumRow, FnRow, Image, MaskRow, Options, PapRow, SiteRow, Slice, Start, Str,
 };
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
@@ -90,8 +90,9 @@ struct Static {
     arity: u16,
 }
 
-/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`、`paps`と、各関数の`sites`と各値の文字列の中を
-/// 指す。どれも`new`の後で変わらず、`Vec`を動かしてもその要素は動かない。`data`のslotはmoduleのデータの物を指す。
+/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`、`masks`、`paps`と、各関数の`sites`と各値の
+/// 文字列の中を指す。どれも`new`の後で変わらず、`Vec`を動かしてもその要素は動かない。`data`のslotはmoduleのデータの
+/// 物を指す。
 struct Tables {
     functions: Vec<Function>,
     _files: Vec<String>,
@@ -99,17 +100,20 @@ struct Tables {
     _rows: Vec<FnRow>,
     _data: Vec<Datum>,
     _datum_rows: Vec<DatumRow>,
+    _masks: Vec<Vec<MaskRow>>,
     _paps: Vec<PapRow>,
     image: Image,
 }
 
 impl Tables {
-    /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードと待つ引数の数を持つ。
+    /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードと待つ引数の数を持つ。`number`はプログラムの
+    /// エフェクトの添字をマシンの番号にする。
     fn new(
         functions: Vec<Function>,
         files: Vec<String>,
         data: Vec<(Datum, *mut u64, Static)>,
         paps: Vec<PapRow>,
+        number: impl Fn(u32) -> u16,
     ) -> Tables {
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
         let mut rows: Vec<FnRow> = functions
@@ -122,9 +126,24 @@ impl Tables {
                 value: std::ptr::null_mut(),
             })
             .collect();
+        let masks: Vec<Vec<MaskRow>> = data
+            .iter()
+            .map(|(datum, _, _)| match datum {
+                Datum::Mask(items) => items
+                    .iter()
+                    .map(|item| MaskRow {
+                        effect: number(item.effect),
+                        keep: item.keep,
+                        skip: item.skip,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
         let datum_rows: Vec<DatumRow> = data
             .iter()
-            .map(|&(ref datum, slot, Static { code, arity })| {
+            .zip(&masks)
+            .map(|(&(ref datum, slot, Static { code, arity }), items)| {
                 let (kind, bits, text) = match datum {
                     Datum::String(text) => (DATUM_STRING, 0, text.as_str()),
                     Datum::BigInt(n) => (DATUM_BIG_INT, *n as u64, ""),
@@ -134,6 +153,8 @@ impl Tables {
                         rows[function.0 as usize].value = slot;
                         (DATUM_FN, u64::from(arity), "")
                     }
+                    Datum::Effect(effect) => (DATUM_EFFECT, u64::from(number(*effect)), ""),
+                    Datum::Mask(_) => (DATUM_MASK, 0, ""),
                 };
                 DatumRow {
                     kind,
@@ -141,6 +162,7 @@ impl Tables {
                     text: Str::new(text),
                     code,
                     slot,
+                    items: Slice::new(items),
                 }
             })
             .collect();
@@ -157,6 +179,7 @@ impl Tables {
             _rows: rows,
             _data: data.into_iter().map(|(datum, _, _)| datum).collect(),
             _datum_rows: datum_rows,
+            _masks: masks,
             _paps: paps,
             image,
         }
@@ -176,6 +199,10 @@ pub struct NativeMachine {
     /// マシンはもう何も定義しない。
     spent: bool,
     tables: Option<Tables>,
+    /// マシンのエフェクトの番号を名前で引く表。`load`が`program.effects`の順に振る。VMが読み込みのエフェクトに番号を
+    /// 振るのと同じで、`Image`がそれを実行系に運ぶので、生成したコードはプログラムのエフェクトの番号を持たない
+    /// (docs/spec/native.mdの「エフェクト」)。
+    effects: HashMap<String, u16>,
     thunks: HashMap<(Vec<Kind>, Vec<Kind>), Thunk>,
     clif: HashMap<String, String>,
     symbols: Vec<Symbol>,
@@ -191,6 +218,7 @@ impl NativeMachine {
             module: None,
             spent: false,
             tables: None,
+            effects: HashMap::new(),
             thunks: HashMap::new(),
             clif: HashMap::new(),
             symbols: Vec::new(),
@@ -229,6 +257,12 @@ impl NativeMachine {
             return Err(LoadError::Entry {
                 function: entry.name.clone(),
             });
+        }
+        for effect in &program.effects {
+            let next = self.effects.len();
+            self.effects
+                .entry(effect.name.clone())
+                .or_insert_with(|| effect_number(next));
         }
         let mut builder = jit_builder().map_err(|error| LoadError::Module(error.to_string()))?;
         for entry in eml_nrt::entries() {
@@ -340,7 +374,15 @@ impl NativeMachine {
                 (datum, slot.cast_mut().cast::<u64>(), fn_value)
             })
             .collect();
-        self.tables = Some(Tables::new(functions, program.files.clone(), data, paps));
+        let effects = &self.effects;
+        let number = |effect: u32| effects[&program.effects[effect as usize].name];
+        self.tables = Some(Tables::new(
+            functions,
+            program.files.clone(),
+            data,
+            paps,
+            number,
+        ));
         Ok(Loaded {
             entry: program.entry.0,
         })
@@ -543,6 +585,15 @@ impl Drop for NativeMachine {
             unsafe { module.free_memory() };
         }
     }
+}
+
+/// マシンの`next`番目のエフェクトの番号。evidenceのtagはエフェクトの番号に1を足したものなので、番号は65535より
+/// 小さい。VMが番号を振るときと同じく、超えればpanicする (docs/spec/object-model.mdの「evidence の3つの物体」)。
+fn effect_number(next: usize) -> u16 {
+    u16::try_from(next)
+        .ok()
+        .filter(|&e| e < u16::MAX)
+        .expect("effect numbers are below 65535 (docs/spec/object-model.md)")
 }
 
 fn module_error(error: ModuleError) -> LoadError {
