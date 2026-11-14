@@ -71,14 +71,14 @@ pub enum Immediates<'a> {
     Root(u32),
 }
 
-/// 種類ごとの型、名前、見本 (即値を空か 0 にしたもの) の並びから、`KINDS` と `Prim::name` の網羅的な `match` を
-/// 作る。並びから漏れた種類は `match` が網羅的でなくなるので、`KINDS` に入れ忘れることがない。
+/// 種類ごとの型、名前、見本 (即値を空か 0 にしたもの) の並びから、`Prim::KINDS` と `Prim::name` の網羅的な `match` を
+/// 作る。並びから漏れた種類は `match` が網羅的でなくなるので、`Prim::KINDS` に入れ忘れることがない。
 macro_rules! kinds {
     ($($kind:pat => $name:literal, $sample:expr;)*) => {
-        /// どの種類の基本操作も1つずつ持つ並び。テキストを読む側は、この並びを名前で引く (`Prim::by_name`)。
-        const KINDS: [Prim; [$($name),*].len()] = [$($sample),*];
-
         impl Prim {
+            /// どの種類の基本操作も1つずつ持つ並び。テキストを読む側は、この並びを名前で引く (`Prim::by_name`)。
+            pub const KINDS: [Prim; [$($name),*].len()] = [$($sample),*];
+
             /// テキストの形で、即値の前に書く名前。
             pub fn name(&self) -> &'static str {
                 match self {
@@ -120,7 +120,7 @@ kinds! {
 impl Prim {
     /// 名前が `name` の種類の基本操作。即値は空か 0 で、読む側が埋める。
     pub fn by_name(name: &str) -> Option<Prim> {
-        KINDS.into_iter().find(|kind| kind.name() == name)
+        Self::KINDS.into_iter().find(|kind| kind.name() == name)
     }
 
     pub fn immediates(&self) -> Immediates<'_> {
@@ -223,7 +223,7 @@ mod tests {
     use super::*;
 
     fn every_prim() -> impl Iterator<Item = Prim> {
-        KINDS.into_iter()
+        Prim::KINDS.into_iter()
     }
 
     /// 見本が自分の行の種類でなければ、ほかの種類の名前が2回現れる。
@@ -232,7 +232,7 @@ mod tests {
         let mut names: Vec<&str> = every_prim().map(|prim| prim.name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), KINDS.len());
+        assert_eq!(names.len(), Prim::KINDS.len());
     }
 
     #[test]
@@ -283,7 +283,7 @@ mod tests {
             ("empty_mut_array", &[], Lin),
             ("child_abort", &[Unr, Poly], Unr),
         ];
-        assert_eq!(table.len(), KINDS.len());
+        assert_eq!(table.len(), Prim::KINDS.len());
         for (name, params, ret) in table {
             let row = Prim::by_name(name).expect("a primitive").row();
             assert_eq!(row.param_marks, params, "{name}");

@@ -6,6 +6,7 @@ mod calls;
 mod clif;
 mod common;
 mod data;
+mod effects;
 mod machine;
 mod placement;
 mod rc;

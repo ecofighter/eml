@@ -21,7 +21,7 @@
 
 - `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`const NAME = "接頭辞";`の形では、エントリの記号は接頭辞に関数の識別子を続けたものになり、`const NAME;`の形では識別子そのものになる。`Entry`の欄は、`symbol` (記号)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
 - `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`のRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`と、ハンドルの型のdtor`dtor`も受ける。どちらも`Kind`は`I64`である。`ptr`のRustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。`dtor`のRustの型は`Option<eml_rows::ffi::Dtor>`である (「エントリのABI」)。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
-- エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は6つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`closures.rs`の`CLOSURES`、`c.rs`の`C`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
+- エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は7つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`effects.rs`の`EFFECTS`、`closures.rs`の`CLOSURES`、`c.rs`の`C`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
 - 生成したコードは、エントリを記号で取り込み、呼び出しの型を行だけから作る。宣言が1つなので、関数と呼び出しの型が食い違うことはない
 - エントリに`#[no_mangle]`は付けない。JITはアドレスを記号の名前で登録する
 
@@ -246,6 +246,15 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - `Float`の比較は`fcmp`で、結果を0か1に広げる。`!=`は`NotEqual`で順序のないときも真であり、ほかの比較はNaNが絡むと偽である
 - 失敗の分岐の先は冷たいコードで、`eml_rt_fault_arith(ctx, kind)`で`Fault::Arith`を置き、純粋さ`Panics`で上げる (「巻き戻しの地点」の`Arith`)。`kind`は`ARITH_DIVISION_BY_ZERO` (0) か`ARITH_INTEGER_OVERFLOW` (1) である。誤りは文の位置を持ち、文が位置を持たなければ関数を名指す
 - 失敗しない行は巻き戻しの地点を持たず、熱いコードに分岐を足さない
+
+## エフェクト
+
+基本操作 (`eml_lir::Prim`) のうち、生成したコードがインラインで読む`yielding`と`yield_status`、エントリを持たない`empty_mut_array`と`child_abort`を除く21個は、エントリ`eml_rt_<Prim::name()>`を持つ (`eml_nrt/src/effects.rs`の表`EFFECTS`)。記号は基本操作の名前から導き、生成する側はエントリの名前の表を持たない。どれも`shim`で、本体は同じ名前の`Ctx`のメソッドの呼び出し1つである (`dummy`は`Heap::dummy`)。`Err`は致命的な誤りでrunを終える。ヒープのエントリと同じく、どのエントリも包むメソッドの前提をそのまま持ち、生成したコードがそれを守る。
+
+- `ctx`の後の引数は、`Ctx`のメソッドの引数を順に並べたものである。基本操作の即値のうち、メソッドの引数にあたるものがその位置に入る。即値は、`ev_new`のエフェクトと操作の数、`ev_lookup`のエフェクト、`ev_set_clause`と`ev_clause`の操作の添字 (エフェクトはメソッドの引数でないので渡さない)、`evv_mask`の項目の列 (先頭へのポインタと個数)、`root_get`と`root_set`の根の番号である
+- 語は`obj`か`tobj`で、エフェクトの番号、操作の添字、個数、根の番号は`i64`である。結果が`unit`の基本操作のエントリは結果を持たず、生成したコードは文の変数に定数`UNIT`を束ねる
+- メソッドがより狭い型で受ける引数は、エントリが変換する。変換に失敗すれば致命的で、正しく作ったコードはこれを起こさない。エフェクトの番号は`u16::try_from`で変換し、65535も断る。速いモードの`Ctx::ev_new`と`Ctx::ev_lookup`は65535より小さい番号を前提とし、65535では`+ 1`が0の印に回り込むためである (`BadEvidence`)。負の操作の添字と個数は`BadEvidence`で、負か32ビットを超える根の番号は`RootMisuse`である。空の根や表の外の根への`root_get`と、置いてある根への`root_set`も`RootMisuse`になる
+- `evv_mask`の項目は、`eml_rt::MaskItem`と同じ並びの行を並べた領域である。エントリは`items`と`n`から`MaskItem`の列を作るので、呼ぶ側は、`items`が生きている`n`個の項目の先頭であることを守る。項目の順には要件がない
 
 ## Cの関数の呼び出し
 
