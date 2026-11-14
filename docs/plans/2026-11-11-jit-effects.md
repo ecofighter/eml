@@ -43,7 +43,7 @@ All facts at be1b1de5 [V: fact dossiers of the refresh].
 | Needed | For | How to check | If missing |
 |---|---|---|---|
 | The dev shell (Rust 1.99.1, nextest, insta, clippy) | every unit | `cargo --version` → `cargo 1.99.1`; `cargo nextest --version` exit 0 | stop |
-| Verus and verusfmt (default devShell, macOS or x86_64 Linux) | R1, R2, R3, N1 (EG) | `cargo verus --version` exit 0; `verusfmt --version` exit 0 | stop: eml_rt units cannot be gated |
+| Verus and verusfmt (default devShell, macOS or x86_64 Linux) | R1, R2, R3, R4, N1 (EG) | `cargo verus --version` exit 0; `verusfmt --version` exit 0 | stop: eml_rt units cannot be gated |
 | The `.#miri` shell | EG, V1, N2..N6 | `nix develop .#miri -c cargo miri --version` exit 0 | stop |
 | macOS (for `bench/rt-gate.sh`, `bench/*.sh`) | EG, Z | `uname` → `Darwin` | rt-gate: stop; Z: `Measure jit-effects` commit later (K-9) |
 | The `.#cross` shell | checkpoint extras | `nix develop .#cross -c rustc --print target-list \| grep -c x86_64-pc-windows-msvc` → 1 | stop before CP-B |
@@ -125,7 +125,8 @@ Kept in the repository: each rule is written into `docs/spec/` (native.md, objec
 | R1 | `Name the evidence roles in eml_rt` | S0 | E-D1; G-1, G-15, G-18 | Sonnet (scripted, see R1) |
 | R2 | `Build fork tables and the Panic tail in eml_rt` | R1 | E-D2 (heap half); G-13, G-15, G-17, G-18 | Opus |
 | R3 | `Build and read fork evidence in eml_rt` | R2 | E-D2 (ctx half); G-13, G-15, G-18 | Opus |
-| V1 | `Build the VM's fork evidence with eml_rt` | R3 | E-D2 (reroute); G-1, G-2, G-13 | Sonnet |
+| R4 | `Refuse a counted immortal that crosses workers in checked mode` | R3 | 00 G.3 U-K; G-15, G-17, G-18 | Opus |
+| V1 | `Build the VM's fork evidence with eml_rt` | R4 | E-D2 (reroute); G-1, G-2, G-13 | Sonnet |
 | CP-A | CI of V1 | V1 | | orchestrator |
 | N1 | `Test the abort byte after a call` | CP-A | E-D6 (no landing yet), 00 E-2 (`CTX_YIELD_ABORT` with its first reader); G-3, G-4, G-14, G-15 | Opus |
 | N2 | `Add the effect entries` | N1 | E-D3 (entries), E-D8; G-8 | Sonnet |
@@ -282,6 +283,77 @@ eml_rt unit tests live in `crates/eml_rt/src/heap/tests/ctx.rs` and are listed i
 - docs: object-model.md 「evidence の3つの物体」 (a fork evidence is made by `fork_ev`; the readers) and 「基本操作の契約」 (three rows).
 - Completion: EG; Verus N > R2's value, 0 errors; `cargo nextest run -p eml_rt -E 'test(/^heap::tests::ctx::(fast|checked)::(fork_|evv_step_)/)'` → `16 tests run: 16 passed` (8 from R2 + 8).
 - Stop rule: as R2; also stop if `fork_table(table)` cannot be discharged for a table in an attached frozen region.
+
+### R4: `Refuse a counted immortal that crosses workers in checked mode`
+
+- **Purpose:** make the R3 spec rule ("a counted immortal object is reachable only from its own heap's worker") a checked precondition. Checked mode only; fast mode is unchanged.
+- **Files:**
+  - `crates/eml_rt/src/error.rs` (enum :15, `Display` :49-112)
+  - `crates/eml_rt/src/heap/check.rs` (`checked_dup` rc-0 branch :370-372, `checked_decref` rc-0 branch :409-414, `immortal_counted` :240)
+  - `crates/eml_rt/src/heap/mod.rs` (`acquire_immortal`, the `count_immortal` call at :3846)
+  - `crates/eml_rt/src/heap/core.rs` (`Core::foreign_block` :330, reused unchanged)
+  - `crates/eml_rt/src/heap/graph.rs` (trait `Graph`), `crates/eml_rt/src/heap/share.rs` (`ShareError`, `share_walk` :1651, the stop branches :1868-1930, the mapping near :2402)
+  - `crates/eml_rt/src/heap/tests/share.rs`, `tests/transfer.rs`, `tests/trusted.rs`
+  - `docs/spec/object-model.md`
+- **Items (inside `verus!`):**
+  - New variant `HeapError::CountedImmortal`, with a `Display` arm. No other crate matches `HeapError` exhaustively, so nothing else changes.
+    - A new variant, not `WrongOwner { owner, worker }`: that variant's `owner` would carry a count, and `chain_err` already admits `WrongOwner` from release chains, so reuse would blur that contract.
+    - Named for the object, not `ForeignImmortal`, because `share` refuses one of its own heap.
+  - New helper in `check.rs`:
+    ```
+    pub(super) fn foreign_counted(&self, h: *mut Header) -> (r: bool)
+        requires self.core.sound(), self.core.checked(), self.core.has(h@.addr), h == self.core.block(h@.addr),
+        ensures !r,
+    { self.core.foreign_block(h) && self.core.prefix_first_get(h) != UNCOUNTED }
+    ```
+    - `foreign_block` compares the page head's `sink` with this heap's and with null, and reads no block memory. It runs first, so own and region blocks never reach the count read here.
+    - `ensures !r` holds because the model has only own and region blocks; no `requires` or `ensures` of a public operation changes for these three sites.
+  - `if self.foreign_counted(h) { return Err(HeapError::CountedImmortal); }` at three sites, each already under `M::CHECKED`:
+    - the `rc == 0` branch of `checked_dup`, before `immortal_counted` (covers `dup`, `dup_check`, and so `fork_ev`);
+    - the `rc == 0` branch of `checked_decref`, before the count read (covers `decref` and every release path through it);
+    - `acquire_immortal`, before `immortal_counted`.
+  - `share`: new trait method `Graph::counted(&self, node) -> bool` with no `ensures`; `Objects::counted` returns `false` when `!M::CHECKED`, else `prefix_first != UNCOUNTED`.
+    - New `ShareError::Counted`, mapped to `HeapError::CountedImmortal`.
+    - In `share_walk`, a new branch before the `LinShared` branch: an rc-0 node with `graph.counted(node)` returns `Err(ShareError::Counted)`.
+    - Gate it so that every walk that makes a value reachable from another worker refuses (`share` and the `par` fork marking), and state in the commit message which `check_lin` values those are. The prototype gated on `check_lin`; confirm that covers the fork marking, or drop the gate.
+    - Contract changes: `share_walk`'s "`==> r is Ok`" becomes "`==> r is Ok || r == Err(Counted)`"; `share`'s "`share_all_ok(w) ==> r is Ok && consistent()`" becomes "`==> (r is Ok || r == Err(CountedImmortal)) && consistent()`".
+    - Marks already made stay, as with `share`'s other errors.
+  - `count_immortal` (check.rs:264) is unchanged: every caller is now behind one of the three checks.
+- **Fast-mode cost:** zero. Every new exec line is under `M::CHECKED` or returns `false` for `!M::CHECKED` in a monomorphized `Graph` impl. The bench gate is the proof.
+- **Tests:**
+  - `heap/tests/share.rs`, `both_modes!`: `share_refuses_a_counted_immortal` (a cons cell holding an `alloc_string_immortal` of the same heap; checked gives `CountedImmortal`, fast gives `Ok`).
+  - `heap/tests/trusted.rs`, both modes: `a_counted_immortal_of_another_heap_is_refused`, modelled on `a_remote_small_free_is_reclaimed_and_reused` (:1024, `two_heaps` :996).
+    - Thread A makes a counted immortal and sends the word to thread B; A then only waits for the join.
+    - B's `dup`, `decref` and `acquire_immortal` return `CountedImmortal` in checked mode and `Ok` in fast mode.
+    - B's `dup` and `decref` of A's dummy pass in both modes.
+    - After the join, A's `decref` returns `ImmortalOverRelease` in checked mode, so B wrote nothing.
+  - This `trusted::` test is the Miri and ThreadSanitizer test; A is quiescent while B runs, so both must report nothing.
+- **Test changes (kind 2, listed one by one; reason: they share a value that reaches a counted immortal of the same heap, which the new rule forbids):**
+  - `heap::tests::share::checked::share_stops_at_immortal_objects`
+  - `heap::tests::share::share_leaves_an_immortal_lin_object_alone`
+  - `heap::tests::transfer::checked::shared_counts_above_one_and_immortal_objects_stop`
+  - Each keeps its claim (the walk stops at an immortal and leaves it alone) with an uncounted immortal: one built in a second heap, frozen and attached, or the dummy. No assertion is dropped.
+  - If one of them cannot be rebuilt on an uncounted immortal (the `lin` one is the candidate), stop: that is a kind 1 change for the user.
+- **docs (`docs/spec/object-model.md`):**
+  - 「核の操作」 (:397): after the R3 rule (a counted immortal is reachable only from its own heap's worker) add "Checked mode refuses it with `CountedImmortal`: `share` when the walk reaches a counted immortal, and `dup`, `decref` and `acquire_immortal` when the object is on another heap's page. Fast mode does not check."
+  - 「不死の物体の数え方」 (:754): one bullet for the two refusals, and one for the limit: "the `dup`/`decref`/`acquire_immortal` refusal reads the other heap's count without an atomic, so it is a diagnosis of a broken precondition, not a guarantee; `share`'s refusal runs on the owner's thread".
+  - 「報告する誤り」 (:767): a `CountedImmortal` bullet naming the four operations.
+  - 「基本操作の契約」 rows of `dup`, `decref`/`release`, `acquire_immortal`, `share` and `fork_ev`: add `CountedImmortal` in the checked-error parentheses.
+  - T14 (:1459): after condition (iv), "checked mode refuses a violation of (iv) as above".
+- **Completion:**
+  - EG (plan 7.3.3), with Verus `N verified, 0 errors` and N greater than R3's amended value.
+  - `cargo nextest run -p eml_rt -E 'test(share_refuses_a_counted_immortal) | test(a_counted_immortal_of_another_heap_is_refused)'` → `4 tests run: 4 passed`.
+  - `cargo test --workspace -q` → no failure.
+  - `nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target $(rustc -vV | sed -n 's/^host: //p') -p eml_rt trusted::` → pass, no report.
+  - `git diff 4bce211a -- crates/eml_rt | grep -cE '^\+.*(external_body|assume\()'` → `0`; `src/trust.rs` unchanged.
+  - `git diff 4bce211a --stat -- crates/eml_vm/tests/bench.rs tests/ui crates/eml_cli/tests` → empty.
+- **RunStats and UI:** no change expected. Both engines freeze every immortal, so a run heap holds no counted immortal; the prototype's workspace run changed only the three eml_rt tests above.
+- **Stop rule:** as R2 (no `external_body`, `assume` or move out of `verus!`). Also stop if:
+  - any test other than the three listed changes outcome;
+  - a `requires` of `dup`, `decref`, `acquire_immortal` or `share` must change;
+  - a new trust-list row is needed;
+  - the bench gate fails twice.
+- **Left to the implementer:** the Japanese wording; the proofs in `share.rs` (the prototype needed the two contract edits above and no new lemma).
 
 ### V1: `Build the VM's fork evidence with eml_rt`
 
@@ -480,7 +552,7 @@ grep -rln 'native: skip' tests/ui/run/effects tests/ui/run/unwind tests/ui/run/p
 ```
 `docs/future` is not in the "always" list: 9 citations of `docs/future/multicore.md` exist in eml_rt / eml_vm today [V]; new code adds none (review).
 
-#### 7.3.3 EG (commits touching `crates/eml_rt`: R1, R2, R3, N1; G-15)
+#### 7.3.3 EG (commits touching `crates/eml_rt`: R1, R2, R3, R4, N1; G-15)
 
 ```sh
 cargo verus verify -p eml_rt                                         # verification results:: N verified, 0 errors; no warning
@@ -514,6 +586,7 @@ ASan before CP-C (N6's completion).
 No `native: skip` mark is added.
 
 **Kind 2 (expected values), scope:**
+- R4 (user-approved, 00 G.3 U-K): `heap::tests::share::checked::share_stops_at_immortal_objects`, `heap::tests::share::share_leaves_an_immortal_lin_object_alone`, `heap::tests::transfer::checked::shared_counts_above_one_and_immortal_objects_stop` keep their claims on an uncounted immortal (frozen and attached, or the dummy), because sharing a value that reaches a counted immortal is now refused; if one cannot, stop (kind 1 for the user).
 - N1: `clif::a_call_and_its_unwind_check`, `clif::an_apply_site`; eml_rt `the_native_offsets_are_pinned`.
 - N7: `integration__ui__run_native.snap`, `integration__ui__run_fail_native.snap`.
 - Contingency V1: `crates/eml_vm/tests/bench.rs` `RunStats` of `bench/` programs that use `par` only (08 A-7).
@@ -582,7 +655,7 @@ rejected 34
 ## 8. Execution order
 
 ```
-S0 → R1 → R2 → R3 → V1 → [CP-A]
+S0 → R1 → R2 → R3 → R4 → V1 → [CP-A]
    → N1 → N2 → N3 → [CP-B]
    → N4 → N5 → N6 → [CP-C]
    → (fix commits, if any) → N7 → [CP-D]
@@ -597,7 +670,7 @@ S0 → R1 → R2 → R3 → V1 → [CP-A]
 | accept | N7 | 489 / 45 (7.5; upper bound until the fix commits, if any, land) |
 | close | Z | unchanged |
 
-Order rationale: eml_rt first (08 U-5 default), so the gate runs on R1..R3 and N1 only. R2 (heap constructors) precedes R3 because R3's tests and `fork_ev`'s fast-mode precondition need a real fork table. N1 precedes N3 so the first effect-prim lowering is already behind the abort-byte check. CP-B splits the native lowering so a Win64 / Linux-only failure is localised to at most three commits. N5 needs N4 (the clause of a landing frame must be callable); N6 needs N4 (the clause call helper) and N5 (`try_*` lands).
+Order rationale: eml_rt first (08 U-5 default), so the gate runs on R1..R4 and N1 only. R2 (heap constructors) precedes R3 because R3's tests and `fork_ev`'s fast-mode precondition need a real fork table. N1 precedes N3 so the first effect-prim lowering is already behind the abort-byte check. CP-B splits the native lowering so a Win64 / Linux-only failure is localised to at most three commits. N5 needs N4 (the clause of a landing frame must be callable); N6 needs N4 (the clause call helper) and N5 (`try_*` lands).
 
 ## 9. Verification plan
 
