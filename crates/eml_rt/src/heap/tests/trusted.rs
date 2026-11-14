@@ -451,6 +451,19 @@ fn every_primitive_once<M: Mode>() {
         assert_eq!(ctx.yield_status(e1), 2);
         assert_eq!(ctx.yield_finish(), Ok(UNIT));
         assert_eq!(ctx.poll(0), Ok(()));
+        // fork evidenceの1往復。VMと同じく、表と`Panic`の末尾は付けた塊にあり、子の`evv`は末尾に足す
+        let mut builder = Heap::<M>::new();
+        let table = builder.alloc_fork_table(&[Word::imm(1)]).unwrap();
+        let tail = builder.alloc_fork_tail(5, table).unwrap();
+        ctx.heap_mut().attach(Arc::new(builder.freeze().unwrap()));
+        let fork = ctx.fork_ev(0, table, 1).unwrap();
+        assert_eq!(ctx.fork_of(fork), Ok((0, 1)));
+        let top = ctx.evv_step(ctx.evv_word()).unwrap().map(|(e, _)| e);
+        assert_eq!(top, Some(1));
+        let child = ctx.evv_push(tail, fork).unwrap();
+        assert_eq!(ctx.evv_step(child), Ok(Some((0, tail))));
+        assert_eq!(ctx.evv_step(tail), Ok(Some((5, UNIT))));
+        ctx.heap_mut().decref(child).unwrap();
         for e in [e0, e1] {
             ctx.heap_mut().decref(e).unwrap();
         }

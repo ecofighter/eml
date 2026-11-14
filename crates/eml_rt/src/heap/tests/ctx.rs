@@ -964,6 +964,84 @@ fn fork_tail_refuses_the_last_effect_number<M: Mode>() {
     unsafe { heap.decref(mortal) }.unwrap();
 }
 
+/// fork evidenceは`evv`に足せるevidenceで、節をforkの表から読み、エフェクトの番号と深さを読み返せる。evidenceは表の参照を
+/// 1つ持つので、手放すと検査モードの不死の数が0に戻る。
+fn fork_ev_is_pushed_and_its_clause_read<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let table = ctx
+            .heap_mut()
+            .alloc_fork_table(&[Word::imm(5), Word::imm(6)])
+            .unwrap();
+        let ev = ctx.fork_ev(3, table, 2).unwrap();
+        assert_eq!(ctx.fork_of(ev), Ok((3, 2)));
+        ctx.heap_mut().dup(ev).unwrap();
+        let list = ctx.evv_push(UNIT, ev).unwrap();
+        assert_eq!(ctx.ev_clause(ev, 1), Ok(Word::imm(6)));
+        ctx.heap_mut().decref(list).unwrap();
+        ctx.heap_mut().decref(ev).unwrap();
+    }
+    assert!(ctx.check_finished());
+    // 残るのは不死の表だけである
+    assert_eq!(super::mortal(&mut ctx), 1);
+}
+
+/// 検査モードは、tagのないエフェクトの番号と不死でない表を、確保の前に断る。
+fn fork_ev_refuses_a_bad_effect_or_table<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let table = ctx.heap_mut().alloc_fork_table(&[Word::imm(1)]).unwrap();
+        assert_eq!(ctx.fork_ev(u16::MAX, table, 0), Err(HeapError::BadEvidence));
+        let mortal = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        assert_eq!(ctx.fork_ev(0, mortal, 0), Err(HeapError::BadEvidence));
+        ctx.heap_mut().decref(mortal).unwrap();
+    }
+    assert_eq!(super::mortal(&mut ctx), 1);
+}
+
+/// 検査モードの`fork_of`は、evidenceでない物体と、状態が即値でないevidenceを断る。
+fn fork_of_refuses_an_object_that_is_not_a_fork_evidence<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let cell = ctx.heap_mut().alloc_data(1, 2, 0, false);
+        assert_eq!(ctx.fork_of(cell), Err(HeapError::BadEvidence));
+        let state = ctx.heap_mut().alloc_string("state");
+        let ev = ctx.ev_new(0, 1, state, UNIT).unwrap();
+        assert_eq!(ctx.fork_of(ev), Err(HeapError::BadEvidence));
+        for w in [cell, ev] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert_eq!(super::mortal(&mut ctx), 0);
+}
+
+/// `evv_step`は先頭の節点のエフェクトの番号と次の節点を返し、空のリストには`None`を返す。
+fn evv_step_walks_a_list_head_first<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let e0 = push(&mut ctx, 0, 1);
+    let e1 = push(&mut ctx, 1, 1);
+    unsafe {
+        let list = ctx.evv_word();
+        let (effect, n0) = ctx.evv_step(list).unwrap().unwrap();
+        assert_eq!(effect, 1);
+        assert_eq!(ctx.heap().field(n0, 0), Ok(e0));
+        assert_eq!(ctx.evv_step(n0), Ok(Some((0, UNIT))));
+        assert_eq!(ctx.evv_step(UNIT), Ok(None));
+        clear(&mut ctx);
+        for e in [e0, e1] {
+            ctx.heap_mut().decref(e).unwrap();
+        }
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(&mut ctx), 0);
+}
+
 both_modes!(
     a_new_ctx_is_finished,
     an_engine_held_failure_is_parked_and_taken,
@@ -1005,6 +1083,10 @@ both_modes!(
     fork_table_refuses_a_mortal_entry,
     fork_tail_is_an_immortal_node_of_a_fork_evidence,
     fork_tail_refuses_the_last_effect_number,
+    fork_ev_is_pushed_and_its_clause_read,
+    fork_ev_refuses_a_bad_effect_or_table,
+    fork_of_refuses_an_object_that_is_not_a_fork_evidence,
+    evv_step_walks_a_list_head_first,
 );
 
 // ネイティブのコードはこれらの位置で読むので、値を変えるのはコード生成器の読みと一緒のときだけである

@@ -366,6 +366,156 @@ impl<M: Mode> Ctx<M> {
         // 呼ぶ側が新しい evidence の参照を1つ持つ
         self.lemma_fresh_holds(s0, ev);
     }
+
+    /// `fork_ev`が表の参照を取った後 (検査モードは`dup`し、速いモードは何も変えない) も、モデルは合っていて、表はエントリの
+    /// 表のままである。
+    pub(super) proof fn lemma_fork_table_dupped(&self, s0: Ctx<M>, table: Word)
+        requires
+            s0.held_ok(),
+            table_ok(s0.heap, table),
+            s0.heap.core.settled_view().rc_of(table.bits_spec()) == 0,
+            self.evv == s0.evv,
+            self.native.yielding == s0.native.yielding,
+            self.max_evv == s0.max_evv,
+            M::CHECKED ==> self.heap.bumped(s0.heap, table) && self.heap.settled()
+                && self.heap.consistent(),
+            !M::CHECKED ==> self.heap == s0.heap,
+        ensures
+            self.held_ok(),
+            moved(self.heap, s0.heap, |b: usize| 0int, Set::empty()),
+            no_free(self.heap, s0.heap),
+            table_ok(self.heap, table),
+            held_word(self.heap, table),
+            self.heap.core.settled_view().rc_of(table.bits_spec()) == 0,
+    {
+        let h0 = s0.heap;
+        let h1 = self.heap;
+        let z = |b: usize| 0int;
+        let none = Set::<usize>::empty();
+        if M::CHECKED {
+            lemma_dup_moved(h1, h0, table);
+            lemma_moved_immortal(h1, h0, |b: usize| points(table, b), z, none, table);
+        } else {
+            lemma_moved_refl(h0);
+        }
+        assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + z(
+            b,
+        ) >= self.need(seq![], b) by {
+            lemma_points_in(seq![], b);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], z, none);
+        self.lemma_evv_kept(s0, z, none);
+        lemma_readable_kept(h1, h0, table);
+        lemma_table_kept(h1, h0, z, none, table);
+        lemma_word_kept(h1, h0, z, none, table);
+    }
+
+    /// `fork_ev` の、モデルが合っている道。
+    pub(super) proof fn lemma_fork_ev_ok(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        h2: Heap<M>,
+        h3: Heap<M>,
+        ev: Word,
+        effect: u16,
+        table: Word,
+        state: Word,
+    )
+        requires
+            s0.held_ok(),
+            table_ok(s0.heap, table),
+            s0.heap.core.settled_view().rc_of(table.bits_spec()) == 0,
+            effect < u16::MAX,
+            !state.is_ptr_spec(),
+            self.evv == s0.evv,
+            self.native.yielding == s0.native.yielding,
+            self.max_evv == s0.max_evv,
+            moved(h1, s0.heap, |b: usize| 0int, Set::empty()),
+            no_free(h1, s0.heap),
+            h1.consistent(),
+            h1.settleable(),
+            table_ok(h1, table),
+            held_word(h1, table),
+            h1.core.settled_view().rc_of(table.bits_spec()) == 0,
+            h2.made(h1, ev),
+            h2.kind_of(ev) == Kind::Data,
+            h2.count_of(ev) == EV_WORDS,
+            h2.scan_of(ev) == EV_WORDS,
+            h2.tag_of(ev) == effect + 1,
+            h2.lin_of(ev) == false,
+            h2.owned(ev),
+            forall|i: int| 0 <= i < 3 ==> (#[trigger] h2.scanned_word(ev, i)).bits_spec() == 1,
+            h3.field_set(h2, ev, 0, table),
+            self.heap.field_set(h3, ev, 1, state),
+            h3.consistent(),
+            self.heap.consistent(),
+        ensures
+            self.held_ok(),
+            self.holds(ev),
+            self.ev_shape(ev),
+            self.ev_tag(ev) == effect + 1,
+            self.ev_table(ev) == table,
+            self.ev_state(ev) == state,
+            self.ev_outer(ev).bits_spec() == 1,
+            self.evolved_by(s0, |b: usize| 0int, Set::empty()),
+    {
+        let h0 = s0.heap;
+        let h4 = self.heap;
+        let z = |b: usize| 0int;
+        let none = Set::<usize>::empty();
+        let x = none.insert(ev.bits_spec());
+        let dt = |b: usize| -points(table, b);
+        let ds = |b: usize| -points(state, b);
+        let tb = table.bits_spec();
+        let eb = ev.bits_spec();
+        // 古い物体についての変化
+        lemma_alloc_moved(h2, h1, ev);
+        lemma_moved_chain(h2, h1, h0, z, z, z, none, none, none);
+        lemma_unextended(h2, ev);
+        assert(h2.scanned_word(ev, EV_TABLE as int).bits_spec() == 1);
+        assert(h2.scanned_word(ev, EV_STATE as int).bits_spec() == 1);
+        assert(h2.scanned_word(ev, EV_OUTER as int).bits_spec() == 1);
+        lemma_set_unit_moved(h3, h2, ev, EV_TABLE as int, table);
+        lemma_moved_chain(h3, h2, h0, z, dt, dt, none, x, none);
+        lemma_unextended(h3, ev);
+        assert(h3.word_at(ev, EV_STATE as int) == h2.word_at(ev, EV_STATE as int));
+        assert(h3.word_at(ev, EV_OUTER as int) == h2.word_at(ev, EV_OUTER as int));
+        lemma_set_unit_moved(h4, h3, ev, EV_STATE as int, state);
+        lemma_moved_chain(h4, h3, h0, dt, ds, dt, none, x, none);
+        assert(live(h1, tb));
+        assert(live(h0, tb));
+        lemma_moved_immortal(h4, h0, dt, z, none, table);
+        // 新しい evidence についての変化
+        let e4 = |b: usize| -points(table, b) - points(state, b);
+        lemma_moved_chain(h4, h3, h2, dt, ds, e4, x, x, x);
+        assert(live(h2, eb));
+        assert(!live(h1, eb));
+        assert(e4(eb) == 0);
+        assert(live(h4, eb));
+        lemma_unextended(h4, ev);
+        assert(h4.scanned_word(ev, EV_TABLE as int) == table);
+        assert(h4.scanned_word(ev, EV_STATE as int) == state);
+        assert(h4.scanned_word(ev, EV_OUTER as int).bits_spec() == 1);
+        // `Ctx`の語
+        assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + z(
+            b,
+        ) >= self.need(seq![], b) by {
+            lemma_points_in(seq![], b);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], z, none);
+        self.lemma_evv_kept(s0, z, none);
+        // 新しい evidence の形
+        h4.lemma_readable_scanned(ev, EV_TABLE as int);
+        h4.lemma_readable_scanned(ev, EV_STATE as int);
+        h4.lemma_readable_scanned(ev, EV_OUTER as int);
+        lemma_readable_kept(h4, h0, table);
+        lemma_table_kept(h4, h0, z, none, table);
+        lemma_unit_bits();
+        assert(ev_ok(h4, ev));
+        // 呼ぶ側が新しい evidence の参照を1つ持つ
+        self.lemma_fresh_holds(s0, ev);
+    }
 }
 
 impl<M: Mode> Ctx<M> {
@@ -945,7 +1095,7 @@ impl<M: Mode> Ctx<M> {
             x,
             x,
         );
-        // Ctx の語
+        // `Ctx`の語
         let ws = seq![c];
         assert(held_word(h0, ws[0]));
         assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(ws, b) + d(b)
@@ -1399,6 +1549,36 @@ pub(super) proof fn lemma_moved_weaken<M: Mode>(
         &&& v0.rc_of(b) != 0 ==> h1.core.settled_view().ext(b) == v0.ext(b) + e(b)
     } by {
         assert(d(b) == e(b));
+    }
+}
+
+/// 不死の物体`t`の外の参照の数は`moved`に現れないので、`t`のほかで変化の数が合えば、同じ変化と言える。
+pub(super) proof fn lemma_moved_immortal<M: Mode>(
+    h1: Heap<M>,
+    h0: Heap<M>,
+    d: spec_fn(usize) -> int,
+    e: spec_fn(usize) -> int,
+    x: Set<usize>,
+    t: Word,
+)
+    requires
+        moved(h1, h0, d, x),
+        h0.core.settled_view().rc_of(t.bits_spec()) == 0,
+        forall|b: usize| live(h0, b) && b != t.bits_spec() ==> #[trigger] d(b) == e(b),
+    ensures
+        moved(h1, h0, e, x),
+{
+    let v0 = h0.core.settled_view();
+    assert forall|b: usize|
+        #![trigger live(h0, b)]
+        live(h0, b) && (v0.rc_of(b) == 0 || v0.ext(b) + e(b) >= 1) implies {
+        &&& live(h1, b)
+        &&& h1.core.block(b) == h0.core.block(b)
+        &&& v0.rc_of(b) != 0 ==> h1.core.settled_view().ext(b) == v0.ext(b) + e(b)
+    } by {
+        if b != t.bits_spec() {
+            assert(d(b) == e(b));
+        }
     }
 }
 
@@ -3469,7 +3649,7 @@ impl<M: Mode> Ctx<M> {
         lemma_skip_prefix(items, 0);
         assert(mask_from(items, s, bound as int) =~= tail);
         assert(mask_spec(items, s) == out + tail);
-        // Ctx の語
+        // `Ctx`の語
         assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + d(
             b,
         ) >= self.need(seq![], b) by {

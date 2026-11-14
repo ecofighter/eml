@@ -608,6 +608,24 @@ impl<M: Mode> Heap<M> {
         Ok(node)
     }
 
+    /// 検査モードで、生きている物体`w`が不死 (rc 0) かを読む。`is_immortal`と違い、付けた塊の物体も受け付ける。
+    fn checked_immortal(&self, w: Word) -> (r: Result<bool, HeapError>)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+        ensures
+            r matches Ok(z) ==> z == (self.rc_value(w) == 0),
+            self.consistent() && self.settleable() && self.readable(w) ==> r is Ok,
+    {
+        let h = self.header_of(w);
+        proof {
+            self.lemma_checks_pass(w);
+        }
+        self.checked_live(h)?;
+        Ok(self.core.rc_get(h) == 0)
+    }
+
     /// forkの表は、別の物体を確保した後もforkの表である。
     proof fn lemma_fork_table_grown(&self, old: Heap<M>, w: Word, t: Word)
         requires
@@ -635,33 +653,42 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// forkの表は、`alloc_data`などが別の物体を確保した後もforkの表である。
-    pub proof fn lemma_fork_table_grew(&self, old: Heap<M>, w: Word, t: Word)
+    /// ほかの物体だけを変える変化 (`moved`) の後も、forkの表はforkの表のままである。
+    proof fn lemma_fork_table_moved(
+        &self,
+        old: Heap<M>,
+        d: spec_fn(usize) -> int,
+        x: Set<usize>,
+        t: Word,
+    )
         requires
-            self.grew(old, w),
+            moved(*self, old, d, x),
+            !x.contains(t.bits_spec()),
             old.consistent(),
             old.settleable(),
+            self.consistent(),
+            self.settleable(),
             old.fork_table(t),
+            self.readable(t),
         ensures
             self.fork_table(t),
     {
+        lemma_table_kept(*self, old, d, x, t);
         let b = t.bits_spec();
-        assert(old.core.has(b) && old.core.settled_state(b) == BlockState::Live);
-        assert(self.grown_block(old, b));
-        assert(self.readable(t));
-        assert forall|i: int| 0 <= i < self.count_of(t) implies dupable(
-            *self,
+        assert(live(old, b) && live(*self, b));
+        assert(same_head(*self, old, b));
+        assert forall|i: int| 0 <= i < self.count_of(t) implies self.immortal_word(
             #[trigger] self.scanned_word(t, i),
-        ) && self.immortal_word(self.scanned_word(t, i)) by {
+        ) by {
             let e = old.scanned_word(t, i);
             assert(self.scanned_word(t, i) == e);
-            assert(dupable(old, e));
             assert(old.immortal_word(e));
             old.lemma_readable_scanned(t, i);
             if e.is_ptr_spec() {
                 let c = e.bits_spec();
-                assert(old.core.has(c) && old.core.settled_state(c) == BlockState::Live);
-                assert(self.grown_block(old, c));
+                assert(live(old, c));
+                assert(live(*self, c));
+                assert(same_head(*self, old, c));
             }
         }
     }
@@ -2377,6 +2404,225 @@ impl<M: Mode> Ctx<M> {
         Ok(ev)
     }
 
+    /// エフェクト`effect`のfork evidence `[table, 即値 depth, ()]`を作る。tagは`effect + 1`である
+    /// (docs/spec/object-model.mdの「evidence の3つの物体」)。`table`は借りる。evidenceは表の参照を1つ持つので、検査モードは
+    /// 「不死の物体の数え方」のとおりに表を`dup`する。速いモードは`dup`を省く。不死の物体の`dup`は何もしないためである。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`table`は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`effect`は
+    /// 65535より小さく、`table`はforkの表である (検査モードは確保の前に、65535の`effect`と、`lin`ビットのない不死のtag 0の
+    /// `Data`でない`table`に`BadEvidence`を返す)。evidenceをほかのworkerに渡す (`par`のforkは共有の印を付けて渡す) なら、
+    /// `table`は数える不死の物体でなく、凍結した領域の物体である (docs/spec/object-model.mdの「核の操作」)。
+    pub unsafe fn fork_ev(&mut self, effect: u16, table: Word, depth: u32) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(table),
+            !M::CHECKED ==> effect < u16::MAX && old(self).heap_spec().fork_table(table),
+        ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> r is Ok,
+            M::CHECKED && effect == u16::MAX ==> r == Err::<Word, HeapError>(
+                HeapError::BadEvidence,
+            ),
+            old(self).held_ok() && effect < u16::MAX && old(self).heap_spec().fork_table(table)
+                ==> (r matches Ok(e) && {
+                &&& final(self).held_ok()
+                &&& final(self).holds(e)
+                &&& final(self).ev_shape(e)
+                &&& final(self).ev_tag(e) == effect + 1
+                &&& final(self).ev_table(e) == table
+                &&& final(self).ev_state(e).bits_spec() == crate::word::imm_spec(depth as i64)
+                &&& final(self).ev_outer(e).bits_spec() == 1
+                &&& final(self).evolved_by(*old(self), |b: usize| 0int, Set::empty())
+                &&& final(self).heap_spec().fork_table(table)
+            }),
+    {
+        if M::CHECKED {
+            if effect == u16::MAX {
+                return Err(HeapError::BadEvidence);
+            }
+            self.checked_fork_table(table)?;
+            self.heap.dup_check(table)?;
+        }
+        let ghost s0 = *self;
+        let ghost h0 = self.heap;
+        let ghost c = s0.held_ok() && effect < u16::MAX && h0.fork_table(table);
+        let ghost z = |b: usize| 0int;
+        let ghost none = Set::<usize>::empty();
+        proof {
+            if c {
+                assert(table_ok(h0, table));
+                assert(h0.dup_ok(table));
+                assert(h0.core.settled_view().rc_of(table.bits_spec()) == 0);
+            }
+        }
+        if M::CHECKED {
+            (unsafe { self.heap.dup(table) })?;
+        }
+        let ghost h1 = self.heap;
+        proof {
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_fork_table_dupped(s0, table);
+            }
+        }
+        let ev = self.heap.alloc_data(effect + 1, EV_WORDS, 0, false);
+        let ghost h2 = self.heap;
+        proof {
+            lemma_words_trans(h2, h1, h0);
+            lemma_unextended(h2, ev);
+            assert(h2.scanned_at(ev, EV_TABLE as int));
+            if c {
+                lemma_alloc_moved(h2, h1, ev);
+                lemma_arg_moved(h2, h1, z, none, table);
+            }
+        }
+        (unsafe { self.heap.set_field(ev, EV_TABLE, table) })?;
+        let ghost h3 = self.heap;
+        let state = Word::imm(depth as i64);
+        proof {
+            crate::word::lemma_imm_round_trip(depth as i64);
+            if M::CHECKED {
+                assert(h2.scanned_at(ev, EV_STATE as int));
+                lemma_set_passes_kept(h3, h2, ev, 0, table, 1);
+            }
+            if c {
+                lemma_unextended(h3, ev);
+                assert(h3.word_at(ev, EV_STATE as int) == h2.word_at(ev, EV_STATE as int));
+            }
+        }
+        (unsafe { self.heap.set_field(ev, EV_STATE, state) })?;
+        proof {
+            lemma_words_trans(self.heap, h3, h2);
+            lemma_words_trans(self.heap, h2, h0);
+            self.lemma_words_kept(s0);
+            if c {
+                self.lemma_fork_ev_ok(s0, h1, h2, h3, ev, effect, table, state);
+                self.heap.lemma_fork_table_moved(h0, z, none, table);
+            }
+        }
+        Ok(ev)
+    }
+
+    /// fork evidence `ev`のエフェクトの番号 (tagから1を引いた値) と深さを返す。`ev`は借りる
+    /// (docs/spec/object-model.mdの「evidence の3つの物体」)。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`ev`は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`ev`は状態が
+    /// 即値のevidenceである (検査モードは確かめ、違えば`BadEvidence`を返す。状態が`u32`に入る自然数でないときも
+    /// `BadEvidence`を返す)。
+    pub unsafe fn fork_of(&self, ev: Word) -> (r: Result<(u16, u32), HeapError>)
+        requires
+            self.wf(),
+            self.heap_spec().word_in(ev),
+            !M::CHECKED ==> self.ev_shape(ev) && self.ev_state(ev).is_imm_spec(),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            self.held_ok() && self.ev_shape(ev) && self.ev_state(ev).is_imm_spec() && 0
+                <= crate::word::imm_value_spec(self.ev_state(ev).bits_spec()) <= u32::MAX ==> r
+                == Ok::<(u16, u32), HeapError>(
+                (
+                    (self.ev_tag(ev) - 1) as u16,
+                    crate::word::imm_value_spec(self.ev_state(ev).bits_spec()) as u32,
+                ),
+            ),
+            M::CHECKED && self.held_ok() && self.ev_shape(ev) && !self.ev_state(ev).is_imm_spec()
+                ==> r == Err::<(u16, u32), HeapError>(HeapError::BadEvidence),
+    {
+        let ghost c = self.held_ok() && self.ev_shape(ev);
+        if M::CHECKED {
+            self.checked_ev(ev)?;
+        }
+        proof {
+            if c {
+                lemma_unextended(self.heap, ev);
+            }
+        }
+        let m = (unsafe { self.heap.meta(ev) })?;
+        proof {
+            m.lemma_fields();
+        }
+        let s = (unsafe { self.heap.field(ev, EV_STATE) })?;
+        if M::CHECKED {
+            if !s.is_imm() {
+                return Err(HeapError::BadEvidence);
+            }
+            let v = s.imm_value();
+            if v < 0 || v > u32::MAX as i64 {
+                return Err(HeapError::BadEvidence);
+            }
+        }
+        Ok((m.tag() - 1, s.imm_value() as u32))
+    }
+
+    /// `evv`のリストを1歩たどる。`()`なら`None`を、そうでなければ先頭の節点のエフェクトの番号 (tagから1を引いた値) と
+    /// 次の節点を返す。`w`は借り、RCに触れない (docs/spec/object-model.mdの「evidence の3つの物体」)。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`w`は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`w`は正しい
+    /// `evv`のリストである (検査モードは、形の違う節点に`BadEvidence`を返す)。
+    pub unsafe fn evv_step(&self, w: Word) -> (r: Result<Option<(u16, Word)>, HeapError>)
+        requires
+            self.wf(),
+            self.heap_spec().word_in(w),
+            !M::CHECKED ==> self.evv_wf(w),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(Some(s)) ==> self.heap_spec().word_in(s.1),
+            self.held_ok() && self.evv_wf(w) ==> (r matches Ok(o) && {
+                &&& (o is None <==> self.evv_seq(w).len() == 0)
+                &&& o matches Some(s) ==> {
+                    &&& self.evv_seq(w).len() > 0
+                    &&& s.0 + 1 == self.evv_seq(w)[0].0
+                    &&& self.evv_wf(s.1)
+                    &&& self.evv_seq(s.1) == self.evv_seq(w).drop_first()
+                }
+            }),
+    {
+        let ghost c = self.held_ok() && self.evv_wf(w);
+        let ghost f = choose|f: nat| #[trigger] path(self.heap, w, f) is Some;
+        let ghost s = seq_of(self.heap, w);
+        proof {
+            lemma_unit_bits();
+            if c {
+                lemma_seq_of(self.heap, w, f);
+                lemma_path_step(self.heap, w, f, s);
+            }
+        }
+        if w.bits() == 1 {
+            return Ok(None);
+        }
+        if M::CHECKED && !w.is_ptr() {
+            return Err(HeapError::BadEvidence);
+        }
+        let m = (unsafe { self.heap.meta(w) })?;
+        proof {
+            m.lemma_fields();
+        }
+        if M::CHECKED && (!Self::data_meta(m, NODE_WORDS as u8) || m.tag() == 0) {
+            return Err(HeapError::BadEvidence);
+        }
+        proof {
+            lemma_unextended(self.heap, w);
+        }
+        let next = (unsafe { self.heap.field(w, NODE_NEXT) })?;
+        proof {
+            if c {
+                let g = (f - 1) as nat;
+                lemma_seq_of(self.heap, next, g);
+            }
+        }
+        Ok(Some((m.tag() - 1, next)))
+    }
+
     /// `l` の先頭に evidence `e` の節点を足したリストを返す。節点の tag は `e` の tag と同じにする
     /// (docs/spec/object-model.md の「evidence の3つの物体」)。`l` と `e` は消費する。
     ///
@@ -3838,6 +4084,7 @@ impl<M: Mode> Ctx<M> {
         ensures
             r matches Ok(t) ==> {
                 &&& ev.is_ptr_spec()
+                &&& self.heap.tag_of(ev) != 0
                 &&& self.heap.scan_of(ev) == EV_WORDS
                 &&& t == self.heap.scanned_word(ev, EV_TABLE as int)
                 &&& t.is_ptr_spec()
@@ -3872,6 +4119,32 @@ impl<M: Mode> Ctx<M> {
             return Err(HeapError::BadEvidence);
         }
         Ok(t)
+    }
+
+    /// `table`が`lin`ビットのない不死のtag 0の`Data`かを確かめる。エントリはここで確かめない。表を作るときに
+    /// `alloc_fork_table`が確かめている。
+    fn checked_fork_table(&self, table: Word) -> (r: Result<(), HeapError>)
+        requires
+            M::CHECKED,
+            self.wf(),
+            self.heap.word_in(table),
+        ensures
+            self.held_ok() && self.heap.fork_table(table) ==> r is Ok,
+    {
+        if !table.is_ptr() {
+            return Err(HeapError::BadEvidence);
+        }
+        let m = (unsafe { self.heap.meta(table) })?;
+        proof {
+            m.lemma_fields();
+        }
+        if !matches!(m.kind(), Kind::Data) || m.lin() || m.tag() != 0 {
+            return Err(HeapError::BadEvidence);
+        }
+        if !self.heap.checked_immortal(table)? {
+            return Err(HeapError::BadEvidence);
+        }
+        Ok(())
     }
 
     /// mask が除く組を、写す前に `m` 個 (`skip_total`) まで数える。節点ごとに形を確かめ、上限の歩数で止まり、除く組が
