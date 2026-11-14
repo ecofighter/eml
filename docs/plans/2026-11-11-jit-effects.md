@@ -129,7 +129,8 @@ Kept in the repository: each rule is written into `docs/spec/` (native.md, objec
 | V1 | `Build the VM's fork evidence with eml_rt` | R4 | E-D2 (reroute); G-1, G-2, G-13 | Sonnet |
 | CP-A | CI of V1 | V1 | | orchestrator |
 | N1 | `Test the abort byte after a call` | CP-A | E-D6 (no landing yet), 00 E-2 (`CTX_YIELD_ABORT` with its first reader); G-3, G-4, G-14, G-15 | Opus |
-| N2 | `Add the effect entries` | N1 | E-D3 (entries), E-D8; G-8 | Sonnet |
+| V2 | `Attach the code's region on every worker heap` | N1 | 00 G.3 U-N | Sonnet |
+| N2 | `Add the effect entries` | V2 | E-D3 (entries), E-D8; G-8 | Sonnet |
 | N3 | `Lower the effect prims` | N2 | E-D3 (lowering), E-D4 (`e:`, `m:`, machine numbers), E-D8; G-6, G-7, G-17 | Opus |
 | CP-B | CI of N3 | N3 | | orchestrator |
 | N4 | `Call clauses natively` | CP-B | E-D5; G-9, G-17 | Opus |
@@ -395,9 +396,37 @@ Push `plan/jit-effects` (with the user's permission unless given for this stage'
   - EG (eml_rt touched; Verus count unchanged from R3: the const is outside `verus!`, `ctx.rs:3808` [V]).
   - `cargo nextest run -p eml_native -E 'test(clif::) | test(abort::)'` → `16 tests run: 16 passed` (clif 10 + 1, abort 4 + 1 [V: base counts]).
   - `cargo nextest run -p eml_lir -E 'test(prompt)'`, `cargo nextest run -p eml_core_ir -E 'test(prompt)'` → each includes the new tests, 0 failed.
-  - `awk '/^fn a_call_and_its_unwind_check/,/^}/' crates/eml_native/tests/clif.rs | grep -c 'load.i8 notrap aligned v0+24'` → `1`; same range `grep -c 'load.i64 notrap aligned v0$'` → `0`.
+  - `awk '/^fn a_call_and_its_unwind_check/,/^    ");/' crates/eml_native/tests/clif.rs | grep -c 'load.i8 notrap aligned v0+24'` → `1`; same range `grep -c 'load.i64 notrap aligned v0$'` → `0`.
   - `cargo nextest run` (the debug-build verifier checks I-land on every UI program) → no failed. A failure is 08 A-3 false: stop and report.
 - Left to the implementer: CLIF block order; the Core IR walker of the `prompt$` test.
+
+### V2: `Attach the code's region on every worker heap`
+
+- Purpose: 00 G.3 (h) U-N (Fable audit AR, finding F1). Only worker 0's heap attaches `CodeBase.region` (`Machine::load`, `crates/eml_vm/src/lib.rs` `self.ctx.heap_mut().attach`); workers 1..N-1 (`crates/eml_vm/src/workers.rs`, `Ctx::for_worker(.., k)`) and the main worker (`lib.rs`, `main_ctx`) never do, so a `par` forked off worker 0 passes unattached frozen objects (the fork table, the tail, constants) to `fork_ev`, `evv_push`, `evv_step` and `fork_of`, outside their `# Safety` ("this heap or an attached chunk"), their `requires word_in` and docs/spec/object-model.md 「核の操作」's three classes. Safe at run time today only because no check distinguishes an attached chunk; this makes the contract literally true on every worker.
+- Files: `crates/eml_vm/src/` — one helper on `CodeBase` (e.g. `CodeBase::worker_ctx(control, host, k) -> Ctx<M>`) that calls `Ctx::for_worker` and attaches `self.region` when `Some`; used at the two sites (workers.rs worker spawn, lib.rs `main_ctx`). `attach` stores one `Arc` and allocates nothing, so the main worker's page-charge ordering (the comment above `main_ctx`) is unchanged. Prototype (verified: `cargo test -p eml_vm -p eml_cli -q` exits 0 with no expected-value change): the orchestrator's scratch diff, inlined here:
+  ```
+  lib.rs, after `let mut main_ctx = Ctx::<M>::for_worker(Arc::clone(&control), start.host.clone(), run.main());`
+      if let Some(region) = &code.region {
+          unsafe { main_ctx.heap_mut() }.attach(Arc::clone(region));
+      }
+  workers.rs, the ctx closure:
+      || {
+          let mut ctx = Ctx::for_worker(Arc::clone(&control), host, k);
+          if let Some(region) = &code.region {
+              unsafe { ctx.heap_mut() }.attach(Arc::clone(region));
+          }
+          ctx
+      },
+  ```
+  (fold both into the helper; the `unsafe` gets a `SAFETY:` comment naming `heap_mut`'s precondition: attaching stores an `Arc` and touches no word `Ctx` holds).
+- docs: object-model.md 「付ける」 (or 「塊の鎖」): every heap that runs a program's code attaches the chain head before it runs; in the VM, worker 0 at load and every other worker, the main worker included, when its `Ctx` is made. vm.md 「メインのworker」 (and the sentence near 「`CodeBase` と `FnEntry`」 that says the run heap re-attaches before the next entry) states the same fact.
+- Tests: none new (attachment is not observable at run time); kind 3, every expected value byte-identical. Pinned by the helper and the grep below.
+- Completion:
+  - `grep -rn 'Ctx::for_worker' crates/eml_vm/src | grep -v 'sched.rs'` → exactly one hit, inside the helper (the `sched.rs` hits are `#[cfg(test)]` code; confirm they are, and say so in the commit).
+  - `cargo nextest run -p eml_vm -p eml_cli` → no failed; `git status --porcelain | grep -c snap` → `0`.
+  - Miri `eml_vm --test integration miri::`, both settings → pass, `user` ≤ 300 s / 400 s.
+  - TSan `-p eml_vm --test integration -- workers::` (the V1 command) → pass.
+  - G (7.3.1) and SC lines in force.
 
 ### N2: `Add the effect entries`
 
@@ -661,7 +690,7 @@ rejected 34
 
 ```
 S0 → R1 → R2 → R3 → R4 → V1 → [CP-A]
-   → N1 → N2 → N3 → [CP-B]
+   → N1 → V2 → N2 → N3 → [CP-B]
    → N4 → N5 → N6 → [CP-C]
    → (fix commits, if any) → N7 → [CP-D]
    → Z → [CP-Z] → merge
