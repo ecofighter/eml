@@ -324,20 +324,41 @@ spec fn table_ok<M: Mode>(h: Heap<M>, t: Word) -> bool {
     &&& forall|i: int| 0 <= i < h.count_of(t) ==> dupable(h, #[trigger] h.scanned_word(t, i))
 }
 
+/// evidenceの物体で、エントリの表を持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const EV_TABLE: usize = 0;
+
+/// evidenceの物体で、状態を持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const EV_STATE: usize = 1;
+
+/// evidenceの物体で、外側の`evv`を持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const EV_OUTER: usize = 2;
+
+/// evidenceの物体の走査する語の数。割り当てと形の確かめが同じ数を使うように、1か所で決める (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const EV_WORDS: usize = 3;
+
+/// `evv`の節点で、evidenceを持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const NODE_EV: usize = 0;
+
+/// `evv`の節点で、次の節点 (`evv`の残り) を持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const NODE_NEXT: usize = 1;
+
+/// `evv`の節点の走査する語の数。割り当てと形の確かめが同じ数を使うように、1か所で決める (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const NODE_WORDS: usize = 2;
+
 /// evidence の浅い形 (docs/spec/object-model.md の「evidence の3つの物体」)。[エントリの表, 状態, 外側の evv] を持つ。
 /// 外側の evv がリストとして正しいことは入れない。入れると節点の述語と互いに再帰し、検査モードで確かめる費用が
 /// handler の入れ子の深さについて指数になるためである。
 spec fn ev_ok<M: Mode>(h: Heap<M>, e: Word) -> bool {
-    &&& data_obj(h, e, 3)
+    &&& data_obj(h, e, EV_WORDS as u8)
     &&& h.tag_of(e) != 0
-    &&& table_ok(h, h.scanned_word(e, 0))
-    &&& droppable(h, h.scanned_word(e, 1))
-    &&& dupable(h, h.scanned_word(e, 2))
+    &&& table_ok(h, h.scanned_word(e, EV_TABLE as int))
+    &&& droppable(h, h.scanned_word(e, EV_STATE as int))
+    &&& dupable(h, h.scanned_word(e, EV_OUTER as int))
 }
 
 /// `evv` の節点の形。[evidence, 次の節点] を持つ。
 spec fn node_ok<M: Mode>(h: Heap<M>, n: Word) -> bool {
-    data_obj(h, n, 2) && h.tag_of(n) != 0
+    data_obj(h, n, NODE_WORDS as u8) && h.tag_of(n) != 0
 }
 
 /// `w` から節点をたどり、`fuel` 歩以内に `()` に着くなら、(tag, evidence) の組の列。輪になったリストや形の違う
@@ -350,9 +371,9 @@ spec fn path<M: Mode>(h: Heap<M>, w: Word, fuel: nat) -> Option<Seq<(u16, Word)>
     } else if fuel == 0 {
         None
     } else {
-        let e = h.scanned_word(w, 0);
+        let e = h.scanned_word(w, NODE_EV as int);
         if node_ok(h, w) && ev_ok(h, e) && h.tag_of(e) == h.tag_of(w) {
-            match path(h, h.scanned_word(w, 1), (fuel - 1) as nat) {
+            match path(h, h.scanned_word(w, NODE_NEXT as int), (fuel - 1) as nat) {
                 Some(s) => Some(seq![(h.tag_of(w), e)] + s),
                 None => None,
             }
@@ -505,7 +526,7 @@ spec fn nth<M: Mode>(h: Heap<M>, w: Word, j: nat) -> Word
 spec fn walk_node<M: Mode>(h: Heap<M>, n: Word) -> bool {
     &&& n.is_ptr_spec()
     &&& h.readable(n)
-    &&& h.scan_of(n) == 2
+    &&& h.scan_of(n) == NODE_WORDS
 }
 
 /// `w` から `k` 個の節点を読める。
@@ -581,8 +602,8 @@ spec fn copies_ok<M: Mode>(h: Heap<M>, cs: Seq<Word>, out: Seq<(u16, Word)>) -> 
             &&& node_ok(h, #[trigger] cs[k])
             &&& h.rc_value(cs[k]) > 0
             &&& h.tag_of(cs[k]) == out[k].0
-            &&& h.scanned_word(cs[k], 0) == out[k].1
-            &&& k + 1 < cs.len() ==> h.scanned_word(cs[k], 1) == cs[k + 1]
+            &&& h.scanned_word(cs[k], NODE_EV as int) == out[k].1
+            &&& k + 1 < cs.len() ==> h.scanned_word(cs[k], NODE_NEXT as int) == cs[k + 1]
         }
 }
 
@@ -811,7 +832,7 @@ fn seen_at_least<M: Mode>(
         if m.tag() == t {
             count += 1;
         }
-        n = (unsafe { h.field(n, 1) })?;
+        n = (unsafe { h.field(n, NODE_NEXT) })?;
         j += 1;
     }
     Ok(count as u64 >= occ)
@@ -980,15 +1001,15 @@ impl<M: Mode> Ctx<M> {
     }
 
     pub closed spec fn ev_table(&self, e: Word) -> Word {
-        self.heap.scanned_word(e, 0)
+        self.heap.scanned_word(e, EV_TABLE as int)
     }
 
     pub closed spec fn ev_state(&self, e: Word) -> Word {
-        self.heap.scanned_word(e, 1)
+        self.heap.scanned_word(e, EV_STATE as int)
     }
 
     pub closed spec fn ev_outer(&self, e: Word) -> Word {
-        self.heap.scanned_word(e, 2)
+        self.heap.scanned_word(e, EV_OUTER as int)
     }
 
     pub closed spec fn ev_ops(&self, e: Word) -> int {
@@ -2042,13 +2063,13 @@ impl<M: Mode> Ctx<M> {
         let ghost none = Set::<usize>::empty();
         let table = self.heap.alloc_data(0, n_ops, 0, false);
         let ghost h1 = self.heap;
-        let ev = self.heap.alloc_data(effect + 1, 3, 0, false);
+        let ev = self.heap.alloc_data(effect + 1, EV_WORDS, 0, false);
         let ghost h2 = self.heap;
         let ghost x = none.insert(ev.bits_spec());
         proof {
             lemma_words_trans(h2, h1, h0);
             lemma_unextended(h2, ev);
-            assert(h2.scanned_at(ev, 0));
+            assert(h2.scanned_at(ev, EV_TABLE as int));
             if c {
                 lemma_alloc_moved(h1, h0, table);
                 lemma_alloc_moved(h2, h1, ev);
@@ -2056,19 +2077,19 @@ impl<M: Mode> Ctx<M> {
                 // 先に作ったエントリの表は、外の参照を1つ持ったまま生き残る
                 assert(live(h1, table.bits_spec()));
                 lemma_arg_moved(h2, h1, z, none, table);
-                assert(h2.scanned_word(ev, 0).bits_spec() == 1);
+                assert(h2.scanned_word(ev, EV_TABLE as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(ev, 0, table) })?;
+        (unsafe { self.heap.set_field(ev, EV_TABLE, table) })?;
         let ghost h3 = self.heap;
         proof {
             if M::CHECKED {
-                assert(h2.scanned_at(ev, 1) && h2.scanned_at(ev, 2));
+                assert(h2.scanned_at(ev, EV_STATE as int) && h2.scanned_at(ev, EV_OUTER as int));
                 lemma_set_passes_kept(h3, h2, ev, 0, table, 1);
                 lemma_set_passes_kept(h3, h2, ev, 0, table, 2);
             }
             if c {
-                lemma_set_unit_moved(h3, h2, ev, 0, table);
+                lemma_set_unit_moved(h3, h2, ev, EV_TABLE as int, table);
                 let d = |b: usize| -points(table, b);
                 lemma_moved_chain(h3, h2, h0, z, d, z, none, x, none);
                 s0.lemma_arg_counted(seq![state, outer], 0);
@@ -2076,7 +2097,7 @@ impl<M: Mode> Ctx<M> {
                 lemma_arg_moved(h3, h0, z, none, state);
             }
         }
-        (unsafe { self.heap.set_field(ev, 1, state) })?;
+        (unsafe { self.heap.set_field(ev, EV_STATE, state) })?;
         let ghost h4 = self.heap;
         let ghost d4 = |b: usize| -points(state, b);
         proof {
@@ -2085,16 +2106,16 @@ impl<M: Mode> Ctx<M> {
             }
             if c {
                 lemma_unextended(h3, ev);
-                assert(h3.word_at(ev, 1) == h2.word_at(ev, 1));
-                assert(h2.scanned_word(ev, 1).bits_spec() == 1);
-                lemma_set_unit_moved(h4, h3, ev, 1, state);
+                assert(h3.word_at(ev, EV_STATE as int) == h2.word_at(ev, EV_STATE as int));
+                assert(h2.scanned_word(ev, EV_STATE as int).bits_spec() == 1);
+                lemma_set_unit_moved(h4, h3, ev, EV_STATE as int, state);
                 lemma_moved_chain(h4, h3, h0, z, d4, d4, none, x, none);
                 s0.lemma_arg_counted(seq![state, outer], 1);
                 lemma_points_in(seq![state, outer], outer.bits_spec());
                 lemma_arg_moved(h4, h0, d4, none, outer);
             }
         }
-        (unsafe { self.heap.set_field(ev, 2, outer) })?;
+        (unsafe { self.heap.set_field(ev, EV_OUTER, outer) })?;
         proof {
             lemma_words_trans(h3, h2, h0);
             lemma_words_trans(self.heap, h4, h3);
@@ -2160,7 +2181,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             m.lemma_fields();
         }
-        let node = self.heap.alloc_data(m.tag(), 2, 0, false);
+        let node = self.heap.alloc_data(m.tag(), NODE_WORDS, 0, false);
         let ghost h1 = self.heap;
         let ghost z = |b: usize| 0int;
         let ghost none = Set::<usize>::empty();
@@ -2169,35 +2190,35 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_words_trans(h1, h0, h0);
             lemma_unextended(h1, node);
-            assert(h1.scanned_at(node, 0));
+            assert(h1.scanned_at(node, NODE_EV as int));
             if c {
                 lemma_alloc_moved(h1, h0, node);
                 s0.lemma_arg_counted(ws, 1);
                 lemma_points_in(ws, e.bits_spec());
                 lemma_arg_moved(h1, h0, z, none, e);
-                assert(h1.scanned_word(node, 0).bits_spec() == 1);
-                assert(h1.scanned_word(node, 1).bits_spec() == 1);
+                assert(h1.scanned_word(node, NODE_EV as int).bits_spec() == 1);
+                assert(h1.scanned_word(node, NODE_NEXT as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(node, 0, e) })?;
+        (unsafe { self.heap.set_field(node, NODE_EV, e) })?;
         let ghost h2 = self.heap;
         let ghost d2 = |b: usize| -points(e, b);
         proof {
             if M::CHECKED {
-                assert(h1.scanned_at(node, 1));
+                assert(h1.scanned_at(node, NODE_NEXT as int));
                 lemma_set_passes_kept(h2, h1, node, 0, e, 1);
             }
             if c {
-                lemma_set_unit_moved(h2, h1, node, 0, e);
+                lemma_set_unit_moved(h2, h1, node, NODE_EV as int, e);
                 lemma_moved_chain(h2, h1, h0, z, d2, d2, none, x, none);
                 s0.lemma_arg_counted(ws, 0);
                 lemma_points_in(ws, l.bits_spec());
                 lemma_arg_moved(h2, h0, d2, none, l);
                 lemma_unextended(h2, node);
-                assert(h2.word_at(node, 1) == h1.word_at(node, 1));
+                assert(h2.word_at(node, NODE_NEXT as int) == h1.word_at(node, NODE_NEXT as int));
             }
         }
-        (unsafe { self.heap.set_field(node, 1, l) })?;
+        (unsafe { self.heap.set_field(node, NODE_NEXT, l) })?;
         proof {
             lemma_words_trans(h2, h1, h0);
             lemma_words_trans(self.heap, h2, h0);
@@ -2245,10 +2266,10 @@ impl<M: Mode> Ctx<M> {
                 lemma_unextended(s0.heap, ev);
             }
         }
-        let w = (unsafe { self.heap.field(ev, 2) })?;
+        let w = (unsafe { self.heap.field(ev, EV_OUTER) })?;
         proof {
             if s0.held_ok() && s0.ev_shape(ev) {
-                s0.heap.lemma_readable_scanned(ev, 2);
+                s0.heap.lemma_readable_scanned(ev, EV_OUTER as int);
             }
         }
         (unsafe { self.heap.dup(w) })?;
@@ -2298,7 +2319,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             if c {
                 lemma_unextended(s0.heap, ev);
-                s0.heap.lemma_readable_scanned(ev, 0);
+                s0.heap.lemma_readable_scanned(ev, EV_TABLE as int);
             }
         }
         let t = if M::CHECKED {
@@ -2309,7 +2330,7 @@ impl<M: Mode> Ctx<M> {
             }
             t
         } else {
-            (unsafe { self.heap.field(ev, 0) })?
+            (unsafe { self.heap.field(ev, EV_TABLE) })?
         };
         let w = (unsafe { self.heap.scanned(t, op) })?;
         proof {
@@ -2374,7 +2395,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_unextended(h1, ev);
         }
-        let s = (unsafe { self.heap.field(ev, 1) })?;
+        let s = (unsafe { self.heap.field(ev, EV_STATE) })?;
         let unit = Word::UNIT;
         proof {
             lemma_unit_bits();
@@ -2382,7 +2403,7 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_settled_ev(s0, ev);
             }
         }
-        (unsafe { self.heap.set_field(ev, 1, unit) })?;
+        (unsafe { self.heap.set_field(ev, EV_STATE, unit) })?;
         proof {
             lemma_words_trans(self.heap, h1, s0.heap);
             self.lemma_words_kept(s0);
@@ -2441,7 +2462,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_unextended(h1, ev);
         }
-        let w = (unsafe { self.heap.field(ev, 2) })?;
+        let w = (unsafe { self.heap.field(ev, EV_OUTER) })?;
         let unit = Word::UNIT;
         proof {
             lemma_unit_bits();
@@ -2449,7 +2470,7 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_settled_ev(s0, ev);
             }
         }
-        (unsafe { self.heap.set_field(ev, 2, unit) })?;
+        (unsafe { self.heap.set_field(ev, EV_OUTER, unit) })?;
         proof {
             lemma_words_trans(self.heap, h1, s0.heap);
             self.lemma_words_kept(s0);
@@ -2521,7 +2542,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_unextended(h1, ev);
         }
-        let old_state = (unsafe { self.heap.field(ev, 1) })?;
+        let old_state = (unsafe { self.heap.field(ev, EV_STATE) })?;
         proof {
             if c {
                 self.lemma_settled_ev(s0, ev);
@@ -2531,7 +2552,7 @@ impl<M: Mode> Ctx<M> {
                 lemma_arg_moved(h1, s0.heap, |b: usize| 0int, Set::empty(), s);
             }
         }
-        (unsafe { self.heap.set_field(ev, 1, s) })?;
+        (unsafe { self.heap.set_field(ev, EV_STATE, s) })?;
         let ghost h2 = self.heap;
         proof {
             if c {
@@ -2623,7 +2644,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             if s0.held_ok() && s0.ev_shape(ev) {
                 lemma_unextended(s0.heap, ev);
-                s0.heap.lemma_readable_scanned(ev, 0);
+                s0.heap.lemma_readable_scanned(ev, EV_TABLE as int);
             }
         }
         let t = if M::CHECKED {
@@ -2649,7 +2670,7 @@ impl<M: Mode> Ctx<M> {
             }
             t
         } else {
-            (unsafe { self.heap.field(ev, 0) })?
+            (unsafe { self.heap.field(ev, EV_TABLE) })?
         };
         let tm = (unsafe { self.heap.meta(t) })?;
         proof {
@@ -2719,13 +2740,13 @@ impl<M: Mode> Ctx<M> {
         proof {
             if c {
                 lemma_unextended(h0, ev);
-                h0.lemma_readable_scanned(ev, 0);
+                h0.lemma_readable_scanned(ev, EV_TABLE as int);
             }
         }
         let t = if M::CHECKED {
             self.checked_ev(ev)?
         } else {
-            (unsafe { self.heap.field(ev, 0) })?
+            (unsafe { self.heap.field(ev, EV_TABLE) })?
         };
         let m = (unsafe { self.heap.meta(ev) })?;
         proof {
@@ -2757,12 +2778,12 @@ impl<M: Mode> Ctx<M> {
         (unsafe { self.heap.dup(l) })?;
         let ghost h2 = self.heap;
         let ghost d2 = |b: usize| points(t, b) + points(l, b);
-        let e = self.heap.alloc_data(m.tag(), 3, 0, false);
+        let e = self.heap.alloc_data(m.tag(), EV_WORDS, 0, false);
         let ghost h3 = self.heap;
         let ghost x = none.insert(e.bits_spec());
         proof {
             lemma_unextended(h3, e);
-            assert(h3.scanned_at(e, 0));
+            assert(h3.scanned_at(e, EV_TABLE as int));
             if c {
                 lemma_dup_moved(h2, h1, l);
                 lemma_moved_chain(h2, h1, h0, d1, |b: usize| points(l, b), d2, none, none, none);
@@ -2770,30 +2791,30 @@ impl<M: Mode> Ctx<M> {
                 lemma_moved_chain(h3, h2, h0, d2, z, d2, none, none, none);
                 lemma_ext_nonneg_word(h0, t);
                 lemma_arg_moved(h3, h0, d2, none, t);
-                assert(h3.scanned_word(e, 0).bits_spec() == 1);
+                assert(h3.scanned_word(e, EV_TABLE as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(e, 0, t) })?;
+        (unsafe { self.heap.set_field(e, EV_TABLE, t) })?;
         let ghost h4 = self.heap;
         let ghost d4 = |b: usize| points(l, b);
         proof {
             if M::CHECKED {
-                assert(h3.scanned_at(e, 1) && h3.scanned_at(e, 2));
+                assert(h3.scanned_at(e, EV_STATE as int) && h3.scanned_at(e, EV_OUTER as int));
                 lemma_set_passes_kept(h4, h3, e, 0, t, 1);
                 lemma_set_passes_kept(h4, h3, e, 0, t, 2);
             }
             if c {
-                lemma_set_unit_moved(h4, h3, e, 0, t);
+                lemma_set_unit_moved(h4, h3, e, EV_TABLE as int, t);
                 lemma_moved_chain(h4, h3, h0, d2, |b: usize| -points(t, b), d4, none, x, none);
                 s0.lemma_arg_counted(seq![state], 0);
                 lemma_points_in(seq![state], state.bits_spec());
                 lemma_arg_moved(h4, h0, d4, none, state);
                 lemma_unextended(h4, e);
-                assert(h4.word_at(e, 1) == h3.word_at(e, 1));
-                assert(h3.scanned_word(e, 1).bits_spec() == 1);
+                assert(h4.word_at(e, EV_STATE as int) == h3.word_at(e, EV_STATE as int));
+                assert(h3.scanned_word(e, EV_STATE as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(e, 1, state) })?;
+        (unsafe { self.heap.set_field(e, EV_STATE, state) })?;
         let ghost h5 = self.heap;
         let ghost d5 = |b: usize| points(l, b) - points(state, b);
         proof {
@@ -2801,17 +2822,17 @@ impl<M: Mode> Ctx<M> {
                 lemma_set_passes_kept(h5, h4, e, 1, state, 2);
             }
             if c {
-                lemma_set_unit_moved(h5, h4, e, 1, state);
+                lemma_set_unit_moved(h5, h4, e, EV_STATE as int, state);
                 lemma_moved_chain(h5, h4, h0, d4, |b: usize| -points(state, b), d5, none, x, none);
                 s0.lemma_evv_counted(seq![state]);
                 lemma_points_in(seq![state], l.bits_spec());
                 lemma_arg_moved(h5, h0, d5, none, l);
                 lemma_unextended(h5, e);
-                assert(h5.word_at(e, 2) == h3.word_at(e, 2));
-                assert(h3.scanned_word(e, 2).bits_spec() == 1);
+                assert(h5.word_at(e, EV_OUTER as int) == h3.word_at(e, EV_OUTER as int));
+                assert(h3.scanned_word(e, EV_OUTER as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(e, 2, l) })?;
+        (unsafe { self.heap.set_field(e, EV_OUTER, l) })?;
         proof {
             if M::CHECKED {
                 lemma_words_trans(h2, h1, h0);
@@ -2862,7 +2883,7 @@ impl<M: Mode> Ctx<M> {
         let ghost s0 = *self;
         let ghost c = s0.held_ok();
         let tag = tag_of_effect(effect);
-        let want = Meta::new(tag, 2, Kind::Data, false);
+        let want = Meta::new(tag, NODE_WORDS as u8, Kind::Data, false);
         proof {
             want.lemma_fields();
         }
@@ -2894,7 +2915,7 @@ impl<M: Mode> Ctx<M> {
                 wanted == want.bits_spec(),
                 bits_wf(wanted),
                 bits_tag(wanted) == tag,
-                bits_scan(wanted) == 2,
+                bits_scan(wanted) == NODE_WORDS,
                 bits_kind(wanted) == Kind::Data,
                 !bits_lin(wanted),
                 c ==> {
@@ -2916,9 +2937,9 @@ impl<M: Mode> Ctx<M> {
                 node.is_ptr_spec(),
                 c ==> {
                     &&& node_ok(self.heap, node)
-                    &&& ev_ok(self.heap, self.heap.scanned_word(node, 0))
-                    &&& find(s, tag) == Some(self.heap.scanned_word(node, 0))
-                    &&& self.heap.tag_of(self.heap.scanned_word(node, 0)) == tag
+                    &&& ev_ok(self.heap, self.heap.scanned_word(node, NODE_EV as int))
+                    &&& find(s, tag) == Some(self.heap.scanned_word(node, NODE_EV as int))
+                    &&& self.heap.tag_of(self.heap.scanned_word(node, NODE_EV as int)) == tag
                 },
             decreases
                     if M::CHECKED {
@@ -2932,9 +2953,13 @@ impl<M: Mode> Ctx<M> {
                 if c && node.bits_spec() != 1 {
                     let k = (f - i) as nat;
                     assert(k > 0);
-                    let next = path(self.heap, self.heap.scanned_word(node, 1), (k - 1) as nat);
+                    let next = path(
+                        self.heap,
+                        self.heap.scanned_word(node, NODE_NEXT as int),
+                        (k - 1) as nat,
+                    );
                     assert(next is Some);
-                    let x = (self.heap.tag_of(node), self.heap.scanned_word(node, 0));
+                    let x = (self.heap.tag_of(node), self.heap.scanned_word(node, NODE_EV as int));
                     assert(rest =~= seq![x] + next->0);
                     assert(rest.drop_first() =~= s.subrange(i + 1, s.len() as int));
                     assert((seq![x] + next->0).drop_first() =~= next->0);
@@ -2979,7 +3004,7 @@ impl<M: Mode> Ctx<M> {
             proof {
                 lemma_unextended(self.heap, node);
             }
-            node = (unsafe { self.heap.field(node, 1) })?;
+            node = (unsafe { self.heap.field(node, NODE_NEXT) })?;
             if M::CHECKED {
                 steps += 1;
             }
@@ -2990,10 +3015,10 @@ impl<M: Mode> Ctx<M> {
         proof {
             if c {
                 lemma_unextended(self.heap, node);
-                s0.heap.lemma_readable_scanned(node, 0);
+                s0.heap.lemma_readable_scanned(node, NODE_EV as int);
             }
         }
-        let e = (unsafe { self.heap.field(node, 0) })?;
+        let e = (unsafe { self.heap.field(node, NODE_EV) })?;
         (unsafe { self.heap.dup(e) })?;
         proof {
             if M::CHECKED {
@@ -3039,7 +3064,7 @@ impl<M: Mode> Ctx<M> {
         let ghost s0 = *self;
         let ghost c = s0.held_ok();
         let tag = tag_of_effect(effect);
-        let want = Meta::new(tag, 2, Kind::Data, false);
+        let want = Meta::new(tag, NODE_WORDS as u8, Kind::Data, false);
         proof {
             want.lemma_fields();
         }
@@ -3071,7 +3096,7 @@ impl<M: Mode> Ctx<M> {
                 wanted == want.bits_spec(),
                 bits_wf(wanted),
                 bits_tag(wanted) == tag,
-                bits_scan(wanted) == 2,
+                bits_scan(wanted) == NODE_WORDS,
                 bits_kind(wanted) == Kind::Data,
                 !bits_lin(wanted),
                 c ==> {
@@ -3093,9 +3118,9 @@ impl<M: Mode> Ctx<M> {
                 node.is_ptr_spec(),
                 c ==> {
                     &&& node_ok(self.heap, node)
-                    &&& ev_ok(self.heap, self.heap.scanned_word(node, 0))
-                    &&& find(s, tag) == Some(self.heap.scanned_word(node, 0))
-                    &&& self.heap.tag_of(self.heap.scanned_word(node, 0)) == tag
+                    &&& ev_ok(self.heap, self.heap.scanned_word(node, NODE_EV as int))
+                    &&& find(s, tag) == Some(self.heap.scanned_word(node, NODE_EV as int))
+                    &&& self.heap.tag_of(self.heap.scanned_word(node, NODE_EV as int)) == tag
                 },
             decreases
                     if M::CHECKED {
@@ -3109,9 +3134,13 @@ impl<M: Mode> Ctx<M> {
                 if c && node.bits_spec() != 1 {
                     let k = (f - i) as nat;
                     assert(k > 0);
-                    let next = path(self.heap, self.heap.scanned_word(node, 1), (k - 1) as nat);
+                    let next = path(
+                        self.heap,
+                        self.heap.scanned_word(node, NODE_NEXT as int),
+                        (k - 1) as nat,
+                    );
                     assert(next is Some);
-                    let x = (self.heap.tag_of(node), self.heap.scanned_word(node, 0));
+                    let x = (self.heap.tag_of(node), self.heap.scanned_word(node, NODE_EV as int));
                     assert(rest =~= seq![x] + next->0);
                     assert(rest.drop_first() =~= s.subrange(i + 1, s.len() as int));
                     assert((seq![x] + next->0).drop_first() =~= next->0);
@@ -3160,7 +3189,7 @@ impl<M: Mode> Ctx<M> {
             proof {
                 lemma_unextended(self.heap, node);
             }
-            node = (unsafe { self.heap.field(node, 1) })?;
+            node = (unsafe { self.heap.field(node, NODE_NEXT) })?;
             if M::CHECKED {
                 steps += 1;
             }
@@ -3171,10 +3200,10 @@ impl<M: Mode> Ctx<M> {
         proof {
             if c {
                 lemma_unextended(self.heap, node);
-                s0.heap.lemma_readable_scanned(node, 0);
+                s0.heap.lemma_readable_scanned(node, NODE_EV as int);
             }
         }
-        let e = (unsafe { self.heap.field(node, 0) })?;
+        let e = (unsafe { self.heap.field(node, NODE_EV) })?;
         (unsafe { self.heap.dup(e) })?;
         proof {
             if M::CHECKED {
@@ -3323,7 +3352,7 @@ impl<M: Mode> Ctx<M> {
                     &&& self.heap.settled()
                     &&& self.heap.word_in(last)
                 },
-                cs.len() > 0 && M::CHECKED ==> self.heap.set_passes(last, 1)
+                cs.len() > 0 && M::CHECKED ==> self.heap.set_passes(last, NODE_NEXT as int)
                     && self.heap.dup_passes(last),
                 c ==> {
                     &&& mask_path(hs, w, f, s)
@@ -3366,12 +3395,12 @@ impl<M: Mode> Ctx<M> {
                     lemma_copy_seq_step(items@, s, out, js, i as int, removed as int);
                 }
             }
-            let next = (unsafe { self.heap.field(node, 1) })?;
+            let next = (unsafe { self.heap.field(node, NODE_NEXT) })?;
             proof {
                 assert(next == nth(hs, w, (i + 1) as nat));
             }
             if keep {
-                let ev = (unsafe { self.heap.field(node, 0) })?;
+                let ev = (unsafe { self.heap.field(node, NODE_EV) })?;
                 proof {
                     lemma_mask_ev(items@, hs, h0, w, f, s, bound, i as nat, ev, c);
                 }
@@ -3383,14 +3412,17 @@ impl<M: Mode> Ctx<M> {
                         lemma_copy_dup(hs, h0, h1, cs, out, ev);
                     }
                 }
-                let cp = self.heap.alloc_data(t, 2, 0, false);
+                let cp = self.heap.alloc_data(t, NODE_WORDS, 0, false);
                 let ghost h2 = self.heap;
                 proof {
                     lemma_kept_alloc(h2, h1, cp);
                     lemma_unextended(h2, cp);
-                    assert(h2.scanned_at(cp, 0) && h2.scanned_at(cp, 1));
-                    assert(h2.scanned_word(cp, 0).bits_spec() == 1);
-                    assert(h2.scanned_word(cp, 1).bits_spec() == 1);
+                    assert(h2.scanned_at(cp, NODE_EV as int) && h2.scanned_at(
+                        cp,
+                        NODE_NEXT as int,
+                    ));
+                    assert(h2.scanned_word(cp, NODE_EV as int).bits_spec() == 1);
+                    assert(h2.scanned_word(cp, NODE_NEXT as int).bits_spec() == 1);
                     lemma_kept_trans(h1, h0, hs, none, none, none);
                     lemma_kept_trans(h2, h1, hs, none, none, none);
                     if M::CHECKED {
@@ -3402,11 +3434,11 @@ impl<M: Mode> Ctx<M> {
                         lemma_arg_moved(h2, hs, |b: usize| points(ev, b), none, ev);
                     }
                 }
-                (unsafe { self.heap.set_field(cp, 0, ev) })?;
+                (unsafe { self.heap.set_field(cp, NODE_EV, ev) })?;
                 let ghost h3 = self.heap;
                 let ghost x3 = none.insert(cp.bits_spec());
                 proof {
-                    lemma_kept_set(h3, h2, cp, 0, ev);
+                    lemma_kept_set(h3, h2, cp, NODE_EV as int, ev);
                     lemma_kept_trans(h3, h2, hs, none, x3, none);
                     lemma_unextended(h3, cp);
                     if M::CHECKED {
@@ -3438,13 +3470,13 @@ impl<M: Mode> Ctx<M> {
                 if last.bits() == 1 {
                     head = cp;
                 } else {
-                    (unsafe { self.heap.set_field(last, 1, cp) })?;
+                    (unsafe { self.heap.set_field(last, NODE_NEXT, cp) })?;
                 }
                 let ghost h4 = self.heap;
                 proof {
                     if cs.len() > 0 {
                         let x4 = none.insert(last.bits_spec());
-                        lemma_kept_set(h4, h3, last, 1, cp);
+                        lemma_kept_set(h4, h3, last, NODE_NEXT as int, cp);
                         lemma_kept_trans(h4, h3, hs, none, x4, none);
                         if M::CHECKED {
                             lemma_words_trans(h4, h3, h0);
@@ -3518,7 +3550,7 @@ impl<M: Mode> Ctx<M> {
             }
             Ok(node)
         } else {
-            (unsafe { self.heap.set_field(last, 1, node) })?;
+            (unsafe { self.heap.set_field(last, NODE_NEXT, node) })?;
             proof {
                 if M::CHECKED {
                     lemma_words_trans(self.heap, h6, hs);
@@ -3557,13 +3589,13 @@ impl<M: Mode> Ctx<M> {
         ensures
             r matches Ok(t) ==> {
                 &&& ev.is_ptr_spec()
-                &&& self.heap.scan_of(ev) == 3
-                &&& t == self.heap.scanned_word(ev, 0)
+                &&& self.heap.scan_of(ev) == EV_WORDS
+                &&& t == self.heap.scanned_word(ev, EV_TABLE as int)
                 &&& t.is_ptr_spec()
                 &&& self.heap.word_in(t)
             },
             self.held_ok() && self.ev_shape(ev) ==> r == Ok::<Word, HeapError>(
-                self.heap.scanned_word(ev, 0),
+                self.heap.scanned_word(ev, EV_TABLE as int),
             ),
     {
         if !ev.is_ptr() {
@@ -3579,7 +3611,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_unextended(self.heap, ev);
         }
-        let t = (unsafe { self.heap.field(ev, 0) })?;
+        let t = (unsafe { self.heap.field(ev, EV_TABLE) })?;
         if !t.is_ptr() {
             return Err(HeapError::BadEvidence);
         }
@@ -3699,12 +3731,12 @@ impl<M: Mode> Ctx<M> {
                 }
             }
             if keep {
-                let ev = (unsafe { self.heap.field(node, 0) })?;
+                let ev = (unsafe { self.heap.field(node, NODE_EV) })?;
                 self.heap.dup_check(ev)?;
             } else {
                 removed += 1;
             }
-            node = (unsafe { self.heap.field(node, 1) })?;
+            node = (unsafe { self.heap.field(node, NODE_NEXT) })?;
             k += 1;
             proof {
                 assert(nth(h, w, k as nat) == h.scanned_word(nth(h, w, (k - 1) as nat), 1));
@@ -3765,10 +3797,15 @@ impl<M: Mode> Ctx<M> {
                     let rest = s.subrange(count as int, s.len() as int);
                     assert(k > 0);
                     assert(node_ok(self.heap, n));
-                    let next = path(self.heap, self.heap.scanned_word(n, 1), (k - 1) as nat);
+                    let next = path(
+                        self.heap,
+                        self.heap.scanned_word(n, NODE_NEXT as int),
+                        (k - 1) as nat,
+                    );
                     assert(next is Some);
-                    assert(rest =~= seq![(self.heap.tag_of(n), self.heap.scanned_word(n, 0))]
-                        + next->0);
+                    assert(rest =~= seq![
+                        (self.heap.tag_of(n), self.heap.scanned_word(n, NODE_EV as int)),
+                    ] + next->0);
                     assert(rest.len() >= 1);
                 }
             }
@@ -3787,14 +3824,18 @@ impl<M: Mode> Ctx<M> {
                 if c {
                     let k = (f - count) as nat;
                     let rest = s.subrange(count as int, s.len() as int);
-                    let next = path(self.heap, self.heap.scanned_word(n, 1), (k - 1) as nat);
-                    let x = (self.heap.tag_of(n), self.heap.scanned_word(n, 0));
+                    let next = path(
+                        self.heap,
+                        self.heap.scanned_word(n, NODE_NEXT as int),
+                        (k - 1) as nat,
+                    );
+                    let x = (self.heap.tag_of(n), self.heap.scanned_word(n, NODE_EV as int));
                     assert(rest =~= seq![x] + next->0);
                     assert(rest.drop_first() =~= s.subrange(count + 1, s.len() as int));
                     assert((seq![x] + next->0).drop_first() =~= next->0);
                 }
             }
-            n = (unsafe { self.heap.field(n, 1) })?;
+            n = (unsafe { self.heap.field(n, NODE_NEXT) })?;
             count += 1;
         }
         // 足す節点の分も上限に入る。空のリストに足すときはループに入らないので、ここで確かめる
