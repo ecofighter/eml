@@ -651,6 +651,7 @@ impl<'a> Checker<'a> {
             }
             self.check_block(index, block, owned)?;
         }
+        self.cx.entries_filled()?;
         Ok(self.unwind.map(|recorder| Unwinds {
             entry: recorder.entry,
             points: recorder.points,
@@ -707,6 +708,14 @@ impl<'a> Checker<'a> {
                 index: at as i64,
             };
             self.check_stmt(&mut owned, stmt)?;
+            let prim = match stmt {
+                Stmt::Let {
+                    var,
+                    rhs: Rhs::Prim(prim, args),
+                } => Some((*var, prim, args.as_slice())),
+                _ => None,
+            };
+            self.cx.note_stmt(prim, |f| stmt.for_each_atom(f));
             let marked = match stmt {
                 Stmt::Let {
                     var: _,
@@ -740,6 +749,7 @@ impl<'a> Checker<'a> {
             block: index,
             index: block.stmts.len() as i64,
         };
+        self.cx.end_block();
         self.check_term(owned, block)
     }
 
@@ -767,9 +777,6 @@ impl<'a> Checker<'a> {
                     }
                     Rhs::MakeClosure(target, args) => {
                         self.cx.note_closure(*var, *target, args.len());
-                    }
-                    Rhs::Prim(Prim::EvNew(effect), _) => {
-                        self.cx.note_evidence(*var, *effect);
                     }
                     Rhs::Extern {
                         ext,
@@ -1708,9 +1715,10 @@ impl<'a> Checker<'a> {
             Call::Clause {
                 effect,
                 op,
-                callee: _,
+                callee,
                 args,
             } => {
+                self.cx.clause_callee(*effect, *op, *callee)?;
                 let info = self.cx.effect(*effect)?;
                 let Some(operation) = info.operations.get(*op as usize) else {
                     return Err(format!(
@@ -1944,6 +1952,8 @@ impl<'a> Checker<'a> {
             } => {
                 let operation = operation(&self.program.effects, *effect, *op);
                 let what = self.call_text(call, false);
+                // `callee`は`ev_clause`の束縛で、その結果は束縛の検査がtobjと比べ、ほかの`callee`は
+                // `Context::clause_callee`が断るので、ここには届かない。どちらかが変わったときの2つ目の守りとして残す
                 if !self.cx.passes(*callee, Repr::TObj) {
                     return Err(format!(
                         "the callee of {what} is {}, but a clause takes tobj",

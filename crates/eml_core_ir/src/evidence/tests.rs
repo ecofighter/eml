@@ -252,9 +252,13 @@ fn a_clause_call_is_a_yield_point_unless_it_is_in_tail_position() {
     let mut program = program(
         "\
 effect State { get(unit) -> tobj }
-yields fn f(c.0: tobj, e.1: obj) -> tobj {
+yields fn f() -> tobj {
+  let e.1: obj = prim ev_lookup[State]()
+  let c.0: tobj = prim ev_clause[State.get](e.1)
   let v.2: tobj = clause State.get c.0(e.1, ())
-  let w.3: tobj = clause State.get c.0(e.1, ())
+  let e.4: obj = prim ev_lookup[State]()
+  let c.5: tobj = prim ev_clause[State.get](e.4)
+  let w.3: tobj = clause State.get c.5(e.4, ())
   return w.3
 }
 ",
@@ -262,24 +266,29 @@ yields fn f(c.0: tobj, e.1: obj) -> tobj {
     split_named(&mut program, "f", &Annotations::default());
     insta::assert_snapshot!(shown(&program), @"
     effect State { get(unit) -> tobj }
-    yields fn f(c.0: tobj, e.1: obj) -> tobj {
+    yields fn f() -> tobj {
+      let e.1: obj = prim ev_lookup[State]()
+      let c.0: tobj = prim ev_clause[State.get](e.1)
       let v.2: tobj = clause State.get c.0(e.1, ())
-      let y.4: int = prim yielding()
-      switch y.4 { 0 -> b2, _ -> b1 }
+      let y.6: int = prim yielding()
+      switch y.6 { 0 -> b2, _ -> b1 }
     b1:
-      let k.5: tobj poly = prim yield_cont_take()
-      let c.6: tobj = closure f$k0(c.0, e.1)
-      let k.7: tobj poly = closure compose$(k.5, c.6)
-      let u.8: unit = prim yield_cont_set(k.7)
-      let d.9: obj poly = prim dummy()
-      return d.9
+      let k.7: tobj poly = prim yield_cont_take()
+      let k.8: tobj poly = closure compose$(k.7, &f$k0)
+      let u.9: unit = prim yield_cont_set(k.8)
+      let d.10: obj poly = prim dummy()
+      return d.10
     b2:
-      let w.3: tobj = clause State.get c.0(e.1, ())
+      let e.4: obj = prim ev_lookup[State]()
+      let c.5: tobj = prim ev_clause[State.get](e.4)
+      let w.3: tobj = clause State.get c.5(e.4, ())
       return w.3
     }
-    internal yields uniform from 2 fn f$k0(c.0: tobj, e.1: obj, v.2: tobj) -> tobj {
-      let w.3: tobj = clause State.get c.0(e.1, ())
-      return w.3
+    internal yields uniform from 0 fn f$k0(v.0: tobj) -> tobj {
+      let e.2: obj = prim ev_lookup[State]()
+      let c.3: tobj = prim ev_clause[State.get](e.2)
+      let w.1: tobj = clause State.get c.3(e.2, ())
+      return w.1
     }
     yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
       let r.3: tobj poly = yields apply k.0(x.2)
@@ -340,10 +349,16 @@ effect Get { get(unit) -> tobj }
 fn keep(v.0: tobj lin, n.1: int, w.2: tobj) -> tobj lin {
   return v.0
 }
-yields fn f(s.0: tobj, a.1: tobj, g.2: tobj, e.3: obj) -> tobj lin {
+yields fn f() -> tobj lin {
+  let e.3: obj = prim ev_lookup[Src]()
+  let s.0: tobj = prim ev_clause[Src.take](e.3)
   let v.4: tobj lin = clause Src.take s.0(e.3, ())
-  let n.5: int = clause Ask.ask a.1(e.3, ())
-  let w.6: tobj = clause Get.get g.2(e.3, ())
+  let e.8: obj = prim ev_lookup[Ask]()
+  let a.1: tobj = prim ev_clause[Ask.ask](e.8)
+  let n.5: int = clause Ask.ask a.1(e.8, ())
+  let e.9: obj = prim ev_lookup[Get]()
+  let g.2: tobj = prim ev_clause[Get.get](e.9)
+  let w.6: tobj = clause Get.get g.2(e.9, ())
   let r.7: tobj lin = call keep(v.4, n.5, w.6)
   return r.7
 }

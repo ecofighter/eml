@@ -210,7 +210,9 @@ fn a_call_that_never_returns_binds_a_struct_to_a_dummy_obj() {
     // なる。`t` は使われないが、縮約の前なので残る。制御が届かないので、どれも実行されない
     let text = format!(
         "{VEC3}{PAIR}{OPTION}effect Fail {{ never fail(tobj) -> never }}
-yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> Vec3{{float, float, float}} {{
+yields fn f(s.2: obj) -> Vec3{{float, float, float}} {{
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let v.3: Vec3{{float, float, float}} = clause Fail.fail c.0(e.1, s.2)
   let o.4: tobj = con Option #1(v.3)
   let t.5: obj = con (,) #0(o.4, v.3)
@@ -224,7 +226,9 @@ fn g(n.0: int) -> (,){{obj, int}} {{
     );
     let shown = flatten_text(&text);
     insta::assert_snapshot!(function(&shown, "f"), @"
-    yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> (float, float, float) {
+    yields fn f(s.2: obj) -> (float, float, float) {
+      let e.1: obj = prim ev_lookup[Fail]()
+      let c.0: tobj = prim ev_clause[Fail.fail](e.1)
       let v.6: obj = clause Fail.fail c.0(e.1, s.2)
       let o.4: tobj = con Option #1(v.6)
       let t.5: obj = con (,) #0(o.4, v.6)

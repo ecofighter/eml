@@ -392,8 +392,15 @@ impl Site {
     }
 }
 
-/// 1つの関数を検査する間の、所有にも IR の命令の型にも関わらない状態。IR ごとの verifier が、命令の列をたどりながら
-/// 使い、`never`、`closures`、`evidences` を埋める。
+/// `ev_new`で作り、まだエントリを入れている途中のevidenceと、入れたエントリ。
+struct Filling {
+    evidence: VarId,
+    effect: u32,
+    filled: Vec<bool>,
+}
+
+/// 1つの関数を検査する間の、所有にもIRの命令の型にも関わらない状態。IRごとのverifierが、命令の列をたどりながら
+/// 使い、`never`、`closures`、evidenceとエントリの表を埋める。
 pub struct Context<'a> {
     pub tables: Tables<'a>,
     /// 検査する関数の変数の表。
@@ -408,8 +415,19 @@ pub struct Context<'a> {
     /// あること、その関数が`E.op`の`clause`の印を持つことを確かめるのに使う。
     closures: FxHashMap<VarId, (FnIdx, usize)>,
     /// `ev_new[E]`で束縛した変数の、エフェクトの番号。`ev_set_clause`のevidenceが同じ関数の中の`ev_new`で作った
-    /// ものであること、そのエフェクトの操作のエントリであることを確かめるのに使う。
+    /// ものであること、そのエフェクトの操作のエントリであることと、節の呼び出しの`callee`を読んだevidenceを
+    /// 確かめるのに使う。
     evidences: FxHashMap<VarId, u32>,
+    /// `ev_lookup[E]`で束縛した変数の、エフェクトの番号。節の呼び出しの`callee`が`E`のevidenceから読んだもので
+    /// あることを確かめるのに使う。
+    found: FxHashMap<VarId, u32>,
+    /// `ev_clause[E.op](v)`で束縛した変数の`(E, op)`と`v`。`clause E.op`の`callee`が同じ操作のエントリから
+    /// 読んだものであることを確かめるのに使う。
+    entries: FxHashMap<VarId, (u32, u32, Atom)>,
+    /// 今のブロックの`ev_new`のevidenceのうち、まだほかに使っていないものと、それまでに入れたエントリ。
+    filling: Vec<Filling>,
+    /// エントリの規則の最初の違反。文ごとの検査の誤りを先に出すため、関数の文をたどり終えてから出す。
+    unfilled: Option<String>,
     dominators: Dominators,
     /// 変数ごとの定義の位置 (R5)。
     defs: Vec<Option<Site>>,
@@ -431,6 +449,10 @@ impl<'a> Context<'a> {
             never: vec![false; vars.len()],
             closures: FxHashMap::default(),
             evidences: FxHashMap::default(),
+            found: FxHashMap::default(),
+            entries: FxHashMap::default(),
+            filling: Vec::new(),
+            unfilled: None,
             dominators,
             defs: vec![None; vars.len()],
             at: Site::entry(0),
@@ -700,8 +722,162 @@ impl<'a> Context<'a> {
         self.closures.insert(var, (target, passed));
     }
 
-    pub fn note_evidence(&mut self, var: VarId, effect: u32) {
-        self.evidences.insert(var, effect);
+    /// 文ごとに、その文の検査の後で呼ぶ。`prim`は`let v = prim ..`の`v`と基本操作と引数で、`uses`は文が値として
+    /// 使うものを渡す (`dup`、`decref`、`release`、`drop_token`、着地の印は使いでない)。evidenceと、そこから
+    /// 読んだエントリを書き留め、エントリの規則を進める。`ev_new`のevidenceのエントリは、どれも、そのブロックの中で、evidenceのほかの最初の
+    /// 使いより前にちょうど1回入れる。入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むため
+    /// である (docs/spec/lir.mdの「verifier」)。
+    pub fn note_stmt(
+        &mut self,
+        prim: Option<(VarId, &Prim, &[Atom])>,
+        uses: impl FnOnce(&mut dyn FnMut(Atom)),
+    ) {
+        match prim {
+            Some((var, &Prim::EvNew(effect), _)) => {
+                self.evidences.insert(var, effect);
+                if let Some(info) = self.tables.effects.get(effect as usize) {
+                    self.filling.push(Filling {
+                        evidence: var,
+                        effect,
+                        filled: vec![false; info.operations.len()],
+                    });
+                }
+            }
+            Some((var, &Prim::EvLookup(effect), _)) => {
+                self.found.insert(var, effect);
+            }
+            Some((var, &Prim::EvClause { effect, op }, &[from])) => {
+                self.entries.insert(var, (effect, op, from));
+            }
+            Some((_, &Prim::EvSetClause { effect: _, op }, &[Atom::Var(evidence), _])) => {
+                self.fill_entry(evidence, op);
+                return;
+            }
+            _ => {}
+        }
+        if self.filling.is_empty() {
+            return;
+        }
+        let mut used = Vec::new();
+        uses(&mut |atom| {
+            if let Atom::Var(var) = atom
+                && self.filling.iter().any(|filling| filling.evidence == var)
+            {
+                used.push(var);
+            }
+        });
+        for evidence in used {
+            if let Some(at) = self
+                .filling
+                .iter()
+                .position(|filling| filling.evidence == evidence)
+            {
+                let filling = self.filling.swap_remove(at);
+                self.close_filling(filling);
+            }
+        }
+    }
+
+    /// ブロックの終わりで呼ぶ。エントリはevidenceの`ev_new`のブロックの中で入れ終える。
+    pub fn end_block(&mut self) {
+        for filling in std::mem::take(&mut self.filling) {
+            self.close_filling(filling);
+        }
+    }
+
+    /// 関数の文をたどり終えてから、エントリの規則の最初の違反を返す。
+    pub fn entries_filled(&mut self) -> Result<(), String> {
+        self.unfilled.take().map_or(Ok(()), Err)
+    }
+
+    fn fill_entry(&mut self, evidence: VarId, op: u32) {
+        let Some(filling) = self
+            .filling
+            .iter_mut()
+            .find(|filling| filling.evidence == evidence)
+        else {
+            if self.evidences.contains_key(&evidence) {
+                let name = self.name(evidence);
+                self.violate(format!(
+                    "an entry of `{name}` is filled after `{name}` is used"
+                ));
+            }
+            return;
+        };
+        let effect = filling.effect;
+        // 表にない操作は`check_set_clause`の前の`check_prim`が断る
+        let Some(slot) = filling.filled.get_mut(op as usize) else {
+            return;
+        };
+        if std::mem::replace(slot, true) {
+            let message = format!(
+                "the `{}` entry of `{}` is filled twice",
+                operation_text(self.tables.effects, effect, op),
+                self.name(evidence)
+            );
+            self.violate(message);
+        }
+    }
+
+    fn close_filling(&mut self, filling: Filling) {
+        if let Some(op) = filling.filled.iter().position(|&filled| !filled) {
+            let name = self.name(filling.evidence);
+            let message = format!(
+                "the `{}` entry of `{name}` is not filled before `{name}` is used",
+                operation_text(self.tables.effects, filling.effect, op as u32)
+            );
+            self.violate(message);
+        }
+    }
+
+    fn violate(&mut self, message: String) {
+        self.unfilled.get_or_insert(message);
+    }
+
+    /// `clause E.op`の`callee`は、同じ関数の中の`ev_clause[E.op](v)`で束縛した変数で、vは同じ関数の中の
+    /// `ev_lookup[E]`か`ev_new[E]`で束縛した変数である。エントリの規則と合わせて、節の呼び出しが呼ぶクロージャは、
+    /// handleが同じ操作のエントリに入れたものになる (docs/spec/lir.mdの「verifier」)。表にない操作は、この後の
+    /// 検査が断る。
+    pub fn clause_callee(&self, effect: u32, op: u32, callee: Atom) -> Result<(), String> {
+        let effects = self.tables.effects;
+        let Some(info) = effects.get(effect as usize) else {
+            return Ok(());
+        };
+        if op as usize >= info.operations.len() {
+            return Ok(());
+        }
+        let entry = operation_text(effects, effect, op);
+        let read = match callee {
+            Atom::Var(var) => self
+                .entries
+                .get(&var)
+                .filter(|&&(read_effect, read_op, _)| (read_effect, read_op) == (effect, op))
+                .map(|&(_, _, from)| (var, from)),
+            _ => None,
+        };
+        let Some((callee, from)) = read else {
+            return Err(format!(
+                "a clause of `{entry}` calls {}, which `ev_clause[{entry}]` did not bind in this function",
+                self.typed_atom_text(callee)
+            ));
+        };
+        let evidence = match from {
+            Atom::Var(var) => self
+                .found
+                .get(&var)
+                .or_else(|| self.evidences.get(&var))
+                .copied(),
+            _ => None,
+        };
+        if evidence == Some(effect) {
+            return Ok(());
+        }
+        Err(format!(
+            "a clause of `{entry}` calls `{}`, read from {}, which is not an evidence of `{}` found or made in this function",
+            self.name(callee),
+            self.typed_atom_text(from),
+            info.name
+        ))
     }
 
     /// `closure` で束縛した変数の関数と、捕獲した値の数。

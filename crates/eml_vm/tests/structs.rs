@@ -321,6 +321,7 @@ effect E {{ op(unit) -> unit }}
 fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   let e.1: obj = prim ev_new[E]((), w.0)
+  let u.9: unit = prim ev_set_clause[E.op](e.1, &op$entry)
   let r.2: tobj = apply &leave(e.1)
   let (n.3: obj, x.4: float) = unbox r.2 Named
   release unboxed r.2 Named #0(n.3, _)
@@ -330,6 +331,10 @@ fn main() -> unit {{
 }}
 fn leave(e.0: obj) -> obj {{
 {leave}
+}}
+internal clause E.op fn op$entry(e.0: obj, u.1: unit) -> unit {{
+  decref e.0
+  return ()
 }}
 "
         )

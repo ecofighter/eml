@@ -555,7 +555,8 @@ fn prims_read_borrowed_arguments_and_consume_the_rest() {
     // 呼び出しは引数を消費する (docs/spec/lir.md の「基本操作」)
     let text = "\
 effect Counter { get(unit) -> int, put(int) -> unit }
-yields fn f(e.0: obj) -> int {
+yields fn f() -> int {
+  let e.0: obj = prim ev_lookup[Counter]()
   let c.1: tobj = prim ev_clause[Counter.get](e.0)
   let m.2: int = clause Counter.get c.1(e.0, ())
   return m.2
@@ -563,7 +564,8 @@ yields fn f(e.0: obj) -> int {
 ";
     insta::assert_snapshot!(perceus_text(text), @"
     effect Counter { get(unit) -> int, put(int) -> unit }
-    yields fn f(e.0: obj) -> int {
+    yields fn f() -> int {
+      let e.0: obj = prim ev_lookup[Counter]()
       let c.1: tobj = prim ev_clause[Counter.get](e.0)
       let m.2: int = clause Counter.get c.1(e.0, ())
       return m.2

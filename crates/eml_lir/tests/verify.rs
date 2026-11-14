@@ -664,17 +664,23 @@ fn the_uses_of_a_never_binder_are_not_compared() {
     let text = "\
 layout Option { None, Some(tobj) }
 effect Fail { never fail(tobj) -> never }
-fn f(c.0: tobj, e.1: obj) -> tobj {
+fn f() -> tobj {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let t.2: int = clause Fail.fail c.0(e.1, ())
   return t.2
 }
-fn g(c.0: tobj, e.1: obj) -> tobj {
+fn g() -> tobj {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let t.2: int = clause Fail.fail c.0(e.1, ())
   jump b1(t.2)
 b1(a.3: tobj):
   return a.3
 }
-fn h(c.0: tobj, e.1: obj) -> tobj {
+fn h() -> tobj {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let t.2: int = clause Fail.fail c.0(e.1, ())
   let r.3: tobj = call k(t.2)
   return r.3
@@ -682,7 +688,9 @@ fn h(c.0: tobj, e.1: obj) -> tobj {
 fn k(x.0: tobj) -> tobj {
   return x.0
 }
-fn m(c.0: tobj, e.1: obj) -> tobj {
+fn m() -> tobj {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let t.2: int = clause Fail.fail c.0(e.1, ())
   let c.3: tobj = closure n(t.2)
   return c.3
@@ -690,12 +698,16 @@ fn m(c.0: tobj, e.1: obj) -> tobj {
 fn n(a.0: tobj, b.1: unit) -> tobj {
   return a.0
 }
-fn p(c.0: tobj, e.1: obj) -> tobj {
+fn p() -> tobj {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let t.2: int = clause Fail.fail c.0(e.1, ())
   let r.3: tobj = apply &k(t.2)
   return r.3
 }
-fn q(c.0: tobj, e.1: obj) -> tobj {
+fn q() -> tobj {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let t.2: int = clause Fail.fail c.0(e.1, ())
   let d.3: tobj = con Option #1(t.2)
   return d.3
@@ -923,18 +935,18 @@ fn the_operands_of_uniform_calls_are_compatible_with_tobj() {
             "argument 0 of an apply is `n.1` (int), but an apply takes tobj",
         ),
         (
-            "c.0: int, e.1: obj",
-            "  let t.2: tobj = clause Ask.ask c.0(e.1, ())\n  return t.2\n",
-            "the callee of a clause of `Ask.ask` is `c.0` (int), but a clause takes tobj",
+            "",
+            "  let e.1: obj = prim ev_lookup[Ask]()\n  let c.0: int = prim ev_clause[Ask.ask](e.1)\n  let t.2: tobj = clause Ask.ask c.0(e.1, ())\n  return t.2\n",
+            "`c.0` (int) is bound to `prim ev_clause[Ask.ask]`, which returns tobj",
         ),
         (
-            "c.0: tobj, e.1: obj, n.2: int",
-            "  let t.3: tobj = clause Ask.ask c.0(e.1, n.2)\n  return t.3\n",
+            "n.2: int",
+            "  let e.1: obj = prim ev_lookup[Ask]()\n  let c.0: tobj = prim ev_clause[Ask.ask](e.1)\n  let t.3: tobj = clause Ask.ask c.0(e.1, n.2)\n  return t.3\n",
             "argument 1 of a clause of `Ask.ask` is `n.2` (int), but the operation takes tobj",
         ),
         (
-            "c.0: tobj, e.1: obj",
-            "  let t.2: int = clause Fail.fail c.0(e.1, 1)\n  return ()\n",
+            "",
+            "  let e.1: obj = prim ev_lookup[Fail]()\n  let c.0: tobj = prim ev_clause[Fail.fail](e.1)\n  let t.2: int = clause Fail.fail c.0(e.1, 1)\n  return ()\n",
             "argument 1 of a clause of `Fail.fail` is 1, but the operation takes tobj",
         ),
         (
@@ -959,8 +971,8 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
             "`t.0` (int) is bound to an apply, which returns tobj",
         ),
         (
-            "c.0: tobj, e.1: obj",
-            "  let t.2: int = clause Ask.ask c.0(e.1, ())\n  return ()\n",
+            "",
+            "  let e.1: obj = prim ev_lookup[Ask]()\n  let c.0: tobj = prim ev_clause[Ask.ask](e.1)\n  let t.2: int = clause Ask.ask c.0(e.1, ())\n  return ()\n",
             "`t.2` (int) is bound to a clause of `Ask.ask`, which returns tobj",
         ),
         (
@@ -980,12 +992,17 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
 #[test]
 fn a_tail_call_result_is_compatible_with_the_ret() {
     let tail = |ret: &str, params: &str, call: &str| {
-        format!("{ASK}fn f({params}) -> {ret} {{\n  tail {call}\n}}\n{K}{UNIFORM}")
+        let read = if call.starts_with("clause") {
+            "  let e.1: obj = prim ev_lookup[Ask]()\n  let c.0: tobj = prim ev_clause[Ask.ask](e.1)\n"
+        } else {
+            ""
+        };
+        format!("{ASK}fn f({params}) -> {ret} {{\n{read}  tail {call}\n}}\n{K}{UNIFORM}")
     };
     for (ret, params, call) in [
         ("tobj", "c.0: tobj", "apply c.0(())"),
         ("int", "", "call k(1)"),
-        ("tobj", "c.0: tobj, e.1: obj", "clause Ask.ask c.0(e.1, ())"),
+        ("tobj", "", "clause Ask.ask c.0(e.1, ())"),
     ] {
         assert_eq!(check(&tail(ret, params, call)), Ok(()), "{call}");
     }
@@ -1004,7 +1021,7 @@ fn a_tail_call_result_is_compatible_with_the_ret() {
         ),
         (
             "int",
-            "c.0: tobj, e.1: obj",
+            "",
             "clause Ask.ask c.0(e.1, ())",
             "a tail clause of `Ask.ask` returns tobj, but this function returns int",
         ),
@@ -2404,6 +2421,7 @@ yields fn f(s.0: tobj) -> tobj {
   let w.1: tobj = prim evv_get()
   let e.2: obj = prim ev_new[State](s.0, w.1)
   let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
+  let u.7: unit = prim ev_set_clause[State.put](e.2, &p)
   let m.4: tobj = prim evv_mask[State*2](w.1)
   let c.5: tobj = prim ev_clause[State.get](e.2)
   let r.6: tobj = clause State.get c.5(e.2, ())
@@ -2412,6 +2430,9 @@ yields fn f(s.0: tobj) -> tobj {
 internal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {
   let s.2: tobj = prim ev_take_state(e.0)
   return s.2
+}
+internal clause State.put fn p(e.0: obj, x.1: tobj) -> unit {
+  return ()
 }
 ";
 
@@ -2442,16 +2463,16 @@ fn the_boundaries_of_prims_and_clauses_are_compatible() {
         ),
         "fn f() -> int {\n  let w.0: int = prim evv_get()\n  return w.0\n}\n".to_string(),
         format!(
-            "{COUNTER}fn f(c.0: tobj, n.1: tobj, e.2: obj) -> unit {{\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+            "{COUNTER}fn f(n.1: tobj) -> unit {{\n  let e.2: obj = prim ev_lookup[Counter]()\n  let c.0: tobj = prim ev_clause[Counter.put](e.2)\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
         ),
         format!(
-            "{COUNTER}fn f(c.0: int, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+            "{COUNTER}fn f() -> int {{\n  let e.1: obj = prim ev_lookup[Counter]()\n  let c.0: int = prim ev_clause[Counter.get](e.1)\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
         ),
         format!(
-            "{COUNTER}fn f(c.0: tobj, e.1: int) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+            "{COUNTER}fn f(e.1: int) -> int {{\n  let e.3: obj = prim ev_lookup[Counter]()\n  let c.0: tobj = prim ev_clause[Counter.get](e.3)\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
         ),
         format!(
-            "{STATE}fn f(c.1: tobj, e.2: obj) -> int {{\n  let t.0: int = clause State.get c.1(e.2, ())\n  return t.0\n}}\n"
+            "{STATE}fn f() -> int {{\n  let e.2: obj = prim ev_lookup[State]()\n  let c.1: tobj = prim ev_clause[State.get](e.2)\n  let t.0: int = clause State.get c.1(e.2, ())\n  return t.0\n}}\n"
         ),
     ]
     .iter()
@@ -2463,7 +2484,7 @@ fn the_boundaries_of_prims_and_clauses_are_compatible() {
             "argument 0 of `prim ev_new[State]` is `n.0` (int), but the primitive takes tobj in `f`",
             "`w.0` (int) is bound to `prim evv_get`, which returns tobj in `f`",
             "argument 1 of a clause of `Counter.put` is `n.1` (tobj), but the operation takes int in `f`",
-            "the callee of a clause of `Counter.get` is `c.0` (int), but a clause takes tobj in `f`",
+            "`c.0` (int) is bound to `prim ev_clause[Counter.get]`, which returns tobj in `f`",
             "argument 0 of a clause of `Counter.get` is `e.1` (int), but a clause takes obj in `f`",
             "`t.0` (int) is bound to a clause of `State.get`, which returns tobj in `f`",
         ]
@@ -2474,11 +2495,15 @@ fn the_boundaries_of_prims_and_clauses_are_compatible() {
 fn a_never_clause_has_no_result_to_compare() {
     let text = "\
 effect Fail { never fail(tobj) -> never }
-fn f(c.0: tobj, e.1: obj) -> tobj {
+fn f() -> tobj {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let t.2: int = clause Fail.fail c.0(e.1, ())
   return t.2
 }
-fn g(c.0: tobj, e.1: obj) -> int {
+fn g() -> int {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   tail clause Fail.fail c.0(e.1, ())
 }
 ";
@@ -2572,7 +2597,7 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
     );
     // 捕獲のある節は、同じ関数の中の `closure` でエントリの表に入れる
     let put = format!(
-        "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  return u.4\n}}\n{PUT_CLAUSE}"
+        "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  let u.5: unit = prim ev_set_clause[Counter.get](e.2, &h)\n  return u.4\n}}\n{PUT_CLAUSE}internal clause Counter.get fn h(e.0: obj, u.1: unit) -> int {{\n  return 0\n}}\n"
     );
     assert_eq!(check_lowered(&put), Ok(()));
     assert_eq!(check_scopes(&put), Ok(()));
@@ -2692,7 +2717,7 @@ fn a_clause_call_names_an_operation_and_takes_its_arguments() {
     );
     assert_eq!(
         check_lowered(&format!(
-            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.put c.0(e.1)\n  return u.2\n}}\n"
+            "{COUNTER}fn f() -> unit {{\n  let e.1: obj = prim ev_lookup[Counter]()\n  let c.0: tobj = prim ev_clause[Counter.put](e.1)\n  let u.2: unit = clause Counter.put c.0(e.1)\n  return u.2\n}}\n"
         )),
         Err("a clause of `Counter.put` is given 1 arguments, but it takes 2 (the evidence and 1 arguments of the operation) in `f`".to_string())
     );
@@ -2729,7 +2754,7 @@ fn ev_set_clause_names_the_clause_of_its_function() {
 fn a_clause_closure_captures_exactly_what_its_function_takes() {
     let closure = |target: &str, captures: &str, entry: &str| {
         format!(
-            "{COUNTER}fn f(a.0: tobj, b.1: tobj, w.2: tobj) -> unit {{\n  let e.3: obj = prim ev_new[Counter]((), w.2)\n  let c.4: tobj = closure {target}({captures})\n  let u.5: unit = prim ev_set_clause[{entry}](e.3, c.4)\n  return u.5\n}}\ninternal clause Counter.put fn g(m.0: tobj, e.1: obj, n.2: int) -> unit {{\n  return ()\n}}\ninternal clause Counter.get fn h(m.0: tobj, k.1: tobj, e.2: obj, u.3: unit) -> int {{\n  return 0\n}}\n"
+            "{COUNTER}fn f(a.0: tobj, b.1: tobj, w.2: tobj) -> unit {{\n  let e.3: obj = prim ev_new[Counter]((), w.2)\n  let c.4: tobj = closure {target}({captures})\n  let u.5: unit = prim ev_set_clause[{entry}](e.3, c.4)\n  let c.6: tobj = closure h(a.0, b.1)\n  let u.7: unit = prim ev_set_clause[Counter.get](e.3, c.6)\n  return u.5\n}}\ninternal clause Counter.put fn g(m.0: tobj, e.1: obj, n.2: int) -> unit {{\n  return ()\n}}\ninternal clause Counter.get fn h(m.0: tobj, k.1: tobj, e.2: obj, u.3: unit) -> int {{\n  return 0\n}}\n"
         )
     };
     let too_many = closure("g", "a.0, b.1", "Counter.put");
@@ -2793,11 +2818,142 @@ fn ev_set_clause_takes_an_evidence_made_in_the_function() {
     }
 }
 
+/// `State`の2つの操作の、何もしない節の関数。
+const STATE_CLAUSES: &str = "\
+internal clause State.get fn get(e.0: obj, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
+internal clause State.put fn put(e.0: obj, x.1: tobj) -> unit {
+  decref e.0
+  decref x.1
+  return ()
+}
+";
+
+#[test]
+fn every_entry_is_filled_once_before_the_evidence_is_used() {
+    let get = "  let u.3: unit = prim ev_set_clause[State.get](e.2, &get)\n";
+    let put = "  let u.4: unit = prim ev_set_clause[State.put](e.2, &put)\n";
+    let push = "  let v.5: tobj = prim evv_get()\n  let x.6: tobj = prim evv_push(v.5, e.2)\n  let u.7: unit = prim evv_set(x.6)\n";
+    let pushed = |body: &str| {
+        format!(
+            "{STATE}fn f(s.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n{body}  decref e.2\n  return ()\n}}\n{STATE_CLAUSES}"
+        )
+    };
+    // `dup`はevidenceの使いに数えない
+    assert_eq!(
+        check(&pushed(&format!("{get}  dup e.2\n{put}{push}"))),
+        Ok(())
+    );
+    let not_filled =
+        Err("the `State.put` entry of `e.2` is not filled before `e.2` is used in `f`".to_string());
+    assert_eq!(
+        check(&pushed(&format!("{get}  dup e.2\n{push}"))),
+        not_filled
+    );
+    let returned = format!(
+        "{STATE}fn f(s.0: tobj, w.1: tobj) -> obj {{\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n{get}  return e.2\n}}\n{STATE_CLAUSES}"
+    );
+    assert_eq!(check(&returned), not_filled);
+    assert_eq!(
+        check(&pushed(&format!(
+            "{get}  let u.8: unit = prim ev_set_clause[State.get](e.2, &get)\n{put}  dup e.2\n{push}"
+        ))),
+        Err("the `State.get` entry of `e.2` is filled twice in `f`".to_string())
+    );
+    let after_use = Err("an entry of `e.2` is filled after `e.2` is used in `f`".to_string());
+    assert_eq!(
+        check(&pushed(&format!(
+            "{get}{put}  dup e.2\n{push}  let u.8: unit = prim ev_set_clause[State.put](e.2, &put)\n"
+        ))),
+        after_use
+    );
+    let successor = format!(
+        "{STATE}fn f(s.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n{get}{put}  jump b1()\nb1:\n  let u.8: unit = prim ev_set_clause[State.put](e.2, &put)\n  decref e.2\n  return ()\n}}\n{STATE_CLAUSES}"
+    );
+    assert_eq!(check(&successor), after_use);
+}
+
+/// `Counter`の2つの操作の、何もしない節の関数。
+const COUNTER_CLAUSES: &str = "\
+internal clause Counter.get fn get(e.0: obj, u.1: unit) -> int {
+  decref e.0
+  return 0
+}
+internal clause Counter.put fn put(e.0: obj, n.1: int) -> unit {
+  decref e.0
+  return ()
+}
+";
+
+#[test]
+fn a_clause_call_calls_what_ev_clause_read() {
+    // `call`は`clause Counter.put`の呼び出しを、結果を束縛する形と末尾の呼び出しの形で書く
+    let program = |params: &str, read: &str, call: &str| {
+        format!("{COUNTER}fn f({params}n.9: int) -> unit {{\n{read}{call}}}\n{COUNTER_CLAUSES}")
+    };
+    let calls = |callee: &str, evidence: &str| {
+        [
+            format!(
+                "  let u.10: unit = clause Counter.put {callee}({evidence}, n.9)\n  return u.10\n"
+            ),
+            format!("  tail clause Counter.put {callee}({evidence}, n.9)\n"),
+        ]
+    };
+    let found = "  let e.1: obj = prim ev_lookup[Counter]()\n";
+    let made = "  let e.1: obj = prim ev_new[Counter]((), w.0)\n  let u.3: unit = prim ev_set_clause[Counter.get](e.1, &get)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.1, &put)\n";
+    let read = "  let c.2: tobj = prim ev_clause[Counter.put](e.1)\n";
+    for call in calls("c.2", "e.1") {
+        assert_eq!(
+            check(&program("", &format!("{found}{read}"), &call)),
+            Ok(())
+        );
+        assert_eq!(
+            check(&program("w.0: tobj, ", &format!("{made}{read}"), &call)),
+            Ok(())
+        );
+    }
+    let not_bound = |callee: &str| {
+        Err(format!(
+            "a clause of `Counter.put` calls `{callee}` (tobj), which `ev_clause[Counter.put]` did not bind in this function in `f`"
+        ))
+    };
+    for call in calls("c.0", "e.1") {
+        assert_eq!(
+            check(&program("c.0: tobj, ", found, &call)),
+            not_bound("c.0")
+        );
+    }
+    let other = "  let c.2: tobj = prim ev_clause[Counter.get](e.1)\n";
+    for call in calls("c.2", "e.1") {
+        assert_eq!(
+            check(&program("", &format!("{found}{other}"), &call)),
+            not_bound("c.2")
+        );
+    }
+    // `Other`のevidenceから読んだエントリは、`Counter.put`のものでない
+    let other_effect = "  let e.1: obj = prim ev_lookup[Other]()\n  let c.2: tobj = prim ev_clause[Counter.put](e.1)\n";
+    for call in calls("c.2", "e.1") {
+        assert_eq!(
+            check(&format!("effect Other {{ ask(unit) -> tobj }}\n{}", program("", other_effect, &call))),
+            Err("a clause of `Counter.put` calls `c.2`, read from `e.1` (obj), which is not an evidence of `Counter` found or made in this function in `f`".to_string())
+        );
+    }
+    let from_parameter = "  let c.2: tobj = prim ev_clause[Counter.put](e.0)\n";
+    for call in calls("c.2", "e.0") {
+        assert_eq!(
+            check(&program("e.0: obj, ", from_parameter, &call)),
+            Err("a clause of `Counter.put` calls `c.2`, read from `e.0` (obj), which is not an evidence of `Counter` found or made in this function in `f`".to_string())
+        );
+    }
+}
+
 #[test]
 fn the_lowered_level_does_not_compare_boundaries() {
     // box の挿入の前なので、Repr の食い違いは box の挿入が変換で埋める
     let text = format!(
-        "{COUNTER}fn f(c.0: tobj, n.1: tobj, e.2: obj) -> tobj {{\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+        "{COUNTER}fn f(n.1: tobj) -> tobj {{\n  let e.2: obj = prim ev_lookup[Counter]()\n  let c.0: tobj = prim ev_clause[Counter.put](e.2)\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
     );
     assert_eq!(check_lowered(&text), Ok(()));
 }
@@ -2905,19 +3061,19 @@ fn v2_rejects_passing_lin_to_unr_at_each_boundary() {
             "argument 0 of `prim evv_set` is `w.0` (lin), but the primitive takes unr",
         ),
         (
-            format!("{LIN_OPS}fn f(c.0: tobj lin, e.1: obj) -> tobj {{\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
+            format!("{LIN_OPS}fn f() -> tobj {{\n  let e.1: obj = prim ev_lookup[L]()\n  let c.0: tobj lin = prim ev_clause[L.ask](e.1)\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
             "the callee of a clause of `L.ask` is `c.0` (lin), but a clause takes unr",
         ),
         (
-            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj lin) -> tobj {{\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
+            format!("{LIN_OPS}fn f(e.1: obj lin) -> tobj {{\n  let e.3: obj = prim ev_lookup[L]()\n  let c.0: tobj = prim ev_clause[L.ask](e.3)\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
             "argument 0 of a clause of `L.ask` is `e.1` (lin), but a clause takes unr",
         ),
         (
-            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {{\n  let t.3: tobj = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
+            format!("{LIN_OPS}fn f(x.2: tobj lin) -> tobj {{\n  let e.1: obj = prim ev_lookup[L]()\n  let c.0: tobj = prim ev_clause[L.take](e.1)\n  let t.3: tobj = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
             "`t.3` (unr) is bound to a clause of `L.take`, which returns lin",
         ),
         (
-            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {{\n  tail clause L.take c.0(e.1, x.2)\n}}\n"),
+            format!("{LIN_OPS}fn f(x.2: tobj lin) -> tobj {{\n  let e.1: obj = prim ev_lookup[L]()\n  let c.0: tobj = prim ev_clause[L.take](e.1)\n  tail clause L.take c.0(e.1, x.2)\n}}\n"),
             "a tail clause of `L.take` returns lin, but this function returns unr",
         ),
     ] {
@@ -2952,7 +3108,7 @@ fn v2_lets_unr_pass_to_lin_at_each_boundary() {
         "fn f(s.0: obj) -> tobj lin {\n  let c.1: tobj lin = closure k(s.0)\n  return c.1\n}\nfn k(a.0: obj lin, b.1: unit) -> tobj lin {\n  return a.0\n}\n".to_string(),
         "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.FileIn.close(s.0)\n  return u.1\n}\n".to_string(),
         "fn f() -> tobj lin {\n  let w.0: tobj lin = prim evv_get()\n  return w.0\n}\n".to_string(),
-        format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj) -> tobj lin {{\n  let t.3: tobj lin = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
+        format!("{LIN_OPS}fn f(x.2: tobj) -> tobj lin {{\n  let e.1: obj = prim ev_lookup[L]()\n  let c.0: tobj = prim ev_clause[L.take](e.1)\n  let t.3: tobj lin = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
     ] {
         assert_eq!(check_scopes(&text), Ok(()), "{text}");
         assert_eq!(check(&text), Ok(()), "{text}");
@@ -2969,10 +3125,12 @@ fn v2_lets_poly_meet_unr_and_lin_and_constants_meet_any_mark() {
     let text = format!(
         "\
 {OPTION}{LIN_OPS}effect Fail {{ never fail(tobj) -> never }}
-fn f(s.0: obj, h.1: obj lin, c.2: tobj, e.3: obj) -> tobj lin {{
+fn f(s.0: obj, h.1: obj lin) -> tobj lin {{
   jump b1(s.0, h.1)
 b1(p.4: obj poly, q.5: obj poly):
   let u.6: unit = call g(q.5)
+  let e.3: obj = prim ev_lookup[L]()
+  let c.2: tobj = prim ev_clause[L.take](e.3)
   let m.8: tobj lin = clause L.take c.2(e.3, #0)
   let v.9: tobj lin = clause L.take c.2(e.3, ())
   let w.10: tobj lin = clause L.take c.2(e.3, &i)
@@ -2980,7 +3138,9 @@ b1(p.4: obj poly, q.5: obj poly):
   return r.11
 }}
 fn k(a.0: obj) -> tobj lin {{
-  let t.1: tobj = clause Fail.fail a.0(a.0, ())
+  let e.2: obj = prim ev_lookup[Fail]()
+  let c.3: tobj = prim ev_clause[Fail.fail](e.2)
+  let t.1: tobj = clause Fail.fail c.3(a.0, ())
   return t.1
 }}
 {TAKES_LIN}{UNIFORM}"

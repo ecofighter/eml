@@ -175,7 +175,9 @@ fn by_apply(f.0: tobj) -> tobj {
   let r.1: tobj = apply f.0(())
   return r.1
 }
-yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
+yields fn by_clause(s.2: obj) -> tobj {
+  let e.1: obj = prim ev_lookup[Ask]()
+  let c.0: tobj = prim ev_clause[Ask.ask](e.1)
   let r.3: tobj = clause Ask.ask c.0(e.1, s.2)
   return r.3
 }
@@ -192,7 +194,9 @@ fn not_returned(x.0: int) -> int {
     fn by_apply(f.0: tobj) -> tobj {
       tail apply f.0(())
     }
-    yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
+    yields fn by_clause(s.2: obj) -> tobj {
+      let e.1: obj = prim ev_lookup[Ask]()
+      let c.0: tobj = prim ev_clause[Ask.ask](e.1)
       tail clause Ask.ask c.0(e.1, s.2)
     }
     fn not_returned(x.0: int) -> int {
@@ -231,21 +235,29 @@ fn a_clause_call_returned_at_the_end_becomes_a_tail_call() {
     // `obj` の `ret` と互換でないので、末尾呼び出しにしない
     let text = "\
 effect Counter { get(unit) -> int, put(int) -> unit }
-yields fn f(c.0: tobj, e.1: obj) -> int {
+yields fn f() -> int {
+  let e.1: obj = prim ev_lookup[Counter]()
+  let c.0: tobj = prim ev_clause[Counter.get](e.1)
   let m.2: int = clause Counter.get c.0(e.1, ())
   return m.2
 }
-yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
+yields fn g(n.2: int) -> obj {
+  let e.1: obj = prim ev_lookup[Counter]()
+  let c.0: tobj = prim ev_clause[Counter.put](e.1)
   let u.3: tobj = clause Counter.put c.0(e.1, n.2)
   return u.3
 }
 ";
     insta::assert_snapshot!(contract_text(text), @"
     effect Counter { get(unit) -> int, put(int) -> unit }
-    yields fn f(c.0: tobj, e.1: obj) -> int {
+    yields fn f() -> int {
+      let e.1: obj = prim ev_lookup[Counter]()
+      let c.0: tobj = prim ev_clause[Counter.get](e.1)
       tail clause Counter.get c.0(e.1, ())
     }
-    yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
+    yields fn g(n.2: int) -> obj {
+      let e.1: obj = prim ev_lookup[Counter]()
+      let c.0: tobj = prim ev_clause[Counter.put](e.1)
       let u.3: tobj = clause Counter.put c.0(e.1, n.2)
       return u.3
     }
@@ -257,14 +269,18 @@ fn a_never_clause_returned_at_the_end_becomes_a_tail_call_in_any_function() {
     // `never` の操作の節の呼び出しは戻らないので、結果はどの `ret` とも互換である
     let text = "\
 effect Fail { never fail(tobj) -> never }
-yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
+yields fn f(s.2: obj) -> int {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let r.3: int = clause Fail.fail c.0(e.1, s.2)
   return r.3
 }
 ";
     insta::assert_snapshot!(contract_text(text), @"
     effect Fail { never fail(tobj) -> never }
-    yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
+    yields fn f(s.2: obj) -> int {
+      let e.1: obj = prim ev_lookup[Fail]()
+      let c.0: tobj = prim ev_clause[Fail.fail](e.1)
       tail clause Fail.fail c.0(e.1, s.2)
     }
     ");
@@ -281,7 +297,9 @@ fn f(s.0: obj) -> obj {
   let r.1: obj poly = call h(s.0)
   return r.1
 }
-yields fn g(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {
+yields fn g(x.2: tobj lin) -> tobj {
+  let e.1: obj = prim ev_lookup[L]()
+  let c.0: tobj = prim ev_clause[L.take](e.1)
   let r.3: tobj poly = clause L.take c.0(e.1, x.2)
   return r.3
 }
@@ -300,7 +318,9 @@ fn k(c.0: tobj) -> tobj lin {
       let r.1: obj poly = call h(s.0)
       return r.1
     }
-    yields fn g(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {
+    yields fn g(x.2: tobj lin) -> tobj {
+      let e.1: obj = prim ev_lookup[L]()
+      let c.0: tobj = prim ev_clause[L.take](e.1)
       let r.3: tobj poly = clause L.take c.0(e.1, x.2)
       return r.3
     }

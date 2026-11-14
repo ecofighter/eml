@@ -430,6 +430,7 @@ fn main() -> unit {
   let w.0: tobj = prim evv_get()
   dup w.0
   let ev.1: obj = prim ev_new[Fail]((), w.0)
+  let u.18: unit = prim ev_set_clause[Fail.fail](ev.1, &fail$entry)
   dup ev.1
   let w.2: tobj = prim evv_push(w.0, ev.1)
   let u.3: unit = prim evv_set(w.2)
@@ -488,6 +489,11 @@ clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: int) -> obj poly {
   decref ev.0
   let d.4: obj poly = prim dummy()
   return d.4
+}
+internal clause Fail.fail fn fail$entry(ev.0: obj, a.1: int) -> obj poly {
+  decref ev.0
+  let d.2: obj poly = prim dummy()
+  return d.2
 }
 uniform from 1 fn reperform$Fail.fail(a.0: int, u.1: unit) -> tobj poly {
   let ev.2: obj = prim ev_lookup[Fail]()

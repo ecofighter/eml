@@ -318,7 +318,7 @@ EP ([Core IR](core-ir.md) の「evidence passing」) の出力は、普通の呼
 
 evidence は、handler の1回の実行を表すヒープの物体で、次を持つ。
 
-- エントリの表: エフェクトの番号と、操作ごとの in-place のエントリのクロージャ ([Core IR](core-ir.md) の「`perform` と節の3つの形」) を持つ物体。handle で入れた後は変えない
+- エントリの表: エフェクトの番号と、操作ごとのin-placeのエントリのクロージャ ([Core IR](core-ir.md)の「`perform` と節の3つの形」)を持つ物体。handleで入れた後は変えない (下の「verifier」)
 - 状態の欄 (`tobj`)
 - 外側の `evv`: その実行の外側で有効な `evv`。作るときに決め、`prompt$` が取り出すまで変えない。その evidence 自身を含まない
 
@@ -401,7 +401,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 ### 節の呼び出し
 
 - `Call::Clause { effect, op, callee, args }` は、操作の ABI を知っている呼び出しである。テキストの形は `clause State.get c.3(ev.2, ())` である
-- `callee` は in-place のエントリのクロージャ、`args` の先頭は evidence (`obj`)、残りは操作の引数である。引数と結果の Repr は、操作の表の `params` と `ret` から取る (上の「エフェクトの位置」)
+- `callee`はin-placeのエントリのクロージャ、`args`の先頭はevidence (`obj`)、残りは操作の引数である。引数と結果のReprは、操作の表の`params`と`ret`から取る (上の「エフェクトの位置」)。`callee`は、同じ関数の中で`ev_clause[E.op]`が読んだ値である (下の「verifier」)
 - `apply` と同じく関数の値を呼ぶ。VM とネイティブでは、操作の ABI を知っている間接呼び出しになる ([VM](vm.md) の「呼び出しと戻り」)
 - `mask` は持たない
 - 操作の Repr を `perform` の境界に通すために、この呼び出しを置く。box の挿入、縮約、verifier にその規則がある。Perceus には規則を足さない
@@ -804,7 +804,10 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `clause` の操作がエフェクトの表にあり、引数の数が「1 + 操作の引数の数」である
   - `ev_set_clause[E.op]`に渡す値は、`&g`か、同じ関数の中の`closure g(..)`で束縛した変数で、gは`E.op`の`clause`の印を持つ。evidenceは、同じ関数の中の`ev_new[E]`で束縛した変数である。関数の引数、呼び出しの結果、ブロックの引数のように、同じ関数の中で関数が読めない値は拒み、同じ関数が作っていないevidenceも拒む (``the `Counter.get` entry is given `c.3` (tobj), which is neither `&g` nor a closure made in this function``、`` `prim ev_set_clause[Counter.get]` is given `e.1` (obj), which is not an evidence made by `ev_new` in this function``)。節の呼び出しは、エントリのクロージャを確かめずに操作のシグネチャで呼ぶので、エントリに入るものを、入れる所で決める
   - `clause`の印の関数gの`closure g(..)`は、ちょうど「gの引数の数 - 1 - 操作の引数の数」個の値を捕獲する (``a closure of `g`, a clause of `Counter.get`, has 2 arguments, but the clause captures 1``)。`&g`を`ev_set_clause`に渡せるのは、この数が0のときだけである (`` `&g` is put into the `Counter.get` entry, but the clause has captures``)
-  - この2つは関数ごとの検査なので、`eml_lir::unwind::points`がどのビルドでも走らせ、ネイティブの読み込みはreleaseのビルドでも破ったプログラムを断る。VMは拒まれた関数を表のない関数として読み、節の呼び出しはどちらのモードでも実行時に引数の数を関数と比べる
+  - `ev_new[E]`が束縛するevidenceのエントリは、どれも、その`ev_new`のブロックの中で、evidenceのほかの最初の使いより前、ブロックの終わりより前に、ちょうど1回入れる。`dup`、`decref`、`release`、`drop_token`と着地の印は使いに数えない。その使いの後や別のブロックの`ev_set_clause`は拒む (``the `State.put` entry of `e.2` is not filled before `e.2` is used``、``the `State.get` entry of `e.2` is filled twice``、``an entry of `e.2` is filled after `e.2` is used``)。入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むためである
+  - `clause E.op`の`callee`は、同じ関数の中の`prim ev_clause[E.op](v)`で束縛した変数で、vは同じ関数の中の`ev_lookup[E]`か`ev_new[E]`で束縛した変数である。関数の引数、呼び出しの結果、別の操作のエントリを`callee`にした呼び出しは拒む (``a clause of `Counter.get` calls `c.0` (tobj), which `ev_clause[Counter.get]` did not bind in this function``、``a clause of `Counter.get` calls `c.3`, read from `e.1` (obj), which is not an evidence of `Counter` found or made in this function``)
+  - これらの規則で、節の呼び出しが呼ぶクロージャは、handleが同じ操作のエントリに入れたものになり、そのコードは操作のシグネチャを持つ。`evv`がevidenceだけを持つことと、実行系が`par`の子のために作るevidenceのエントリは、verifierが確かめない。この2つは実行の前提に残る (下の「実行の前提」)
+  - この4つは関数ごとの検査なので、`eml_lir::unwind::points`がどのビルドでも走らせ、ネイティブの読み込みはreleaseのビルドでも破ったプログラムを断る。VMは拒まれた関数を表のない関数として読む
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける
 - `par`の検査は次のとおりである。Core IRの2つの段と、LIRの6つの段のすべてで走る
   - `pair` は、`tobj` のフィールドをちょうど2つ持つ構築子である。VM は子の一様な結果を2つ並べて組を作るためである (``the pair of a par is `Box` #0, which does not have two tobj fields``)。表にない配置とタグの範囲は R8 と同じ文言で、主語を ``the pair of a par`` にする
@@ -901,6 +904,8 @@ VMの速いモードとネイティブのコードは、読む値の形を確か
   - どの値も、作ったときの配置、Repr、印で読み、手放す
   - verifierの所有の規則が成り立つ (上の「verifier」)
   - `evv`の不変条件が成り立つ (上の「`evv` の不変条件」)
+  - `evv`はevidenceだけを持つ
+  - 実行系が`par`の子のために作るevidence (forkの表) のエントリは、どれも、その操作の`clause`の印を持つ関数 (`fork$E.op`) のクロージャを持つ
   - externの行は、標準ライブラリのシグネチャの型の値を受け取る (上の「extern の行」)
 
 前提を満たさないプログラムの振る舞いは、速いモードとネイティブのコードでは未定義である。検査モードはその一部を止めるが、すべては止めない。形が同じ別の配置で読んだ値には気付かない (上の「構造の規則」のR8)。

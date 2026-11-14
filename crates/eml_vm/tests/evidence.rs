@@ -9,6 +9,19 @@ use crate::common::run_lir;
 
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
+/// `Counter`のエントリの関数。evidenceのエントリは、どれも`ev_new`の直後に入れる (docs/spec/lir.mdの「verifier」)。
+const COUNTER_ENTRIES: &str = "\
+internal clause Counter.get fn get$entry(e.0: obj, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
+internal clause Counter.put fn put$entry(e.0: obj, x.1: tobj) -> unit {
+  decref e.0
+  decref x.1
+  return ()
+}
+";
+
 /// yield を始めるときの κ。EP の `id$` と同じ形で、`yield_to` の3つ目の引数に渡す。`()` を渡さない
 /// のは、継続の欄の `()` が「取り出した後」の印を兼ねるためである (docs/spec/core-ir.md の「EP が作る補助の関数」)。
 const ID: &str = "yields fn id(x.0: tobj) -> tobj {\n  return x.0\n}\n";
@@ -25,7 +38,11 @@ fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   dup w.0
   let e.1: obj = prim ev_new[Counter]((), w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](e.1, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](e.1, &put$entry)
   let e.2: obj = prim ev_new[Counter]((), w.0)
+  let u.92: unit = prim ev_set_clause[Counter.get](e.2, &get$entry)
+  let u.93: unit = prim ev_set_clause[Counter.put](e.2, &put$entry)
   dup e.1
   dup e.1
   let a.3: int = prim yield_status(e.1)
@@ -74,7 +91,7 @@ fn show(n.0: int) -> unit {{
   let u.2: unit = extern Prelude.println(s.1)
   return u.2
 }}
-{ID}"
+{ID}{COUNTER_ENTRIES}"
     );
     let (output, result) = run_lir(&text);
     assert_eq!(result, Ok(()));
@@ -96,11 +113,16 @@ fn main() -> unit {{
   dup w.0
   let s.1: tobj = box 1
   let c.2: obj = prim ev_new[Counter](s.1, w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
   let w.3: tobj = prim evv_push(w.0, c.2)
   let s.4: tobj = box 2
   let d.5: obj = prim ev_new[Counter](s.4, w.0)
+  let u.92: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
+  let u.93: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
   let w.6: tobj = prim evv_push(w.3, d.5)
   let o.7: obj = prim ev_new[Other]((), w.0)
+  let u.94: unit = prim ev_set_clause[Other.ask](o.7, &ask$entry)
   let w.8: tobj = prim evv_push(w.6, o.7)
   dup w.8
   let u.9: unit = prim evv_set(w.8)
@@ -124,6 +146,10 @@ fn main() -> unit {{
   let v.22: unit = extern Prelude.println(t.21)
   return v.22
 }}
+{COUNTER_ENTRIES}internal clause Other.ask fn ask$entry(e.0: obj, u.1: unit) -> tobj {{
+  decref e.0
+  return ()
+}}
 "
     );
     let (output, result) = run_lir(&text);
@@ -145,12 +171,18 @@ fn main() -> unit {{
   dup w.0
   let s.1: tobj = box 1
   let c.2: obj = prim ev_new[Counter](s.1, w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
   let w.3: tobj = prim evv_push(w.0, c.2)
   let s.4: tobj = box 2
   let d.5: obj = prim ev_new[Counter](s.4, w.0)
+  let u.92: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
+  let u.93: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
   let w.6: tobj = prim evv_push(w.3, d.5)
   let s.7: tobj = box 3
   let o.8: obj = prim ev_new[Counter](s.7, w.0)
+  let u.94: unit = prim ev_set_clause[Counter.get](o.8, &get$entry)
+  let u.95: unit = prim ev_set_clause[Counter.put](o.8, &put$entry)
   let w.9: tobj = prim evv_push(w.6, o.8)
   let m.10: tobj = prim evv_mask[Counter@1](w.9)
   decref w.9
@@ -176,7 +208,7 @@ fn main() -> unit {{
   let v.24: unit = extern Prelude.println(t.23)
   return v.24
 }}
-"
+{COUNTER_ENTRIES}"
     );
     let (output, result) = run_lir(&text);
     assert_eq!(result, Ok(()));
@@ -194,6 +226,8 @@ fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   let s.1: tobj = box 1
   let e.2: obj = prim ev_new[Counter](s.1, w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](e.2, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](e.2, &put$entry)
   dup e.2
   let w.3: tobj = prim evv_get()
   let w.4: tobj = prim evv_push(w.3, e.2)
@@ -219,7 +253,7 @@ fn show(s.0: tobj) -> unit {{
   let u.3: unit = extern Prelude.println(t.2)
   return u.3
 }}
-"
+{COUNTER_ENTRIES}"
     );
     assert_eq!(run_lir(&text), ("1\n2\n".to_string(), Ok(())));
 }
@@ -274,11 +308,13 @@ fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   dup w.0
   let e.1: obj = prim ev_new[Counter]((), w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](e.1, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](e.1, &put$entry)
   let w.2: tobj = prim evv_push(w.0, e.1)
   let u.3: unit = prim evv_set(w.2)
   return u.3
 }}
-"
+{COUNTER_ENTRIES}"
     );
     let (_, result) = run_lir(&text);
     let error = result.unwrap_err();
@@ -297,10 +333,12 @@ fn a_program_that_ends_during_a_yield_is_an_error() {
 fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   let e.1: obj = prim ev_new[Counter]((), w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](e.1, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](e.1, &put$entry)
   let u.2: unit = prim yield_to(e.1, (), &id)
   return u.2
 }}
-{ID}"
+{ID}{COUNTER_ENTRIES}"
     );
     assert_eq!(run_lir(&text).1, Err(internal_error(LEFT_AT_END)));
 }
@@ -313,12 +351,14 @@ fn a_yield_does_not_start_during_another_yield() {
 fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   let e.1: obj = prim ev_new[Counter]((), w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](e.1, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](e.1, &put$entry)
   dup e.1
   let u.2: unit = prim yield_to(e.1, (), &id)
   let u.3: unit = prim yield_abort(e.1, ())
   return u.3
 }}
-{ID}"
+{ID}{COUNTER_ENTRIES}"
     );
     assert_eq!(run_lir(&text).1, Err(heap_fault(HeapError::YieldMisuse)));
 }

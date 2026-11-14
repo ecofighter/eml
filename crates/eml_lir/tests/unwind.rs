@@ -190,13 +190,15 @@ fn prompt$(ev.0: obj, x.1: tobj) -> obj {
 fn clause_call_is_a_point() {
     let text = "\
 effect Ask { ask(unit) -> tobj }
-fn f(c.0: tobj, e.1: obj, k.2: obj) -> obj {
+fn f(k.2: obj) -> obj {
+  let e.1: obj = prim ev_lookup[Ask]()
+  let c.0: tobj = prim ev_clause[Ask.ask](e.1)
   let x.3: tobj = clause Ask.ask c.0(e.1, ())
   decref x.3
   return k.2
 }
 ";
-    assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
+    assert_eq!(points_of(text, "f"), [point(0, 2, &[(2, 1)], None)]);
 }
 
 /// 所有の段の verifier が拒む関数は、地点の代わりにその誤りを返す。VM は、その関数を表のない関数として扱う。

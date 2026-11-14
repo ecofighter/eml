@@ -45,6 +45,27 @@ fn every_prim_entry_is_named_after_its_prim() {
 
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
+/// `Counter`のエントリの関数。evidenceのエントリは、どれも`ev_new`の直後に入れる (docs/spec/lir.mdの「verifier」)。
+const COUNTER_ENTRIES: &str = "\
+internal clause Counter.get fn get$entry(e.0: obj, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
+internal clause Counter.put fn put$entry(e.0: obj, x.1: tobj) -> unit {
+  decref e.0
+  decref x.1
+  return ()
+}
+";
+
+/// `Other`のエントリの関数。
+const OTHER_ENTRY: &str = "\
+internal clause Other.ask fn ask$entry(e.0: obj, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
+";
+
 /// yieldを始めるときのκ。EPの`id$`と同じ形である。
 const ID: &str = "yields fn id(x.0: tobj) -> tobj {\n  return x.0\n}\n";
 
@@ -77,7 +98,11 @@ fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   dup w.0
   let e.1: obj = prim ev_new[Counter]((), w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](e.1, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](e.1, &put$entry)
   let e.2: obj = prim ev_new[Counter]((), w.0)
+  let u.92: unit = prim ev_set_clause[Counter.get](e.2, &get$entry)
+  let u.93: unit = prim ev_set_clause[Counter.put](e.2, &put$entry)
   dup e.1
   let a.3: int = prim yield_status(e.1)
   let c.4: obj = const \"clause\"
@@ -96,13 +121,15 @@ fn main() -> unit {{
   let p.13: unit = call show(d.7)
   tail call show(f.10)
 }}
-{SHOW}{ID}"
+{SHOW}{ID}{COUNTER_ENTRIES}"
     ));
     let text = format!(
         "{COUNTER}\
 fn make() -> obj {{
   let w.0: tobj = prim evv_get()
   let e.1: obj = prim ev_new[Counter]((), w.0)
+  let u.94: unit = prim ev_set_clause[Counter.get](e.1, &get$entry)
+  let u.95: unit = prim ev_set_clause[Counter.put](e.1, &put$entry)
   return e.1
 }}
 fn abort(e.0: obj) -> unit {{
@@ -114,7 +141,7 @@ fn status(e.0: obj) -> int {{
   decref e.0
   return s.1
 }}
-"
+{COUNTER_ENTRIES}"
     );
     let (finished, record) = visit_each(
         &text,
@@ -162,6 +189,8 @@ fn main() -> unit {{
   let a.0: int = prim yielding()
   let w.1: tobj = prim evv_get()
   let e.2: obj = prim ev_new[Counter]((), w.1)
+  let u.90: unit = prim ev_set_clause[Counter.get](e.2, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](e.2, &put$entry)
   let c.3: obj = const \"clause\"
   let u.4: unit = prim yield_to(e.2, c.3, &id)
   let b.5: int = prim yielding()
@@ -178,7 +207,7 @@ fn main() -> unit {{
   let p.14: unit = call show(d.8)
   tail call show(f.11)
 }}
-{SHOW}{ID}"
+{SHOW}{ID}{COUNTER_ENTRIES}"
     ));
 }
 
@@ -255,11 +284,16 @@ fn main() -> unit {{
   dup w.0
   let s.1: tobj = box 1
   let c.2: obj = prim ev_new[Counter](s.1, w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
   let w.3: tobj = prim evv_push(w.0, c.2)
   let s.4: tobj = box 2
   let d.5: obj = prim ev_new[Counter](s.4, w.0)
+  let u.92: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
+  let u.93: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
   let w.6: tobj = prim evv_push(w.3, d.5)
   let o.7: obj = prim ev_new[Other]((), w.0)
+  let u.94: unit = prim ev_set_clause[Other.ask](o.7, &ask$entry)
   let w.8: tobj = prim evv_push(w.6, o.7)
   dup w.8
   let u.9: unit = prim evv_set(w.8)
@@ -276,7 +310,7 @@ fn main() -> unit {{
   let p.17: unit = call show_boxed(s.11)
   tail call show_boxed(s.15)
 }}
-{SHOW_BOXED}{SHOW}"
+{SHOW_BOXED}{SHOW}{COUNTER_ENTRIES}{OTHER_ENTRY}"
     ));
     // 項目が2つのマスクは、`m:`のデータの物から項目を2つ読む。内側の`Counter`と内側の`Other`を飛ばすので、どちらの
     // エフェクトでも外側のevidenceが見つかる
@@ -292,15 +326,21 @@ fn main() -> unit {{
   dup w.0
   let s.1: tobj = box 1
   let c.2: obj = prim ev_new[Counter](s.1, w.0)
+  let u.95: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
+  let u.96: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
   let w.3: tobj = prim evv_push(w.0, c.2)
   let s.4: tobj = box 2
   let d.5: obj = prim ev_new[Counter](s.4, w.0)
+  let u.97: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
+  let u.98: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
   let w.6: tobj = prim evv_push(w.3, d.5)
   let s.7: tobj = box 3
   let o.8: obj = prim ev_new[Other](s.7, w.0)
+  let u.99: unit = prim ev_set_clause[Other.ask](o.8, &ask$entry)
   let w.9: tobj = prim evv_push(w.6, o.8)
   let s.10: tobj = box 4
   let q.11: obj = prim ev_new[Other](s.10, w.0)
+  let u.100: unit = prim ev_set_clause[Other.ask](q.11, &ask$entry)
   let w.12: tobj = prim evv_push(w.9, q.11)
   let m.13: tobj = prim evv_mask[Counter, Other](w.12)
   decref w.12
@@ -315,7 +355,7 @@ fn main() -> unit {{
   let p.20: unit = call show_boxed(s.16)
   tail call show_boxed(s.18)
 }}
-{SHOW_BOXED}{SHOW}"
+{SHOW_BOXED}{SHOW}{COUNTER_ENTRIES}{OTHER_ENTRY}"
     ));
 }
 
@@ -395,9 +435,11 @@ fn f() -> int {{
   dup w.0
   let s.1: tobj = box 1
   let a.2: obj = prim ev_new[A](s.1, w.0)
+  let u.90: unit = prim ev_set_clause[A.a](a.2, &a$entry)
   let w.3: tobj = prim evv_push(w.0, a.2)
   let s.4: tobj = box 2
   let b.5: obj = prim ev_new[B](s.4, w.0)
+  let u.91: unit = prim ev_set_clause[B.b](b.5, &b$entry)
   let w.6: tobj = prim evv_push(w.3, b.5)
   let u.7: unit = prim evv_set(w.6)
   let e.8: obj = prim ev_lookup[A]()
@@ -407,6 +449,14 @@ fn f() -> int {{
   let n.11: int = unbox t.9
   decref t.9
   return n.11
+}}
+internal clause A.a fn a$entry(e.0: obj, u.1: unit) -> tobj {{
+  decref e.0
+  return ()
+}}
+internal clause B.b fn b$entry(e.0: obj, u.1: unit) -> tobj {{
+  decref e.0
+  return ()
 }}
 ",
         first.to_lowercase(),
@@ -542,7 +592,9 @@ fn main() -> unit {
 }
 
 /// `Counter`のhandlerを1つ入れて`evv`に積み、`ev_lookup`で見つけたevidenceの`get`の節を`clause`で呼んで、結果を表示する
-/// `main`。`clause`は入れた節の値`value`を受け取り、節の関数`get`はプログラムの残り`rest`が定義する。
+/// `main`。`clause`は入れた節の値`value`を受け取り、節の関数`get`はプログラムの残り`rest`が定義する。`put`の
+/// エントリには捕獲を持つクロージャを入れる。静的な行を作らないので、静的なクロージャの行は`get`のエントリのもの
+/// だけになる。
 fn run_get(value: &str, rest: &str) -> String {
     format!(
         "{COUNTER}\
@@ -553,6 +605,9 @@ fn main() -> unit {{
   let s.1: tobj = box 41
   let e.2: obj = prim ev_new[Counter](s.1, w.0)
   let u.3: unit = prim ev_set_clause[Counter.get](e.2, {value})
+  let k.10: tobj = box 0
+  let p.11: tobj = closure put$captured(k.10)
+  let u.12: unit = prim ev_set_clause[Counter.put](e.2, p.11)
   let w.4: tobj = prim evv_push(w.0, e.2)
   let u.5: unit = prim evv_set(w.4)
   let f.6: obj = prim ev_lookup[Counter]()
@@ -560,6 +615,12 @@ fn main() -> unit {{
   let r.8: tobj = clause Counter.get c.7(f.6, ())
   let u.9: unit = prim evv_set(w.0)
   tail call show_boxed(r.8)
+}}
+internal clause Counter.put fn put$captured(k.0: tobj, e.1: obj, x.2: tobj) -> unit {{
+  decref k.0
+  decref e.1
+  decref x.2
+  return ()
 }}
 {rest}{SHOW_BOXED}{SHOW}"
     )
@@ -595,11 +656,14 @@ fn main() -> unit {{
   dup w.0
   let s.1: tobj = box 1
   let a.2: obj = prim ev_new[Counter](s.1, w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](a.2, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](a.2, &put$entry)
   let w.3: tobj = prim evv_push(w.0, a.2)
   dup w.3
   let s.4: tobj = box 2
   let b.5: obj = prim ev_new[Counter](s.4, w.3)
   let u.6: unit = prim ev_set_clause[Counter.get](b.5, &under)
+  let u.92: unit = prim ev_set_clause[Counter.put](b.5, &put$entry)
   let w.7: tobj = prim evv_push(w.3, b.5)
   let u.8: unit = prim evv_set(w.7)
   let f.9: obj = prim ev_lookup[Counter]()
@@ -621,7 +685,7 @@ internal clause Counter.get fn under(e.0: obj, u.1: unit) -> tobj {{
   let u.8: unit = prim evv_set(w.2)
   return s.6
 }}
-{SHOW_BOXED}{SHOW}"
+{SHOW_BOXED}{SHOW}{COUNTER_ENTRIES}"
     ));
 }
 
@@ -639,23 +703,24 @@ fn main() -> unit {{
   let k.2: tobj = closure captured(n.1)
   let e.3: obj = prim ev_new[Counter]((), w.0)
   let u.4: unit = prim ev_set_clause[Counter.get](e.3, k.2)
+  let u.90: unit = prim ev_set_clause[Counter.put](e.3, &put$entry)
   let w.5: tobj = prim evv_push(w.0, e.3)
   let u.6: unit = prim evv_set(w.5)
-  let f.7: obj = prim ev_lookup[Counter]()
-  let c.8: tobj = prim ev_clause[Counter.get](f.7)
-  let r.9: tobj = call ask(c.8, f.7)
+  let r.9: tobj = call ask()
   let u.10: unit = prim evv_set(w.0)
   let u.11: unit = extern Prelude.println(r.9)
   return u.11
 }}
-fn ask(c.0: tobj, e.1: obj) -> tobj {{
+fn ask() -> tobj {{
+  let e.1: obj = prim ev_lookup[Counter]()
+  let c.0: tobj = prim ev_clause[Counter.get](e.1)
   tail clause Counter.get c.0(e.1, ())
 }}
 internal clause Counter.get fn captured(n.0: tobj, e.1: obj, u.2: unit) -> tobj {{
   decref e.1
   return n.0
 }}
-"
+{COUNTER_ENTRIES}"
     ));
 }
 
@@ -736,9 +801,7 @@ fn main() -> unit {{
   let s.5: obj = extern \"Prelude.Show Int.show\"(5)
   dup s.5
   let u.6: unit = extern Prelude.println(s.5)
-  let f.7: obj = prim ev_lookup[Fail]()
-  let c.8: tobj = prim ev_clause[Fail.fail](f.7)
-  {bind} = call fail(c.8, f.7)
+  {bind} = call fail()
   let u.9: unit = prim evv_set(w.0)
   let u.10: unit = extern Prelude.println(s.5)
   return u.10
@@ -760,7 +823,7 @@ fn exits(text: &str) {
 fn a_tail_never_clause_in_a_float_function() {
     exits(&run_fail(
         "let x.11: float",
-        "fn fail(c.0: tobj, e.1: obj) -> float {\n  tail clause Fail.fail c.0(e.1, ())\n}\n",
+        "fn fail() -> float {\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.0: tobj = prim ev_clause[Fail.fail](e.1)\n  tail clause Fail.fail c.0(e.1, ())\n}\n",
     ));
 }
 
@@ -769,7 +832,7 @@ fn a_tail_never_clause_in_a_float_function() {
 fn a_tail_never_clause_in_a_function_returning_two_leaves() {
     exits(&run_fail(
         "let (x.11: float, n.12: int)",
-        "fn fail(c.0: tobj, e.1: obj) -> (float, int) {\n  tail clause Fail.fail c.0(e.1, ())\n}\n",
+        "fn fail() -> (float, int) {\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.0: tobj = prim ev_clause[Fail.fail](e.1)\n  tail clause Fail.fail c.0(e.1, ())\n}\n",
     ));
 }
 
@@ -780,7 +843,9 @@ fn a_never_clause_bound_to_a_float() {
     exits(&run_fail(
         "let x.11: float",
         "\
-fn fail(c.0: tobj, e.1: obj) -> float {
+fn fail() -> float {
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let s.2: obj = extern \"Prelude.Show Int.show\"(6)
   let x.3: float = clause Fail.fail c.0(e.1, ())
   let u.4: unit = extern Prelude.println(s.2)
@@ -820,8 +885,10 @@ fn release_check_a_tail_clause_result_mismatch_panics() {
 fn main() -> unit {{
   return ()
 }}
-fn f(c.0: tobj, e.1: obj) -> float {{
-  tail clause Counter.get c.0(e.1, ())
+fn f() -> float {{
+  let e.0: obj = prim ev_lookup[Counter]()
+  let c.1: tobj = prim ev_clause[Counter.get](e.0)
+  tail clause Counter.get c.1(e.0, ())
 }}
 "
     ));
@@ -843,11 +910,17 @@ fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   let e.1: obj = prim ev_new[Counter]((), w.0)
   let u.2: unit = prim ev_set_clause[Counter.get](e.1, &g)
+  let u.3: unit = prim ev_set_clause[Counter.put](e.1, &p)
   decref e.1
   return ()
 }}
 internal clause Counter.get fn g(e.0: obj, x.1: float) -> tobj {{
   decref e.0
+  return ()
+}}
+internal clause Counter.put fn p(e.0: obj, x.1: tobj) -> unit {{
+  decref e.0
+  decref x.1
   return ()
 }}
 "
@@ -884,4 +957,61 @@ fn f(c.0: tobj, w.1: tobj) -> unit {{
         "`f` has no unwind points: the `Counter.get` entry is given `c.0` (tobj), which is neither `&g` nor a closure made in this function"
     };
     assert!(message.contains(expected), "{message}");
+}
+
+/// 入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むので、ほかの最初の使いより前に
+/// エントリをすべて入れていないevidenceは、どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseの
+/// ビルドでは下ろしがどのビルドでも走らせる`eml_lir::unwind::points`の検査が断る (docs/spec/lir.mdの「verifier」)。
+#[test]
+fn release_check_an_unfilled_entry_panics() {
+    let message = load_panic(&format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  return ()
+}}
+fn f(w.0: tobj) -> unit {{
+  let e.1: obj = prim ev_new[Counter]((), w.0)
+  let u.2: unit = prim ev_set_clause[Counter.get](e.1, &g)
+  decref e.1
+  return ()
+}}
+internal clause Counter.get fn g(e.0: obj, u.1: unit) -> tobj {{
+  decref e.0
+  return ()
+}}
+"
+    ));
+    let rule = "the `Counter.put` entry of `e.1` is not filled before `e.1` is used";
+    let expected = if cfg!(debug_assertions) {
+        format!("invalid LIR at the native load: {rule} in `f`")
+    } else {
+        format!("`f` has no unwind points: {rule}")
+    };
+    assert!(message.contains(&expected), "{message}");
+}
+
+/// 節の呼び出しは、クロージャを確かめずに操作のシグネチャで呼ぶので、同じ操作の`ev_clause`が読んでいない`callee`は、
+/// どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseのビルドでは下ろしがどのビルドでも走らせる
+/// `eml_lir::unwind::points`の検査が断る (docs/spec/lir.mdの「verifier」)。
+#[test]
+fn release_check_a_clause_callee_not_read_from_its_entry_panics() {
+    let message = load_panic(&format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  return ()
+}}
+fn f(c.0: tobj) -> unit {{
+  let e.1: obj = prim ev_lookup[Counter]()
+  let u.2: unit = clause Counter.put c.0(e.1, ())
+  return u.2
+}}
+"
+    ));
+    let rule = "a clause of `Counter.put` calls `c.0` (tobj), which `ev_clause[Counter.put]` did not bind in this function";
+    let expected = if cfg!(debug_assertions) {
+        format!("invalid LIR at the native load: {rule} in `f`")
+    } else {
+        format!("`f` has no unwind points: {rule}")
+    };
+    assert!(message.contains(&expected), "{message}");
 }
