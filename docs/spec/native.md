@@ -167,20 +167,24 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 
 | `After` | 使う所 | 熱いコード | 冷たいコード |
 |---|---|---|---|
-| `Call` | 末尾でない直接の呼び出し | yieldの状態の`abort`のバイト (`CTX_YIELD_ABORT`) を8ビットでロードし、0でなければ冷たいコードへ分岐する。この確かめを出すのは`unwind::if_aborting`だけである | 後始末へ進む |
+| `Call` | 着地の印のない、末尾でない呼び出し | yieldの状態の`abort`のバイト (`CTX_YIELD_ABORT`) を8ビットでロードし、0でなければ冷たいコードへ分岐する。この確かめを出すのは`unwind::if_aborting`だけである | 後始末へ進む |
+| `Land { result }` | 着地の印を持つ、末尾でない`apply` | `Call`と同じである。熱いブロックは呼び出しの結果を引数に受け、`result`をそれに束縛し直す | 着地の確かめ (下) |
 | `Faults { site, purity }` | `faults`の行で、戻るものの呼び出し | faultの語 (`CTX_FAULT`) をロードし、0でなければ冷たいコードへ分岐する | `eml$raise(ctx, self, site, purity)`を呼び、後始末へ進む |
 | `Arith` | 失敗するインラインの行 (`IntAdd`、`IntSub`、`IntMul`、`IntDiv`、`ByteDiv`、`IntMod`、`ByteMod`、`IntNeg`) | なし。行を展開したコードが、失敗の条件で冷たいコードへ分岐する | `eml_rt_fault_arith(ctx, kind)`で算術の失敗を置き、`eml$raise(ctx, self, site, PURITY_PANICS)`を呼び、後始末へ進む。失敗の種類ごとに冷たいブロックが1つあり、後始末は1つを共有する |
 | `Never { raise }` | 戻らない行の呼び出し。`exit`は`raise`なし、`panic`は自分の位置の行と純粋さを持つ | なし。無条件に冷たいコードへ分岐する | (`raise`があれば`eml$raise(ctx, self, site, purity)`を呼び) 後始末へ進む |
 
 - `self`は関数自身のコードのアドレス (自分の記号の`func_addr`) で、冷たいコードだけがそれを作る。`site`は、関数自身の`FnRow.sites`での位置の行の添字である。この組が場所を表すので、プログラムのほかの部分で変わる番号はコードに現れない (「`Image`」)
 - 位置の行 (`FnRow.sites`の`SiteRow`) は、失敗を上げる文ごとに1つある。`Faults`、`Arith`、上げる`Never`で下ろした`extern`の文で、文の順 (ブロックの順、ブロックの中の文の順) に並ぶ。行は文の位置を持ち、位置のない文なら`file`は`NO_FILE`である。だから位置の行は巻き戻しの地点の一部にだけある。何も上げない地点、つまり`exit`と末尾でない呼び出しは、位置の行を持たない
-- 後始末は、地点ごとの冷たいブロック1つである。地点の直後に所有している変数ごとに、その数だけ`eml_rt_decref`を呼び、生きているtokenごとに`eml_rt_drop_token`を呼び、関数の結果ごとに仮の値を返す。仮の値は、`float`では0.0、`obj`、`tobj`、`unit`ではUnitの語、`int`と`enum`では0、`token`では空のtoken (0) である。呼んだ側は中断か置いた失敗を見るので、仮の値を使わない。着地の印を持つ地点は下ろさない。着地の印を持つ`apply`は断る形だからである (「断る形」)
+- 後始末は、地点ごとの冷たいブロック1つである。地点の直後に所有している変数ごとに、その数だけ`eml_rt_decref`を呼び、生きているtokenごとに`eml_rt_drop_token`を呼び、関数の結果ごとに仮の値を返す。仮の値は、`float`では0.0、`obj`、`tobj`、`unit`ではUnitの語、`int`と`enum`では0、`token`では空のtoken (0) である。呼んだ側は中断か置いた失敗を見るので、仮の値を使わない
+- 着地の印`v`を持つ地点の冷たいブロックは、`yielding.target`をロードして`v`と比べる。等しければ、中断はこのフレームに着地する。サービス`eml_nrt_landed(ctx) -> obj`を呼び、それが返すヒープのダミーを持って熱いブロックへ飛ぶ。熱いブロックは`apply`の変数をそれに束縛し直すので、着地したフレームはダミーを値として`prompt$`の呼び出しへ進む。`abort`のバイトは立ったままで、`prompt$`の`yield_finish`が中断を終える。等しくなければ、中断はこのhandleを外す。`eml_rt_ev_take_state(ctx, v)`でhandlerの状態を取り出して`eml_rt_decref`で手放し、その後に地点の後始末へ進む。VMの巻き戻しと同じ順である ([VM](vm.md)の「巻き戻し」)。`target`をロードするのは冷たい道だけなので、熱い道の費用は`Call`と同じである
+- `eml_nrt_landed`は`services.rs`の表`SERVICES`にあり、ヒープのダミーを返すだけである。印を持つ`apply`の結果の語として、VMの着地と同じ値を渡すためである
 - `Never`の行の後のLIRの続きはどこからも届かない。下ろしは、前のブロックのない新しいブロックで続け、行の変数をそのReprの仮の値に束縛する。だからブロックの残りもふつうに下ろせる
 - `never`の操作の節の呼び出しは、末尾の位置でも末尾呼び出しにせず、その後に`unwind::if_aborting`の確かめが続き、熱い側はtrapする。続きは`Never`と同じく仮の値で下ろす (「関数の値」)
 - `eml$raise(ctx, function, site, purity)`は、moduleに1つある`tail`の関数で、結果を持たない。同じ引数で`eml_nrt_failed`を呼んで戻る (「externの失敗」)
 - `abort`のバイトは、ちょうど中断の途中の間だけ0でない。検証した`YieldState::wf`により、`target`がUnitなら`abort`は偽で、それを立てるのは`yield_abort`と`exit_abort`だけだからである。呼ばれた側で中断が始まると (`exit`)、呼ばれた側は自分の後始末で仮の値を返し、呼んだ側はこの確かめで自分の後始末へ進む。だから中断は、フレームを1つずつ、ふつうに戻って抜ける
 - yieldは`abort`のバイトを立てないので、呼ばれた側がyieldした呼び出しは、呼ばれた側のダミーを持って熱い道で戻る。その後のLIR自身の`prim yielding()`が遅い道へ進む。yieldが戻るのは、LIRのyieldの地点、末尾呼び出し、着地の印を持つ`apply`を通るときだけだからである
-- この確かめは1つの不変条件に頼る。着地から`yield_finish`までの間に、呼び出しの巻き戻しの地点を通らないことである。着地の印を持つ`apply`のすぐ後には`prompt$`の呼び出しが続き、その間に呼び出しもexternの行も`yield_to`も`yield_abort`もない ([LIR](lir.md)の「着地の印」)。`prompt$`は、yieldと中断の道で`yield_finish`の前に、呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない ([Core IR](core-ir.md)の「handle と `prompt$`」)。前半はdebugのビルドでLIRのverifierが確かめ、後半はEPの単体テストが確かめる。releaseのビルドでは、違反したときの動きは定まらない。着地と`prompt$`の間の呼び出しは中断が立ったまま走り、そこでの`yield_to`が中断を消すので、着地したフレームはダミーを値として続けてしまう
+- この確かめは1つの不変条件に頼る。着地から`yield_finish`までの間に、呼び出しの巻き戻しの地点を通らないことである。着地の印を持つ`apply`のすぐ後には`prompt$`の呼び出しが続き、その間に呼び出しもexternの行も`yield_to`も`yield_abort`もない ([LIR](lir.md)の「着地の印」)。`prompt$`は、yieldと中断の道で`yield_finish`の前に、呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない ([Core IR](core-ir.md)の「handle と `prompt$`」)。前半は、debugのビルドでLIRのverifierが、どのビルドでも下ろしが確かめる。下ろしがどのビルドでも走らせる`eml_lir::unwind::points`がverifierの規則を走らせ、下ろしはブロックを下ろしながらそれをもう1度assertする。破ればverifierと同じ文でpanicする。後半はEPの単体テストが確かめる。releaseのビルドで違反したときの動きが定まらないのは、後半 (`prompt$`の本体を変えたとき) だけである。着地と`yield_finish`の間の呼び出しは中断が立ったまま走り、そこでの`yield_to`が中断を消すので、着地したフレームはダミーを値として続けてしまう
+- `unwind::if_aborting`は確かめのただ1つの出し手のまま、呼び出しのような命令のどの後にも使える。emlのコードを走らせうる行の呼び出しの後には、`Faults`の確かめに加えて`Call`の確かめも続く。今の下ろしが下ろす行に、emlのコードを走らせるものはない
 - 速い道の費用: `Call`は、`abort`のバイトのロード1つと、通らない分岐1つだけを足し、比較を持たない。`Faults`は、faultの語のロード1つと、通らない分岐1つだけを足す。`Never`はロードを持たない。`Arith`は、行の展開が持つ失敗の条件の通らない分岐のほかに何も足さない
 - `Arith`では、行の展開が今のブロックを熱い続きへの分岐で終えてから`after_unwind_point`を呼ぶ。Craneliftは、埋めていないブロックから別のブロックへ移ることを許さないからである
 
@@ -259,7 +263,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 生成したコードは、`empty_mut_array` (「値と定数」) と`child_abort`を除く基本操作を次のとおり下ろす (`lower/effects.rs`)。`child_abort`は下ろさない。
 
-- `yielding`と`yield_status`はインラインで読む。`yielding`は`target`をロードして`UNIT`と比べる。`yield_status(ev)`は`target`と`abort`のバイトをロードし、分岐でなく`select`で、`Ctx::yield_status`と同じく、`target`が`UNIT`なら0、`ev`でなければ3、`abort`のバイトが立っていれば2、ほかは1を選ぶ。生成したコードで`target`を読むのは、これらと`eml$apply$m`の`n < m`の腕の見張り (「関数の値」) だけである
+- `yielding`と`yield_status`はインラインで読む。`yielding`は`target`をロードして`UNIT`と比べる。`yield_status(ev)`は`target`と`abort`のバイトをロードし、分岐でなく`select`で、`Ctx::yield_status`と同じく、`target`が`UNIT`なら0、`ev`でなければ3、`abort`のバイトが立っていれば2、ほかは1を選ぶ。生成したコードで`target`を読むのは、これらと、`eml$apply$m`の`n < m`の腕の見張り (「関数の値」) と、着地の印を持つ地点の冷たいブロック (「巻き戻しの地点」) だけである
 - ほかの基本操作は、エントリ`eml_rt_<Prim::name()>`の呼び出し1つである。エントリの名前を綴るのは下ろしの1つの関数`lower::effects::entry`だけである。`yield_abort`はフレームに戻らないので、その後のコードは巻き戻しの地点の後始末へ進む (「巻き戻しの地点」の`Never`)
 - エフェクトの番号は、データの記号`e:<エフェクト>`からロード1つでだけエントリに届く。名前はエフェクトの名前 (`eml_lir::syntax::effect_text`) である。`evv_mask`の項目は、データの記号`m:<項目>`のアドレスとして、ロードなしでエントリに届き、個数は即値である。名前は項目のテキストの形 (`eml_lir::syntax::mask_text`) である。生成したコードはエフェクトの番号を即値として持たないので、関数のコードはプログラムのエフェクトの番号の振り方によらない。`ev_new`の操作の数、操作の添字、根の番号は即値である。エフェクトの宣言と関数のLIRがそれらを決めるためである
 - エフェクトの番号はマシンのものである。`NativeMachine`は`load`で、VMが読み込みのエフェクトに番号を振るのと同じく、`program.effects`の順に名前で番号を振る。番号は`Image` (`DATUM_EFFECT`の行の`bits`と`MaskRow.effect`) を通してだけ実行系に届く。番号は65535より小さく、それを超えれば`load`がVMと同じ文でpanicする
@@ -352,7 +356,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## 断る形
 
-ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。ただし`Prim`の形のうち`child_abort`でない基本操作は、下ろしが下ろせる (「エフェクト」)。
+ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。ただし`Prim`の形のうち`child_abort`でない基本操作 (「エフェクト」) と、`Clause`の形 (「関数の値」) と、`Prompt`の形 (「巻き戻しの地点」) は、下ろしが下ろせる。
 
 | `Form` | 名前 (`Form::label`) | LIRの形 |
 |---|---|---|

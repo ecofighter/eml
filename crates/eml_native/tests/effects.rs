@@ -6,8 +6,8 @@ use eml_nrt::{RunFault, RuntimeError};
 use eml_rt::{Ctx, Fast, Fault, HeapError, Word};
 
 use crate::common::native::{
-    Visit, Visits, agree, call_visited, call_visited_at, clif, machine, native, program, visit,
-    visit_each,
+    Visit, Visits, agree, agree_source, call_visited, call_visited_at, clif, machine, native,
+    program, visit, visit_each,
 };
 
 /// 即値の数。`evv_mask`は項目の列の長さ、`ev_new`は操作の数、`ev_set_clause`、`ev_lookup`、`ev_clause`、`root_get`、
@@ -1008,6 +1008,477 @@ fn f(c.0: tobj) -> unit {{
 "
     ));
     let rule = "a clause of `Counter.put` calls `c.0` (tobj), which `ev_clause[Counter.put]` did not bind in this function";
+    let expected = if cfg!(debug_assertions) {
+        format!("invalid LIR at the native load: {rule} in `f`")
+    } else {
+        format!("`f` has no unwind points: {rule}")
+    };
+    assert!(message.contains(&expected), "{message}");
+}
+
+/// `agree_source`と同じだが、先にコンパイルしたプログラムが着地の印を持つ巻き戻しの地点を持つことを確かめる。optimizeは
+/// 本体と節を丸ごと見えるhandlerを消すので、そうなればテストは着地について何も確かめなくなるためである。
+fn agree_landing(source: &str) {
+    let program = eml_test_support::lir(source);
+    let lands = eml_lir::unwind::points(&program, |_| true)
+        .into_iter()
+        .flatten()
+        .any(|unwinds| {
+            unwinds
+                .unwrap_or_else(|error| panic!("{error}"))
+                .points
+                .iter()
+                .any(|point| point.landing.is_some())
+        });
+    assert!(lands, "the compiled program has a landing point");
+    agree_source(source);
+}
+
+/// EPの`prompt$`、`resume$`、`rewind$`。EPが出すものを写したもので、手で書くhandleはこれを呼ぶ。
+const PROMPT: &str = "\
+yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: tobj = prim ev_take_evv(ev.0)
+  let u.4: unit = prim evv_set(w.3)
+  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
+b1:
+  let st.6: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply ret.1(x.2, st.6)
+b2:
+  let u.8: unit = drop x.2
+  let k.9: tobj poly = prim yield_cont_take()
+  let c.10: tobj poly = prim yield_finish()
+  let st.11: tobj poly = prim ev_take_state(ev.0)
+  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  tail yields apply c.10(k.12, st.11)
+b3:
+  let u.14: unit = drop ret.1
+  let u.15: unit = drop x.2
+  let c.16: tobj poly = prim yield_finish()
+  let st.17: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply c.16(st.17)
+b4:
+  let u.19: unit = drop x.2
+  let st.20: tobj poly = prim ev_take_state(ev.0)
+  let k.21: tobj poly = prim yield_cont_take()
+  let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+  let u.23: unit = prim yield_cont_set(k.22)
+  let d.24: obj poly = prim dummy()
+  return d.24
+}
+yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: obj = prim ev_renew(ev.0, s.4)
+  decref ev.0
+  let w.6: tobj = prim evv_get()
+  dup e.5
+  let w.7: tobj = prim evv_push(w.6, e.5)
+  let u.8: unit = prim evv_set(w.7)
+  let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
+  tail call prompt$(e.5, ret.1, x.9)
+}
+yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+}
+";
+
+/// `Fail` (`FAIL`) のエントリ`fail$entry`は、受け取った引数を捕まえた節のクロージャ`fail$k`で`yield_abort`し、
+/// handlerへ中断する。`fail$k`はその引数を結果にする。`ret`はhandleの`return`の節である。
+const FAIL_ABORTS: &str = "\
+internal clause Fail.fail fn fail$entry(e.0: obj, m.1: tobj) -> obj {
+  let c.2: tobj = closure fail$k(m.1)
+  let u.3: unit = prim yield_abort(e.0, c.2)
+  let d.4: obj = prim dummy()
+  return d.4
+}
+fn fail$k(m.0: tobj, st.1: tobj) -> tobj {
+  decref st.1
+  return m.0
+}
+fn ret(x.0: tobj, st.1: tobj) -> tobj {
+  decref st.1
+  return x.0
+}
+";
+
+/// `never`の操作の中断はhandleの着地の印を持つ`apply`に着地し、`prompt$`がhandlerの節を走らせて、その値がhandleの
+/// 値になる。中断しないhandleは本体の値を返す。
+#[test]
+fn an_abort_lands_and_the_clause_returns() {
+    agree_landing(
+        "\
+effect Fail where
+  never fail : String -> a
+
+check : Int -> <Fail> Int
+check n = if n > 0 then n else fail \"not positive\"
+
+safe : Int -> String
+safe n =
+  handle show (check n) with
+    | ctl fail message -> \"error: \" ++ message
+
+main : Unit -> <IO> Unit
+main () =
+  println (safe 3)
+  println (safe 0)
+",
+    );
+}
+
+/// handleとエントリの間の3つのフレームは、どれも呼び出しをまたいで文字列と生きたtokenを持つ。中断はそれぞれの後始末を
+/// 通ってから着地し、着地したフレームは持っていた文字列を使い続ける。後始末が参照かtokenの箱を残せば、censusが漏れを
+/// 見つける。
+#[test]
+fn an_abort_unwinds_three_frames_and_lands() {
+    let text = format!(
+        "\
+layout P {{ P(obj, int) }}
+{FAIL}\
+fn main() -> unit {{
+  let s.0: obj = extern \"Prelude.Show Int.show\"(9)
+  let w.1: tobj = prim evv_get()
+  dup w.1
+  let ev.2: obj = prim ev_new[Fail]((), w.1)
+  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &fail$entry)
+  dup ev.2
+  let w.4: tobj = prim evv_push(w.1, ev.2)
+  let u.5: unit = prim evv_set(w.4)
+  let x.6: tobj = yields apply &body(()) prompt ev.2
+  let r.7: obj = call prompt$(ev.2, &ret, x.6)
+  let u.8: unit = extern Prelude.println(s.0)
+  let u.9: unit = extern Prelude.println(r.7)
+  return u.9
+}}
+fn body(u.0: tobj) -> tobj {{
+  decref u.0
+  let a.1: obj = extern \"Prelude.Show Int.show\"(1)
+  let p.2: obj = con P #0(a.1, 2)
+  let n.3: int = call f1(p.2)
+  let b.4: tobj = box n.3
+  return b.4
+}}
+fn f1(x.0: obj) -> int {{
+  unpack x.0 P #0(s.1: obj, n.2: int)
+  let r.3: token = release x.0 P #0(s.1, _)
+  let a.4: obj = extern \"Prelude.Show Int.show\"(n.2)
+  let y.5: obj = con P #0(a.4, n.2)
+  let m.6: int = call f2(y.5)
+  let d.7: obj = con P #0(s.1, m.6) reuse r.3 in place
+  decref d.7
+  return m.6
+}}
+fn f2(x.0: obj) -> int {{
+  unpack x.0 P #0(s.1: obj, n.2: int)
+  let r.3: token = release x.0 P #0(s.1, _)
+  let a.4: obj = extern \"Prelude.Show Int.show\"(n.2)
+  let y.5: obj = con P #0(a.4, n.2)
+  let m.6: int = call f3(y.5)
+  let d.7: obj = con P #0(s.1, m.6) reuse r.3 in place
+  decref d.7
+  return m.6
+}}
+fn f3(x.0: obj) -> int {{
+  unpack x.0 P #0(s.1: obj, n.2: int)
+  let r.3: token = release x.0 P #0(s.1, _)
+  let ev.4: obj = prim ev_lookup[Fail]()
+  let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
+  let m.6: obj = extern \"Prelude.Show Int.show\"(n.2)
+  let k.7: int = clause Fail.fail c.5(ev.4, m.6)
+  let d.8: obj = con P #0(s.1, k.7) reuse r.3 in place
+  decref d.8
+  return k.7
+}}
+{FAIL_ABORTS}{PROMPT}"
+    );
+    let program = program(&text);
+    let points = eml_lir::unwind::points(&program, |_| true);
+    let points_of = |name: &str| {
+        let index = program
+            .functions
+            .iter()
+            .position(|function| function.name == name)
+            .unwrap_or_else(|| panic!("no function `{name}`"));
+        points[index]
+            .as_ref()
+            .expect("every function is wanted")
+            .as_ref()
+            .unwrap_or_else(|error| panic!("{error}"))
+            .points
+            .clone()
+    };
+    for name in ["f1", "f2", "f3"] {
+        assert!(
+            points_of(name)
+                .iter()
+                .any(|point| !point.owned.is_empty() && !point.tokens.is_empty()),
+            "`{name}` holds a reference and a token across a point"
+        );
+    }
+    assert!(
+        points_of("main")
+            .iter()
+            .any(|point| point.landing.is_some() && !point.owned.is_empty()),
+        "`main` lands holding a reference"
+    );
+    agree(&text);
+    assert_eq!(native(&text), ("9\n2\n".to_string(), Ok(None)));
+}
+
+/// 再開できるyieldは`abort`のバイトを立てないので、3つのフレームを熱い道で戻り、それぞれのフレームのLIRの`yielding`の
+/// 確かめが継続を組み立てる。節はそれを再開し、再開の後も続く。
+#[test]
+fn a_resumable_yield_passes_three_frames() {
+    agree_landing(
+        "\
+effect Ask where
+  ask : Unit -> Int
+
+frames : Int -> <Ask, Panic> Int
+frames n = if n == 0 then ask () else frames (n - 1) * 2 + n
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let total =
+    handle frames 3 with
+      | ctl ask () k ->
+          println \"ask\"
+          let r = k 10
+          println \"resumed\"
+          r + 1
+  println (show total)
+",
+    );
+}
+
+/// 何度も呼べる継続は、呼ぶたびに捕まえた部分を写して走らせる。
+#[test]
+fn a_multi_shot_continuation() {
+    agree_landing(
+        "\
+effect Choice where
+  multi choose : Unit -> Bool
+
+bits : Int -> <Choice, Panic> Int
+bits n = if n == 0 then 0 else (if choose () then 1 else 0) + 2 * bits (n - 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let every =
+    handle show (bits 2) with
+      | ctl choose () k -> k False ++ \", \" ++ k True
+  println every
+",
+    );
+}
+
+/// `run`自身の`log`は内側のhandlerに届き、`mask`の包みを通る`action`の`log`は内側のhandlerを飛ばして外側に届く。
+#[test]
+fn a_masked_perform_skips_the_inner_handler() {
+    agree_landing(
+        "\
+effect Log where
+  log : String -> Unit
+
+run : (Unit -> <e> a) -> <Log | e> a
+run action =
+  log \"own\"
+  action ()
+
+tagged : String -> (Unit -> <Log, IO | e> a) -> <IO | e> a
+tagged tag action =
+  handle action () with
+    | ctl log s k ->
+      println \"\\{tag}: \\{s}\"
+      let r = k ()
+      println \"\\{tag} resumed\"
+      r
+
+main : Unit -> <IO> Unit
+main () =
+  use tagged \"outer\"
+  use tagged \"inner\"
+  run (fn () -> log \"masked\")
+",
+    );
+}
+
+/// 外側のhandlerへの中断が内側のhandleのフレームを通ると、そのフレームは内側のhandlerの状態を取り出して手放してから
+/// 抜ける。VMと同じ順である。この`prompt$`は`evv`を戻さないので、内側のevidenceは`evv`の中で生きたままである。代役は、
+/// `probe`が戻った後、`evv`を戻す前に、状態の物体が生きていないことを確かめる。
+#[test]
+fn an_abort_through_a_handler_frame_releases_its_state() {
+    let text = "\
+effect Fail { never fail(unit) -> never }
+effect Inner { op(unit) -> tobj }
+fn make() -> obj {
+  let s.0: obj = extern \"Prelude.Show Int.show\"(12345)
+  return s.0
+}
+fn probe(s.0: obj) -> unit {
+  let w.1: tobj = prim evv_get()
+  dup w.1
+  let ev.2: obj = prim ev_new[Fail]((), w.1)
+  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &fail$entry)
+  dup ev.2
+  let w.4: tobj = prim evv_push(w.1, ev.2)
+  let u.5: unit = prim evv_set(w.4)
+  let x.6: tobj = yields apply &inner(s.0) prompt ev.2
+  let r.7: tobj = call prompt$(ev.2, x.6)
+  decref r.7
+  return ()
+}
+yields fn inner(s.0: tobj) -> tobj {
+  let w.1: tobj = prim evv_get()
+  dup w.1
+  let ev.2: obj = prim ev_new[Inner](s.0, w.1)
+  let u.3: unit = prim ev_set_clause[Inner.op](ev.2, &op$entry)
+  dup ev.2
+  let w.4: tobj = prim evv_push(w.1, ev.2)
+  let u.5: unit = prim evv_set(w.4)
+  let x.6: tobj = yields apply &fail(()) prompt ev.2
+  tail call prompt$(ev.2, x.6)
+}
+yields fn fail(u.0: tobj) -> tobj {
+  decref u.0
+  let e.1: obj = prim ev_lookup[Fail]()
+  let c.2: tobj = prim ev_clause[Fail.fail](e.1)
+  tail clause Fail.fail c.2(e.1, ())
+}
+internal clause Fail.fail fn fail$entry(e.0: obj, u.1: unit) -> obj {
+  let u.2: unit = prim yield_abort(e.0, ())
+  let d.3: obj = prim dummy()
+  return d.3
+}
+internal clause Inner.op fn op$entry(e.0: obj, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
+fn prompt$(ev.0: obj, x.1: tobj) -> tobj {
+  let u.2: unit = drop x.1
+  let c.3: tobj = prim yield_finish()
+  decref c.3
+  decref ev.0
+  return ()
+}
+";
+    let (finished, record) = visit_each(text, &["make", "probe"], state_released, None);
+    finished.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(record, Some(false), "the state is not live after the abort");
+    // 内側のhandlerが同じ`Fail`でも、着地は効果でなくevidenceで比べるので、中断は内側のフレームを外して外側に着地する。
+    // `fail`は`evv_mask[Fail]`で内側のhandlerを飛ばし、外側のevidenceへ中断する
+    let same = text
+        .replace(
+            "prim ev_new[Inner](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[Inner.op](ev.2, &op$entry)",
+            "prim ev_new[Fail](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &fail$entry)",
+        )
+        .replace(
+            "  decref u.0\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.2: tobj = prim ev_clause[Fail.fail](e.1)\n  tail clause Fail.fail c.2(e.1, ())",
+            "  decref u.0\n  let w.3: tobj = prim evv_get()\n  let m.4: tobj = prim evv_mask[Fail](w.3)\n  decref w.3\n  let u.5: unit = prim evv_set(m.4)\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.2: tobj = prim ev_clause[Fail.fail](e.1)\n  tail clause Fail.fail c.2(e.1, ())",
+        );
+    assert!(same.contains("ev_new[Fail](s.0") && same.contains("evv_mask[Fail]"));
+    let (finished, record) = visit_each(&same, &["make", "probe"], state_released, None);
+    finished.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        record,
+        Some(false),
+        "the inner handler of the same effect is left and its state released"
+    );
+}
+
+/// 代役。`make`の文字列を内側のhandlerの状態にして`probe`を呼び、戻った後に、その文字列が生きている物体の中にあるかを
+/// 記録する。その後`evv`を`probe`の前のものに戻す。
+unsafe fn state_released(ctx: *mut Ctx<Fast>, visit: &mut Visits<Option<bool>>) {
+    // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない。文字列の参照は
+    // `probe`が消費し、`evv_get`の参照は`evv_set`が消費する
+    let seen = unsafe {
+        let saved = (*ctx).evv_get();
+        let mut argv = [0u64];
+        call_visited_at(ctx, visit, 0, &mut argv);
+        let state = Word::from_bits(argv[0] as usize);
+        let mut argv = [state.bits() as u64];
+        call_visited_at(ctx, visit, 1, &mut argv);
+        let heap = (*ctx).heap_mut();
+        heap.reclaim();
+        let live = heap.live_objects().contains(&state);
+        let restored = saved.and_then(|saved| (*ctx).evv_set(saved));
+        restored.is_ok().then_some(live)
+    };
+    visit.record = seen;
+}
+
+/// `never`の操作のエントリが`prim yield_abort`で中断し、それを呼んだ`never`の節の呼び出しの`abort`のバイトの確かめが
+/// 後始末へ進む。末尾でない位置では後始末がフレームの持つ文字列を手放し、末尾の位置では仮の値を返す。どちらもhandleに
+/// 着地する。
+#[test]
+fn an_abort_through_a_never_clause_entry_across_a_never_clause_call() {
+    let text = format!(
+        "{FAIL}\
+fn main() -> unit {{
+  let a.0: obj = call run(&in_place)
+  let u.1: unit = extern Prelude.println(a.0)
+  let b.2: obj = call run(&in_tail)
+  let u.3: unit = extern Prelude.println(b.2)
+  return u.3
+}}
+fn run(b.0: tobj) -> obj {{
+  let w.1: tobj = prim evv_get()
+  dup w.1
+  let ev.2: obj = prim ev_new[Fail]((), w.1)
+  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &fail$entry)
+  dup ev.2
+  let w.4: tobj = prim evv_push(w.1, ev.2)
+  let u.5: unit = prim evv_set(w.4)
+  let x.6: tobj = yields apply b.0(()) prompt ev.2
+  tail call prompt$(ev.2, &ret, x.6)
+}}
+yields fn in_place(u.0: tobj) -> tobj {{
+  decref u.0
+  let ev.1: obj = prim ev_lookup[Fail]()
+  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
+  let s.3: obj = const \"in place\"
+  let t.4: obj = extern \"Prelude.Show Int.show\"(4)
+  let x.5: int = clause Fail.fail c.2(ev.1, s.3)
+  let u.6: unit = extern Prelude.println(t.4)
+  let b.7: tobj = box x.5
+  return b.7
+}}
+yields fn in_tail(u.0: tobj) -> tobj {{
+  decref u.0
+  let ev.1: obj = prim ev_lookup[Fail]()
+  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
+  let s.3: obj = const \"tail\"
+  tail clause Fail.fail c.2(ev.1, s.3)
+}}
+{FAIL_ABORTS}{PROMPT}"
+    );
+    agree(&text);
+    assert_eq!(native(&text), ("in place\ntail\n".to_string(), Ok(None)));
+}
+
+/// 着地の印を持つ`apply`の後には`prompt$`の呼び出しが続かなければならない。`abort`のバイトだけを確かめる呼び出しの
+/// 後のコードはこれに頼るので、どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseのビルドでは下ろしが
+/// どのビルドでも走らせる`eml_lir::unwind::points`の検査が先に断る。下ろしの`assert`は2つ目の守りとして残る
+/// (docs/spec/native.md の「巻き戻しの地点」)。
+#[test]
+fn release_check_a_marked_apply_not_followed_by_prompt_panics() {
+    let message = load_panic(
+        "\
+fn main() -> unit {
+  return ()
+}
+yields fn g(u.0: tobj) -> tobj {
+  return u.0
+}
+fn f(ev.0: obj) -> tobj {
+  let x.1: tobj = yields apply &g(()) prompt ev.0
+  decref ev.0
+  return x.1
+}
+",
+    );
+    let rule = "the apply with the prompt marker `ev.0` is not followed by `prompt$`";
     let expected = if cfg!(debug_assertions) {
         format!("invalid LIR at the native load: {rule} in `f`")
     } else {

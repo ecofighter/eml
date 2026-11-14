@@ -242,8 +242,8 @@ fn in_span(b: &mut FunctionBuilder, rc: Value, bias: u32, span: u32) -> Value {
 }
 
 /// `ctx`の`yielding.target`の語。yieldも中断もしていない間は`UNIT`である。読むのは、インラインの`yielding`と
-/// `yield_status`と、最後でない部分から戻るyieldを見つける`eml$apply$m`の`n < m`の腕の見張りである
-/// (docs/spec/native.mdの「エフェクト」「関数の値」)。
+/// `yield_status`と、最後でない部分から戻るyieldを見つける`eml$apply$m`の`n < m`の腕の見張りと、着地の印を持つ
+/// 地点の冷たいブロックである (docs/spec/native.mdの「エフェクト」「関数の値」「巻き戻しの地点」)。
 pub fn yield_target(b: &mut FunctionBuilder, ctx: Value) -> Value {
     b.ins().load(
         types::I64,

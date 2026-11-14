@@ -1,7 +1,7 @@
-//! 生成したコードが冷たい道で呼ぶサービス (docs/spec/native.md の「安全点」、「externの失敗」)。
+//! 生成したコードが冷たい道で呼ぶサービス (docs/spec/native.md の「安全点」、「巻き戻しの地点」、「externの失敗」)。
 #![allow(unsafe_code)]
 
-use eml_rt::{Fault, Stop};
+use eml_rt::{Fault, Stop, Word};
 use eml_sched::error::RunFault;
 
 use crate::arch;
@@ -77,5 +77,14 @@ crate::entries! {
         let at = Some(At { function: function as usize, site });
         // SAFETY: 上と同じ
         Err::<i64, Fatal>(unsafe { worker::record(ctx, fault, at) })
+    }
+
+    /// 着地の印が中断の宛先のevidenceである地点の冷たい側。ヒープのダミーを返し、着地したフレームはそれを印を持つ
+    /// `apply`の結果に束縛する (docs/spec/native.md の「巻き戻しの地点」)。
+    ///
+    /// # Safety
+    /// `eml_nrt_safepoint`と同じ。
+    pub shim fn eml_nrt_landed(ctx) -> obj {
+        Ok::<Word, Fatal>(ctx.heap().dummy())
     }
 }

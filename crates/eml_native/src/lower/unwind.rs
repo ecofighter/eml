@@ -1,11 +1,12 @@
 //! 巻き戻しの地点の後のコード、地点の後始末、仮の値、`eml$raise`、関数の位置の行 (docs/spec/native.md の
 //! 「巻き戻しの地点」)。
-use cranelift_codegen::ir::{Block, InstBuilder, Signature, Value, types};
+use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::{Block, BlockArg, InstBuilder, Signature, Value, types};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::Module;
 use eml_extern::Purity;
 use eml_lir::unwind::{UnwindPoint, Unwinds};
-use eml_lir::{BlockId, Loc, Repr, VarId};
+use eml_lir::{BlockId, Loc, Prim, Repr, VarId};
 use eml_nrt::Kind;
 use eml_nrt::image::{
     ARITH_DIVISION_BY_ZERO, ARITH_INTEGER_OVERFLOW, NO_FILE, PURITY_EFFECTFUL, PURITY_PANICS,
@@ -13,6 +14,7 @@ use eml_nrt::image::{
 };
 
 use super::Imports;
+use super::effects;
 use super::function::FnLower;
 use crate::abi::tail_signature;
 use crate::mem;
@@ -20,8 +22,11 @@ use crate::mem;
 /// 巻き戻しの地点の命令の後に出すもの。`site`は関数自身の位置の行 (`FnRow.sites`) の添字である。
 #[derive(Debug, Clone, Copy)]
 pub(super) enum After {
-    /// 末尾でない呼び出し。呼ばれた側が中断を始めたかを`abort`のバイトで確かめる。
+    /// 着地の印のない地点の、末尾でない呼び出し。呼ばれた側が中断を始めたかを`abort`のバイトで確かめる。
     Call,
+    /// 着地の印を持つ地点の、末尾でない呼び出し。確かめは`Call`と同じである。`result`は呼び出しが束縛する変数で、
+    /// 続きはそれを、熱い道では呼び出しの結果に、中断がここに着地したときはダミーに束縛し直す。
+    Land { result: VarId },
     /// `faults`の行の呼び出し。faultの語を確かめる。
     Faults { site: u32, purity: Purity },
     /// 失敗するインラインの行。熱いコードはない。行を展開したコードが失敗の条件で`overflow`か`zero`へ分岐し、
@@ -53,15 +58,24 @@ impl<'a> From<&'a UnwindPoint> for Point<'a> {
     }
 }
 
-/// `abort`のバイトをロードし、立っていれば新しい冷たいブロックへ、そうでなければ新しい熱いブロックへ分岐する。どちらの
-/// ブロックも選ばずに`(cold, hot)`を返す。呼び出しの後の巻き戻しの確かめは、どれもこの関数が出す
-/// (docs/spec/native.md の「巻き戻しの地点」)。
-pub(super) fn if_aborting(b: &mut FunctionBuilder, ctx: Value) -> (Block, Block) {
+/// `abort`のバイトをロードし、立っていれば新しい冷たいブロックへ、そうでなければ`hot_args`を持って新しい熱いブロックへ
+/// 分岐する。熱いブロックは`hot_args`の型の引数を持つ。どちらのブロックも選ばずに`(cold, hot)`を返す。呼び出しの後の
+/// 巻き戻しの確かめは、どれもこの関数が出す (docs/spec/native.md の「巻き戻しの地点」)。
+pub(super) fn if_aborting(
+    b: &mut FunctionBuilder,
+    ctx: Value,
+    hot_args: &[Value],
+) -> (Block, Block) {
     let aborting = mem::yield_abort(b, ctx);
     let cold = b.create_block();
     b.set_cold_block(cold);
     let hot = b.create_block();
-    b.ins().brif(aborting, cold, &[], hot, &[]);
+    for &value in hot_args {
+        let ty = b.func.dfg.value_type(value);
+        b.append_block_param(hot, ty);
+    }
+    let args: Vec<BlockArg> = hot_args.iter().copied().map(BlockArg::Value).collect();
+    b.ins().brif(aborting, cold, &[], hot, &args);
     (cold, hot)
 }
 
@@ -131,9 +145,20 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
     pub fn after_unwind_point(&mut self, point: &Point, after: After) {
         match after {
             After::Call => {
-                let (cleanup, hot) = if_aborting(&mut self.b, self.ctx);
+                let (cleanup, hot) = if_aborting(&mut self.b, self.ctx, &[]);
                 self.fill_cleanup(cleanup, point);
                 self.b.switch_to_block(hot);
+            }
+            After::Land { result } => {
+                let marker = point
+                    .landing
+                    .expect("a landing point carries its prompt marker");
+                let value = self.var(result);
+                let (cold, hot) = if_aborting(&mut self.b, self.ctx, &[value]);
+                self.fill_landing(cold, hot, marker, point);
+                self.b.switch_to_block(hot);
+                let value = self.b.block_params(hot)[0];
+                self.bind(result, value);
             }
             After::Faults { site, purity } => {
                 let fault = mem::fault(&mut self.b, self.ctx);
@@ -213,13 +238,40 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
         self.b.ins().jump(cleanup, &[]);
     }
 
-    /// 地点の後始末。持っている参照を数だけ手放し、tokenを捨て、関数の結果の仮の値を返す。
+    /// 着地の印`marker`を持つ地点の冷たいブロック。`target`を印と比べ、等しければ中断はここで終わるので、
+    /// `eml_nrt_landed`が返すダミーを持って熱いブロックへ戻る。そうでなければ、中断が外すhandlerの状態を取り出して
+    /// 手放してから、地点の後始末へ進む。VMと同じ順である (docs/spec/native.md の「巻き戻しの地点」)。
+    fn fill_landing(&mut self, cold: Block, hot: Block, marker: VarId, point: &Point) {
+        self.b.switch_to_block(cold);
+        let target = mem::yield_target(&mut self.b, self.ctx);
+        let ev = self.var(marker);
+        let here = self.b.ins().icmp(IntCC::Equal, target, ev);
+        let land = self.cold_block();
+        let other = self.cold_block();
+        self.b.ins().brif(here, land, &[], other, &[]);
+
+        self.b.switch_to_block(land);
+        let dummy = self
+            .call_entry("eml_nrt_landed", &[])
+            .expect("`eml_nrt_landed` returns a word");
+        self.b.ins().jump(hot, &[dummy.into()]);
+
+        self.b.switch_to_block(other);
+        let state = self
+            .call_entry(&effects::entry(&Prim::EvTakeState), &[ev])
+            .expect("`ev_take_state` returns a word");
+        self.call_entry("eml_rt_decref", &[state]);
+        self.cleanup(point);
+    }
+
+    /// 地点の後始末を`block`に置く。
     pub(super) fn fill_cleanup(&mut self, block: Block, point: &Point) {
-        assert!(
-            point.landing.is_none(),
-            "the native lowering has no landing"
-        );
         self.b.switch_to_block(block);
+        self.cleanup(point);
+    }
+
+    /// 地点の後始末。持っている参照を数だけ手放し、tokenを捨て、関数の結果の仮の値を返す。
+    fn cleanup(&mut self, point: &Point) {
         for &(var, count) in point.owned {
             let word = self.var(var);
             for _ in 0..count {

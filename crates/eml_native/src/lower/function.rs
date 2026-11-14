@@ -6,7 +6,7 @@ use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataId, FuncId, Module};
 use eml_extern::ExternRef;
 use eml_lir::unwind::Unwinds;
-use eml_lir::{Atom, BlockId, Call, LirFn, Prim, Repr, Rhs, Stmt, Term, VarId};
+use eml_lir::{Atom, BlockId, Call, EP_PROMPT, LirFn, Prim, Repr, Rhs, Stmt, Term, VarId};
 use eml_nrt::image::SiteRow;
 
 use super::apply::ClosureEntries;
@@ -37,15 +37,55 @@ pub(super) fn lower<M: Module>(
     for (index, lir) in function.blocks.iter().enumerate() {
         fx.b.switch_to_block(fx.blocks[index]);
         fx.case_fields(BlockId(index as u32));
+        let mut landed = None;
         for (position, stmt) in lir.stmts.iter().enumerate() {
+            landed = fx.landing_after(landed, Step::of(stmt));
             fx.stmt(BlockId(index as u32), position, stmt);
         }
+        let landed = fx.landing_after(landed, Step::of_term(&lir.term));
+        fx.landing_after(landed, Step::End);
         fx.term(&lir.term);
     }
     // 値をfrontendの変数でなくブロックの引数に置くので、すべてのブロックを下ろした後で1回sealすれば足りる
     fx.b.seal_all_blocks();
     fx.b.finalize(config);
     fx.sites
+}
+
+/// 着地の印の確かめ (`FnLower::landing_after`) から見た、ブロックの文か終端。
+enum Step<'c> {
+    /// 呼び出し。末尾呼び出しも含む。
+    Call(&'c Call),
+    /// externの行、`yield_to`、`yield_abort`。
+    Barrier,
+    /// ほかの文。
+    Other,
+    /// ブロックの終わり。
+    End,
+}
+
+impl<'c> Step<'c> {
+    fn of(stmt: &'c Stmt) -> Step<'c> {
+        match stmt {
+            Stmt::Let {
+                var: _,
+                rhs: Rhs::Call(call),
+            }
+            | Stmt::LetMany { vars: _, call } => Step::Call(call),
+            Stmt::Let {
+                var: _,
+                rhs: Rhs::Extern { .. } | Rhs::Prim(Prim::YieldTo | Prim::YieldAbort, _),
+            } => Step::Barrier,
+            _ => Step::Other,
+        }
+    }
+
+    fn of_term(term: &'c Term) -> Step<'c> {
+        match term {
+            Term::TailCall(call) => Step::Call(call),
+            _ => Step::Other,
+        }
+    }
 }
 
 pub(super) struct FnLower<'a, 'b, M: Module> {
@@ -243,7 +283,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                         callee,
                         args,
                         yields: _,
-                        prompt: None,
+                        prompt: _,
                     }),
             } => self.apply(block, position, *var, *callee, args),
             Stmt::Let {
@@ -331,6 +371,33 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 self.bind(*var, unit);
             }
             _ => panic!("the native lowering has no rule for `{stmt:?}`"),
+        }
+    }
+
+    /// `step`の前に着地の印`landed`が待っていたときの、`step`の後に待っている着地の印。着地の印を持つ`apply`から、
+    /// 最初の引数が印である`prompt$`の直接の呼び出しまで、ブロックは呼び出しもexternの行も`yield_to`も`yield_abort`も
+    /// 下ろさず、印を待ったまま終わらない。呼び出しの後の確かめは`abort`のバイトしか読まないので、着地から`yield_finish`
+    /// までの間に呼び出しの巻き戻しの地点を通ってはならないからである。LIRのverifierの規則だが、コードがそれに頼るので、
+    /// ここでどのビルドでも確かめる (docs/spec/native.md の「巻き戻しの地点」)。
+    fn landing_after(&self, landed: Option<VarId>, step: Step) -> Option<VarId> {
+        let Some(marker) = landed else {
+            return match step {
+                Step::Call(call) => call.prompt(),
+                _ => None,
+            };
+        };
+        match step {
+            Step::Call(Call::Direct(callee, args))
+                if self.callees.program.function(*callee).name == EP_PROMPT
+                    && args.first() == Some(&Atom::Var(marker)) =>
+            {
+                None
+            }
+            Step::Other => Some(marker),
+            Step::Call(_) | Step::Barrier | Step::End => panic!(
+                "the apply with the prompt marker `{}.{}` is not followed by `{EP_PROMPT}` in `{}`",
+                self.function.vars[marker.0 as usize].name, marker.0, self.function.name
+            ),
         }
     }
 

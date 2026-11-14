@@ -391,7 +391,7 @@ pub(super) fn define_apply<M: Module>(
         // 内の適用の中で中断が始まったら、最後の引数を1回手放し、仮の値を返す。中断しうるのは1つの`apply`の最後の
         // 矢印だけだが、その矢印がどの部分に来るかは実行時に決まる。残りの引数は、内の段がそれぞれ1回ずつ手放す
         // (docs/spec/native.md の「関数の値」)
-        let (cleanup, hot) = unwind::if_aborting(&mut b, ctx);
+        let (cleanup, hot) = unwind::if_aborting(&mut b, ctx, &[]);
         b.switch_to_block(cleanup);
         let decref = module.declare_func_in_func(imports.entry("eml_rt_decref"), b.func);
         b.ins().call(decref, &[ctx, last]);
@@ -461,7 +461,8 @@ impl<M: Module> FnLower<'_, '_, M> {
     }
 
     /// 末尾でない`var = apply callee(args)`。呼ぶ値が引数の数だけを待てば、そのエントリを直接呼び、そうでなければ
-    /// `eml$apply$<m>`を呼ぶ。その後に中断を確かめる。
+    /// `eml$apply$<m>`を呼ぶ。その後に中断を確かめる。着地の印を持つ地点では、その確かめが、印を宛先とする中断を
+    /// ここに着地させる。
     pub(super) fn apply(
         &mut self,
         block: BlockId,
@@ -495,7 +496,11 @@ impl<M: Module> FnLower<'_, '_, M> {
         self.b.switch_to_block(join);
         self.bind(var, result);
         let point = self.point(block, position);
-        self.after_unwind_point(&Point::from(point), After::Call);
+        let after = match point.landing {
+            Some(_) => After::Land { result: var },
+            None => After::Call,
+        };
+        self.after_unwind_point(&Point::from(point), after);
     }
 
     /// 末尾の`apply callee(args)`。`apply`と同じに分け、どちらの道も末尾で呼ぶ。
@@ -543,7 +548,7 @@ impl<M: Module> FnLower<'_, '_, M> {
         let meta = mem::load_meta(&mut self.b, clo);
         if operation.ret == OpRet::Never {
             call_closure_code(&mut self.b, self.ctx, clo, meta, sig, &values, false);
-            let (cleanup, hot) = unwind::if_aborting(&mut self.b, self.ctx);
+            let (cleanup, hot) = unwind::if_aborting(&mut self.b, self.ctx, &[]);
             match bound {
                 Some((block, position, _)) => {
                     let point = self.point(block, position);
