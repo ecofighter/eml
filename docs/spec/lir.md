@@ -419,7 +419,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 ### エントリの関数の印
 
 - 関数は、in-place のエントリの関数にだけ `(effect, op)` の印 (`clause`) を持つ。テキストの形では `internal yields clause State.get fn …` と書く
-- エントリの関数は、捕獲の後に evidence と操作の引数を受け、操作の結果を返す。`ev_set_clause` に渡す値としてだけ参照され、`apply` でも直接の呼び出しでも呼ばれない
+- エントリの関数は、捕獲の後にevidenceと操作の引数を受け、操作の結果を返す。`ev_set_clause`に渡す値としてだけ参照され、`apply`でも直接の呼び出しでも呼ばれない。エントリの表に入るクロージャが捕獲する値の数は、関数の引数の数と操作の引数の数から決まる (下の「verifier」)
 
 ### ダミーの値
 
@@ -802,7 +802,9 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 - 基本操作と`clause`の検査は次のとおりである。Core IRのEPの段と、LIRの6つの段のすべてで走る
   - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask` の項目は、呼び出しの `mask` と同じく空でなく、番号の真に昇順に並び (同じエフェクトの項目が2つない)、どの項目も1つ以上の evidence を飛ばす (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``、``an item of `prim evv_mask[State*0]` skips no handler``)
   - `clause` の操作がエフェクトの表にあり、引数の数が「1 + 操作の引数の数」である
-  - `ev_set_clause[E.op]` に渡す値が `&g` か、同じ関数の中の `closure g(..)` なら、g の `clause` の印が op に合い、同じ関数の中で evidence を定義した `ev_new[E]` の E にも合う
+  - `ev_set_clause[E.op]`に渡す値は、`&g`か、同じ関数の中の`closure g(..)`で束縛した変数で、gは`E.op`の`clause`の印を持つ。evidenceは、同じ関数の中の`ev_new[E]`で束縛した変数である。関数の引数、呼び出しの結果、ブロックの引数のように、同じ関数の中で関数が読めない値は拒み、同じ関数が作っていないevidenceも拒む (``the `Counter.get` entry is given `c.3` (tobj), which is neither `&g` nor a closure made in this function``、`` `prim ev_set_clause[Counter.get]` is given `e.1` (obj), which is not an evidence made by `ev_new` in this function``)。節の呼び出しは、エントリのクロージャを確かめずに操作のシグネチャで呼ぶので、エントリに入るものを、入れる所で決める
+  - `clause`の印の関数gの`closure g(..)`は、ちょうど「gの引数の数 - 1 - 操作の引数の数」個の値を捕獲する (``a closure of `g`, a clause of `Counter.get`, has 2 arguments, but the clause captures 1``)。`&g`を`ev_set_clause`に渡せるのは、この数が0のときだけである (`` `&g` is put into the `Counter.get` entry, but the clause has captures``)
+  - この2つは関数ごとの検査なので、`eml_lir::unwind::points`がどのビルドでも走らせ、ネイティブの読み込みはreleaseのビルドでも破ったプログラムを断る。VMは拒まれた関数を表のない関数として読み、節の呼び出しはどちらのモードでも実行時に引数の数を関数と比べる
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける
 - `par`の検査は次のとおりである。Core IRの2つの段と、LIRの6つの段のすべてで走る
   - `pair` は、`tobj` のフィールドをちょうど2つ持つ構築子である。VM は子の一様な結果を2つ並べて組を作るためである (``the pair of a par is `Box` #0, which does not have two tobj fields``)。表にない配置とタグの範囲は R8 と同じ文言で、主語を ``the pair of a par`` にする

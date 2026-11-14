@@ -193,14 +193,18 @@ fn main() -> unit {{
   dup w.0
   let s.1: tobj = box 5
   let e.2: obj = prim ev_new[Counter](s.1, w.0)
-  let g.3: tobj = box 10
-  let u.4: unit = prim ev_set_clause[Counter.get](e.2, g.3)
-  let p.5: tobj = box 20
-  let u.6: unit = prim ev_set_clause[Counter.put](e.2, p.5)
+  let u.4: unit = prim ev_set_clause[Counter.get](e.2, &get)
+  let u.6: unit = prim ev_set_clause[Counter.put](e.2, &put)
   let w.7: tobj = prim evv_push(w.0, e.2)
   let u.8: unit = prim evv_set(w.7)
   let f.9: obj = prim ev_lookup[Counter]()
   let c.10: tobj = prim ev_clause[Counter.put](f.9)
+  dup f.9
+  let p.5: tobj = box 20
+  let q.21: unit = clause Counter.put c.10(f.9, p.5)
+  let y.19: tobj = prim ev_clause[Counter.get](f.9)
+  dup f.9
+  let q.26: tobj = clause Counter.get y.19(f.9, ())
   let o.11: tobj = prim ev_evv(f.9)
   decref o.11
   let o.25: tobj = prim ev_take_evv(f.9)
@@ -213,18 +217,25 @@ fn main() -> unit {{
   let v.17: tobj = prim ev_take_state(f.9)
   decref f.9
   let x.18: tobj = prim ev_take_state(r.16)
-  let y.19: tobj = prim ev_clause[Counter.get](r.16)
   decref r.16
   let u.20: unit = prim evv_set(w.0)
-  let q.21: unit = call show_boxed(c.10)
   let q.22: unit = call show_boxed(t.12)
   let q.23: unit = call show_boxed(v.17)
   let q.24: unit = call show_boxed(x.18)
-  let q.26: unit = call show_boxed(y.19)
+  let q.29: unit = call show_boxed(q.26)
   let d.27: tobj = prim dummy()
   let n.28: int = unbox d.27
   decref d.27
   tail call show(n.28)
+}}
+internal clause Counter.get fn get(e.0: obj, u.1: unit) -> tobj {{
+  decref e.0
+  let g.2: tobj = box 10
+  return g.2
+}}
+internal clause Counter.put fn put(e.0: obj, v.1: tobj) -> unit {{
+  decref e.0
+  tail call show_boxed(v.1)
 }}
 {SHOW_BOXED}{SHOW}"
     ));
@@ -845,6 +856,32 @@ internal clause Counter.get fn g(e.0: obj, x.1: float) -> tobj {{
         "invalid LIR at the native load"
     } else {
         "the closure entry of `g` does not have the signature of its operation"
+    };
+    assert!(message.contains(expected), "{message}");
+}
+
+/// 節の呼び出しは、エントリのクロージャを確かめずに操作のシグネチャで呼ぶので、読めない関数を入れる`ev_set_clause`は、
+/// どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseのビルドでは下ろしがどのビルドでも走らせる
+/// `eml_lir::unwind::points`の検査が断る (docs/spec/lir.md の「verifier」)。
+#[test]
+fn release_check_an_unreadable_clause_entry_panics() {
+    let message = load_panic(&format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  return ()
+}}
+fn f(c.0: tobj, w.1: tobj) -> unit {{
+  let e.2: obj = prim ev_new[Counter]((), w.1)
+  let u.3: unit = prim ev_set_clause[Counter.get](e.2, c.0)
+  decref e.2
+  return ()
+}}
+"
+    ));
+    let expected = if cfg!(debug_assertions) {
+        "invalid LIR at the native load"
+    } else {
+        "`f` has no unwind points: the `Counter.get` entry is given `c.0` (tobj), which is neither `&g` nor a closure made in this function"
     };
     assert!(message.contains(expected), "{message}");
 }

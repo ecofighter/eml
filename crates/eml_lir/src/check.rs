@@ -404,11 +404,11 @@ pub struct Context<'a> {
     /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛か、戻らない extern の束縛かどうか。束縛の使いには
     /// 制御が届かないので、互換の位置で位置と比べない。
     never: Vec<bool>,
-    /// `closure` で束縛した変数の関数と、捕獲した値の数。`ev_set_clause` のエントリの関数と、Core IR の `handle` の節の
-    /// 引数の数を確かめるのに使う。
+    /// `closure`で束縛した変数の関数と、捕獲した値の数。`ev_set_clause`に渡す値が同じ関数の中で作った`closure`で
+    /// あること、その関数が`E.op`の`clause`の印を持つことを確かめるのに使う。
     closures: FxHashMap<VarId, (FnIdx, usize)>,
-    /// `ev_new[E]` で束縛した変数の、エフェクトの番号。`ev_set_clause` のエントリがその evidence のエフェクトの操作で
-    /// あることを確かめるのに使う。
+    /// `ev_new[E]`で束縛した変数の、エフェクトの番号。`ev_set_clause`のevidenceが同じ関数の中の`ev_new`で作った
+    /// ものであること、そのエフェクトの操作のエントリであることを確かめるのに使う。
     evidences: FxHashMap<VarId, u32>,
     dominators: Dominators,
     /// 変数ごとの定義の位置 (R5)。
@@ -481,7 +481,10 @@ impl<'a> Context<'a> {
             .ok_or_else(|| format!("a call refers to the unknown function #{}", target.0))
     }
 
-    /// `closure` は1つ以上で、関数の引数の数より少ない値を捕まえる。捕まえる値がなければ `&f` と書く。
+    /// `closure`は1つ以上で、関数の引数の数より少ない値を捕まえる。捕まえる値がなければ`&f`と書く。`clause`の印の
+    /// 関数は、ちょうど「引数の数 - 1 - 操作の引数の数」個を捕まえる。節の呼び出しは、エントリのクロージャを確かめずに
+    /// 操作のシグネチャで呼ぶので、捕獲の数を作る所で決める (docs/spec/lir.mdの「verifier」)。印の操作が表にないことは
+    /// `clause_function`が断る。
     pub fn closure_arity(&self, target: FnIdx, captured: usize) -> Result<(), String> {
         let target = self.function(target)?;
         if captured == 0 {
@@ -496,7 +499,33 @@ impl<'a> Context<'a> {
                 target.name, target.params
             ));
         }
+        if let Some(required) = self.clause_captures(target)
+            && captured != required
+        {
+            return Err(format!(
+                "a closure of `{}`, a clause of `{}`, has {captured} arguments, but the clause captures {required}",
+                target.name,
+                self.clause_text(target),
+            ));
+        }
         Ok(())
+    }
+
+    /// `clause`の印の関数が捕獲する値の数。印の操作が表にないか、引数が足りない関数は`None`である。
+    fn clause_captures(&self, function: &FnSummary<'_>) -> Option<usize> {
+        let (effect, op) = function.clause?;
+        let operation = self
+            .tables
+            .effects
+            .get(effect as usize)?
+            .operations
+            .get(op as usize)?;
+        function.params.checked_sub(1 + operation.params.len())
+    }
+
+    fn clause_text(&self, function: &FnSummary<'_>) -> String {
+        let (effect, op) = function.clause.expect("a function with the clause mark");
+        operation_text(self.tables.effects, effect, op)
     }
 
     /// 直接の呼び出しは、`clause` の印のない関数に、引数の数をそろえて渡す。
@@ -1264,9 +1293,10 @@ impl<'a> Context<'a> {
         self.bound_mark(var, row.ret_mark, || format!("`prim {name}`"))
     }
 
-    /// `ev_set_clause[E.op](ev, c)` の c の関数が分かるとき (`&g` か、同じ関数の中の `closure g(..)`)、g は `E.op` の
-    /// `clause` の印を持つ。ev を同じ関数の中の `ev_new` で作ったなら、そのエフェクトは E である
-    /// (docs/spec/lir.md の「verifier」)。
+    /// `ev_set_clause[E.op](ev, c)`のcは`&g`か、同じ関数の中の`closure g(..)`の変数で、gは`E.op`の`clause`の
+    /// 印を持つ。`&g`のgは捕獲を持たない。evは同じ関数の中の`ev_new[E]`の変数である。節の呼び出しはエントリの
+    /// クロージャを確かめずに操作のシグネチャで呼ぶので、読めない値と作っていないevidenceは、エントリに入れる所で
+    /// 断る (docs/spec/lir.mdの「verifier」)。
     pub fn check_set_clause(
         &self,
         name: &str,
@@ -1281,37 +1311,55 @@ impl<'a> Context<'a> {
             Atom::Var(var) => self.closure(var).map(|(function, _)| function),
             Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => None,
         };
-        if let Some(function) =
-            target.and_then(|target| self.tables.functions.get(target.0 as usize))
-        {
-            match function.clause {
-                Some(mark) if mark == (effect, op) => {}
-                Some((marked_effect, marked_op)) => {
-                    return Err(format!(
-                        "`{}` is a clause of `{}`, but it is put into the `{entry}` entry",
-                        function.name,
-                        operation_text(effects, marked_effect, marked_op)
-                    ));
-                }
-                None => {
-                    return Err(format!(
-                        "`{}` is not a clause, but it is put into the `{entry}` entry",
-                        function.name
-                    ));
-                }
+        let Some(function) = target.and_then(|target| self.tables.functions.get(target.0 as usize))
+        else {
+            return Err(format!(
+                "the `{entry}` entry is given {}, which is neither `&g` nor a closure made in this function",
+                self.typed_atom_text(args[1])
+            ));
+        };
+        match function.clause {
+            Some(mark) if mark == (effect, op) => {}
+            Some((marked_effect, marked_op)) => {
+                return Err(format!(
+                    "`{}` is a clause of `{}`, but it is put into the `{entry}` entry",
+                    function.name,
+                    operation_text(effects, marked_effect, marked_op)
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "`{}` is not a clause, but it is put into the `{entry}` entry",
+                    function.name
+                ));
             }
         }
-        if let Atom::Var(evidence) = args[0]
-            && let Some(&created) = self.evidences.get(&evidence)
-            && created != effect
+        if matches!(args[1], Atom::Fn(_)) && self.clause_captures(function).is_some_and(|n| n != 0)
         {
             return Err(format!(
+                "`&{}` is put into the `{entry}` entry, but the clause has captures",
+                function.name
+            ));
+        }
+        let made = match args[0] {
+            Atom::Var(evidence) => self
+                .evidences
+                .get(&evidence)
+                .map(|&created| (evidence, created)),
+            _ => None,
+        };
+        match made {
+            Some((_, created)) if created == effect => Ok(()),
+            Some((evidence, created)) => Err(format!(
                 "`prim {name}` is given `{}`, the evidence of `{}`",
                 self.name(evidence),
                 effect_text(effects, created)
-            ));
+            )),
+            None => Err(format!(
+                "`prim {name}` is given {}, which is not an evidence made by `ev_new` in this function",
+                self.typed_atom_text(args[0])
+            )),
         }
-        Ok(())
     }
 
     /// `con` のフィールドの数は、コンストラクタと同じである。束縛する変数の Repr は配置の Repr と同じで、宣言した

@@ -2726,6 +2726,74 @@ fn ev_set_clause_names_the_clause_of_its_function() {
 }
 
 #[test]
+fn a_clause_closure_captures_exactly_what_its_function_takes() {
+    let closure = |target: &str, captures: &str, entry: &str| {
+        format!(
+            "{COUNTER}fn f(a.0: tobj, b.1: tobj, w.2: tobj) -> unit {{\n  let e.3: obj = prim ev_new[Counter]((), w.2)\n  let c.4: tobj = closure {target}({captures})\n  let u.5: unit = prim ev_set_clause[{entry}](e.3, c.4)\n  return u.5\n}}\ninternal clause Counter.put fn g(m.0: tobj, e.1: obj, n.2: int) -> unit {{\n  return ()\n}}\ninternal clause Counter.get fn h(m.0: tobj, k.1: tobj, e.2: obj, u.3: unit) -> int {{\n  return 0\n}}\n"
+        )
+    };
+    let too_many = closure("g", "a.0, b.1", "Counter.put");
+    let too_few = closure("h", "a.0", "Counter.get");
+    let exact = closure("g", "a.0", "Counter.put");
+    for check in [check_lowered, check_scopes] {
+        assert_eq!(
+            check(&too_many),
+            Err("a closure of `g`, a clause of `Counter.put`, has 2 arguments, but the clause captures 1 in `f`".to_string())
+        );
+        assert_eq!(
+            check(&too_few),
+            Err("a closure of `h`, a clause of `Counter.get`, has 1 arguments, but the clause captures 2 in `f`".to_string())
+        );
+        assert_eq!(check(&exact), Ok(()));
+    }
+}
+
+#[test]
+fn ev_set_clause_takes_a_function_it_can_read() {
+    let set = |binding: &str, value: &str| {
+        format!(
+            "{COUNTER}fn f(c.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n{binding}  let u.4: unit = prim ev_set_clause[Counter.put](e.2, {value})\n  return u.4\n}}\n{PUT_CLAUSE}fn r() -> tobj {{\n  return ()\n}}\n"
+        )
+    };
+    let unreadable = |value: &str| {
+        format!(
+            "the `Counter.put` entry is given `{value}` (tobj), which is neither `&g` nor a closure made in this function in `f`"
+        )
+    };
+    for check in [check_lowered, check_scopes] {
+        assert_eq!(check(&set("", "c.0")), Err(unreadable("c.0")));
+        assert_eq!(
+            check(&set("  let r.3: tobj = call r()\n", "r.3")),
+            Err(unreadable("r.3"))
+        );
+        assert_eq!(
+            check(&set("", "&g")),
+            Err(
+                "`&g` is put into the `Counter.put` entry, but the clause has captures in `f`"
+                    .to_string()
+            )
+        );
+    }
+    assert_eq!(
+        check_scopes(&set("  let b.3: tobj = box 1\n", "b.3")),
+        Err(unreadable("b.3"))
+    );
+}
+
+#[test]
+fn ev_set_clause_takes_an_evidence_made_in_the_function() {
+    let text = format!(
+        "{COUNTER}fn f(e.0: obj) -> unit {{\n  let u.1: unit = prim ev_set_clause[Counter.get](e.0, &g)\n  return u.1\n}}\ninternal clause Counter.get fn g(e.0: obj, u.1: unit) -> int {{\n  return 0\n}}\n"
+    );
+    for check in [check_lowered, check_scopes] {
+        assert_eq!(
+            check(&text),
+            Err("`prim ev_set_clause[Counter.get]` is given `e.0` (obj), which is not an evidence made by `ev_new` in this function in `f`".to_string())
+        );
+    }
+}
+
+#[test]
 fn the_lowered_level_does_not_compare_boundaries() {
     // box の挿入の前なので、Repr の食い違いは box の挿入が変換で埋める
     let text = format!(
