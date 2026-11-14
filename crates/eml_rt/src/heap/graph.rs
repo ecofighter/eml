@@ -8,7 +8,7 @@ use vstd::hash_set::HashSetWithView;
 use vstd::prelude::*;
 use vstd::raw_ptr::ptr_ref;
 
-use super::check::ALIVE_STATE;
+use super::check::{ALIVE_STATE, UNCOUNTED};
 #[cfg(verus_only)]
 use super::inv::{
     p_code, p_count, p_extended, p_first, p_init, p_meta, p_owner, p_scanned, p_word, state_code,
@@ -120,6 +120,13 @@ pub(crate) trait Graph: Sized {
             self.gv().nodes.contains(node),
         ensures
             r == self.gv().lin[node],
+    ;
+
+    /// 検査モードで、rc 0の節点が数える不死の物体か。`share`と`transfer_back`はそこに届くと断る
+    /// (docs/spec/object-model.mdの「不死の物体の数え方」)。たどりの証明はこの値を使わないので、値は約束しない。
+    fn counted(&self, node: Self::Node) -> (r: bool)
+        requires
+            self.gv().nodes.contains(node),
     ;
 
     fn set_owner(&mut self, node: Self::Node, owner: u32)
@@ -750,6 +757,19 @@ impl<M: Mode> Graph for Objects<M> {
                 }
             }
         }
+    }
+
+    fn counted(&self, h: *mut Header) -> (r: bool) {
+        proof {
+            reveal(graph_of);
+            lemma_node(self.view(), self.perms@, M::CHECKED, h);
+        }
+        if !M::CHECKED {
+            return false;
+        }
+        let tracked p = self.tracked_node(h@.addr, M::CHECKED);
+        let tracked q = p.prefix.tracked_borrow();
+        u32_load(prefix_first_ptr(h), Tracked(&q.first)) != UNCOUNTED
     }
 
     fn lin(&self, h: *mut Header) -> (r: bool) {

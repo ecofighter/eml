@@ -3835,6 +3835,9 @@ impl<M: Mode> Heap<M> {
             if self.core.rc_get(h) != 0 {
                 return Err(HeapError::NotImmortal);
             }
+            if self.foreign_counted(h) {
+                return Err(HeapError::CountedImmortal);
+            }
             if self.immortal_counted(h) {
                 let ghost s0 = *self;
                 proof {

@@ -43,6 +43,7 @@ pub enum HeapError {
     OwnedMiscount { worker: u32 },
     NotQuiescent,
     UnknownPage,
+    CountedImmortal,
 }
 
 } // verus!
@@ -107,6 +108,9 @@ impl fmt::Display for HeapError {
             HeapError::UnknownPage => {
                 f.write_str("a word points into a page no heap of this run has")
             }
+            HeapError::CountedImmortal => f.write_str(
+                "a counted immortal object is reached from a worker other than its heap's",
+            ),
         }
     }
 }

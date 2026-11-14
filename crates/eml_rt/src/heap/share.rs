@@ -40,6 +40,8 @@ pub(crate) enum ShareError {
     LinShared,
     /// 共有の物体から局所の物体だけを通って、`lin` でも rc 1 でもない局所の物体に届いた。
     SharedLocal,
+    /// 数える不死の物体に届いた。
+    Counted,
 }
 
 // 仕様
@@ -1675,7 +1677,9 @@ pub(crate) fn share_walk<G: Graph>(
         well_formed(old(graph).gv(), root) && !(check_lin && reaches_shared_lin(
             old(graph).gv(),
             root,
-        )) && !(check_lin && reaches_local_past_shared(old(graph).gv(), root)) ==> r is Ok,
+        )) && !(check_lin && reaches_local_past_shared(old(graph).gv(), root)) ==> r is Ok || r
+            == Err::<(), ShareError>(ShareError::Counted),
+        !check_lin ==> r != Err::<(), ShareError>(ShareError::Counted),
         r is Ok && sound(old(graph).gv(), root) ==> forall|n: G::Node|
             old(graph).gv().nodes.contains(n) ==> #[trigger] node_post(
                 old(graph).gv(),
@@ -1865,6 +1869,8 @@ pub(crate) fn share_walk<G: Graph>(
                 vstd::set_lib::lemma_len_subset(w.marked, g0.nodes);
                 vstd::set_lib::lemma_len_subset(w.moved.union(w.passed), g0.nodes);
             }
+        } else if check_lin && rc == 0 && graph.counted(node) {
+            return Err(ShareError::Counted);
         } else if lin && rc < 0 && check_lin {
             proof {
                 assert(node_inv(g0, g1, receiver, w, node));
@@ -2324,7 +2330,9 @@ impl<M: Mode> Heap<M> {
         ensures
             !M::CHECKED ==> r is Ok,
             final(self).wf(),
-            old(self).share_all_ok(w) ==> r is Ok && final(self).consistent(),
+            old(self).share_all_ok(w) ==> (r is Ok || r == Err::<(), HeapError>(
+                HeapError::CountedImmortal,
+            )) && final(self).consistent(),
             w.is_ptr_spec() ==> final(self).shared(*old(self), w, receiver),
             w.is_ptr_spec() && r is Ok ==> final(self).shared_all(*old(self), w, receiver),
             w.is_ptr_spec() && r == Err::<(), HeapError>(HeapError::LinShared) ==> old(
@@ -2438,6 +2446,7 @@ impl<M: Mode> Heap<M> {
             Err(ShareError::LinReachedTwice) => Err(HeapError::LinReachedTwice),
             Err(ShareError::LinShared) => Err(HeapError::LinShared),
             Err(ShareError::SharedLocal) => Err(HeapError::SharedReachesLocal),
+            Err(ShareError::Counted) => Err(HeapError::CountedImmortal),
         }
     }
 }

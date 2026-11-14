@@ -2,7 +2,7 @@ use std::any::Any;
 use std::sync::atomic::Ordering;
 
 use super::raw;
-use super::{LONG, cons, list, mortal, probe};
+use super::{LONG, cons, frozen_immortal, list, mortal, probe};
 use crate::{Checked, Heap, HeapError, Kind, Meta, Mode, Word};
 
 fn rc<M: Mode>(_heap: &Heap<M>, w: Word) -> i32 {
@@ -43,7 +43,7 @@ fn shared_counts_go_through_the_atomic_path<M: Mode>() {
 
 fn share_stops_at_immortal_objects<M: Mode>() {
     let mut heap = Heap::<M>::new();
-    let immortal = unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false)) };
+    let immortal = frozen_immortal(&mut heap, false);
     let parent = heap.alloc_data(0, 1, 0, false);
     unsafe {
         heap.acquire_immortal(immortal).unwrap();
@@ -52,8 +52,25 @@ fn share_stops_at_immortal_objects<M: Mode>() {
         assert_eq!(rc(&heap, immortal), 0);
         assert_eq!(rc(&heap, parent), -1);
         heap.decref(parent).unwrap();
+        assert_eq!(rc(&heap, immortal), 0);
     }
-    assert_eq!(mortal(&mut heap), 1);
+    assert_eq!(mortal(&mut heap), 0);
+}
+
+fn share_refuses_a_counted_immortal<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let s = heap.alloc_string_immortal("constant");
+    unsafe { heap.acquire_immortal(s) }.unwrap();
+    let cell = cons(&mut heap, s, Word::UNIT);
+    let r = unsafe { heap.share(cell, 0) };
+    if M::CHECKED {
+        assert_eq!(r, Err(HeapError::CountedImmortal));
+        // `share`が状態を変えた後の`Err`なので、ヒープは落とすだけにする (docs/spec/object-model.mdの「検査モードの約束」)
+        drop(heap);
+    } else {
+        r.unwrap();
+        unsafe { heap.decref(cell) }.unwrap();
+    }
 }
 
 fn share_walks_a_cycle_once<M: Mode>() {
@@ -367,6 +384,7 @@ both_modes!(
     sharing_a_list_marks_every_cell,
     shared_counts_go_through_the_atomic_path,
     share_stops_at_immortal_objects,
+    share_refuses_a_counted_immortal,
     share_walks_a_cycle_once,
     a_lin_object_moves_to_the_receiver_and_its_unique_children_move_with_it,
     releasing_a_shared_parent_takes_its_lin_child_without_dup,
@@ -507,18 +525,18 @@ fn sharing_reaches_no_freed_object() {
 #[test]
 fn share_leaves_an_immortal_lin_object_alone() {
     let mut heap = H::new();
-    let immortal = unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, true)) };
+    let immortal = frozen_immortal(&mut heap, true);
     let parent = heap.alloc_data(0, 1, 0, false);
     unsafe {
         heap.acquire_immortal(immortal).unwrap();
         heap.set_field(parent, 0, immortal).unwrap();
         heap.share(parent, 7).unwrap();
         assert_eq!(rc(&heap, immortal), 0);
+        // 受け手の7を所有者の欄に書かず、数えない印のまま残す
         let count = raw::prefix_first(immortal);
-        assert_eq!(count, 1);
-        // 共有の parent を空けると、子の不死の物体の参照も手放す
+        assert_eq!(count, u32::MAX);
         heap.decref(parent).unwrap();
-        assert_eq!(raw::prefix_first(immortal), 0);
+        assert_eq!(raw::prefix_first(immortal), u32::MAX);
     }
 }
 

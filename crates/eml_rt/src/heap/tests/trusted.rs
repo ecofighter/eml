@@ -1023,6 +1023,40 @@ fn cells<M: Mode>(heap: &Heap<M>, xs: Word) -> Vec<usize> {
     out
 }
 
+// ほかのヒープの数える不死の物体の`dup`、`decref`、`acquire_immortal`を、検査モードは数を書かずに断る。
+// ダミーは数えないので通る (docs/spec/object-model.mdの「不死の物体の数え方」)
+fn a_counted_immortal_of_another_heap_is_refused<M: Mode>() {
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let s = a.alloc_string_immortal("constant");
+    unsafe { a.acquire_immortal(s) }.unwrap();
+    let dummy = a.dummy();
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        let results = unsafe { [b.dup(s), b.decref(s), b.acquire_immortal(s)] };
+        for r in results {
+            if M::CHECKED {
+                assert_eq!(r, Err(HeapError::CountedImmortal));
+            } else {
+                r.unwrap();
+            }
+        }
+        unsafe {
+            b.dup(dummy).unwrap();
+            b.decref(dummy).unwrap();
+        }
+        b
+    })
+    .join()
+    .unwrap();
+    // Bは数を書いていないので、持ち主が唯一の参照を手放した後のもう1つの手放しは、手放しすぎになる
+    if M::CHECKED {
+        unsafe { a.decref(s) }.unwrap();
+        assert_eq!(unsafe { a.decref(s) }, Err(HeapError::ImmortalOverRelease));
+    }
+    drop(b);
+    drop(a);
+}
+
 // 別のスレッドが空けた小さいブロックは、持ち主の取り込みで空きリストに戻り、速いモードでは次の確保に使われる。
 // 取り込まずに落としたヒープは、`Drop` が取り込む
 fn a_remote_small_free_is_reclaimed_and_reused<M: Mode>() {
@@ -2933,6 +2967,7 @@ both_modes!(
     recovery_tells_own_blocks_from_region_blocks,
     two_threads_share_one_control,
     a_remote_small_free_is_reclaimed_and_reused,
+    a_counted_immortal_of_another_heap_is_refused,
     a_foreign_value_freed_remotely_is_finalized_once,
     a_remote_large_free_refunds_at_once,
     two_threads_free_into_one_page,
