@@ -136,7 +136,7 @@ Kept in the repository: each rule is written into `docs/spec/` (native.md, objec
 | CP-B | CI of N3 | N3 | | orchestrator |
 | N4 | `Call clauses natively` | CP-B | E-D5; G-9, G-17 | Opus |
 | L1 | `Fix what a clause entry holds where it is filled` | N4 | 00 G.3 (j); G-17 | Sonnet |
-| L2 | `Check that every entry is filled and read under its name` | L1 | 00 G.3 (j); G-17 (text to follow) | Opus |
+| L2 | `Check that every entry is filled and read under its name` | L1 | 00 G.3 (j), (k); G-17 | Opus |
 | N5 | `Land aborts at prompt` | L2 | E-D6 (landing), 08 U-2 = now; G-4, G-5 | Opus |
 | N6 | `Catch extern failures natively` | N5 | E-D7, E-D4 (`Image` effects); G-7, G-10, G-11, G-12, G-17 | Opus |
 | CP-C | CI of N6 | N6 | | orchestrator |
@@ -579,6 +579,115 @@ As CP-A, on N3's commit. Before it: the Windows and Linux cross clippy lines (7.
 - Counts to update in the plan: new tests 71 -> 75 (>= 5218) with L1's four; N5's added test (below) makes it 76 (>= 5219), the figure in 7.4; the cumulative `--release` `release_check` counts of N5 (3 -> 4) and N6 (7 -> 8).
 - Completion: G; `cargo nextest run -p eml_lir -E 'test(a_clause_closure_captures) | test(ev_set_clause_takes)'` -> `3 tests run: 3 passed`; `cargo nextest run -p eml_native --release -E 'test(release_check)'` -> `3 tests run: 3 passed`; `cargo nextest run -p eml_lir -p eml_core_ir -p eml_vm -p eml_native -p eml_cli` -> no failed (every compiled program still verifies at the EP level, the six LIR levels and `unwind::points`). The commit message says which builds run the rule and that the VM's load does not refuse.
 
+### L2: `Check that every entry is filled and read under its name`
+
+- Place: right after L1, before N5 (plan order N4 -> L1 -> L2 -> N5). That order is right: N5-N7 add hand-written LIR with clause calls and evidences, and written after L2 they follow the rules from the start. L2 does not depend on N5-N7 and they do not depend on it. Model: Opus (about 60 hand-written tests change, and each must keep its claim).
+- Purpose: 00 G.3 (j) and (k), user-approved 2026-11-14 (U-P); G-17. After L1 a clause call's `call_indirect` signature still rests on two things no build checks: that the slot was filled at all (an unfilled entry holds an immediate, and native code would load `meta` through it), and that the callee of `clause E.op` is the value `ev_clause[E.op]` read from an `E` evidence (`callee: _` in both verifiers). This unit adds both rules to the per-function checker, so the Core IR EP level, the six LIR levels and `eml_lir::unwind::points` run them, and the native load panics on a violation in every build (`crates/eml_native/src/lower/mod.rs:161-172`). The VM is unchanged (it reads a refused function as one without a table).
+- Evidence that the compiler satisfies both: scratch clone at f5b7c884 with L1's rules and both rules of this unit in both verifiers, `cargo test --workspace -q --no-fail-fast` (debug): every `eml_cli` test (UI, REPL transcripts), every bench and lowering test passed; only the hand-written tests listed below failed [V: `exec/advice-scratch/full4.txt`, prototype `advice-scratch/patch.py`, `patch2.py`, `patch3.py`, `patch4.py`]. EP's producers are `Out::handle` (handlers.rs:616-632: `ev_new`, then one `ev_set_clause` per operation, then `evv_push`) and `Out::perform` / `reperform$` (handlers.rs:662-682, forks.rs:112-128: `ev_lookup[E]`, `ev_clause[E.op]`, `clause E.op`).
+
+#### Rules
+
+Both rules live in `eml_lir::check` (`Context`), fed by both verifiers, as `clause_values` is. No rule logic is duplicated in `eml_core_ir`.
+
+**F (filled entries).** For every `let ev = prim ev_new[E](..)`:
+- In the block of the `ev_new`, the statements after it up to the first statement that uses `ev` as a value in any other way (`Stmt::for_each_atom`; `dup`, `decref` and the prompt marker are not uses), or up to the block's terminator, contain exactly one `ev_set_clause[E.op](ev, _)` for each operation of E.
+- No other `ev_set_clause` has `ev` as argument 0 (none after that use, none in another block).
+- Run the scan after the function's statement walk, so that the at-site messages (L1's and the existing ones of `check_set_clause`) are reported first.
+- Messages (the function suffix `` in `f` `` is added by the caller as usual):
+  - `` the `State.put` entry of `e.2` is not filled before `e.2` is used ``
+  - `` the `State.get` entry of `e.2` is filled twice ``
+  - `` an entry of `e.2` is filled after `e.2` is used ``
+- An effect number outside the table is skipped (`check_prim` reports it).
+
+**C (callee).** For every `Call::Clause { effect: E, op, callee, .. }` (bound, multi-value and tail):
+- `callee` is a variable bound in the same function by `prim ev_clause[E.op](v)`, and `v` is a variable bound in the same function by `prim ev_lookup[E]` or `prim ev_new[E]`.
+- `Context` gains the maps for this (`ev_clause` bindings with their operand; `ev_lookup` bindings), filled where `note_closure` / `note_evidence` are called (eml_lir verify.rs:768-773, eml_core_ir verify.rs:233-238). An `ev_lookup` variable is not added to `evidences`: `ev_set_clause` still takes only an `ev_new` variable (L1).
+- Messages:
+  - `` a clause of `Counter.get` calls `c.0` (tobj), which `ev_clause[Counter.get]` did not bind in this function `` (a parameter, a call result, a constant, or the entry of another operation; use `typed_atom_text`)
+  - `` a clause of `Counter.get` calls `c.3`, read from `e.1` (obj), which is not an evidence of `Counter` found or made in this function ``
+- The check goes first in the `Call::Clause` arm of `check_call` in `crates/eml_lir/src/verify.rs` (:1708) and after the `Level::Translated` refusal in `crates/eml_core_ir/src/verify.rs` (:442).
+
+#### Files
+
+- `crates/eml_lir/src/check.rs` (the two rules, the maps, doc comments citing docs/spec/lir.md の「verifier」), `crates/eml_lir/src/verify.rs`, `crates/eml_core_ir/src/verify.rs` (feeding and the two call sites only).
+- `docs/spec/lir.md`: 「verifier」 (two bullets after L1's, and the every-build sentence), 「節の呼び出し」 (the `callee` bullet), 「evidence」 ("handle で入れた後は変えない" gains the reference to the rule). `docs/spec/core-ir.md` 「verifier」 (the EP level runs the same rules; cite lir.md). `docs/spec/native.md` 「関数の値」 (the clause-call bullets at :341-342). L1 already put a sentence into the tag-0 bullet (:341: "`ev_set_clause`が関数を読める値だけを受け、…関数ごとの検査がどのビルドでも確かめる"); this unit deletes that sentence and states the four rules once, in the clause-call bullet (:342), with the wording below, so that native.md holds one statement (L1 review B-1). L1 does not write any "relies on EP" wording there; this unit writes the final sentence.
+- The tests below.
+
+#### Docs sentences
+
+English source (translate with PLaMo, `form: plain`, glossary: evidence, エントリ, 節の呼び出し, `clause`の印, 捕獲, verifier, 下ろし, 実行の前提; pass the surrounding section as `history`; review). Reviewed drafts follow each.
+
+lir.md 「verifier」, after L1's two bullets:
+- "Every entry of the evidence that `ev_new[E]` binds is filled exactly once, in the block of the `ev_new`, before the first other use of the evidence and before the end of the block. `dup` and `decref` are not uses. An `ev_set_clause` on the evidence after that use, or in another block, is refused. An entry that is not filled holds an immediate, and a clause call would read it as a closure."
+  - `ev_new[E]`が束縛するevidenceのエントリは、どれも、その`ev_new`のブロックの中で、evidenceのほかの最初の使いより前、ブロックの終わりより前に、ちょうど1回入れる。`dup`と`decref`は使いに数えない。その使いの後や別のブロックの`ev_set_clause`は拒む。入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むためである
+- "The callee of `clause E.op` is a variable bound by `prim ev_clause[E.op](v)` in the same function, and v is a variable bound by `ev_lookup[E]` or `ev_new[E]` in the same function. A callee that is a parameter, the result of a call or the entry of another operation is refused."
+  - `clause E.op`の`callee`は、同じ関数の中の`prim ev_clause[E.op](v)`で束縛した変数で、vは同じ関数の中の`ev_lookup[E]`か`ev_new[E]`で束縛した変数である。関数の引数、呼び出しの結果、別の操作のエントリを`callee`にした呼び出しは拒む
+- "With these rules, the closure that a clause call calls is the one that the handle put into the entry of the same operation, so its code has the signature of the operation. The verifier does not check that `evv` holds only evidences, nor the entries of the evidences that the runtime makes for the children of a `par`. These stay in the premises of execution (「実行の前提」)."
+  - これらの規則で、節の呼び出しが呼ぶクロージャは、handleが同じ操作のエントリに入れたものになり、そのコードは操作のシグネチャを持つ。`evv`がevidenceだけを持つことと、実行系が`par`の子のために作るevidenceのエントリは、verifierが確かめない。この2つは実行の前提に残る (下の「実行の前提」)
+- Replace L1's every-build sentence ("この2つは関数ごとの検査なので…") by one that covers all four rules: "These four rules belong to the check of each function, so `eml_lir::unwind::points` runs them in every build, and the native load refuses a program that breaks them in a release build too. The VM reads a refused function as a function without a table."
+  - この4つは関数ごとの検査なので、`eml_lir::unwind::points`がどのビルドでも走らせ、ネイティブの読み込みはreleaseのビルドでも破ったプログラムを断る。VMは拒まれた関数を表のない関数として読む
+
+lir.md 「節の呼び出し」, the `callee` bullet gains: "`callee` is the value `ev_clause[E.op]` read in the same function (「verifier」)."
+  - `callee`は、同じ関数の中で`ev_clause[E.op]`が読んだ値である (下の「verifier」)
+
+core-ir.md 「verifier」: "The EP level runs the entry rules and the callee rule of the LIR verifier with the same code (`eml_lir::check`; [LIR](lir.md) の「verifier」)."
+  - EPの段は、LIRのverifierのエントリの規則と`callee`の規則を、同じ部品 (`eml_lir::check`) で確かめる ([LIR](lir.md)の「verifier」)
+
+native.md 「関数の値」: delete L1's sentence in the tag-0 bullet (:341, from "節の呼び出しはエントリのクロージャを確かめずに呼ぶので" to "確かめる ([LIR](lir.md)の「verifier」)。"; the sentence that follows it, about the `lower::program` assert, stays), and in the clause-call bullet (:342), after "タグは読まない", add: "Native code calls the closure of a clause call with the operation's signature and tests neither its tag nor its function. Four rules of the verifier make this right, and the lowering runs them in every build through `eml_lir::unwind::points`: what an entry is filled with, the number of captures of a clause closure, that every entry is filled, and that the callee is read from the entry of the same operation. The load panics on a program that breaks them, in a release build as well."
+  - ネイティブのコードは、節の呼び出しのクロージャを操作のシグネチャで呼び、タグも関数も確かめない。これを正しくするのはverifierの4つの規則で、下ろしが`eml_lir::unwind::points`を通してどのビルドでも走らせる。エントリに入れる値、節のクロージャの捕獲の数、どのエントリも入れてあること、`callee`を同じ操作のエントリから読むことである。これを破るプログラムの読み込みは、releaseのビルドでもpanicする ([LIR](lir.md)の「verifier」)
+
+#### New tests (5; write first)
+
+- `crates/eml_lir/tests/verify.rs`:
+  - `every_entry_is_filled_once_before_the_evidence_is_used`: accepted (all entries, with a `dup` of the evidence between); refused with the three F messages (one entry missing before `evv_push`; missing at a `return`; the same entry twice; an `ev_set_clause` after `evv_push`; one in a successor block).
+  - `a_clause_call_calls_what_ev_clause_read`: accepted from `ev_lookup` and from `ev_new`; refused with the two C messages (a `tobj` parameter; `ev_clause` of another operation; `ev_clause` on an `obj` parameter), for a bound and a tail clause call.
+- `crates/eml_core_ir/tests/verify.rs`: `the_evidence_level_checks_entries_and_clause_callees` (one refusal of each rule through the Core IR verifier; it pins the feeding, not the rule).
+- `crates/eml_native/tests/effects.rs`: `release_check_an_unfilled_entry_panics`, `release_check_a_clause_callee_not_read_from_its_entry_panics` (`eml_lir::parse`d, unverified; `NativeMachine::load` under `catch_unwind` panics; release text `has no unwind points: ` + the rule's message, debug text `invalid LIR at the native load`; `cfg!(debug_assertions)` picks, as in N4's).
+
+#### Test changes (kind 2; the user's approval of L2 covers this scope)
+
+Scope: hand-written LIR and Core IR whose clause callee is not read by `ev_clause` from an `ev_lookup` / `ev_new` evidence in the same function, or whose `ev_new` evidence does not have every entry filled first. The fix is input-only: add `let ev = prim ev_lookup[E]()` + `let c = prim ev_clause[E.op](ev)` (dropping the `c` / `e` parameters and their arguments at the callers), or add the missing clause functions and `ev_set_clause` lines. Each test keeps its claim and its pass/fail role. No kind 1 is expected [I: classified by module, not by reading each test]; see the stop rule.
+
+Failing with the rules on [V: `advice-scratch/full4.txt`; 58 there, 57 here: `effects::a_handler_is_installed_and_found` is not listed, because L1 rewrote it to these rules and it meets both (measured at L1)], plus two that fail only in release [V: `advice-scratch/rel.txt`]. Total 2 + 6 + 29 + 11 + 9 = 57, plus 2 = 59:
+
+- `eml_core_ir` unit tests, `crates/eml_core_ir/src/evidence/` (2; expected-value: the printed IR gains the added lines): `evidence::tests::a_clause_call_is_a_yield_point_unless_it_is_in_tail_position`, `evidence::tests::a_slow_path_drops_a_non_unr_yield_result`.
+- `eml_core_ir` `tests/verify.rs` (6; input-only): `a_clause_call_names_an_operation_and_takes_its_arguments`, `a_clause_function_is_only_put_into_a_handler_table`, `ev_set_clause_names_the_clause_of_its_function`, `prims_and_clauses_are_accepted_after_the_evidence_pass`, `the_evidence_level_does_not_compare_boundaries`, `the_uses_of_a_never_binder_are_not_compared`.
+- `eml_lir` `tests/` (29):
+  - expected-value (the printed LIR or point list gains the added lines; 14): `boxing::a_clause_call_uses_the_reprs_of_its_operation`, `boxing::a_clause_function_keeps_its_captures_uniform`, `boxing::a_clause_function_takes_the_reprs_of_its_operation`, `boxing::a_clause_function_unboxes_its_return_to_a_scalar_operation_result`, `boxing::a_never_clause_call_is_not_rebound`, `boxing::prim_operands_are_converted_like_call_arguments`, `boxing::the_uses_of_a_never_clause_binder_are_not_converted`, `contract::a_call_whose_result_mark_is_not_compatible_with_the_ret_mark_is_not_a_tail_call`, `contract::a_clause_call_returned_at_the_end_becomes_a_tail_call`, `contract::a_never_clause_returned_at_the_end_becomes_a_tail_call_in_any_function`, `contract::every_kind_of_call_returned_at_the_end_becomes_a_tail_call`, `flatten::a_call_that_never_returns_binds_a_struct_to_a_dummy_obj`, `perceus::prims_read_borrowed_arguments_and_consume_the_rest`, `unwind::clause_call_is_a_point`.
+  - input-only (15): `verify::a_clause_call_names_an_operation_and_takes_its_arguments`, `verify::a_clause_function_is_only_put_into_a_handler_table`, `verify::a_never_clause_has_no_result_to_compare`, `verify::a_tail_call_result_is_compatible_with_the_ret`, `verify::ev_set_clause_names_the_clause_of_its_function`, `verify::prims_and_clauses_are_accepted_after_the_evidence_pass`, `verify::the_boundaries_of_prims_and_clauses_are_compatible`, `verify::the_lowered_level_checks_prims_and_clauses`, `verify::the_lowered_level_does_not_compare_boundaries`, `verify::the_operands_of_uniform_calls_are_compatible_with_tobj`, `verify::the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj`, `verify::the_uses_of_a_never_binder_are_not_compared`, `verify::v2_lets_poly_meet_unr_and_lin_and_constants_meet_any_mark`, `verify::v2_lets_unr_pass_to_lin_at_each_boundary`, `verify::v2_rejects_passing_lin_to_unr_at_each_boundary`.
+- `eml_native` `tests/effects.rs` (11 + 2; input-only, `agree` compares with the VM): `a_mask_skips_the_named_evidence`, `a_never_clause_bound_to_a_float`, `a_static_clause_closure_has_tag_0`, `a_tail_clause_call`, `a_tail_never_clause_in_a_float_function`, `a_tail_never_clause_in_a_function_returning_two_leaves`, `an_in_place_clause_returns_its_value`, `an_under_clause_runs_with_its_handlers_evv`, `effect_numbers_come_from_the_machine_table`, `yield_status_reads_as_the_runtime_does`, `yielding_is_one_while_a_yield_is_in_flight`; and, failing only in `--release` because the new rules fire before the message they expect, `release_check_a_clause_entry_signature_mismatch_panics` (fill `Counter.put` too) and `release_check_a_tail_clause_result_mismatch_panics` (read the callee with `ev_lookup` + `ev_clause`).
+- `eml_vm` `tests/` (9; input-only, including `tests/ir/*.lir` and `tests/miri/blocking.lir` where the test reads a file): `evidence::a_program_that_ends_during_a_yield_is_an_error`, `evidence::a_program_that_ends_with_a_nonempty_evidence_list_is_an_error`, `evidence::a_renewed_evidence_has_its_own_state_and_the_current_evv_outside`, `evidence::a_yield_does_not_start_during_another_yield`, `evidence::a_yield_reaches_the_status_of_its_target`, `evidence::evv_mask_keeps_the_innermost_evidence_and_skips_the_next`, `evidence::evv_mask_skips_the_innermost_evidence_of_an_effect`, `miri::par_switches_between_tasks`, `structs::a_struct_unbox_on_a_dummy_gives_leaf_dummies`.
+
+Notes on the list:
+- The two `ev_set_clause_names_the_clause_of_its_function` tests are expected to stay unchanged once F runs after the statement walk (the mark messages they assert are at-site); they failed in the prototype, which ran F first. If they still fail, add the missing entries (input-only).
+- A test whose first failing assertion hid a later one is still on the list by name; the list is of tests, not of programs.
+- N5-N7's planned hand-written tests (plan 7.2) are written to these rules: read the callee with `ev_lookup` + `ev_clause`, fill every entry.
+
+#### Counts to update in the plan
+
+- New tests: 76 (after L1 and N5's extra test) -> 81 (L2 +5); the stage's floor >= 5219 -> >= 5224 (5143 + 81). Changed in 7.4, 7.5, section 9 and 00 G.3 (j)/(k).
+- Cumulative `--release` `release_check` counts: after L1 3 (N4's 2, L1's 1; measured); after L2 5 (3 + L2's 2); N5 4 -> 6; N6 8 -> 10 (3 + 2 + 1 + 2 + 1 + 1 = 10: the three `prelude_` tests, N4's two, L1's one, L2's two, N5's one, N6's one).
+- 7.4 gains the kind-2 scope above under L2.
+
+#### Completion
+
+- G.
+- `cargo nextest run -p eml_lir -E 'test(every_entry_is_filled) | test(a_clause_call_calls_what)'` -> `2 tests run: 2 passed`.
+- `cargo nextest run -p eml_core_ir -E 'test(the_evidence_level_checks_entries)'` -> `1 test run: 1 passed`.
+- `cargo nextest run -p eml_native --release -E 'test(release_check)'` -> `5 tests run: 5 passed`.
+- `cargo nextest run -p eml_lir -p eml_core_ir -p eml_vm -p eml_native -p eml_cli` -> no failed (every compiled program passes both rules at the EP level, the six LIR levels and `unwind::points`).
+- `grep -n 'callee: _' crates/eml_lir/src/verify.rs crates/eml_core_ir/src/verify.rs` shows no hit inside the `check_call` arms at eml_lir :1708 and eml_core_ir :442 (the callee is now read there).
+- Miri on the VM's small runs, both settings (CLAUDE.md command; `miri::par_switches_between_tasks`'s input changed) -> pass.
+- The commit message lists the changed tests by crate, says they are kind 2 under the user's approval of 2026-11-14, and says which builds run the rules.
+
+#### Stop rule
+
+Stop and return a consultation request, without committing, when:
+- a test outside the list above fails (in debug or in the `--release` run);
+- a listed test cannot keep its claim under the rules (its pass/fail role or the fact it pins would change): that is kind 1 for the user;
+- any `eml_cli` test, bench snapshot or lowering test fails: a compiled program breaks a rule, which means a pass moves an entry or a callee, and the rule or the pass needs a decision, not a workaround;
+- the rules cannot be fed from both verifiers without duplicating the rule logic.
+
 ### N5: `Land aborts at prompt`
 
 - Purpose: E-D6 landing; `eml_nrt_landed`.
@@ -592,7 +701,7 @@ As CP-A, on N3's commit. Before it: the Windows and Linux cross clippy lines (7.
   - `an_abort_through_a_never_clause_entry_across_a_never_clause_call` (N4 review A-2: `agree` on LIR text whose `never` clause entry aborts through `prim yield_abort`, called by a `never` clause call, non-tail and tail; one test with both positions).
   - `release_check_a_marked_apply_not_followed_by_prompt_panics` (a parsed, unverified LIR program; `load` under `catch_unwind` panics). From N4's results, the every-build LIR checker run by `eml_lir::unwind::points` already refuses a marked `apply` not followed by `prompt$` [I: to confirm at N5 against N4's finding], so in a release build the message is the checker's and in a debug build the verifier's (`cfg!(debug_assertions)` picks the text); the lowering assert stays as a second line of defence (as N4's `release_check_a_tail_clause_result_mismatch_panics`, option A).
 - docs: native.md 「巻き戻しの地点」 (landing block, order, `eml_nrt_landed`; delete 「着地の印を持つ地点は下ろさない…」; I-land's first half "前半は、debugのビルドでLIRのverifierが、どのビルドでも下ろしが確かめる" so that the 「releaseでは定まらない」 sentence (native.md:182 in the audit's tree) covers only the `prompt$` half; and, for jit-tasks, "a row that can run eml code is followed by the `Call` test as well as the `Faults` test" (SA-audit B2: `unwind::if_aborting` stays the only emitter and is usable after any call-like instruction; no code in this stage)), 「エントリ」 service list.
-- Completion: G; `cargo nextest run -p eml_native -E 'test(=effects::an_abort_lands_and_the_clause_returns)'` → 1 passed; `cargo nextest run -p eml_native --release -E 'test(release_check)'` → `4 tests run: 4 passed` (N4's two, L1's and this one); `cargo nextest run -p eml_native` → no failed; `grep -c 'landing.is_none' crates/eml_native/src/lower/unwind.rs` → `0`; SC lines of N5.
+- Completion: G; `cargo nextest run -p eml_native -E 'test(=effects::an_abort_lands_and_the_clause_returns)'` → 1 passed; `cargo nextest run -p eml_native --release -E 'test(release_check)'` → `6 tests run: 6 passed` (N4's two, L1's one, L2's two and this one: 2 + 1 + 2 + 1 = 6); `cargo nextest run -p eml_native` → no failed; `grep -c 'landing.is_none' crates/eml_native/src/lower/unwind.rs` → `0`; SC lines of N5.
 
 ### N6: `Catch extern failures natively`
 
@@ -605,7 +714,7 @@ As CP-A, on N3's commit. Before it: the Windows and Linux cross clippy lines (7.
 - Kind 3: `crates/eml_nrt/tests/services.rs` :119, :164, :197 pass a 4-word buffer (from `as_mut_ptr()`) as `out`; every `Image { … }` literal gains `panic_effect: NO_EFFECT, io_effect: NO_EFFECT`: `crates/eml_nrt/tests/run.rs` :27, :225, :352, :406, `crates/eml_nrt/tests/services.rs` :37, `crates/eml_nrt/src/rows.rs` :188, `crates/eml_nrt/src/entries.rs` :532 (plus `jit.rs` :147, the producer). Assertions unchanged.
 - New tests (new `crates/eml_native/tests/raise.rs`, in `tests/main.rs`): `prelude_with_two_panic_operations_is_refused`, `prelude_whose_panicked_takes_two_objects_is_refused`, `prelude_whose_panicked_returns_a_value_is_refused`, `try_io_sees_the_vm_kind_for_not_found_and_permission_denied`, `an_overflow_without_prelude_panic_ends_with_the_vm_text`, `try_panic_catches_inline_overflow`, `try_panic_catches_an_index_row`, `try_panic_catches_the_panic_row`, `try_panic_catches_a_c_row_narrowing_panic`, `try_io_catches_a_failing_open`, `a_stop_is_never_caught`, `a_pure_rows_fault_is_not_caught`, `no_handler_gives_the_vm_text`, `cleanups_run_after_raise_returns` (each `agree` / `agree_source`, census empty: G-11, G-12); `release_check_an_empty_mask_panics` (a parsed, unverified program whose `evv_mask` list is emptied after parsing; `load` panics; from N4's results the every-build checker run by `eml_lir::unwind::points` already refuses an empty mask [I: to confirm at N6], so the message is the checker's in a release build and the verifier's (`invalid LIR at the native load`) in a debug build, `cfg!(debug_assertions)` picks the expected text; the lowering assert stays as a second line of defence, option A); `crates/eml_native/tests/clif.rs` `the_raise_helper` (pin of `clif(text, "eml$raise")`: one `call %eml_nrt_failed`, two `call_indirect`, two `load.i8 ... v0+24`, one `trap user1`, no `iconst` but the two class values; G-10).
 - docs: native.md 「externの失敗」 (classes, order, `out`, ownership; delete 「失敗を捕まえるハンドラはないので…」), 「Image」 (two fields), 「関数の形」 (`LoadError::Prelude`).
-- Completion: G; `cargo nextest run -p eml_native -E 'test(raise::) | test(clif::)'` → no failed; `cargo nextest run -p eml_native --release -E 'test(/::prelude_/) | test(release_check)'` → `8 tests run: 8 passed` (G-17: the three `prelude_` tests of N6, N4's `release_check_a_clause_entry_signature_mismatch_panics` and `release_check_a_tail_clause_result_mismatch_panics`, L1's `release_check_an_unreadable_clause_entry_panics`, N5's `release_check_a_marked_apply_not_followed_by_prompt_panics`, N6's `release_check_an_empty_mask_panics`: 3 + 2 + 1 + 1 + 1 = 8); `grep -rn 'debug_assert\|cfg!(debug_assertions)' crates/eml_native/src/jit.rs | grep -ci prelude` → `0`; SC lines of N6; Miri eml_nrt both settings → pass; ASan (CLAUDE.md command) `-p eml_native -- --skip fatal::` and `-p eml_nrt -- --skip fatal::` → pass.
+- Completion: G; `cargo nextest run -p eml_native -E 'test(raise::) | test(clif::)'` → no failed; `cargo nextest run -p eml_native --release -E 'test(/::prelude_/) | test(release_check)'` → `10 tests run: 10 passed` (G-17: the three `prelude_` tests of N6, N4's `release_check_a_clause_entry_signature_mismatch_panics` and `release_check_a_tail_clause_result_mismatch_panics`, L1's `release_check_an_unreadable_clause_entry_panics`, L2's `release_check_an_unfilled_entry_panics` and `release_check_a_clause_callee_not_read_from_its_entry_panics`, N5's `release_check_a_marked_apply_not_followed_by_prompt_panics`, N6's `release_check_an_empty_mask_panics`: 3 + 2 + 1 + 2 + 1 + 1 = 10); `grep -rn 'debug_assert\|cfg!(debug_assertions)' crates/eml_native/src/jit.rs | grep -ci prelude` → `0`; SC lines of N6; Miri eml_nrt both settings → pass; ASan (CLAUDE.md command) `-p eml_native -- --skip fatal::` and `-p eml_nrt -- --skip fatal::` → pass.
 
 ### CP-C
 
@@ -736,17 +845,19 @@ No `native: skip` mark is added.
 - R4 (user-approved, 00 G.3 U-K): `heap::tests::share::checked::share_stops_at_immortal_objects`, `heap::tests::share::share_leaves_an_immortal_lin_object_alone`, `heap::tests::transfer::checked::shared_counts_above_one_and_immortal_objects_stop` keep their claims on an uncounted immortal (frozen and attached, or the dummy), because sharing a value that reaches a counted immortal is now refused; if one cannot, stop (kind 1 for the user). The `fast::` variants of the two `both_modes!` tests change too (`mortal()` 1 → 0, the immortal now lives in a frozen region). In `share_leaves_an_immortal_lin_object_alone` the sub-claim "releasing a shared parent gives back a counted child's reference" is dropped: that state is now illegal in checked mode (reviewed as within kind 2).
 - N1: `clif::a_call_and_its_unwind_check`, `clif::an_apply_site`; eml_rt `the_native_offsets_are_pinned`. Also (00 G.3 U-M), because the I-land rule refuses hand-written LIR whose marked `apply` is not followed by `prompt$`: `eml_lir` `unwind::landing_is_the_prompt_variable` and `eml_vm` `codegen::an_unwind_point_shows_its_owned_slots_and_landing` gain a `prompt$` function and its call (their point list / disassembly change); `eml_lir` `verify::prompt_marker_is_accepted` and `eml_vm` `evidence::a_yield_reaches_the_status_of_its_target` change their input only (a `prompt$` call; the status read moves into a small `prompt$`) and keep their expected values.
 - L1 (00 G.3 (j); approved with L2 on 2026-11-14): `eml_native` `effects::a_handler_is_installed_and_found` puts `box 10` / `box 20` into the entries and prints them; it installs clause functions instead (`&get$entry`-style, as `run_get` does) and observes them by calling `clause Counter.get` / `clause Counter.put`; its expected output changes. Reason: the entries must hold clause closures (the rule of L1). Nothing else (`eml_lir` `text::every_prim_round_trips` only parses and prints and passed with the rule on [V: CP-advice]); another failing test stops the unit.
+- L2 (00 G.3 (k); user-approved 2026-11-14, U-P): hand-written IR whose clause callee is not read by `ev_clause` from an `ev_lookup` / `ev_new` evidence in the same function, or whose `ev_new` evidence does not have every entry filled first, gains the missing lines (57 tests that fail with the rules on, plus 2 that fail only in `--release`; the full list by crate and name, and which are expected-value and which input-only, is in unit L2's "Test changes"). Each keeps its claim and its pass/fail role; the stop rule of L2 applies (a test outside the list, or one that cannot keep its claim, stops the unit).
 - N7: `integration__ui__run_native.snap`, `integration__ui__run_fail_native.snap`.
 - Contingency V1: `crates/eml_vm/tests/bench.rs` `RunStats` of `bench/` programs that use `par` only (08 A-7).
 - Nothing else; another change stops the unit.
 
 **Kind 3 (byte-identical expected values):** R1 (rename); V1 (reroute); N3 `DatumRow` literals (`crates/eml_nrt/tests/run.rs` :203, :210, :217); N6 `eml_nrt_failed` callers (`crates/eml_nrt/tests/services.rs` :119, :164, :197) and `Image` literals (`crates/eml_nrt/tests/run.rs` :27, :225, :352, :406; `crates/eml_nrt/tests/services.rs` :37; `crates/eml_nrt/src/rows.rs` :188; `crates/eml_nrt/src/entries.rs` :532) [V: grep of `DatumRow {` / `Image {`].
 
-**New tests:** R2 4 (×2 modes), R3 4 (×2), R5 1 (×2), N1 6, N2 3, N3 10, N4 10, L1 4, N5 10, N6 16, N7 2 (and 3 deleted): 8 + 8 + 2 + 6 + 3 + 10 + 10 + 4 + 10 + 16 + 2 − 3 = 76 more in the run [I], so ≥ 5219 after the stage (5143 + 76). `both_modes!` counts a test twice; only the eml_rt tests (R2, R3, R5) use it, every other new test counts once. Per unit (SA-audit, 00 G.3 (i)):
+**New tests:** R2 4 (×2 modes), R3 4 (×2), R5 1 (×2), N1 6, N2 3, N3 10, N4 10, L1 4, L2 5, N5 10, N6 16, N7 2 (and 3 deleted): 8 + 8 + 2 + 6 + 3 + 10 + 10 + 4 + 5 + 10 + 16 + 2 − 3 = 81 more in the run [I], so ≥ 5224 after the stage (5143 + 81). `both_modes!` counts a test twice; only the eml_rt tests (R2, R3, R5) use it, every other new test counts once. Per unit (SA-audit, 00 G.3 (i)):
 - R5 (kind 3 otherwise): `heap::tests::trusted::{fast,checked}::a_counted_immortal_is_refused_while_its_owner_counts`.
 - N2: `an_effect_number_of_65535_is_refused` (F4; in the `entries::` tests module of eml_nrt, so Miri runs it).
 - N4: `a_tail_never_clause_in_a_float_function`, `a_tail_never_clause_in_a_function_returning_two_leaves`, `a_never_clause_bound_to_a_float`, `release_check_a_tail_clause_result_mismatch_panics` (F1; `crates/eml_native/tests/effects.rs`).
 - L1: `a_clause_closure_captures_exactly_what_its_function_takes`, `ev_set_clause_takes_a_function_it_can_read`, `ev_set_clause_takes_an_evidence_made_in_the_function` (`crates/eml_lir/tests/verify.rs`), `release_check_an_unreadable_clause_entry_panics` (`crates/eml_native/tests/effects.rs`); its kind-2 change is listed above.
+- L2: `every_entry_is_filled_once_before_the_evidence_is_used`, `a_clause_call_calls_what_ev_clause_read` (`crates/eml_lir/tests/verify.rs`), `the_evidence_level_checks_entries_and_clause_callees` (`crates/eml_core_ir/tests/verify.rs`), `release_check_an_unfilled_entry_panics`, `release_check_a_clause_callee_not_read_from_its_entry_panics` (`crates/eml_native/tests/effects.rs`); its kind-2 scope is listed above.
 - N5: `release_check_a_marked_apply_not_followed_by_prompt_panics` (F3); `an_abort_through_a_never_clause_entry_across_a_never_clause_call` (N4 review A-2; see N5).
 - N7: `unsupported::every_row_with_a_held_argument_is_rejected` (F5).
 
@@ -803,7 +914,7 @@ rejected 34
 - Newly accepted: 155 files, all previously `prim` (153 run + 2 run-fail) [V]. By directory: run/effects 33, run/unwind 15, run/panic 15, run/io 14, run/linearity 10, run/std 10, run/var 9, run/bytes 7, run/files 7, run/kinds 5, run/scripts 5, run/unboxed 5, run/arrays 4, run/ffi 3, run/borrow 2, run/byte 2, run/chars 2, run-fail/io 2, and 1 each in run/float, run/functions, run/records, run/reuse, run/strings. Full list: appendix A.
 - All 111 entry files of `run/{effects,unwind,panic}` and `run-fail/panic` are accepted [V].
 - `bench/native.sh` after the stage: 42 rows, 41 with numbers, `rejected` only for `par_tree` [V: the probe binary reaches lowering for `ep_float` and `nbody` and rejects `par_tree` with E0004 `par`]; `differs` 0 [I].
-- Tests: ≥ 5219 run, 23 skipped [I]. Verus: R1 1250 [V]; R2, R3 strictly larger [I]; N1 equal to R3.
+- Tests: ≥ 5224 run, 23 skipped [I]. Verus: R1 1250 [V]; R2, R3 strictly larger [I]; N1 equal to R3.
 - Native UI timing: base 1.14 s / 0.95 s [V]; after N7 within the 10 s timing override [I].
 
 ## 8. Execution order
@@ -849,7 +960,7 @@ Order rationale: eml_rt first (08 U-5 default), so the gate runs on R1..R4 and N
 
 - Per unit: the unit's completion criteria, G (7.3.1), the SC lines in force (7.3.2), EG for eml_rt commits (7.3.3), the checkpoint extras before CP-B / CP-C / CP-D (7.3.4).
 - Overall (after Z, on the Close commit):
-  - `cargo nextest run` → `N tests run: N passed, 23 skipped`, N ≥ 5219 [I: 5143 + 76 new].
+  - `cargo nextest run` → `N tests run: N passed, 23 skipped`, N ≥ 5224 [I: 5143 + 81 new].
   - `cargo nextest run -p eml_cli --test integration -E 'test(=ui::run_native) | test(=ui::run_fail_native)'` → pass with the bodies of 7.5 (S-1).
   - `cargo verus verify -p eml_rt` → `N verified, 0 errors`, N > 1250 (S-4).
   - every SC line of 7.3.2 → its stated value (S-5).
