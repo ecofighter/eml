@@ -5,7 +5,7 @@ use std::sync::Arc;
 use eml_cabi::{CCall, Dtor};
 use eml_extern::{CFunction, CHandleType};
 use eml_lir::{FloatBits, Loc, Repr};
-use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
+use eml_rt::{Control, Ctx, Frozen, HeapError, HostRef, MaskItem, Mode, Word};
 use rustc_hash::FxHashMap;
 
 use crate::error::{RunFault, RuntimeError, SourceLocation};
@@ -267,6 +267,18 @@ pub enum CompileError {
 }
 
 impl<M: Mode> CodeBase<M> {
+    /// worker `k`の`Ctx`。コードの領域は作るときに付ける。forkの表、末尾、定数はどのworkerのヒープでも付けた塊と
+    /// して届くので、`fork_ev`などの前提がどのworkerでも成り立つ (docs/spec/object-model.mdの「凍結した領域」)。
+    /// 付けるのは`Arc`を1つ持つだけで何も確保しないので、検査モードで作るときに取るページの課金の順は変わらない。
+    pub(crate) fn worker_ctx(&self, control: Arc<Control>, host: HostRef, k: usize) -> Ctx<M> {
+        let mut ctx = Ctx::for_worker(control, host, k);
+        if let Some(region) = &self.region {
+            // SAFETY: 付けるのは`Arc`を1つ持つだけで、`Ctx`の持つ語には触れないので、`heap_mut`の前提を崩さない
+            unsafe { ctx.heap_mut() }.attach(Arc::clone(region));
+        }
+        ctx
+    }
+
     pub fn functions(&self) -> &[FnEntry] {
         &self.functions
     }

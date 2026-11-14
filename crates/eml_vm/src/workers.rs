@@ -906,7 +906,7 @@ fn run_worker<M: Mode, P: Policy>(
         &control,
         k,
         format!("<worker {k}>"),
-        || Ctx::for_worker(Arc::clone(&control), host, k),
+        || code.worker_ctx(Arc::clone(&control), host, k),
         |ctx| work::<M, P>(code, ctx, policy, &run, &control, cells, k, max_depth),
     )
 }

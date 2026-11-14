@@ -860,7 +860,7 @@ fn run_scheduled<M: Mode, P: Policy>(
     // メインのworkerの`Ctx`はworker 0を作る前に作る。検査モードでは作るときにページを1枚取り、確保量に数えるので、
     // その課金がプログラムの確保とどう前後するかをスレッドの速さで決めないためである。決定的な方針では柔らかい上限の
     // 旗の地点が確保量で決まる (docs/spec/vm.mdの「メインのworker」「タスクとスケジュール」)
-    let main_ctx = Ctx::<M>::for_worker(Arc::clone(&control), start.host.clone(), run.main());
+    let main_ctx = code.worker_ctx(Arc::clone(&control), start.host.clone(), run.main());
     let (worker_ctx, worker_task, worker_counts) = (&mut *ctx, &mut *task, &mut *counts);
     let (joined, main) = thread::scope(|scope| {
         // 呼んだスレッドの panic でも `END` を立ててすべての worker を起こし、scope が worker 0 を join できるようにする
