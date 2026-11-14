@@ -683,6 +683,8 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 1. 合否が機械の速さに左右されない
 2. dev プロファイルで1つずつ流して (`cargo nextest run -j 1`)、開発機で1秒以内に終わる
 
+手元で全体を流すときは`cargo test --workspace -q`を使う。テストのバイナリごとに1つのプロセスで流すので、テストごとにプロセスを立てるnextestより、開発機のmacOSでは10倍ほど速い。CIは`cargo nextest run`で流し、1秒の条件はテストを1つずつ別のプロセスで流す`cargo nextest run -j 1`で確かめる。
+
 本物の時計を使うテストは、時間の下限 (「以上」) と終わることだけを確かめる。上限は確かめず、止まらないときのための見張りだけを置く。見張りの長さは、測った時間の10倍以上にする。刻みに依って合否が決まるテストは置かない。
 
 ファイルを集めて流す7つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`、`ui::run_native`、`ui::run_fail_native`、`repl::transcripts`、`lowering::every_program_lowers_to_the_same_text`) は、1つのファイルが1秒以内で、テスト全体が5秒以内であればよい。この7つはテストの中でファイルを並べて流すので、`.config/nextest.toml` で単独で流し、ほかのテストとコアを取り合わないようにする。テストの中に壁時計の上限を置くのは、止まったことを見つけるためだけにする。上限は測った時間の10倍以上にする。2つの条件に当たらないテストには `#[ignore = "<理由>"]` を付ける。流すコマンドを「よく使うコマンド」に書き、流す時 (何を変えたときか) をそのテストを説明する節に書く。
@@ -784,20 +786,21 @@ Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-App
 
 ## CI
 
-`.github/workflows/ci.yml`は、mainへのpush、pull request、手動の起動で、次の8つのジョブを流す。
+`.github/workflows/ci.yml`は、mainへのpush、pull request、手動の起動で、次の9つのジョブを流す。
 
 - `test`: macOS (macos-15)、Linux (ubuntu-24.04と、aarch64のubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls`と`gui`を外した`tls_off::`と`gui_off::`のテスト、既定でないfeatureのclippy (「feature の組み合わせの確認」の14個) と、段「feature resolution of tls」、4つのOSで`eml_nrt`のTlsの実行時の閉包を組む段「cargo build of the Tls runtime closure」 (`cargo build -p eml_nrt --features eml_rows/tls`)、段「crate graph」、段「dependency edges of eml_gui」の検査を流す。段「crate graph」は`nix/crate-graph.sh --check`を流し、crate間の直接の辺とfeatureの表、crateの木の閉包を守る ([アーキテクチャ](architecture.md)の「crate の依存関係」)。段「dependency edges of eml_gui」は、`eml_gui`がワークスペースのどのcrateにも依存しないことと、`eml_cli`の既定の依存の木にnativeのtoolkitのcrate (`cxx`、`objc2`、`qt-build-utils`と、生成したWinUIのbindingだけが使う`windows-collections`、`windows-reference`、`windows-time`) が入らないことを`cargo tree`で守る。`gui-native`を足した木 (`--target all`) は1度書き出し、`cxx v`、`objc2 v`、WinUIの印の`windows-collections v`、`qt-build-utils v`がそれぞれ出ることを、crateごとの`grep -q`で確かめる。まとめて数えると、1つのtoolkitのcrateだけでも数が足りてしまうからである。toolchainはrustupが`rust-toolchain.toml`から入れ、`rustc -V`のバージョンが`channel`と同じことを確かめる。Windowsのtargetは`x86_64-pc-windows-msvc`だけで、ジョブはhostがそれであることを確かめる。cargo-nextestは、ワークフローに書いたバージョンを入れる。ubuntu-24.04では、同じビルドで時間の検査 (「性能のテスト」) も流す
-- `gui-native`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUIの手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKit、Qt、WinUIのbackendはテストの中では作れない。WindowsではWindows App SDKのファイルなしに組み、`eml_gui`のbootstrapのテストは、runnerにruntimeがなければ文言がMicrosoftの配布のページを示すことを確かめ、あれば`skipped: the Windows App SDK 2 runtime is installed`と書いて通る。Windowsでは、この行をログに出すため、別の段でこのテストだけを`--no-capture`でもう1度流す。全体の実行には`--no-capture`を付けない。nextestがテストを1つずつ流すようになるからである。Linuxでは、Qt 6の入ったふだんのdevShellを通して流し、続けて`nix build`を流す。rustcはx86_64のLinuxで既定に自分のLLDでリンクし、nixのldのラッパーを通らないので、Qtとlibstdc++へのRUNPATHが付かない。そこでdevShellと`nix build`は`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Clinker-features=-lld`でラッパーのldに戻し、ラッパーがRUNPATHを付ける。`result/bin/.eml-wrapped`が`libQt6Widgets.so.6`に動的にリンクすること (`readelf -d`) と、`result`に`libQt6*`、`*.dll`、`*.msix`のファイルがないことを確かめる
+- `gui-native`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUIの手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKit、Qt、WinUIのbackendはテストの中では作れない。WindowsではWindows App SDKのファイルなしに組み、`eml_gui`のbootstrapのテストは、runnerにruntimeがなければ文言がMicrosoftの配布のページを示すことを確かめ、あれば`skipped: the Windows App SDK 2 runtime is installed`と書いて通る。Windowsでは、この行をログに出すため、別の段でこのテストだけを`--no-capture`でもう1度流す。全体の実行には`--no-capture`を付けない。nextestがテストを1つずつ流すようになるからである。Linuxでは、Qt 6の入ったdevShell `.#base`を通して流す。rustcはx86_64のLinuxで既定に自分のLLDでリンクし、nixのldのラッパーを通らないので、Qtとlibstdc++へのRUNPATHが付かない。そこでdevShellと`nix build`は`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Clinker-features=-lld`でラッパーのldに戻し、ラッパーがRUNPATHを付ける
+- `nix-build`: Linux (ubuntu-24.04) で`nix build -L`を流す。パッケージは`eml_cli`を`gui-native`を足したreleaseで組み、組み立ての中でテストを流す (「nix build の中で流さないテスト」)。10分を超えるので、ほかのジョブと並べて自分のジョブで流す。`-L`は組み立ての出力をログに出す。続けて、`result/bin/.eml-wrapped`が`libQt6Widgets.so.6`に動的にリンクすること (`readelf -d`) と、`result`に`libQt6*`、`*.dll`、`*.msix`のファイルがないことを確かめる
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
-- `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
-- `miri`: Linuxで、MiriのdevShellを通して`trusted::`、`miri::`、`eml_sched`の`cells::a_read`と`cells::a_write`、`eml_vm`の`counters::`、`eml_io`の`driver::tests::`、`eml_nrt`の`entries::`、`census::`、`constants::`を続けて流す。借用の規則ごとにジョブを1つ立てる
+- `licenses`: Linuxで、devShell `.#base`を通して`nix/third-party-licenses.sh --check`を流し、コミットした`THIRD-PARTY-LICENSES.md`が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md)の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
+- `miri`: Linuxで、MiriのdevShellを通して流す。借用の規則ごとにジョブを2つ立てて並べる。`eml_vm`の組は`eml_vm`の`miri::`とlibの`counters::`を、`rest`の組は`trusted::`、`eml_sched`の`cells::a_read`と`cells::a_write`、`eml_io`の`driver::tests::`、`eml_nrt`の`entries::`、`census::`、`constants::`を続けて流す。`miri::`が1つで最も長い段なので、ほかの段と分ける
 - `asan`: x86_64のLinux、aarch64のLinux、aarch64のmacOSのそれぞれで、`eml_io`のテスト、`eml_clink`のテスト、`fatal::`を除いた`eml_native`と`eml_nrt`のテストと`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`をAddressSanitizerの下で流す (下の「AddressSanitizer」)
 - `tsan`: x86_64のLinuxで、`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`、libの`counters::`と、`eml_io`のlibの`driver::tests::`をThreadSanitizerの下で流す (下の「ThreadSanitizer」)
 
-CIが時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件とMiriのCPU時間の予算は開発機で確かめ、runnerの速さに合わせて緩めない。ほかの手順では、nextestがテストを止める60秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]`を付けたテストと`bench/`の計測は、CIで流さない。`nix/winui-bindings.sh`はメタデータとcrateをネットワークから取るので、CIで流さない。WinUIのbackendが使うAPIかメタデータの版を変えたときに手で流し、`--check`で比べる ([コンパイラの構成](architecture.md)の「`eml_gui`の内部」)。`nix build`は`gui-native`のジョブのLinuxでだけ流し、aarch64-darwinの`nix build`は手で確かめる。
+CIが時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件とMiriのCPU時間の予算は開発機で確かめ、runnerの速さに合わせて緩めない。ほかの手順では、nextestがテストを止める60秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]`を付けたテストと`bench/`の計測は、CIで流さない。`nix/winui-bindings.sh`はメタデータとcrateをネットワークから取るので、CIで流さない。WinUIのbackendが使うAPIかメタデータの版を変えたときに手で流し、`--check`で比べる ([コンパイラの構成](architecture.md)の「`eml_gui`の内部」)。`nix build`は`nix-build`のジョブ (x86_64のLinux) でだけ流し、aarch64-darwinの`nix build`は手で確かめる。
 
-アクションはcommitのSHAで固定し、バージョンの名前をコメントに書く。runnerのimageは名前で固定し、上げるのは手で行う。nixのストアはキャッシュしない。install-nix-actionには`GITHUB_TOKEN`を渡し、`github:`のinputの取得が率の制限に当たらないようにする。tokenはnix.confに入ってジョブの中で動くものから読めるが、権限は`contents: read`だけで、ジョブとともに切れるので受け入れる。cargoの依存のビルドをキャッシュするのは、`test`のジョブと、devShellを通さない`gui-native`のジョブ (macOSとWindows) だけで、保存するのはmainの実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml`で検査する。
+アクションはcommitのSHAで固定し、バージョンの名前をコメントに書く。runnerのimageは名前で固定し、上げるのは手で行う。nixのストアはキャッシュしない。devShell `.#base`は、ふだんのdevShellからVerusとverusfmtを除いたものである。Verusのreleaseのzip (約490 MB) はflakeのinputで、それを使うshellに入るときだけ取るので、Verusを使わないジョブは`.#base`を通して取得を省く。install-nix-actionには`GITHUB_TOKEN`を渡し、`github:`のinputの取得が率の制限に当たらないようにする。tokenはnix.confに入ってジョブの中で動くものから読めるが、権限は`contents: read`だけで、ジョブとともに切れるので受け入れる。cargoの依存のビルドをキャッシュするのは、`test`のジョブと、devShellを通さない`gui-native`のジョブ (macOSとWindows) だけで、保存するのはmainの実行だけである。ワークフローは`CARGO_PROFILE_DEV_DEBUG=line-tables-only`を置き、devプロファイルのdebug情報を行の表だけにする。CIは変数の単位のdebug情報を使わず、ビルドの時間と`target`の大きさが減るからである。panicのbacktraceはファイルと行を保つ。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml`で検査する。
 
 ## クラウドのセッション
 
@@ -839,8 +842,8 @@ claude plugin install ecoskills@ecoskills --scope user
 dev プロファイル (`cargo nextest run` と `cargo test` もこれを使う) は opt-level 1 で、debug assertions は有効である。`--release` は `bench/*.sh` と、`#[ignore]` を付けた時間のテストだけで使う。デバッガで局所変数が最適化で消えるときは、`CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...` で一度だけ opt-level 0 のビルドを作る。
 
 ```sh
-cargo nextest run                                    # すべてのテスト
-cargo test                                           # 同じテストを流す (1つの crate の短いループでは cargo test -p の方が速い)
+cargo test --workspace -q                            # すべてのテスト (手元の全体の実行。1つのcrateの短いループではcargo test -p。性能のテスト)
+cargo nextest run                                    # 同じテストをCIと同じくテストごとのプロセスで流す (開発機のmacOSでは10倍ほど遅い)
 cargo nextest run -j 1                               # ふだんの実行の条件を確かめる (1秒を超えるのは集めて流す7つだけ。性能のテスト)
 cargo nextest run --profile timing -j 1              # CI の時間の検査 (SLOW の時間を過ぎたテストを失敗にする。性能のテスト)
 cargo nextest run -p eml_syntax --test integration parser::empty_file    # 1つのテスト

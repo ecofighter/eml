@@ -77,7 +77,7 @@ $ eml check leak.em
 
 ```sh
 cargo build                                  # すべての crate をビルドする
-cargo nextest run                            # すべてのテストを実行する (cargo test でも同じテストが流れる)
+cargo test --workspace -q                    # すべてのテストを実行する (CIは同じテストをcargo nextest runで流す)
 cargo run -p eml_cli -- check <file.em>      # 検査だけを行う
 cargo run -p eml_cli -- run <file.em>        # 実行する (--debug-heap でヒープの検査を有効にし、--workers N で worker の数を選ぶ)
 cargo run -p eml_cli -- repl                 # 端末の REPL
