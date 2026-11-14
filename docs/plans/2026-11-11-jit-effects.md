@@ -456,7 +456,7 @@ grep -rnE 'ins\(\)\.(load|store|uload|sload|stack_load|stack_store)' crates/eml_
 grep -rnE 'CTX_[A-Z_]+\s*(:|=)' crates/eml_native/src crates/eml_nrt/src                           # empty
 grep -rn 'Prelude\.' crates/eml_nrt/src                                                            # empty (G-7)
 grep -rn 'native: skip' tests/ui | wc -l                                                           # 8
-grep -rn 'docs/plans' crates                                                                        # empty
+grep -rn 'docs/plans' crates | grep -v crates/eml_cli/tests/citations.rs                          # empty (citations.rs names the directory it skips)
 git diff --exit-code be1b1de5 -- crates/eml_rt/src/trust.rs                                        # exit 0 (G-18)
 git diff be1b1de5 -- crates/eml_rt | grep -cE '^\+.*(external_body|assume\()'                      # 0 (G-18)
 # R1 on (G-1)
