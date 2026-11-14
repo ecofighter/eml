@@ -1,6 +1,6 @@
 # Appendix 00: decisions that override the other appendices
 
-Read this first. The other appendices are the designers' final texts (01 contract, 02 jit-rt + sched-split, 03 jit-core + jit-apply, 04 jit-externs (superseded by 06 and 07), 05 jit-effects + jit-tasks + jit-repl, 06 the extern / C-call boundary and 07 the workspace crate graph from the jit-externs refresh). Where one of them differs from this file, this file wins. Paths of the form `scratch-*` or `S2b-work.*` in "Additional checks" sections refer to throwaway experiments that no longer exist; their results are stated as facts there.
+Read this first. The other appendices are the designers' final texts (01 contract, 02 jit-rt + sched-split, 03 jit-core + jit-apply, 04 jit-externs (superseded by 06 and 07), 05 jit-effects + jit-tasks + jit-repl, 06 the extern / C-call boundary and 07 the workspace crate graph from the jit-externs refresh, 08 the jit-effects design from the jit-effects refresh). Where one of them differs from this file, this file wins. Paths of the form `scratch-*` or `S2b-work.*` in "Additional checks" sections refer to throwaway experiments that no longer exist; their results are stated as facts there.
 
 ## A. User decisions (settled)
 
@@ -123,3 +123,46 @@ Also amended: 01 §1.1's graph, table and "Features" (AM-1, AM-2: eml_rows defin
 | Docs | architecture.md and CLAUDE.md change in the commit that changes the structure; the Close commit only checks them. The roadmap items for jit-tasks, jit-repl and native-aot and the AOT texts (AM-12, AM-12b) are written by the graph and Gui units, not by Close. |
 | Checkpoints | CI runs on pushes after the Gui move (the first push), after the shared C pieces, after the import test `abi::an_import_gives_its_address` (its own push, before any C lowering), after the UI files of the std rows, and after Close. |
 | 01, 05 | Not edited by the refresh: this section and appendices 06 and 07 override them. |
+
+## G. Decisions of the jit-effects refresh (2026-11-14)
+
+Appendix 08 (the jit-effects design, E-D1..E-D10) supersedes 05 D-1..D-6 and D-18 for jit-effects and overrides 01 where they differ. This section overrides 01, 05 and 08.
+
+### G.1 User decision (2026-11-14)
+
+U-H: the user approved 08 E-D1..E-D10 and the amendments below (08 section 9, verbatim), and that the plan of jit-effects is written in English.
+
+Appendix 01:
+- §1.4 table, row "Unwind point that is a call", later-stage cell: "behind the same test, the `abort` load; ... That side is not marked cold" -> "jit-effects replaces the test: one byte load of `yielding.abort` and a cold branch; a yield does not branch and returns on the hot path; the cold block tests the `landing` against `yielding.target`".
+- §1.4 table, row "Unwind point that is a call", jit-core cell: "load `yielding.target`, compare, cold branch" -> unchanged for jit-core; superseded from jit-effects by the line above.
+- §1.4 table, row "Faulting row", later-stage cell: "when `eml_nrt_failed` returns a clause, call it with the clause ABI and return" -> "when `eml_nrt_failed` returns a class, call the clause it wrote to `out` with that class's fixed signature and return".
+- §1.4 "Evidence roles": "the fork-evidence builders (`fork_evv`, the `Panic` tail, the re-raise mask) become one implementation used by eml_vm and eml_nrt" -> "jit-effects moves the construction and reading of fork-evidence objects into eml_rt; the `fork_evv` loop and the re-raise mask move to eml_sched in jit-tasks, with their second caller".
+- N-24 check: "rt-layout G-10's grep for role literals in eml_vm is empty after jit-effects" -> the same, plus "the role consts are crate-private to eml_rt; `fork_evv` has one definition from jit-tasks on".
+- N-9 (as 05 D-2 applied it: "exactly one `target` load per call point; `abort` only after it") -> "exactly one `abort` byte load per call point; `target` is loaded only by inline `yielding` / `yield_status` and in a landing's cold block".
+- §1.3 "Function values": "tag = the number of argument leaves still missing" -> the same, plus "a clause closure has tag 0 and is never an `apply` target; its entry has the operation's signature".
+
+Appendix 00:
+- C-2: "05's extra `out` parameter for jit-effects is added on top of it" -> the same, with "`out` is a 4-word slot `[clause, ev, a0, a1]`; there is no `eml_nrt_raise_arg`".
+- C-6: "jit-effects adds `m:<mask>`" -> "jit-effects adds `e:<effect>` (8 bytes, machine number) and `m:<mask>` (`eml_nrt::image::mask_bytes(n)` bytes, `MaskItem`s); a data object's size is its datum's, no longer always 8 bytes".
+- C-14: "jit-effects lifts the assert and types the entries of clause functions with the op's signature" -> "jit-effects lifts the assert; every closure entry's signature is derived from its function (equal to `uniform(n)` for non-clause functions); `apply::arity` gives a clause function 0".
+- C-13: "calls `eml$apply$(m-1)` and tail-calls `eml$apply$1`" -> the same, with "between them it tests the `abort` byte (cleanup) and then traps if `yielding.target` is set".
+- E-2: "the const arrives with its first reader in generated code" -> the same, with "the first reader is the call unwind check".
+- E-3: settled: `m:` shape as in C-6 above; the two prelude effect numbers are `Image.panic_effect` / `Image.io_effect` (01 §1.3 as written).
+- E-6: settled by the C-14 line above.
+- F.2 N-37: no change ("`call_indirect` in eml_native only in `lower/apply.rs` and `thunk.rs`"); the design-level plan's kind-2 change to the placement test is withdrawn.
+- New section G records E-D1..E-D10 as overriding 05 D-1..D-6; in particular 05 D-6's `fork_plan`, `ForkTables`, `fork_evv` in eml_sched and `evv_effects` are withdrawn from jit-effects.
+
+### G.2 Resolutions of this plan (orchestrator; consistent with the approved amendments)
+
+Each line: entry: old -> new.
+
+- 01 N-9 (G.1 wording): "exactly one `abort` byte load per call point; `target` is loaded only by inline `yielding` / `yield_status` and in a landing's cold block" -> "exactly one `abort` byte load per call point; `target` is loaded only by inline `yielding` / `yield_status`, in a landing's cold block, and by the `n < m` arm's guard in `eml$apply$m`" (08 E-D6 requires the guard's load; the approved wording omitted it).
+- 00 E-2 (G.1 wording "the first reader is the call unwind check"): "jit-effects adds `CTX_YIELD_ABORT` (08 section 5, unit 2, with the roles)" -> "jit-effects adds `CTX_YIELD_ABORT` in the commit that adds the call unwind check (plan unit N1), which passes the eml_rt gate; the role commit does not add it".
+- 08 E-D5 / G-9 ("`ClosureEntries::id` asserts ... a clause function's entry signature equals the signature built from its operation" and "there is no clause branch in them"): "the assert is in `ClosureEntries::id`" -> "the assert runs, in every build, in `lower::program`'s loop that defines every declared closure entry (`crates/eml_native/src/lower/mod.rs`), before the entry is defined; `ClosureEntries::id` and `define_closure_entry` name no clause".
+- 08 E-D2 (`Heap::alloc_fork_table` / `alloc_fork_tail` preconditions, unstated): "none stated" -> "the `requires` of `Heap::alloc_data` (`wf`, `safe_settleable`, `!M::CHECKED ==> settleable`), plus `!data_extended(entries.len(), false)` for the table and, for each entry and for `table`, 'an immediate or a live object of this heap' (what `Heap::is_immortal` needs); no new `HeapError` variant; eml_vm keeps its release-build assert on the operation count before the call".
+- 08 E-D3 / G-8 (entry symbols derived from `Prim::name()`): "lowering derives the symbol" -> "one helper `lower::effects::entry(prim: &Prim) -> String` (`"eml_rt_"` + `prim.name()`) is the only place lowering spells an effect entry; the landing block's `ev_take_state` call uses it with `Prim::EvTakeState`".
+- 08 G-8's test ("a test iterates `Prim::KINDS`"): "`KINDS` is a module-private const of `crates/eml_lir/src/prim.rs`" -> "the `kinds!` macro emits it as `impl Prim { pub const KINDS: [Prim; N] }`; `Prim::by_name` uses `Self::KINDS`".
+- 08 U-4 ("one `trusted::` test per new constructor / reader (5)"): -> "no new `trusted` test; the five operations are called once in the T8 tests `every_core_operation_once` (heap constructors) and `every_primitive_once` (ctx operations) of `crates/eml_rt/src/heap/tests/trusted.rs`" (testing.md 「Miri」: T8 runs every primitive once; the `trusted` module is for trust-list boundaries).
+- 08 U-6 (unit 3 one commit or two): -> "two commits: heap constructors (plan unit R2), then `fork_ev`, `fork_of`, `evv_step` (plan unit R3)".
+- 08 U-2 (`eml_nrt_landed` now or later): -> "now (plan unit N5)".
+- 08 §5 completion criterion "role-literal grep -> no output" on the measured tree 8ff26d91: -> "the plan's rename script (plan unit R1) also renames `scanned_at(ev, 2)` at `ctx/proof.rs:524`, which the measured script missed; R1's criteria do not depend on 8ff26d91".
