@@ -1124,6 +1124,7 @@ fn a_landing_point() {
     // `eml_nrt_landed`を呼び、そのダミーを結果として熱いブロックへ飛ぶ。もう一方のブロックは`eml_rt_ev_take_state`で
     // handlerの状態を取り出して手放し、フレームが持つものを手放して戻る。熱い道はほかの呼び出しと同じである
     let text = "\
+effect Land { land(unit) -> tobj }
 yields fn g(u.0: tobj) -> tobj {
   return u.0
 }
@@ -1131,31 +1132,43 @@ fn prompt$(ev.0: obj, x.1: tobj) -> tobj {
   decref ev.0
   return x.1
 }
-fn f(ev.0: obj, s.1: obj) -> obj {
+fn f(w.4: tobj, s.1: obj) -> obj {
+  let ev.0: obj = prim ev_new[Land]((), w.4)
+  let u.5: unit = prim ev_set_clause[Land.land](ev.0, &land$entry)
   let x.2: tobj = yields apply &g(()) prompt ev.0
   let r.3: tobj = call prompt$(ev.0, x.2)
   decref r.3
   return s.1
 }
+internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
 ";
     insta::assert_snapshot!(clif(text, "f"), @"
     function %f:f(i64, i64, i64) -> i64 tail {
-        gv0 = symbol colocated %v:g
+        gv0 = symbol colocated %e:Land
+        gv1 = symbol colocated %v:land$entry
+        gv2 = symbol colocated %v:g
         sig0 = (i64, i64, i64) -> i64 tail
         sig1 = (i64, i64, i64) -> i64 c
         sig2 = (i64, i64) c
-        sig3 = (i64, i64, i64) -> i64 tail
-        sig4 = (i64, i64, i64) -> i64 tail
-        sig5 = (i64) -> i64 c
-        sig6 = (i64, i64) -> i64 c
-        sig7 = (i64, i64, i64) -> i64 tail
+        sig3 = (i64, i64, i64, i64, i64) -> i64 c
+        sig4 = (i64, i64, i64, i64) c
+        sig5 = (i64, i64, i64) -> i64 tail
+        sig6 = (i64, i64, i64) -> i64 tail
+        sig7 = (i64) -> i64 c
+        sig8 = (i64, i64) -> i64 c
+        sig9 = (i64, i64, i64) -> i64 tail
         fn0 = colocated %f:f sig0
         fn1 = %eml_nrt_safepoint sig1
         fn2 = %eml_rt_decref sig2
-        fn3 = colocated %eml$apply$1 sig4
-        fn4 = %eml_nrt_landed sig5
-        fn5 = %eml_rt_ev_take_state sig6
-        fn6 = colocated %f:prompt$ sig7
+        fn3 = %eml_rt_ev_new sig3
+        fn4 = %eml_rt_ev_set_clause sig4
+        fn5 = colocated %eml$apply$1 sig6
+        fn6 = %eml_nrt_landed sig7
+        fn7 = %eml_rt_ev_take_state sig8
+        fn8 = colocated %f:prompt$ sig9
 
     block0(v0: i64, v1: i64, v2: i64):
         v3 = load.i64 notrap aligned v0+40
@@ -1177,98 +1190,108 @@ fn f(ev.0: obj, s.1: obj) -> obj {
         brif v15, block3, block2
 
     block2 cold:
-        call fn2(v0, v1)
         call fn2(v0, v2)
+        call fn2(v0, v1)
         v16 = iconst.i64 1
         return v16  ; v16 = 1
 
     block3:
-        v17 = symbol_value.i64 gv0
-        v18 = load.i64 notrap aligned v17
-        v19 = iconst.i64 1
-        v20 = load.i32 notrap aligned v18+4
-        v21 = iconst.i32 0xffff
-        v22 = band v20, v21  ; v21 = 0xffff
-        v23 = iconst.i32 1
-        v24 = icmp eq v22, v23  ; v23 = 1
-        brif v24, block4, block5
+        v17 = iconst.i64 1
+        v18 = symbol_value.i64 gv0
+        v19 = load.i64 notrap aligned v18
+        v20 = iconst.i64 1
+        v21 = call fn3(v0, v19, v20, v17, v1)  ; v20 = 1, v17 = 1
+        v22 = symbol_value.i64 gv1
+        v23 = load.i64 notrap aligned v22
+        v24 = iconst.i64 0
+        call fn4(v0, v21, v24, v23)  ; v24 = 0
+        v25 = iconst.i64 1
+        v26 = symbol_value.i64 gv2
+        v27 = load.i64 notrap aligned v26
+        v28 = iconst.i64 1
+        v29 = load.i32 notrap aligned v27+4
+        v30 = iconst.i32 0xffff
+        v31 = band v29, v30  ; v30 = 0xffff
+        v32 = iconst.i32 1
+        v33 = icmp eq v31, v32  ; v32 = 1
+        brif v33, block4, block5
 
     block4:
-        v26 = iconst.i32 16
-        v27 = ushr.i32 v20, v26  ; v26 = 16
-        v28 = iconst.i32 255
-        v29 = band v27, v28  ; v28 = 255
-        v30 = iconst.i32 255
-        v31 = icmp eq v29, v30  ; v30 = 255
-        v32 = iconst.i64 8
-        v33 = iconst.i64 16
-        v34 = select v31, v33, v32  ; v33 = 16, v32 = 8
-        v35 = iadd.i64 v18, v34
-        v36 = load.i64 notrap aligned v35
-        v37 = iconst.i64 1
-        v38 = sshr v36, v37  ; v37 = 1
-        v39 = call_indirect sig3, v38(v0, v18, v19)  ; v19 = 1
-        jump block6(v39)
+        v35 = iconst.i32 16
+        v36 = ushr.i32 v29, v35  ; v35 = 16
+        v37 = iconst.i32 255
+        v38 = band v36, v37  ; v37 = 255
+        v39 = iconst.i32 255
+        v40 = icmp eq v38, v39  ; v39 = 255
+        v41 = iconst.i64 8
+        v42 = iconst.i64 16
+        v43 = select v40, v42, v41  ; v42 = 16, v41 = 8
+        v44 = iadd.i64 v27, v43
+        v45 = load.i64 notrap aligned v44
+        v46 = iconst.i64 1
+        v47 = sshr v45, v46  ; v46 = 1
+        v48 = call_indirect sig5, v47(v0, v27, v28)  ; v28 = 1
+        jump block6(v48)
 
     block5:
-        v40 = call fn3(v0, v18, v19)  ; v19 = 1
-        jump block6(v40)
+        v49 = call fn5(v0, v27, v28)  ; v28 = 1
+        jump block6(v49)
 
-    block6(v25: i64):
-        v41 = load.i8 notrap aligned v0+24
-        brif v41, block7, block8(v25)
+    block6(v34: i64):
+        v50 = load.i8 notrap aligned v0+24
+        brif v50, block7, block8(v34)
 
     block7 cold:
-        v43 = load.i64 notrap aligned v0
-        v44 = icmp eq v43, v1
-        brif v44, block9, block10
+        v52 = load.i64 notrap aligned v0
+        v53 = icmp eq v52, v21
+        brif v53, block9, block10
 
     block9 cold:
-        v45 = call fn4(v0)
-        jump block8(v45)
+        v54 = call fn6(v0)
+        jump block8(v54)
 
     block10 cold:
-        v46 = call fn5(v0, v1)
-        call fn2(v0, v46)
-        call fn2(v0, v1)
+        v55 = call fn7(v0, v21)
+        call fn2(v0, v55)
+        call fn2(v0, v21)
         call fn2(v0, v2)
-        v47 = iconst.i64 1
-        return v47  ; v47 = 1
+        v56 = iconst.i64 1
+        return v56  ; v56 = 1
 
-    block8(v42: i64):
-        v48 = call fn6(v0, v1, v42)
-        v49 = load.i8 notrap aligned v0+24
-        brif v49, block11, block12
+    block8(v51: i64):
+        v57 = call fn8(v0, v21, v51)
+        v58 = load.i8 notrap aligned v0+24
+        brif v58, block11, block12
 
     block11 cold:
         call fn2(v0, v2)
-        v50 = iconst.i64 1
-        return v50  ; v50 = 1
+        v59 = iconst.i64 1
+        return v59  ; v59 = 1
 
     block12:
-        v51 = iconst.i64 1
-        v52 = band.i64 v48, v51  ; v51 = 1
-        brif v52, block16, block17
+        v60 = iconst.i64 1
+        v61 = band.i64 v57, v60  ; v60 = 1
+        brif v61, block16, block17
 
     block17:
-        v53 = load.i32 notrap aligned v48
-        v54 = iconst.i32 -2
-        v55 = iadd v53, v54  ; v54 = -2
-        v56 = iconst.i32 0x7fff_fffd
-        v57 = icmp ult v55, v56  ; v56 = 0x7fff_fffd
-        brif v57, block13, block14
+        v62 = load.i32 notrap aligned v57
+        v63 = iconst.i32 -2
+        v64 = iadd v62, v63  ; v63 = -2
+        v65 = iconst.i32 0x7fff_fffd
+        v66 = icmp ult v64, v65  ; v65 = 0x7fff_fffd
+        brif v66, block13, block14
 
     block13:
-        v58 = iconst.i32 -1
-        v59 = iadd.i32 v53, v58  ; v58 = -1
-        store notrap aligned v59, v48
+        v67 = iconst.i32 -1
+        v68 = iadd.i32 v62, v67  ; v67 = -1
+        store notrap aligned v68, v57
         jump block16
 
     block14:
-        brif.i32 v53, block15, block16
+        brif.i32 v62, block15, block16
 
     block15 cold:
-        call fn2(v0, v48)
+        call fn2(v0, v57)
         jump block16
 
     block16:

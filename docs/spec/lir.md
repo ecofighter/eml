@@ -408,7 +408,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 ### 着地の印
 
-- `Call::Apply` は、省ける着地の印 `prompt: Option<VarId>` を持つ。印の変数 v は evidence (`obj`) の変数である。意味は「宛先が v の中断は、この呼び出しの結果にダミーを入れて、呼び出しの次から続ける」である (下の「実行の意味」、[VM](vm.md) の「巻き戻し」)。Core IR の `apply` も同じ欄を持ち、LIR への変換がそのまま写す
+- `Call::Apply`は、省ける着地の印`prompt: Option<VarId>`を持つ。印の変数vは、同じ関数の中で`ev_new`か`ev_renew`が束縛したevidence (`obj`)の変数である (下の「verifier」)。意味は「宛先がvの中断は、この呼び出しの結果にダミーを入れて、呼び出しの次から続ける」である (下の「実行の意味」、[VM](vm.md)の「巻き戻し」)。Core IRの`apply`も同じ欄を持ち、LIRへの変換がそのまま写す
 - テキストの形は、呼び出しの後に `prompt v` と書く (`let x.5: tobj poly = yields apply body.4(()) prompt ev.2`)。`mask` は呼び出しの前に書くので、印と並ぶことはない
 - 印は呼び出しの使いではない。v を消費も読みもしないので、呼び出しが使う値 (`Call::for_each_atom`) にも、生存解析にも、Perceus と所有の検査の消費にも入らない。v は、続く `prompt$` の呼び出しが使うので、着地の後も生きている。巻き戻しは着地したフレームの値を手放さないので、v は着地の後も有効である
 - 印を付けるのは EP だけで、付ける所は2つである。handle の `apply body(())` (v は handle の evidence) と、`resume$` の `apply κ(v)` (v は再開で作り直した evidence) である。どちらも直後に `prompt$` の呼び出しが続き、`prompt$` が `yield_status` の状態 2 の経路に進む ([Core IR](core-ir.md) の「handle と `prompt$`」と「再開と状態」)
@@ -707,6 +707,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 末尾呼び出しの印は、呼び出しの検査の最初に拒む (``a tail apply has a prompt marker, but a tail call leaves no frame to land on``)。エントリの段は `tail` そのものを拒むので、この文言はエントリの段のほかで出る
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数 v が見えること、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
+  - その後に、vが同じ関数の中で`ev_new`か`ev_renew`が束縛した変数であることを確かめる。どちらもevidenceを返す (``the prompt marker `ev.1` is not an evidence made by `ev_new` or `ev_renew` in this function``)。中断が着地しないフレームを通るとき、巻き戻しはvから`ev_take_state`で状態を取り出し、速いモードではそれが物体を確かめずにevidenceの欄を書くためである。関数ごとの検査なので、`eml_lir::unwind::points`がどのビルドでも走らせ、ネイティブの読み込みはreleaseのビルドでも破ったプログラムを断る
   - 印のほかの検査の後に、印の付いた呼び出しに`prompt$`が続くことを確かめる (上の「着地の印」。`` the apply with the prompt marker `ev.1` is not followed by `prompt$` ``)
 - `eml_lir::unwind::points` は、所有の段の走査に、関数のエントリと巻き戻しの地点ごとの所有を書き留めさせる。VM のコード生成が、これで巻き戻しの表を作る ([VM](vm.md) の「巻き戻し」)。所有を求める走査を、verifier と巻き戻しの表で2つ持たないためである
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)

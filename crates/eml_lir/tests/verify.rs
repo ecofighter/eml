@@ -3243,20 +3243,109 @@ fn marked(body: &str, ev: &str) -> String {
     format!("fn f(b.0: tobj, {ev}) -> obj {{\n{body}}}\n")
 }
 
+/// `Land`と、そのエントリの関数。着地の印のevidenceを`ev_new`で作るテストが、エントリをすべて入れるのに使う。
+const LAND: &str = "\
+effect Land { land(unit) -> tobj }
+internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
+";
+
+/// Perceusの前の段の`LAND`。エントリの関数は`decref`を書かない。
+fn land_before_perceus() -> String {
+    LAND.replace("  decref e.0\n", "")
+}
+
+/// 印`ev.1`を`ev_new`で作り、エントリをすべて入れてから`body`を続ける関数`f`。`land`は`LAND`か
+/// `land_before_perceus()`。
+fn made(land: &str, body: &str, ret: &str) -> String {
+    format!(
+        "{land}fn f(b.0: tobj, w.5: tobj) -> {ret} {{
+  let ev.1: obj = prim ev_new[Land]((), w.5)
+  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+{body}}}
+"
+    )
+}
+
 #[test]
-fn prompt_marker_is_accepted() {
-    let text = marked(
+fn a_prompt_marker_is_an_evidence_made_in_its_function() {
+    // 関数の中の`ev_new`か`ev_renew`で作った印は通る。巻き戻しは印をevidenceとして状態を取り出すので、引数と
+    // 呼び出しの結果は断る
+    let made = format!(
+        "{LAND}fn f(b.0: tobj, w.1: tobj) -> obj {{
+  let ev.2: obj = prim ev_new[Land]((), w.1)
+  let u.3: unit = prim ev_set_clause[Land.land](ev.2, &land$entry)
+  let x.4: tobj = yields apply b.0(()) prompt ev.2
+  let r.5: obj = call prompt$(ev.2, x.4)
+  return r.5
+}}
+{PROMPT}"
+    );
+    assert_eq!(check(&made), Ok(()));
+    let renewed = format!(
+        "{LAND}fn f(b.0: tobj, ev.1: obj, s.2: tobj) -> obj {{
+  let e.3: obj = prim ev_renew(ev.1, s.2)
+  decref ev.1
+  let x.4: tobj = yields apply b.0(()) prompt e.3
+  let r.5: obj = call prompt$(e.3, x.4)
+  return r.5
+}}
+{PROMPT}"
+    );
+    assert_eq!(check(&renewed), Ok(()));
+    let parameter = marked(
         "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  let r.3: obj = call prompt$(ev.1, x.2)\n  return r.3\n",
         "ev.1: obj",
     ) + PROMPT;
+    assert_eq!(
+        check(&parameter),
+        Err("the prompt marker `ev.1` is not an evidence made by `ev_new` or `ev_renew` in this function in `f`".to_string())
+    );
+    let called = format!(
+        "fn f(b.0: tobj) -> obj {{
+  let ev.1: obj = call g()
+  let x.2: tobj = yields apply b.0(()) prompt ev.1
+  let r.3: obj = call prompt$(ev.1, x.2)
+  return r.3
+}}
+fn g() -> obj {{
+  let s.0: obj = const \"not an evidence\"
+  return s.0
+}}
+{PROMPT}"
+    );
+    assert_eq!(
+        check(&called),
+        Err("the prompt marker `ev.1` is not an evidence made by `ev_new` or `ev_renew` in this function in `f`".to_string())
+    );
+}
+
+#[test]
+fn prompt_marker_is_accepted() {
+    let text = format!(
+        "{LAND}fn f(b.0: tobj, w.5: tobj) -> obj {{
+  let ev.1: obj = prim ev_new[Land]((), w.5)
+  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let x.2: tobj = yields apply b.0(()) prompt ev.1
+  let r.3: obj = call prompt$(ev.1, x.2)
+  return r.3
+}}
+{PROMPT}"
+    );
     assert_eq!(check(&text), Ok(()));
 }
 
 #[test]
 fn prompt_marker_in_tail_position_is_rejected() {
-    let text = "fn f(b.0: tobj, ev.1: obj) -> tobj {\n  tail yields apply b.0(()) prompt ev.1\n}\n";
+    let text = made(
+        &land_before_perceus(),
+        "  tail yields apply b.0(()) prompt ev.1\n",
+        "tobj",
+    );
     assert_eq!(
-        check_scopes(text),
+        check_scopes(&text),
         Err(
             "a tail apply has a prompt marker, but a tail call leaves no frame to land on in `f`"
                 .to_string()
@@ -3266,11 +3355,11 @@ fn prompt_marker_in_tail_position_is_rejected() {
 
 #[test]
 fn prompt_marker_on_a_dead_variable_is_rejected() {
-    let text = marked(
+    let text = made(
+        &land_before_perceus(),
         "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ()\n",
-        "ev.1: obj",
-    )
-    .replace("-> obj", "-> unit");
+        "unit",
+    );
     assert_eq!(
         check_scopes(&text),
         Err(
@@ -3291,9 +3380,10 @@ fn prompt_marker_on_a_non_obj_variable_is_rejected() {
 
 #[test]
 fn prompt_marker_on_an_unowned_variable_is_rejected() {
-    let text = marked(
+    let text = made(
+        LAND,
         "  decref ev.1\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
-        "ev.1: obj",
+        "obj",
     );
     assert_eq!(
         check(&text),
@@ -3307,7 +3397,9 @@ fn prompt_marker_on_an_unowned_variable_is_rejected() {
 #[test]
 fn prompt_marker_used_only_in_a_sibling_branch_is_rejected() {
     let text = format!(
-        "{BOOL}fn f(b.0: tobj, ev.1: obj, c.2: enum, e.3: obj) -> obj {{
+        "{BOOL}{}fn f(b.0: tobj, w.5: tobj, c.2: enum, e.3: obj) -> obj {{
+  let ev.1: obj = prim ev_new[Land]((), w.5)
+  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
   switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
   let x.4: tobj = yields apply b.0(()) prompt ev.1
@@ -3315,7 +3407,8 @@ b1:
 b2:
   return ev.1
 }}
-"
+",
+        land_before_perceus()
     );
     assert_eq!(
         check_scopes(&text),
@@ -3329,15 +3422,20 @@ b2:
 #[test]
 fn prompt_marker_passed_only_to_a_jump_is_refused() {
     // 呼び出しの後で印を`jump`だけが使うなら、`apply`の後に`prompt$`の呼び出しが続かないので、verifierが拒む
-    let text = "fn f(b.0: tobj, ev.1: obj) -> obj {
+    let text = format!(
+        "{}fn f(b.0: tobj, w.5: tobj) -> obj {{
+  let ev.1: obj = prim ev_new[Land]((), w.5)
+  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
   let x.2: tobj = yields apply b.0(()) prompt ev.1
   jump b1(ev.1)
 b1(p.3: obj):
   return p.3
-}
-";
+}}
+",
+        land_before_perceus()
+    );
     assert_eq!(
-        check_scopes(text),
+        check_scopes(&text),
         Err(
             "the apply with the prompt marker `ev.1` is not followed by `prompt$` in `f`"
                 .to_string()

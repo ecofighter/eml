@@ -1463,21 +1463,24 @@ yields fn in_tail(u.0: tobj) -> tobj {{
 /// (docs/spec/native.md の「巻き戻しの地点」)。
 #[test]
 fn release_check_a_marked_apply_not_followed_by_prompt_panics() {
-    let message = load_panic(
-        "\
-fn main() -> unit {
+    let message = load_panic(&format!(
+        "{COUNTER}\
+fn main() -> unit {{
   return ()
-}
-yields fn g(u.0: tobj) -> tobj {
+}}
+yields fn g(u.0: tobj) -> tobj {{
   return u.0
-}
-fn f(ev.0: obj) -> tobj {
+}}
+fn f(w.2: tobj) -> tobj {{
+  let ev.0: obj = prim ev_new[Counter]((), w.2)
+  let u.3: unit = prim ev_set_clause[Counter.get](ev.0, &get$entry)
+  let u.4: unit = prim ev_set_clause[Counter.put](ev.0, &put$entry)
   let x.1: tobj = yields apply &g(()) prompt ev.0
   decref ev.0
   return x.1
-}
-",
-    );
+}}
+{COUNTER_ENTRIES}"
+    ));
     let rule = "the apply with the prompt marker `ev.0` is not followed by `prompt$`";
     let expected = if cfg!(debug_assertions) {
         format!("invalid LIR at the native load: {rule} in `f`")

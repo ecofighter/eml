@@ -170,7 +170,10 @@ fn f(n.0: int, s.1: obj) -> obj {
 #[test]
 fn landing_is_the_prompt_variable() {
     let text = "\
-yields fn f(b.0: tobj, ev.1: obj) -> obj {
+effect Land { land(unit) -> tobj }
+yields fn f(b.0: tobj, w.5: tobj) -> obj {
+  let ev.1: obj = prim ev_new[Land]((), w.5)
+  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
   let x.2: tobj = yields apply b.0(()) prompt ev.1
   let r.3: obj = call prompt$(ev.1, x.2)
   return r.3
@@ -179,10 +182,14 @@ fn prompt$(ev.0: obj, x.1: tobj) -> obj {
   decref x.1
   return ev.0
 }
+internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
 ";
     assert_eq!(
         points_of(text, "f"),
-        [point(0, 0, &[(1, 1)], Some(1)), point(0, 1, &[], None)]
+        [point(0, 2, &[(1, 1)], Some(1)), point(0, 3, &[], None)]
     );
 }
 

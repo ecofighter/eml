@@ -971,12 +971,33 @@ fn marked(body: &str, ev: &str, ret: &str) -> String {
 
 #[test]
 fn prompt_marker_is_accepted_after_the_evidence_pass() {
-    let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ev.1\n",
-        "ev.1: obj",
-        "obj",
+    let text = format!(
+        "{LAND}fn f(b.0: tobj, w.5: tobj) -> obj {{
+  let ev.1: obj = prim ev_new[Land]((), w.5)
+  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let x.2: tobj = yields apply b.0(()) prompt ev.1
+  return ev.1
+}}
+{LAND_ENTRY}"
     );
     assert_eq!(check_evidence(&text), Ok(()));
+}
+
+/// 着地の印のevidenceを`ev_new`で作るテストの`Land`と、そのエントリの関数。印は同じ関数の中で`ev_new`か`ev_renew`が
+/// 束縛したevidenceでなければならない (docs/spec/lir.mdの「verifier」)。
+const LAND: &str = "effect Land { land(unit) -> tobj }\n";
+const LAND_ENTRY: &str =
+    "internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {\n  return ()\n}\n";
+
+/// 印`ev.1`を`ev_new`で作り、エントリをすべて入れてから`body`を続ける関数`f`。
+fn made(body: &str, ret: &str) -> String {
+    format!(
+        "{LAND}fn f(b.0: tobj, w.5: tobj) -> {ret} {{
+  let ev.1: obj = prim ev_new[Land]((), w.5)
+  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+{body}}}
+{LAND_ENTRY}"
+    )
 }
 
 #[test]
@@ -994,9 +1015,8 @@ fn prompt_marker_is_rejected_before_the_evidence_pass() {
 
 #[test]
 fn prompt_marker_in_tail_position_is_rejected() {
-    let text = marked(
+    let text = made(
         "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return x.2\n",
-        "ev.1: obj",
         "tobj",
     );
     assert_eq!(
@@ -1007,9 +1027,8 @@ fn prompt_marker_in_tail_position_is_rejected() {
 
 #[test]
 fn prompt_marker_on_a_dead_variable_is_rejected() {
-    let text = marked(
+    let text = made(
         "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ()\n",
-        "ev.1: obj",
         "unit",
     );
     assert_eq!(
@@ -1036,17 +1055,21 @@ fn prompt_marker_on_a_non_obj_variable_is_rejected() {
 
 #[test]
 fn prompt_marker_used_only_in_a_sibling_branch_is_rejected() {
-    let text = "layout Prelude.Bool { False, True }\nfn f(b.0: tobj, ev.1: obj, c.2: enum, e.3: obj) -> obj {
-  switch c.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    let text = format!(
+        "layout Prelude.Bool {{ False, True }}\n{LAND}fn f(b.0: tobj, w.5: tobj, c.2: enum, e.3: obj) -> obj {{
+  let ev.1: obj = prim ev_new[Land]((), w.5)
+  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
   let x.4: tobj = yields apply b.0(()) prompt ev.1
   return e.3
 b2:
   return ev.1
-}
-";
+}}
+{LAND_ENTRY}"
+    );
     assert_eq!(
-        check_evidence(text),
+        check_evidence(&text),
         Err(
             "`ev.1` is the prompt marker of an apply, but it is not used after the call in `f`"
                 .to_string()
@@ -1056,14 +1079,18 @@ b2:
 
 #[test]
 fn prompt_marker_passed_only_to_a_jump_is_accepted() {
-    let text = "fn f(b.0: tobj, ev.1: obj) -> obj {
+    let text = format!(
+        "{LAND}fn f(b.0: tobj, w.5: tobj) -> obj {{
+  let ev.1: obj = prim ev_new[Land]((), w.5)
+  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
   let x.2: tobj = yields apply b.0(()) prompt ev.1
   jump b1(ev.1)
 b1(p.3: obj):
   return p.3
-}
-";
-    assert_eq!(check_evidence(text), Ok(()));
+}}
+{LAND_ENTRY}"
+    );
+    assert_eq!(check_evidence(&text), Ok(()));
 }
 
 /// 一様な位置の始まりは、関数の引数の数を超えない。

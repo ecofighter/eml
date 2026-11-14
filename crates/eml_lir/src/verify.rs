@@ -1833,8 +1833,9 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 着地の印 `prompt v` の検査。`v` は呼び出しの後も生きている `obj` の変数でなければならない。所有の段では、
-    /// 呼び出しの直後にも所有していなければならない (docs/spec/lir.md の「着地の印」)。
+    /// 着地の印`prompt v`の検査。`v`は呼び出しの後も生きている`obj`の変数で、同じ関数の中で`ev_new`か`ev_renew`が
+    /// 束縛したevidenceでなければならない。所有の段では、呼び出しの直後にも所有していなければならない
+    /// (docs/spec/lir.mdの「着地の印」)。
     fn check_prompt(&self, owned: &Owned, call: &Call, marker: VarId) -> Result<(), String> {
         let what = self.call_text(call, false);
         self.cx.visible(marker)?;
@@ -1857,7 +1858,7 @@ impl<'a> Checker<'a> {
                 self.cx.name(marker)
             ));
         }
-        Ok(())
+        self.cx.prompt_marker(marker)
     }
 
     /// 呼び出しの直後で `var` が生きているか。生存解析のエントリの集合から、終端と後ろの文を逆にたどって求める。

@@ -487,10 +487,13 @@ b3:
 #[test]
 fn an_unwind_point_shows_its_owned_slots_and_landing() {
     insta::assert_snapshot!(disasm("\
+effect Land { land(unit) -> tobj }
 fn main() -> unit {
   return ()
 }
-yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
+yields fn land(b.0: tobj, w.7: tobj, s.2: obj) -> unit {
+  let ev.1: obj = prim ev_new[Land]((), w.7)
+  let u.8: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
   dup s.2
   let x.3: tobj = yields apply b.0(()) prompt ev.1
   let r.6: obj = call prompt$(ev.1, x.3)
@@ -503,22 +506,34 @@ fn prompt$(ev.0: obj, x.1: tobj) -> obj {
   decref x.1
   return ev.0
 }
+internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
 "), @"
     fn main (arity 0, frame 1)
          3  load_imm s0, 0
          4  ret s0
-    fn land (arity 3, frame 4) entry unwind [s0, s1, s2]
-         5  dup s2
-         6  load_imm s3, 0
-         7  apply s0 = s0(s3) unwind [s1, s2*2] land s1
-         8  call s0 = prompt$(s1, s0) unwind [s2*2]
-         9  decref s0
-        10  extern s0 = Prelude.++(s2, s2)
-        11  extern s0 = Prelude.println(s0)
-        12  ret s0
+    fn land (arity 3, frame 5) entry unwind [s0, s2, s1]
+         5  load_imm s4, 0
+         6  ev_new s1, E0 (1 ops), s4, s1
+         7  load_imm s4, 3
+         8  ev_set_clause s3, s1, op0, s4
+         9  dup s2
+        10  load_imm s4, 0
+        11  apply s0 = s0(s4) unwind [s1, s2*2] land s1
+        12  call s0 = prompt$(s1, s0) unwind [s2*2]
+        13  decref s0
+        14  extern s0 = Prelude.++(s2, s2)
+        15  extern s0 = Prelude.println(s0)
+        16  ret s0
     fn prompt$ (arity 2, frame 2) entry unwind [s0, s1]
-        13  decref s1
-        14  ret s0
+        17  decref s1
+        18  ret s0
+    fn land$entry (arity 2, frame 3) entry unwind [s0]
+        19  decref s0
+        20  load_imm s2, 0
+        21  ret s2
     ");
 }
 

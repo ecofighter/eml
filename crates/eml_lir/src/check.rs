@@ -421,6 +421,8 @@ pub struct Context<'a> {
     /// `ev_lookup[E]`で束縛した変数の、エフェクトの番号。節の呼び出しの`callee`が`E`のevidenceから読んだもので
     /// あることを確かめるのに使う。
     found: FxHashMap<VarId, u32>,
+    /// `ev_renew`で束縛した変数。`ev_new`で束縛した変数と同じくevidenceで、着地の印はこの2つのどちらかである。
+    renewed: FxHashSet<VarId>,
     /// `ev_clause[E.op](v)`で束縛した変数の`(E, op)`と`v`。`clause E.op`の`callee`が同じ操作のエントリから
     /// 読んだものであることを確かめるのに使う。
     entries: FxHashMap<VarId, (u32, u32, Atom)>,
@@ -450,6 +452,7 @@ impl<'a> Context<'a> {
             closures: FxHashMap::default(),
             evidences: FxHashMap::default(),
             found: FxHashMap::default(),
+            renewed: FxHashSet::default(),
             entries: FxHashMap::default(),
             filling: Vec::new(),
             unfilled: None,
@@ -746,6 +749,9 @@ impl<'a> Context<'a> {
             Some((var, &Prim::EvLookup(effect), _)) => {
                 self.found.insert(var, effect);
             }
+            Some((var, &Prim::EvRenew, _)) => {
+                self.renewed.insert(var);
+            }
             Some((var, &Prim::EvClause { effect, op }, &[from])) => {
                 self.entries.insert(var, (effect, op, from));
             }
@@ -832,6 +838,19 @@ impl<'a> Context<'a> {
 
     fn violate(&mut self, message: String) {
         self.unfilled.get_or_insert(message);
+    }
+
+    /// 着地の印は、同じ関数の中で`ev_new`か`ev_renew`が束縛した変数で、どちらもevidenceを返す。中断が着地しない
+    /// フレームを通るとき、巻き戻しは印から`ev_take_state`で状態を取り出し、速いモードではそれがevidenceの欄を確かめずに
+    /// 書くためである (docs/spec/lir.mdの「着地の印」)。
+    pub fn prompt_marker(&self, marker: VarId) -> Result<(), String> {
+        if self.evidences.contains_key(&marker) || self.renewed.contains(&marker) {
+            return Ok(());
+        }
+        Err(format!(
+            "the prompt marker `{}` is not an evidence made by `ev_new` or `ev_renew` in this function",
+            self.name(marker)
+        ))
     }
 
     /// `clause E.op`の`callee`は、同じ関数の中の`ev_clause[E.op](v)`で束縛した変数で、vは同じ関数の中の
