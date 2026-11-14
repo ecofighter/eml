@@ -342,7 +342,8 @@ eml_rt unit tests live in `crates/eml_rt/src/heap/tests/ctx.rs` and are listed i
   - T14 (:1459): after condition (iv), "checked mode refuses a violation of (iv) as above".
 - **Completion:**
   - EG (plan 7.3.3), with Verus `N verified, 0 errors` and N greater than R3's amended value.
-  - `cargo nextest run -p eml_rt -E 'test(share_refuses_a_counted_immortal) | test(a_counted_immortal_of_another_heap_is_refused)'` → `4 tests run: 4 passed`.
+  - `cargo nextest run -p eml_rt -E 'test(share_refuses_a_counted_immortal) | test(a_counted_immortal_of_another_heap_is_refused) | test(a_counted_immortal_under_a_cell_of_the_child_is_refused)'` → `6 tests run: 6 passed`.
+  - Inbound refusal (00 G.3 (f), U-L): `transfer_walk` (`heap/transfer.rs`) returns `TransferError::Counted` → `HeapError::CountedImmortal` in checked mode when it reaches a counted immortal; `transfer_back`'s last `ensures` gains `|| r == Err(CountedImmortal)`; a failed `transfer_back` keeps the flips already made, as for `WrongOwner`. Spec: no thread but the owner's writes a count; a refusal that reads a count on another heap's page (`transfer_back`, `share` of a value already holding one, `dup`, `decref`, `acquire_immortal`) is a diagnosis, not a guarantee.
   - `cargo test --workspace -q` → no failure.
   - `nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target $(rustc -vV | sed -n 's/^host: //p') -p eml_rt trusted::` → pass, no report.
   - `git diff 4bce211a -- crates/eml_rt | grep -cE '^\+.*(external_body|assume\()'` → `0`; `src/trust.rs` unchanged.
@@ -586,7 +587,7 @@ ASan before CP-C (N6's completion).
 No `native: skip` mark is added.
 
 **Kind 2 (expected values), scope:**
-- R4 (user-approved, 00 G.3 U-K): `heap::tests::share::checked::share_stops_at_immortal_objects`, `heap::tests::share::share_leaves_an_immortal_lin_object_alone`, `heap::tests::transfer::checked::shared_counts_above_one_and_immortal_objects_stop` keep their claims on an uncounted immortal (frozen and attached, or the dummy), because sharing a value that reaches a counted immortal is now refused; if one cannot, stop (kind 1 for the user).
+- R4 (user-approved, 00 G.3 U-K): `heap::tests::share::checked::share_stops_at_immortal_objects`, `heap::tests::share::share_leaves_an_immortal_lin_object_alone`, `heap::tests::transfer::checked::shared_counts_above_one_and_immortal_objects_stop` keep their claims on an uncounted immortal (frozen and attached, or the dummy), because sharing a value that reaches a counted immortal is now refused; if one cannot, stop (kind 1 for the user). The `fast::` variants of the two `both_modes!` tests change too (`mortal()` 1 → 0, the immortal now lives in a frozen region). In `share_leaves_an_immortal_lin_object_alone` the sub-claim "releasing a shared parent gives back a counted child's reference" is dropped: that state is now illegal in checked mode (reviewed as within kind 2).
 - N1: `clif::a_call_and_its_unwind_check`, `clif::an_apply_site`; eml_rt `the_native_offsets_are_pinned`.
 - N7: `integration__ui__run_native.snap`, `integration__ui__run_fail_native.snap`.
 - Contingency V1: `crates/eml_vm/tests/bench.rs` `RunStats` of `bench/` programs that use `par` only (08 A-7).
