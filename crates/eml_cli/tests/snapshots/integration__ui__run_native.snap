@@ -2,17 +2,12 @@
 source: crates/eml_cli/tests/ui.rs
 expression: counts
 ---
-accepted 336
+accepted 489
 skipped 6
-rejected 304
+rejected 151
   async row 129
   par 22
-  prim 153
-unlowered 31
-  ShowBytesLength
-  ShowBytesGet
-  ProcStageCount
-  ProcWaitStage
+unlowered 27
   AsyncJobCell
   ChanToCell
   TlsPushTls

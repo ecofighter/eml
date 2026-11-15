@@ -365,20 +365,20 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## 断る形
 
-ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。ただし`Prim`の形のうち`child_abort`でない基本操作 (「エフェクト」) と、`Clause`の形 (「関数の値」) と、`Prompt`の形 (「巻き戻しの地点」) は、下ろしが下ろせる。
+ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。ほかの基本操作、`evidence`、節の呼び出し、着地は下ろす (「エフェクト」「関数の値」「巻き戻しの地点」)。
 
 | `Form` | 名前 (`Form::label`) | LIRの形 |
 |---|---|---|
 | `Par` | `par` | `Call::Par` |
 | `AsyncRow` | `async row` | `Extern::is_async`が真であるstdの行 (タスクの行) |
 | `BlockingC` | `blocking c` | `ExternRef::CSubmit`と`ExternRef::CTake` |
-| `Prim` | `prim` | `Prim::EmptyMutArray`のほかのすべての`Rhs::Prim` |
-| `Clause` | `clause` | `Call::Clause`と、`LirFn.clause`を持つ関数 |
-| `Prompt` | `prompt` | 着地の印 (`prompt`) を持つ`Call::Apply` |
+| `ChildAbort` | `child abort` | `Rhs::Prim(Prim::ChildAbort, _)` (`par`の子か`compute`の仕事の中断。[Core IR](core-ir.md)の「`par` の呼び出し」) |
 
 - 形は、何度現れても1度だけ報告する
 - `rows::INLINE`は、CLIFの演算としてインラインに下ろす45の行である。VMの算術と比較の専用の命令 ([VM](vm.md)の「基本操作と extern」) の行から`FloatMod`を除いたものである。Craneliftの`LibCall`には`fmod`がないので、`FloatMod`は呼ぶ行にする
 - タスクの行でも`Par`でもなく、`rows::INLINE`にない行は、エントリ`eml_x_<Variant>`の呼び出しとして下ろす。`rows::lowering(ext)`は、行がこの2つのどちらであるかを返し、タスクの行と`Par`には`None`を返す (「行の下ろし方」)
+- 預かる引数を持つ行はどれもタスクの行なので、ネイティブのコードは預かる引数を扱わない。テストがこれを`Extern::ALL`の全体で確かめる
+- ネイティブのコードには、Rustからemlの閉包を呼ぶ行もない。関数を引数に取るstdのexternは、タスクの行と`Std.Par.par`だけで、どれも断るからである
 - `prim empty_mut_array`は、読み込み時の値`a:mut`を読むので断らない (「値と定数」)
 - `blocking`でない利用者のCの関数の行 (`ExternRef::C`) は断らず、`eml_c$<名前>`の直接の呼び出しに下ろす (「Cの関数の呼び出し」)
 

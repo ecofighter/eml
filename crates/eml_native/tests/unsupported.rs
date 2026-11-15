@@ -52,69 +52,44 @@ fn blocking_c_is_rejected() {
     );
 }
 
-#[test]
-fn prim_is_rejected() {
-    assert_rejects(
-        "effect Fail where\n  never fail : String -> a\n\
-         \n\
-         check : Int -> <Fail> Int\n\
-         check n = if n > 0 then n else fail \"not positive\"\n\
-         \n\
-         safe : Int -> String\n\
-         safe n =\n  handle show (check n) with\n    | ctl fail message -> message\n\
-         \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () =\n  println (safe 3)\n  println (safe 0)\n",
-        Form::Prim,
-    );
-}
+const PAR_OF_HANDLERS: &str = "import Std.Par\n\
+     \n\
+     effect Fail where\n  never fail : String -> a\n\
+     \n\
+     check : Int -> <Fail> Int\n\
+     check n = if n > 0 then n else fail \"not positive\"\n\
+     \n\
+     safe : Int -> String\n\
+     safe n =\n  handle show (check n) with\n    | ctl fail message -> message\n\
+     \n\
+     main : Unit -> <IO, Panic> Unit\n\
+     main () =\n  let (a, b) = Par.par (fn () -> safe 1) (fn () -> safe 0)\n  println (a ++ b)\n";
 
 #[test]
-fn clause_is_rejected() {
-    assert_rejects(
-        "main : Unit -> <IO> Unit\n\
-         main () = println (show (try_panic (fn () -> 9223372036854775807 + 1)))\n",
-        Form::Clause,
-    );
-}
-
-#[test]
-fn prompt_is_rejected() {
-    assert_rejects(
-        "effect Fail where\n  never fail : String -> a\n\
-         \n\
-         check : Int -> <Fail> Int\n\
-         check n = if n > 0 then n else fail \"not positive\"\n\
-         \n\
-         safe : Int -> String\n\
-         safe n =\n  handle show (check n) with\n    | ctl fail message -> message\n\
-         \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () =\n  println (safe 3)\n  println (safe 0)\n",
-        Form::Prompt,
-    );
+fn child_abort_is_rejected() {
+    let found = rejected(PAR_OF_HANDLERS);
+    let child_abort = found
+        .iter()
+        .find(|u| u.form == Form::ChildAbort)
+        .unwrap_or_else(|| panic!("ChildAbort not in {found:?}"));
+    assert_eq!(child_abort.function, "fork$Prelude.Panic.panicked");
+    assert_eq!(child_abort.row, None);
 }
 
 #[test]
 fn forms_are_sorted_and_distinct() {
-    let found = forms(
-        "import Std.Par\n\
-         \n\
-         effect Fail where\n  never fail : String -> a\n\
-         \n\
-         check : Int -> <Fail> Int\n\
-         check n = if n > 0 then n else fail \"not positive\"\n\
-         \n\
-         safe : Int -> String\n\
-         safe n =\n  handle show (check n) with\n    | ctl fail message -> message\n\
-         \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () =\n  let (a, b) = Par.par (fn () -> safe 1) (fn () -> safe 0)\n  println (a ++ b)\n",
-    );
-    for form in [Form::Par, Form::Prim, Form::Prompt] {
-        assert!(found.contains(&form), "{form:?} not in {found:?}");
+    assert_eq!(forms(PAR_OF_HANDLERS), [Form::Par, Form::ChildAbort]);
+}
+
+/// ネイティブのコードは預かる引数を扱わない。それで正しいのは、預かる引数を持つ行がどれもタスクの行で、断られるから
+/// である (docs/spec/native.mdの「断る形」)。
+#[test]
+fn every_row_with_a_held_argument_is_rejected() {
+    for &row in Extern::ALL {
+        if row.row().held.iter().any(|held| *held) {
+            assert!(row.is_async(), "{row:?}");
+        }
     }
-    assert!(found.windows(2).all(|pair| pair[0] < pair[1]), "{found:?}");
 }
 
 /// 関数は宣言の順に並ぶ。`Std.Atomic.add`は`bump`の最初のタスクの行で、`fresh`の`Std.Atomic.new`はその後の関数に
