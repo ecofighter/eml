@@ -120,8 +120,8 @@ valgrindがarm64のmacOSで動かないので、callgrindは使わない。`inst
 | `append` | 空の文字列から始め、一意な文字列に `string_push` で 1 バイトずつ足すことを、10,000,000 回繰り返す。その場の追記と、倍の容量での作り直しの費用である |
 | `perform` | evidence が1つの `evv` で、`ev_lookup` と `ev_clause` を呼んで結果を手放すことを、10,000,000 回繰り返す。handler の中で `perform` してその場で戻る道である |
 | `perform-deep` | 同じことを、8つの evidence の `evv` の最も奥の evidence に対して行う |
-| `handle` | handler を `evv_get`、`ev_new`、`ev_set_clause`、`evv_push`、`evv_set` で設け、`prompt$` と同じく `ev_take_evv` と `evv_set` で外すことを、1,000,000 回繰り返す |
-| `yield` | yield を始め、κ を取り出して入れ直し、yield を終える1往復を、10,000,000 回繰り返す |
+| `handle` | handlerを`evv_get`、`ev_new`、`ev_set_clause`、`evv_enter`、`evv_set`で設け、`prompt$`と同じく`ev_take_evv`と`evv_set`で外すことを、1,000,000回繰り返す |
+| `yield` | yieldを始め、κを取り出して入れ直し、yieldを終えて`prompt$`と同じく`ev_retire`でevidenceを退かせる1往復を、10,000,000回繰り返す |
 | `mask` | 4つの evidence の `evv` で、2つ目の evidence を飛ばす `evv_mask` (項目は n = 0、m = 1 の1つ) を呼び、結果を手放すことを、10,000,000 回繰り返す |
 | `poll` | 安全点の確かめ `Ctx::poll` を、100,000,000 回繰り返す |
 
@@ -280,90 +280,90 @@ bench/scripts.sh
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.2.1 (26B131)
 - rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
-- コミット: bab1816
+- コミット: 7fb967c
 
 `rt_bench` の計測
 
 | 計測 | instructions retired | 実時間 (s) |
 |---|---:|---:|
-| `empty` | 19440908 | 0.00 |
-| `list` | 1245168254 | 0.05 |
-| `box-list` | 2919050542 | 0.08 |
-| `dup` | 279677720 | 0.01 |
-| `free` | 1860105456 | 0.06 |
-| `map` | 1802664559 | 0.06 |
-| `map-reuse` | 672799879 | 0.02 |
-| `append` | 280348861 | 0.01 |
-| `perform` | 519540737 | 0.01 |
-| `perform-deep` | 869533893 | 0.03 |
-| `handle` | 643467319 | 0.02 |
-| `yield` | 329545836 | 0.09 |
-| `mask` | 3769552258 | 0.10 |
-| `poll` | 1119506634 | 0.04 |
+| `empty` | 19387694 | 0.00 |
+| `list` | 1245005554 | 0.05 |
+| `box-list` | 2921466795 | 0.08 |
+| `dup` | 279569027 | 0.01 |
+| `free` | 1859768903 | 0.06 |
+| `map` | 1803487438 | 0.06 |
+| `map-reuse` | 673548079 | 0.03 |
+| `append` | 281114760 | 0.01 |
+| `perform` | 519523893 | 0.01 |
+| `perform-deep` | 869619014 | 0.03 |
+| `handle` | 647420815 | 0.02 |
+| `yield` | 669937450 | 0.03 |
+| `mask` | 3770092021 | 0.10 |
+| `poll` | 1119544654 | 0.04 |
 
 extern の計測 (`rt_extern_bench`)
 
 | 計測 | instructions retired | 実時間 (s) |
 |---|---:|---:|
-| `string-eq` | 347587339 | 0.01 |
-| `string-eq-early` | 439637432 | 0.01 |
-| `compare` | 347828442 | 0.01 |
-| `concat-copy` | 2576660140 | 0.09 |
-| `show-int` | 2079513801 | 0.06 |
-| `show-int-long` | 5229708628 | 0.15 |
-| `show-string` | 3394250834 | 0.15 |
-| `show-string-dense` | 8183215781 | 0.28 |
-| `println-block` | 257864852 | 0.01 |
-| `println-line` | 30437721124 | 1.32 |
-| `read-all` | 128274801 | 0.00 |
-| `read-all-unsized` | 139754357 | 0.01 |
-| `find-byte-1mib` | 1212874766 | 0.04 |
-| `find-byte-1mib-position` | 6325233717 | 0.24 |
-| `find-bytes-1mib` | 424755254 | 0.01 |
-| `find-bytes-1mib-windows` | 3283905238 | 0.12 |
-| `find-byte` | 999481055 | 0.03 |
-| `find-byte-swar` | 1049448036 | 0.03 |
-| `find-sub` | 2079577183 | 0.07 |
-| `find-sub-contains` | 1529605468 | 0.05 |
-| `slice-short` | 1939522053 | 0.07 |
-| `slice-short-box` | 2473123381 | 0.07 |
-| `read-all-bytes` | 424727948 | 0.04 |
-| `read-all-bytes-std` | 215011037 | 0.02 |
-| `read-line-bytes-64mib` | 677669212 | 0.03 |
-| `read-line-bytes-64mib-std` | 767182847 | 0.03 |
-| `stdout-write-line-10m` | 2959991098 | 0.10 |
+| `string-eq` | 347559951 | 0.01 |
+| `string-eq-early` | 439740083 | 0.01 |
+| `compare` | 347882088 | 0.01 |
+| `concat-copy` | 2577028184 | 0.10 |
+| `show-int` | 2079885802 | 0.07 |
+| `show-int-long` | 5230388712 | 0.15 |
+| `show-string` | 3394795384 | 0.15 |
+| `show-string-dense` | 8183789881 | 0.28 |
+| `println-block` | 257948908 | 0.01 |
+| `println-line` | 30477875842 | 1.35 |
+| `read-all` | 128208716 | 0.00 |
+| `read-all-unsized` | 139597452 | 0.00 |
+| `find-byte-1mib` | 1213122436 | 0.04 |
+| `find-byte-1mib-position` | 6325996132 | 0.25 |
+| `find-bytes-1mib` | 424494204 | 0.01 |
+| `find-bytes-1mib-windows` | 3284514374 | 0.12 |
+| `find-byte` | 999653020 | 0.03 |
+| `find-byte-swar` | 1049562754 | 0.03 |
+| `find-sub` | 2079916732 | 0.07 |
+| `find-sub-contains` | 1529974964 | 0.05 |
+| `slice-short` | 1940001786 | 0.07 |
+| `slice-short-box` | 2473483163 | 0.07 |
+| `read-all-bytes` | 437439211 | 0.05 |
+| `read-all-bytes-std` | 218135684 | 0.02 |
+| `read-line-bytes-64mib` | 675500590 | 0.03 |
+| `read-line-bytes-64mib-std` | 770282437 | 0.03 |
+| `stdout-write-line-10m` | 2960548574 | 0.09 |
 
 ネイティブの実行系のエントリ (`nrt_bench`)
 
 | 計測 | instructions retired | 実時間 (s) |
 |---|---:|---:|
-| `enter` | 418008069 | 0.03 |
-| `entry-plain` | 827999521 | 0.06 |
-| `entry-shim` | 827934068 | 0.06 |
+| `enter` | 418093895 | 0.02 |
+| `entry-plain` | 828170318 | 0.06 |
+| `entry-shim` | 828092139 | 0.06 |
 
 eml / 参照の比 (1 MiB の2組は目標が2倍、続く4組は予算の行、最後の組は記録だけの行)
 
 | eml の計測 | 参照の計測 | 命令の数の比 | 実時間の比 |
 |---|---|---:|---:|
-| `find-byte-1mib` | `find-byte-1mib-position` | 0.19 | 0.17 |
+| `find-byte-1mib` | `find-byte-1mib-position` | 0.19 | 0.16 |
 | `find-bytes-1mib` | `find-bytes-1mib-windows` | 0.13 | 0.08 |
 | `find-byte` | `find-byte-swar` | 0.95 | 1.00 |
 | `find-sub` | `find-sub-contains` | 1.36 | 1.40 |
 | `slice-short` | `slice-short-box` | 0.78 | 1.00 |
-| `read-all-bytes` | `read-all-bytes-std` | 1.98 | 2.00 |
+| `read-all-bytes` | `read-all-bytes-std` | 2.01 | 2.50 |
 | `read-line-bytes-64mib` | `read-line-bytes-64mib-std` | 0.88 | 1.00 |
 
 #### 予算を超えた行の既知の差
 
 命令の数の比は、`find-byte`が0.95 (予算1.5)、`find-sub`が1.36 (予算1.6)、`slice-short`が0.78 (予算1.0) で、予算の中にある。超えた行は`read-all-bytes`だけである。
 
-- `slice-short`のemlの側は1,939,522,053命令 (1回あたり約194) である。参照の`slice-short-box`は、同じバイナリでも測る時期で値が違い、この表では2,473,123,381命令 (1回あたり約247)、別の時期には2,601,090,182と4,518,733,825命令だった。どの値でも比は予算の1.0より小さい (0.78、0.75、0.43)。releaseをthin LTOで組む前は、emlの側が約278命令で、比は1.07で予算を超えていた。thin LTOで減った約84命令は、`Ctx`の呼び出しとヒープの確保の道の費用である (「releaseのthin LTO」)。
-- 参照の仕事がRustのアロケータである行 (`box-list`、`slice-short-box`、`read-line-bytes-64mib-std`) は、測る時期でそろって動き、`eml_rt`の行 (`list`、`free`、`dup`、`slice-short`) は動かなかった。この表の`box-list`は2,919,050,542命令、`read-line-bytes-64mib-std`は767,182,847命令で、`eml_rt`を呼ばない同じコードが、別の時期には3,596,306,812と987,473,679命令だった。この3行を分母にする比は、安定した基準にならない。
-- `read-all-bytes`は命令の数の比が1.98で (424,727,948対215,011,037命令)、行の予算の1.3を超える。どちらの側も、入力の64 MiBを組む費用を含むので、比は1の側に寄る。測っているのは`handle_read`の`Form::Bytes`で、UTF-8の検査はない。差は、`Vec`に読んでからヒープへ写す2回目の写しと、`read_to_end`が空き領域を0で埋める費用である (「`FileIn.read_all` の読み方」)。参照の`read_to_end`は`&[u8]`から`Vec`へ1回写すだけである
+- `slice-short`のemlの側は1,940,001,786命令 (1回あたり約194) である。参照の`slice-short-box`は、同じバイナリでも測る時期で値が違い、この表では2,473,483,163命令 (1回あたり約247)、別の時期には2,601,090,182と4,518,733,825命令だった。どの値でも比は予算の1.0より小さい (0.78、0.75、0.43)。releaseをthin LTOで組む前は、emlの側が約278命令で、比は1.07で予算を超えていた。thin LTOで減った約84命令は、`Ctx`の呼び出しとヒープの確保の道の費用である (「releaseのthin LTO」)。
+- 参照の仕事がRustのアロケータである行 (`box-list`、`slice-short-box`、`read-line-bytes-64mib-std`) は、測る時期でそろって動き、`eml_rt`の行 (`list`、`free`、`dup`、`slice-short`) は動かなかった。この表の`box-list`は2,921,466,795命令、`read-line-bytes-64mib-std`は770,282,437命令で、`eml_rt`を呼ばない同じコードが、別の時期には3,596,306,812と987,473,679命令だった。この3行を分母にする比は、安定した基準にならない。
+- `read-all-bytes`は命令の数の比が2.01で (437,439,211対218,135,684命令)、行の予算の1.3を超える。どちらの側も、入力の64 MiBを組む費用を含むので、比は1の側に寄る。測っているのは`handle_read`の`Form::Bytes`で、UTF-8の検査はない。差は、`Vec`に読んでからヒープへ写す2回目の写しと、`read_to_end`が空き領域を0で埋める費用である (「`FileIn.read_all` の読み方」)。参照の`read_to_end`は`&[u8]`から`Vec`へ1回写すだけである
   - 2倍の行への費用: 100 MB の入力で、eml の `read_all` (読み、UTF-8 の検査、写し) は 23 ms、Rust の `read_to_end` は 9〜10 ms で、差は約 13 ms である (設計のときの計測)。`wc` の Rust の実装は 0.07 s なので、2倍の目標 ([ネイティブ化の設計](../future/native.md) の「目的と範囲」の、スクリプト全体の目標で、この行の予算とは別) の余裕約 70 ms のうち、約 13 ms を読みが使う
   - `read_into` (Host の読みを一意な `Bytes` の空きに直接書く) は入れていない。入れる引き金は、ネイティブのコードで、この行が `read_to_end` の 1.3 倍を超えることで、VM の測定では判定しない ([ロードマップ](../future/roadmap.md) の「処理系」の `read_into`)。`read_into` は `Vec` からの写しを省くが、stable の Rust は `read_buf` を持たず、読む前に空きを 0 で埋めるので、ヒープへ直接読んでも得は 6〜10% に留まる。1.3 の予算に入れるには、写しを省くことに加えて、0 で埋めずに読む手段が要る
-- `read-line-bytes-64mib` (56バイトの行の64 MiBを`Form::Bytes`の行の読みで読む) は記録だけの行で、予算を持たない。64 KiBの`BufReader`の`read_until`で行ごとに`Vec`に読む参照に対し、命令の数の比は0.88である (677,669,212対767,182,847命令。どちらも入力の64 MiBを組む費用を含む)。行の読みは読み手のbufferから行を1回だけヒープへ写し、行の終わりをT13の`find_byte`で8バイトずつ探す。行の終わりを1バイトずつ探すループで測ったときの比は1.28で、差の主な原因はそのループだった。
-- `stdout-write-line-10m` (23バイトの行を`Stdout`のハンドルで10,000,000回書く) は記録だけの行で、1回の書き込みは約296命令、約10 nsである (2,959,991,098命令と0.10秒)。`println-block`の1行あたり約258命令に比べ、ハンドルの型の確かめと、ハンドルを返す分が多い。
+- `read-line-bytes-64mib` (56バイトの行の64 MiBを`Form::Bytes`の行の読みで読む) は記録だけの行で、予算を持たない。64 KiBの`BufReader`の`read_until`で行ごとに`Vec`に読む参照に対し、命令の数の比は0.88である (675,500,590対770,282,437命令。どちらも入力の64 MiBを組む費用を含む)。行の読みは読み手のbufferから行を1回だけヒープへ写し、行の終わりをT13の`find_byte`で8バイトずつ探す。行の終わりを1バイトずつ探すループで測ったときの比は1.28で、差の主な原因はそのループだった。
+- `stdout-write-line-10m` (23バイトの行を`Stdout`のハンドルで10,000,000回書く) は記録だけの行で、1回の書き込みは約296命令、約9 nsである (2,960,548,574命令と0.09秒)。`println-block`の1行あたり約258命令に比べ、ハンドルの型の確かめと、ハンドルを返す分が多い。
 
 ### `bench/scripts.sh`
 
@@ -417,9 +417,9 @@ C/Rust との比
 
 | 計測 | instructions retired | 1回あたりの命令 | 実時間 (s) |
 |---|---:|---:|---:|
-| `enter` | 418008069 | 約42 | 0.03 |
-| `entry-plain` | 827999521 | 約8.3 | 0.06 |
-| `entry-shim` | 827934068 | 約8.3 | 0.06 |
+| `enter` | 418093895 | 約42 | 0.02 |
+| `entry-plain` | 828170318 | 約8.3 | 0.06 |
+| `entry-shim` | 828092139 | 約8.3 | 0.06 |
 
 ### `bench/native.sh`
 
@@ -848,7 +848,7 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 ### 出力のバッファと Host の呼び出し
 
 - 主張: 標準出力と標準エラーは `Mutex` の中の 64 KiB の `BufWriter` にまとめて書く。行ごとに flush すると約65〜160倍遅い。Host は `dyn Host` で呼び、総称の型引数にしない。動的な呼び出しの分は、書き込みの費用と比べて小さい
-- 数値: 23バイトの行を100万行書くと、行ごとのflushはファイルへ1.30 µs/行、パイプへ324 ns/行、`BufWriter`は8 ns/行と5 ns/行 (M4。設計のときの使い捨ての計測で、コミットの記録はない)。`rt.sh`の`println-block` (`dyn Host`の呼び出しを含む) は1行あたり約258命令、`println-line`は約30,468命令 (大半はカーネルの中のwriteのsyscall) で、`Stdout`のハンドルの1回の書き込み (`stdout-write-line-10m`) は約296命令である (「今の数値」の表)
+- 数値: 23バイトの行を100万行書くと、行ごとのflushはファイルへ1.30 µs/行、パイプへ324 ns/行、`BufWriter`は8 ns/行と5 ns/行 (M4。設計のときの使い捨ての計測で、コミットの記録はない)。`rt.sh`の`println-block` (`dyn Host`の呼び出しを含む) は1行あたり約258命令、`println-line`は約30,478命令 (大半はカーネルの中のwriteのsyscall) で、`Stdout`のハンドルの1回の書き込み (`stdout-write-line-10m`) は約296命令である (「今の数値」の表)
 - 根拠にしている所: [オブジェクトモデル](../spec/object-model.md) の「extern」の「Host」と「出力のバッファ」
 
 ### `FileIn.read_all` の読み方

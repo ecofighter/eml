@@ -218,16 +218,15 @@ fn perform(effects: &[u16], target: u16) {
 fn handle() {
     let mut ctx = ctx();
     for _ in 0..HANDLERS {
-        // SAFETY: ev は ev_new が返した参照と、dup した参照の2つを持つ。1つは evv_push が節点に移し、もう1つは
-        // 最後に手放す。evv_get と ev_take_evv が返したリストの参照は、evv_push と evv_set に渡す。コンパイラの
-        // `prompt$` と同じく、外側の evv は dup せずに evidence から取り出す。
+        // SAFETY: evはev_newが返した参照を持ち、evv_enterはevを借りて節点に新しい参照を持たせる。持っている
+        // 参照は最後に手放す。evv_getとev_take_evvが返したリストの参照は、evv_enterとevv_setに渡す。コンパイラの
+        // handleと`prompt$`と同じく、evidenceをevv_enterで入れ、外側のevvはdupせずにevidenceから取り出す。
         unsafe {
             let outer = ctx.evv_get().unwrap();
             let ev = ctx.ev_new(0, 1, UNIT, outer).unwrap();
             ctx.ev_set_clause(ev, 0, Word::imm(1)).unwrap();
-            ctx.heap_mut().dup(ev).unwrap();
             let list = ctx.evv_get().unwrap();
-            let list = ctx.evv_push(list, ev).unwrap();
+            let list = ctx.evv_enter(list, black_box(ev)).unwrap();
             ctx.evv_set(list).unwrap();
             let outer = ctx.ev_take_evv(black_box(ev)).unwrap();
             ctx.evv_set(outer).unwrap();
@@ -236,12 +235,13 @@ fn handle() {
     }
 }
 
-/// yield して継続を1回組み立て直し、再開する1往復。
+/// yieldして継続を1回組み立て直し、再開する1往復。`prompt$`と同じく、yieldを終えた後にevidenceを退かせる。
 fn yield_once() {
     let mut ctx = ctx();
-    // SAFETY: ev は ev_new が返した参照を持つ。yield_to に渡す参照は dup で作り、yield_finish が手放す。
+    // SAFETY: evはev_newが返した参照を持つ。yield_toに渡す参照はdupで作り、yield_finishが手放す。evの状態と
+    // 外側のevvは`()`なのでev_retireは退いたevidenceを返し、evはその参照に替わる。
     unsafe {
-        let ev = ctx.ev_new(0, 1, UNIT, UNIT).unwrap();
+        let mut ev = ctx.ev_new(0, 1, UNIT, UNIT).unwrap();
         for _ in 0..PRIMITIVES {
             ctx.heap_mut().dup(ev).unwrap();
             ctx.yield_to(black_box(ev), Word::imm(2), Word::imm(1))
@@ -251,6 +251,7 @@ fn yield_once() {
             let k = ctx.yield_cont_take().unwrap();
             black_box(k);
             black_box(ctx.yield_finish().unwrap());
+            ev = ctx.ev_retire(black_box(ev)).unwrap();
         }
         ctx.heap_mut().decref(ev).unwrap();
     }
