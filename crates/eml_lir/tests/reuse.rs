@@ -454,7 +454,8 @@ fn a_release_does_not_move_across_a_yielding_call() {
   let d.7: tobj = con Prelude.List #1(t.13, acc.1)
   let n.5: int = call g(x.3)
   release ys.2 Prelude.List #1(_, rest.4)
-  tail call go(d.7, rest.4)
+  decref rest.4
+  return d.7
 ",
     ));
 }

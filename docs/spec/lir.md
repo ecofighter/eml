@@ -434,6 +434,13 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - 印は `apply` にだけ付く。EP が印を付ける2か所が、どちらも `apply` だからである
 - 印の付いた呼び出しの後、ブロックの次の呼び出し (呼び出しの`let`、複数の値の`let`、`tail`の呼び出し) は、最初の引数が印の変数vである`prompt$`の直接の呼び出しで、その間にexternの行も`prim yield_to`も`prim yield_abort`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを確かめるので ([ネイティブの実行系](native.md)の「巻き戻しの地点」)、着地から`prompt$`の`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない。verifierがこの規則を確かめる
 
+### yieldの確認までの間
+
+- 飛んでいるyieldは、巻き戻しの地点 (下の「巻き戻しの地点」) を通らない。yieldしうる呼び出し ([Core IR](core-ir.md)の「yield の地点」、`reuse::may_yield`) はyieldを飛ばしたまま戻り、フレームは`prim yielding()`の確認まで、確認のない呼び出しでは`return`まで走る ([Core IR](core-ir.md)の「yield の確認のない呼び出しの後」)
+- そのような呼び出しの後、確認までに、ブロックは巻き戻しの地点も`prim yield_to`も持たない。確認はブロックの最後の文で、ブロックは`switch y { 0 -> .., _ -> .. }`で終わり、遅い経路は巻き戻しの地点も`prim yield_to`も持たずに`return`で終わる。確認のない呼び出しの後には、巻き戻しの地点でも`prim yield_to`でもない文だけが続き、ブロックは`return`で終わる
+- 呼び出しと確認の間にあるのは、結果の変換とRCの命令である (下の「ダミーの値」)。RCの命令は物体を解放しうるが、ファイナライザは文脈を取らないので、失敗もyieldも始めない
+- verifierはこれを6つの段のすべてで確かめるので、どちらの読み込みも、これを破るプログラムを拒む。`yields`の印が誤っていることは確かめない (下の「実行の前提」)
+
 ### エントリの関数の印
 
 - 関数は、in-place のエントリの関数にだけ `(effect, op)` の印 (`clause`) を持つ。テキストの形では `internal yields clause State.get fn …` と書く
@@ -727,6 +734,11 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数vが見えること、vのReprが`ev`であること、vが呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not ev ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
   - 印のほかの検査の後に、印の付いた呼び出しに`prompt$`が続くことを確かめる (上の「着地の印」。`` the apply with the prompt marker `ev.1` is not followed by `prompt$` ``)
+- yieldしうる呼び出し (上の「yieldの確認までの間」) の検査は、6つの段のすべてで走る。印の付いた`apply`は着地の印の検査に任せ、続く`prompt$`の呼び出しは、`yields`の関数の中のyieldしうる呼び出しとして、この検査を受ける。文言は次の4つである
+  - `` `g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` ``
+  - `` `g` may yield, but its block ends with neither `prim yielding()` nor `return` ``
+  - `` the `prim yielding()` after `g` is not the last statement of a block that ends with a `switch` on it with the case `0` and a default ``
+  - `` the slow path after `g` runs an unwind point or `prim yield_to`, or does not return ``
 - 所有の段の走査は、関数のエントリと巻き戻しの地点ごとの所有を書き留める。所有を求める走査を、verifierと巻き戻しの表で2つ持たないためである。`eml_lir::unwind::verified(program)`は、プログラム全体の検査と同じ1回の走査で、すべての関数の表を`program.functions`の順に返す。`eml_lir::unwind::verified_for(program, walked)`は同じ検査をするが、たどるのは`walked`の関数だけで、プログラム全体の規則 (forkの関数、`clause`の印の関数のABI、値の参照など) はすべての関数に当て、`walked`の関数の表だけを返す。外した関数は、前の確かめが同じ名前でたどっていなければならず、そのコードが同じであることは呼ぶ側の約束である ([VM](vm.md)の「追記」)。VMの読み込みは、これですでにある関数をたどり直さない ([VM](vm.md)の「追記」)。`eml_lir::unwind::points(program, wanted)`はプログラム全体の規則を確かめず、関数ごとに表か誤りを返す。verifierを通らないIRの地点を見るテストと、VMの確かめない読み込み (下の「実行の前提」) が使う
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)
 - 境界の検査は、R7とR8の検査のうち、`jump`、`return`、`box`、`unbox`を除くものである。直接の呼び出しの引数と結果、`closure`の引数、`apply`の呼ばれる値と引数と結果 (`tobj`と比べる)、`par`の子 (`tobj`と比べる) と結果 (`obj`)、`clause`と`prim`のオペランドと結果、`evidence`の状態と外側のリストと捕獲と束縛、`clause`の印の関数の引数と`ret`が操作の表と互換であること、宣言したReprが`tobj`のフィールドである。`tail`の結果は、呼び出し元の`rets`とReprと印を比べる。translateとEPの出力は、boxの挿入より前には境界に合わないので、Core IRのverifierとLIRのエントリの段は境界を見ない
@@ -924,12 +936,12 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 
 ## 実行の前提
 
-プログラムは読み込みを通ってだけエンジンに届き、読み込みは最後の段のverifierが拒むプログラムを断る (上の「verifier」。例外は下の`eml_vm`のテストだけの確かめない読み込みである)。verifierは、所有、Repr、印、evidenceの役、すべてのevidenceのエントリ、forkのエントリを確かめる。VMの速いモードとネイティブのコードは、渡されたプログラムについて、verifierが確かめられない次のことをなお前提にする。
+プログラムは読み込みを通ってだけエンジンに届き、読み込みは最後の段のverifierが拒むプログラムを断る (上の「verifier」。例外は下の`eml_vm`のテストだけの確かめない読み込みである)。verifierは、所有、Repr、印、evidenceの役、すべてのevidenceのエントリ、forkのエントリ、yieldしうる呼び出しから確認までの間を確かめる。VMの速いモードとネイティブのコードは、渡されたプログラムについて、verifierが確かめられない次のことをなお前提にする。
 
 - どの`obj`と`tobj`の値も、作ったときの配置で読み、手放す。evidenceの状態もこれに含まれ、最後に入れた値として読む (取り出した後の状態は`()`である)
 - 実行時に`Lin`である値に付いた`poly`や`unr`の印は確かめない
 - 戻るときに`evv`が元に戻り、どの`clause E.op`と`evv_mask`のどの項目も、そのevidenceを見つける (上の「`evv` の不変条件」)
-- yieldの基本操作はEPが出す順に走り、`prompt$`は`yield_finish`の前に呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない (上の「着地の印」)
+- yieldの基本操作はEPが出す順に走り、関数と`apply`の`yields`の印は正しく、`prompt$`は`yield_finish`の前に呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない (上の「着地の印」)
 - externの行は、標準ライブラリのシグネチャの型の値を受け取る (上の「extern の行」)
 
 これらは、ソースのプログラムの型と、各パスの正しさから従う。

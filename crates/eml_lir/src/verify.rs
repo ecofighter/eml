@@ -802,6 +802,16 @@ impl<'a> Checker<'a> {
             if let Some(marker) = marked {
                 self.check_landing(block, at, marker)?;
             }
+            if let Stmt::Let {
+                var: _,
+                rhs: Rhs::Call(call),
+            }
+            | Stmt::LetMany { vars: _, call } = stmt
+                && call.prompt().is_none()
+                && reuse::may_yield(self.program, function, call)
+            {
+                self.check_yield_window(block, at, call)?;
+            }
             if let Some(Recorder { entry: _, points }) = &mut self.unwind
                 && let Some((vars, landing)) = unwind::point(stmt, &self.program.c_functions)
             {
@@ -1985,6 +1995,79 @@ impl<'a> Checker<'a> {
                 Ok(())
             }
             _ => Err(refused()),
+        }
+    }
+
+    /// yieldしうる呼び出しは、yieldを飛ばしたまま戻る。そのフレームは`let y = prim yielding()`の確認か`return`まで、
+    /// 巻き戻しの地点も`prim yield_to`も通ってはならない。`yield_abort`が、飛んでいるyieldを前提にしないからである。
+    /// 確認は、ブロックの最後の文で、`switch y { 0 -> .., _ -> .. }`の遅い経路は地点を通らずに`return`する
+    /// (docs/spec/lir.mdの「yieldの確認までの間」)。
+    fn check_yield_window(&self, block: &Block, at: usize, call: &Call) -> Result<(), String> {
+        let crosses = |stmt: &Stmt| {
+            unwind::point(stmt, &self.program.c_functions).is_some()
+                || matches!(
+                    stmt,
+                    Stmt::Let {
+                        var: _,
+                        rhs: Rhs::Prim(Prim::YieldTo, _)
+                    }
+                )
+        };
+        let returns = |term: &Term| matches!(term, Term::Return(_) | Term::ReturnMany(_));
+        let what = self.call_text(call, false);
+        let rest = &block.stmts[at + 1..];
+        let test = rest.iter().position(|stmt| {
+            matches!(
+                stmt,
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Prim(Prim::Yielding, _)
+                }
+            )
+        });
+        let before = &rest[..test.unwrap_or(rest.len())];
+        if before.iter().any(crosses) {
+            return Err(format!(
+                "{what} may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()`"
+            ));
+        }
+        let Some(test) = test else {
+            return if returns(&block.term) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{what} may yield, but its block ends with neither `prim yielding()` nor `return`"
+                ))
+            };
+        };
+        let Stmt::Let { var: tested, .. } = &rest[test] else {
+            unreachable!("the position is a `let`")
+        };
+        let not_switched = || {
+            format!(
+                "the `prim yielding()` after {what} is not the last statement of a block that ends with a `switch` on it with the case `0` and a default"
+            )
+        };
+        let Term::Switch {
+            scrutinee,
+            layout: None,
+            cases,
+            default: Some(slow),
+        } = &block.term
+        else {
+            return Err(not_switched());
+        };
+        if test + 1 != rest.len()
+            || *scrutinee != Atom::Var(*tested)
+            || !matches!(&cases[..], [case] if case.pattern == CasePattern::Int(0))
+        {
+            return Err(not_switched());
+        }
+        match self.function.blocks.get(slow.0 as usize) {
+            Some(slow) if !slow.stmts.iter().any(crosses) && returns(&slow.term) => Ok(()),
+            _ => Err(format!(
+                "the slow path after {what} runs an unwind point or `prim yield_to`, or does not return"
+            )),
         }
     }
 

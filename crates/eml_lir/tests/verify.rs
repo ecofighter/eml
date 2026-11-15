@@ -3433,6 +3433,185 @@ fn an_extern_row_between_a_prompted_apply_and_prompt_is_refused() {
     );
 }
 
+// yieldの確認までの間
+
+/// yieldしうる`g`を呼ぶ`yields`の関数`f`。`body`は`g`の呼び出しの結果`n.1`の後に続く文で、`f`は`int`を返す
+/// (docs/spec/lir.mdの「yieldの確認までの間」)。
+fn yield_point(body: &str) -> String {
+    format!(
+        "yields fn g() -> int {{\n  return 1\n}}\nyields fn f(e.8: cev, c.9: tobj poly, s.10: tobj poly) -> int {{\n  let n.1: int = call g()\n{body}}}\n"
+    )
+}
+
+/// `before`を挟んで`prim yielding()`を確かめ、`slow`で遅い経路を終える`body`。
+fn tested(before: &str, slow: &str) -> String {
+    format!(
+        "{before}  let y.3: int = prim yielding()\n  switch y.3 {{ 0 -> b1, _ -> b2 }}\nb1:\n  return n.1\nb2:\n{slow}"
+    )
+}
+
+#[test]
+fn yield_point_followed_by_its_test_is_accepted() {
+    let before = "  decref e.8\n  let u.6: unit = drop c.9\n  let u.7: unit = drop s.10\n  let b.2: tobj = box n.1\n  let m.4: int = unbox b.2\n  decref b.2\n  let q.5: enum = extern \"Prelude.Eq Int.==\"(m.4, 1)\n";
+    assert_eq!(
+        check(&yield_point(&tested(before, "  return n.1\n"))),
+        Ok(())
+    );
+    let without_test = "yields fn h() -> tobj {\n  let n.0: int = call g()\n  let b.1: tobj = box n.0\n  return b.1\n}\n";
+    let text = format!("yields fn g() -> int {{\n  return 1\n}}\n{without_test}");
+    assert_eq!(check(&text), Ok(()));
+}
+
+#[test]
+fn yield_point_followed_by_a_faulting_row_is_refused() {
+    let before = "  let z.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)\n";
+    assert_eq!(
+        check(&yield_point(&tested(before, "  return n.1\n"))),
+        Err("`g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`".to_string())
+    );
+}
+
+#[test]
+fn yield_point_followed_by_a_call_is_refused() {
+    let before = "  let z.2: int = call g()\n";
+    assert_eq!(
+        check(&yield_point(&tested(before, "  return n.1\n"))),
+        Err("`g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`".to_string())
+    );
+}
+
+#[test]
+fn yield_point_followed_by_yield_to_is_refused() {
+    let before = "  let u.2: unit = prim yield_to(e.8, c.9, s.10)\n";
+    assert_eq!(
+        check(&yield_point(&tested(before, "  return n.1\n"))),
+        Err("`g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`".to_string())
+    );
+}
+
+#[test]
+fn yield_point_whose_block_ends_without_a_test_is_refused() {
+    let refused =
+        "`g` may yield, but its block ends with neither `prim yielding()` nor `return` in `f`";
+    assert_eq!(
+        check(&yield_point("  jump b1()\nb1:\n  return n.1\n")),
+        Err(refused.to_string())
+    );
+    assert_eq!(
+        check(&yield_point("  tail call g()\n")),
+        Err(refused.to_string())
+    );
+}
+
+#[test]
+fn yield_point_whose_test_is_not_switched_on_is_refused() {
+    let refused = "the `prim yielding()` after `g` is not the last statement of a block that ends with a `switch` on it with the case `0` and a default in `f`";
+    let after = "  let y.3: int = prim yielding()\n  let k.4: int = prim yielding()\n  switch y.3 { 0 -> b1, _ -> b2 }\nb1:\n  return n.1\nb2:\n  return n.1\n";
+    assert_eq!(check(&yield_point(after)), Err(refused.to_string()));
+    let other = "  let y.3: int = prim yielding()\n  switch n.1 { 0 -> b1, _ -> b2 }\nb1:\n  return n.1\nb2:\n  return n.1\n";
+    assert_eq!(check(&yield_point(other)), Err(refused.to_string()));
+}
+
+#[test]
+fn yield_point_whose_slow_path_runs_a_row_is_refused() {
+    let refused = "the slow path after `g` runs an unwind point or `prim yield_to`, or does not return in `f`";
+    let row = "  let z.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)\n  return z.2\n";
+    assert_eq!(
+        check(&yield_point(&tested("", row))),
+        Err(refused.to_string())
+    );
+    let jump = "  jump b3()\nb3:\n  return n.1\n";
+    assert_eq!(
+        check(&yield_point(&tested("", jump))),
+        Err(refused.to_string())
+    );
+}
+
+#[test]
+fn yield_point_is_found_for_apply_clause_and_multi_value_let() {
+    let row = "  let z.5: int = extern \"Prelude.Num Int.+\"(1, 2)\n";
+    let refused = |what: &str| {
+        Err(format!(
+            "{what} may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`"
+        ))
+    };
+    let apply = format!(
+        "yields fn f(b.0: tobj) -> int {{\n  let x.1: tobj = yields apply b.0(())\n{row}  decref x.1\n  return z.5\n}}\n"
+    );
+    assert_eq!(check(&apply), refused("an apply"));
+    let clause = format!(
+        "{ASK}yields fn f(b.0: tobj) -> int {{\n  let x.1: tobj = clause Ask.ask(b.0)\n{row}  decref x.1\n  return z.5\n}}\n"
+    );
+    assert_eq!(check(&clause), refused("a clause of `Ask.ask`"));
+    let mut program = read(&yield_point(&tested(row, "  return n.1\n")));
+    let stmt = &mut program.functions[1].blocks[0].stmts[0];
+    let Stmt::Let {
+        var,
+        rhs: Rhs::Call(call),
+    } = stmt.clone()
+    else {
+        unreachable!()
+    };
+    *stmt = Stmt::LetMany {
+        vars: vec![var],
+        call,
+    };
+    assert_eq!(
+        verify(&program).map_err(|error| error.to_string()),
+        refused("`g`")
+    );
+}
+
+#[test]
+fn yield_point_exemptions_are_accepted() {
+    let row = "  let z.5: int = extern \"Prelude.Num Int.+\"(1, 2)\n  return z.5\n";
+    let plain = format!(
+        "yields fn g() -> int {{\n  return 1\n}}\nfn f() -> int {{\n  let n.1: int = call g()\n{row}}}\n"
+    );
+    assert_eq!(check(&plain), Ok(()));
+    let parent = par(
+        "a.0: tobj, b.1: tobj",
+        "let t.2: obj = par (,) #0(a.0, b.1)",
+        "  let z.5: int = extern \"Prelude.Num Int.+\"(1, 2)\n  return t.2\n",
+    )
+    .replace("fn f(", "yields fn f(");
+    assert_eq!(check(&parent), Ok(()));
+    assert_eq!(check(TRY_PANIC), Ok(()));
+}
+
+#[test]
+fn yield_point_is_checked_at_every_level() {
+    let program = |before: &str| {
+        format!(
+            "yields fn g() -> int {{\n  return 1\n}}\nyields fn f() -> int {{\n  let n.1: int = call g()\n{before}  let y.3: int = prim yielding()\n  switch y.3 {{ 0 -> b1, _ -> b2 }}\nb1:\n  return n.1\nb2:\n  return n.1\n}}\n"
+        )
+    };
+    let accepted = program("");
+    let refused = program("  let z.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)\n");
+    let message = "`g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`";
+    type Level = fn(&str) -> Result<(), String>;
+    let levels: [Level; 5] = [
+        check,
+        check_scopes,
+        check_lowered,
+        |text| verify_flattened(&read(text)).map_err(|error| error.to_string()),
+        |text| verify_borrowed(&read(text)).map_err(|error| error.to_string()),
+    ];
+    for level in levels {
+        assert_eq!(level(&accepted), Ok(()));
+        assert_eq!(level(&refused), Err(message.to_string()));
+    }
+}
+
+#[test]
+fn yield_point_switch_must_have_exactly_the_case_zero_and_a_default() {
+    let refused = "the `prim yielding()` after `g` is not the last statement of a block that ends with a `switch` on it with the case `0` and a default in `f`";
+    let extra = "  let y.3: int = prim yielding()\n  switch y.3 { 0 -> b1, 1 -> b2, _ -> b3 }\nb1:\n  return n.1\nb2:\n  return n.1\nb3:\n  return n.1\n";
+    assert_eq!(check(&yield_point(extra)), Err(refused.to_string()));
+    let no_default = "  let y.3: int = prim yielding()\n  switch y.3 { 0 -> b1, 1 -> b2 }\nb1:\n  return n.1\nb2:\n  return n.1\n";
+    assert_eq!(check(&yield_point(no_default)), Err(refused.to_string()));
+}
+
 const P2: &str = "layout P { P(obj, obj) }\n";
 
 /// `x` を分解して token `r` にし、`c` で分かれた行き先の b1 と b2 で、それぞれ `left` と `right` が使う

@@ -239,9 +239,9 @@ fn a_prim_result_is_rebound_to_its_row_repr() {
 fn a_clause_call_uses_the_reprs_of_its_operation() {
     // `put` の `int` の引数へ `tobj` の n.2 を `unbox` して渡す。`get` の結果は末尾の位置でも操作の `int` で受け直し、
     // `box` して返す
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nyields fn f(n.2: tobj) -> tobj {\n  let u.3: unit = clause Counter.put(n.2)\n  let m.5: tobj = clause Counter.get(())\n  return m.5\n}\n";
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn f(n.2: tobj) -> tobj {\n  let u.3: unit = clause Counter.put(n.2)\n  let m.5: tobj = clause Counter.get(())\n  return m.5\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
-    yields fn f(n.2: tobj) -> tobj {
+    fn f(n.2: tobj) -> tobj {
       let n.6: int = unbox n.2
       let u.3: unit = clause Counter.put(n.6)
       let m.7: int = clause Counter.get(())
