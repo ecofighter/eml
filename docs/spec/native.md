@@ -41,7 +41,7 @@
 - `eml_x_*`: 失敗しうる行 (`faults`の行) は、失敗を`Ctx`に置き (`set_fault`)、仮の値を返す。生成したコードは、呼び出しのすぐ後でfaultの語 (`CTX_FAULT`) を確かめる。ほかの誤りは内部の種類のもので、捕まえたpanicと同じく`shim`の致命的な誤りの道で終わる。包みの本体は`eml_fatal`を名指さない。利用者のCの関数の呼び出しの補助`eml_x_c_*`は行ではなく、利用者のpanicを`worker::park_panic`で置き、ほかの誤りは記録して致命的な誤りの道で終わる (「externの失敗」)
 - `eml_nrt_*`: サービスは、生成したコードが分岐に使う行動の語を返すか、失敗の道が致命的な誤りだけなら値の語を返す
 
-速いモードでヒープの操作が`Err`を返すのは、次の場合だけである: `WrongKind` (`foreign*`の種類か、型の食い違い)、`StaleToken` (空のtokenへの`reuse_in_place`。生成したコードは`reuse_in_place`を呼ばず、tokenの語をそのまま箱にする。「データ」を見る)、`RootMisuse`と`Unrecoverable` (根と回復の操作)、`ev_retire`の`BadEvidence` (状態か外側の`evv`が`()`でないevidence。EPの`prompt$`は先に両方を取るので届かないが、verifierが受け入れる手書きのIRは、たとえば状態を持つ`ev_new`の結果を`ev_retire`に渡して届きうる。断ってもヒープは何も変わらない)。どれも生成したコードからは回復できない。だからヒープのエントリは致命的な誤りだけで終わる。
+速いモードでヒープの操作が`Err`を返すのは、次の場合だけである: `WrongKind` (`foreign*`の種類か、型の食い違い)、`StaleToken` (空のtokenへの`reuse_in_place`。生成したコードは`reuse_in_place`を呼ばず、tokenの語をそのまま箱にする。「データ」を見る)、`RootMisuse`と`Unrecoverable` (根と回復の操作)、`ev_retire`の`BadEvidence` (状態か外側の`evv`が`()`でないevidence。EPの`prompt$`は先に両方を取るので届かないが、verifierが受け入れる手書きのIRは、たとえば状態を持つ`evidence`の結果を`ev_retire`に渡して届きうる。断ってもヒープは何も変わらない)。どれも生成したコードからは回復できない。だからヒープのエントリは致命的な誤りだけで終わる。
 
 ### ヒープのエントリ
 
@@ -254,16 +254,17 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## エフェクト
 
-基本操作 (`eml_lir::Prim`) のうち、生成したコードがインラインで読む`yielding`と`yield_status`、エントリを持たない`empty_mut_array`と`child_abort`を除く19個は、エントリ`eml_rt_<Prim::name()>`を持つ (`eml_nrt/src/effects.rs`の表`EFFECTS`)。節の呼び出しが走らせる`Ctx`の2つの操作 (`eml_lir::Step`) も、同じ表に同じ形のエントリ`eml_rt_<Step::name()>`を持つ。`eml_rt_ev_lookup`はエフェクトの番号を、`eml_rt_ev_clause`はevidenceと操作の添字を受ける (「関数の値」)。記号は基本操作とstepの名前から導き、生成する側はエントリの名前の表を持たない。どれも`shim`で、本体は同じ名前の`Ctx`のメソッドの呼び出し1つである (`dummy`は`Heap::dummy`)。`Err`は致命的な誤りでrunを終える。ヒープのエントリと同じく、どのエントリも包むメソッドの前提をそのまま持ち、生成したコードがそれを守る。
+基本操作 (`eml_lir::Prim`) のうち、生成したコードがインラインで読む`yielding`と`yield_status`、エントリを持たない`empty_mut_array`と`child_abort`を除く19個は、エントリ`eml_rt_<Prim::name()>`を持つ (`eml_nrt/src/effects.rs`の表`EFFECTS`)。節の呼び出しと`evidence`が走らせる`Ctx`の4つの操作 (`eml_lir::Step`) も、同じ表に同じ形のエントリ`eml_rt_<Step::name()>`を持つ。`eml_rt_ev_lookup`はエフェクトの番号を、`eml_rt_ev_clause`はevidenceと操作の添字を受け (「関数の値」)、`eml_rt_ev_new`はエフェクトの番号と操作の数を、`eml_rt_ev_set_clause`はevidence、操作の添字、エントリを受ける。記号は基本操作とstepの名前から導き、生成する側はエントリの名前の表を持たない。どれも`shim`で、本体は同じ名前の`Ctx`のメソッドの呼び出し1つである (`dummy`は`Heap::dummy`)。`Err`は致命的な誤りでrunを終える。ヒープのエントリと同じく、どのエントリも包むメソッドの前提をそのまま持ち、生成したコードがそれを守る。
 
-- `ctx`の後の引数は、`Ctx`のメソッドの引数を順に並べたものである。基本操作の即値のうち、メソッドの引数にあたるものがその位置に入る。即値は、`ev_new`のエフェクトと操作の数、`ev_set_clause`の操作の添字 (エフェクトはメソッドの引数でないので渡さない)、`evv_mask`の項目の列 (先頭へのポインタと個数)、`root_get`と`root_set`の根の番号である
+- `ctx`の後の引数は、`Ctx`のメソッドの引数を順に並べたものである。基本操作の即値のうち、メソッドの引数にあたるものがその位置に入る。即値は、`evv_mask`の項目の列 (先頭へのポインタと個数) と、`root_get`と`root_set`の根の番号である。stepの`ev_new`にはエフェクトと操作の数が、`ev_set_clause`には操作の添字が入る (エフェクトはメソッドの引数でないので渡さない)
 - 語は`obj`か`tobj`で、エフェクトの番号、操作の添字、個数、根の番号は`i64`である。結果が`unit`の基本操作のエントリは結果を持たず、生成したコードは文の変数に定数`UNIT`を束ねる
 - メソッドがより狭い型で受ける引数は、エントリが変換する。変換に失敗すれば致命的で、正しく作ったコードはこれを起こさない。エフェクトの番号は`u16::try_from`で変換し、65535も断る。速いモードの`Ctx::ev_new`と`Ctx::ev_lookup`は65535より小さい番号を前提とし、65535では`+ 1`が0の印に回り込むためである (`BadEvidence`)。負の操作の添字と個数は`BadEvidence`で、負か32ビットを超える根の番号は`RootMisuse`である。空の根や表の外の根への`root_get`と、置いてある根への`root_set`も`RootMisuse`になる
 - `evv_mask`の項目は、`eml_rt::MaskItem`と同じ並びの行を並べた領域である。エントリは`items`と`n`から`MaskItem`の列を作るので、呼ぶ側は、`items`が生きている`n`個の項目の先頭であることを守る。項目の順には要件がない
 
-生成したコードは、`empty_mut_array` (「値と定数」) と`child_abort`を除く基本操作を次のとおり下ろす (`lower/effects.rs`)。`child_abort`は下ろさない。
+生成したコードは、`empty_mut_array` (「値と定数」) と`child_abort`を除く基本操作と`evidence`を次のとおり下ろす (`lower/effects.rs`)。`child_abort`は下ろさない。
 
 - `yielding`と`yield_status`はインラインで読む。`yielding`は`target`をロードして`UNIT`と比べる。`yield_status(ev)`は`target`と`abort`のバイトをロードし、分岐でなく`select`で、`Ctx::yield_status`と同じく、`target`が`UNIT`なら0、`ev`でなければ3、`abort`のバイトが立っていれば2、ほかは1を選ぶ。生成したコードで`target`を読むのは、これらと、`eml$apply$m`の`n < m`の腕の見張り (「関数の値」) と、着地の印を持つ地点の冷たいブロック (「巻き戻しの地点」) だけである
+- `evidence`は、エントリのクロージャ (`closure`と同じく下ろす。捕獲のないエントリは関数の静的なクロージャである)、`eml_rt_ev_new`の呼び出し1つ、操作の順にエントリごとの`eml_rt_ev_set_clause`の呼び出し1つに下ろす
 - ほかの基本操作は、エントリ`eml_rt_<Prim::name()>`の呼び出し1つである。エントリの名前を綴るのは下ろしの1つの関数`lower::effects::entry`だけである。`yield_abort`はフレームに戻らないので、その後のコードは巻き戻しの地点の後始末へ進む (「巻き戻しの地点」の`Never`)
 - エフェクトの番号は、データの記号`e:<エフェクト>`からロード1つでだけエントリに届く。名前はエフェクトの名前 (`eml_lir::syntax::effect_text`) である。`evv_mask`の項目は、データの記号`m:<項目>`のアドレスとして、ロードなしでエントリに届き、個数は即値である。名前は項目のテキストの形 (`eml_lir::syntax::mask_text`) である。生成したコードはエフェクトの番号を即値として持たないので、関数のコードはプログラムのエフェクトの番号の振り方によらない。`ev_new`の操作の数、操作の添字、根の番号は即値である。エフェクトの宣言と関数のLIRがそれらを決めるためである
 - エフェクトの番号はマシンのものである。`NativeMachine`は`load`で、VMが読み込みのエフェクトに番号を振るのと同じく、`program.effects`の順に名前で番号を振る。番号は`Image` (`DATUM_EFFECT`の行の`bits`と`MaskRow.effect`) を通してだけ実行系に届く。番号は65535より小さく、それを超えれば`load`がVMと同じ文でpanicする

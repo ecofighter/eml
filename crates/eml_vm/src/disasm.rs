@@ -343,16 +343,31 @@ impl<'a> View<'a> {
                     .collect();
                 format!("evv_mask s{dst}, [{}] s{}", items.join(", "), o[2])
             }
-            Op::EvNew { dst, at } => {
+            Op::Evidence { dst, at } => {
                 let o = ops(at);
+                let mut next = 4;
+                let entries: Vec<String> = (0..o[1])
+                    .map(|_| {
+                        let (f, n) = (o[next], o[next + 1] as usize);
+                        let captures: Vec<String> = o[next + 2..next + 2 + n]
+                            .iter()
+                            .map(|slot| format!("s{slot}"))
+                            .collect();
+                        next += 2 + n;
+                        if n == 0 {
+                            format!("&{}", name(f))
+                        } else {
+                            format!("{}({})", name(f), captures.join(", "))
+                        }
+                    })
+                    .collect();
                 format!(
-                    "ev_new s{dst}, E{} ({} ops), s{}, s{}",
-                    o[0], o[1], o[2], o[3]
+                    "evidence s{dst}, E{}(s{}, s{}) [{}]",
+                    o[0],
+                    o[2],
+                    o[3],
+                    entries.join(", ")
                 )
-            }
-            Op::EvSetClause { dst, at } => {
-                let o = ops(at);
-                format!("ev_set_clause s{dst}, s{}, op{}, s{}", o[0], o[1], o[2])
             }
             Op::EvRenew { dst, ev, state } => bin("ev_renew", dst, ev, state),
             Op::EvRetire { dst, ev } => format!("ev_retire s{dst}, s{ev}"),

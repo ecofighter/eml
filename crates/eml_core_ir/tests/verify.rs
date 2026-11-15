@@ -582,9 +582,7 @@ const EVIDENCE_EXAMPLE: &str = "\
 effect State { get(unit) -> tobj, put(tobj) -> unit }
 yields fn f(s.0: tobj) -> tobj {
   let w.1: evv = prim evv_get()
-  let e.2: ev lin = prim ev_new[State](s.0, w.1)
-  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
-  let u.7: unit = prim ev_set_clause[State.put](e.2, &p)
+  let e.2: ev lin = evidence State(s.0, w.1) [&g, &p]
   let m.4: evv = prim evv_mask[State*2](w.1)
   let r.6: tobj = clause State.get(())
   return r.6
@@ -605,22 +603,6 @@ const PUT_CLAUSE: &str =
 #[test]
 fn prims_and_clauses_are_accepted_after_the_evidence_pass() {
     assert_eq!(check_evidence(EVIDENCE_EXAMPLE), Ok(()));
-}
-
-/// EPの段は、エントリの規則を、LIRのverifierと同じ部品で確かめる。ここでは規則の中身でなく、Core IRのverifierが
-/// 部品に文を渡していることを確かめる。
-#[test]
-fn the_evidence_level_checks_entries() {
-    let clauses = "internal clause Counter.get fn get(e.0: cev, u.1: unit) -> int {\n  return 0\n}\ninternal clause Counter.put fn put(e.0: cev, n.1: int) -> unit {\n  return ()\n}\n";
-    assert_eq!(
-        check_evidence(&format!(
-            "{COUNTER}fn f(w.0: tobj) -> unit {{\n  let e.1: ev lin = prim ev_new[Counter]((), w.0)\n  let u.2: unit = prim ev_set_clause[Counter.get](e.1, &get)\n  let x.3: evv = prim evv_enter(w.0, e.1)\n  return ()\n}}\n{clauses}"
-        )),
-        Err(
-            "the `Counter.put` entry of `e.1` is not filled before `e.1` is used in `f`"
-                .to_string()
-        )
-    );
 }
 
 /// EP の後の段が拒むエフェクトの命令と、その文言。
@@ -696,23 +678,12 @@ fn a_prim_takes_its_arguments() {
 }
 
 #[test]
-fn a_prim_names_known_effects_and_operations() {
+fn an_evidence_names_a_known_effect() {
     assert_eq!(
         check_evidence(
-            "fn f(w.0: tobj) -> obj {\n  let e.1: ev lin = prim ev_new[#2]((), w.0)\n  return e.1\n}\n"
+            "fn f(w.0: tobj) -> unit {\n  let e.1: ev lin = evidence #2((), w.0) []\n  let u.2: unit = drop e.1\n  return u.2\n}\n"
         ),
-        Err(
-            "`prim ev_new[#2]` names effect 2, which is not in the effect table in `f`".to_string()
-        )
-    );
-    assert_eq!(
-        check_evidence(&format!(
-            "{STATE}fn f(w.0: tobj, c.1: tobj) -> unit {{\n  let e.2: ev lin = prim ev_new[State]((), w.0)\n  let u.3: unit = prim ev_set_clause[State.#2](e.2, c.1)\n  return u.3\n}}\n"
-        )),
-        Err(
-            "`prim ev_set_clause[State.#2]` names operation 2 of `State`, which has 2 operations in `f`"
-                .to_string()
-        )
+        Err("an evidence names effect 2, which is not in the effect table in `f`".to_string())
     );
 }
 
@@ -843,38 +814,11 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
         )),
         Err("`g` is a clause of `Counter.put`, but it is called directly in `f`".to_string())
     );
-    // 捕獲のある節は、同じ関数の中の `closure` でエントリの表に入れる
+    // 捕獲のある節は、evidenceのエントリに`closure`で書く
     let put = format!(
-        "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: ev lin = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  let u.5: unit = prim ev_set_clause[Counter.get](e.2, &h)\n  return u.4\n}}\n{PUT_CLAUSE}internal clause Counter.get fn h(e.0: cev, u.1: unit) -> int {{\n  return 0\n}}\n"
+        "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: ev lin = evidence Counter((), w.1) [&h, closure g(m.0)]\n  let u.4: unit = drop e.2\n  return u.4\n}}\n{PUT_CLAUSE}internal clause Counter.get fn h(e.0: cev, u.1: unit) -> int {{\n  return 0\n}}\n"
     );
     assert_eq!(check_evidence(&put), Ok(()));
-}
-
-#[test]
-fn ev_set_clause_names_the_clause_of_its_function() {
-    let set = |entry: &str, value: &str| {
-        check_evidence(&format!(
-            "{STATE}{COUNTER}fn f(s.0: tobj, w.1: tobj) -> unit {{\n  let e.2: ev lin = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[{entry}](e.2, {value})\n  return u.3\n}}\ninternal clause Counter.put fn g(e.0: cev, n.1: int) -> unit {{\n  return ()\n}}\nfn h(e.0: obj, u.1: unit) -> tobj {{\n  return ()\n}}\n"
-        ))
-    };
-    assert_eq!(
-        set("State.get", "&g"),
-        Err(
-            "`g` is a clause of `Counter.put`, but it is put into the `State.get` entry in `f`"
-                .to_string()
-        )
-    );
-    assert_eq!(
-        set("State.get", "&h"),
-        Err("`h` is not a clause, but it is put into the `State.get` entry in `f`".to_string())
-    );
-    assert_eq!(
-        set("Counter.put", "&g"),
-        Err(
-            "`prim ev_set_clause[Counter.put]` is given `e.2`, the evidence of `State` in `f`"
-                .to_string()
-        )
-    );
 }
 
 // 印 (docs/spec/lir.md の「Kind の印の検査」)
@@ -959,8 +903,7 @@ fn prompt_marker_is_accepted_after_the_evidence_pass() {
     let text = format!(
         "{LAND}fn f(b.0: tobj) -> tobj {{
   let w.5: evv = prim evv_get()
-  let ev.1: ev lin = prim ev_new[Land]((), w.5)
-  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
   let x.2: tobj = yields apply b.0(()) prompt ev.1
   let u.7: unit = drop ev.1
   return x.2
@@ -970,19 +913,18 @@ fn prompt_marker_is_accepted_after_the_evidence_pass() {
     assert_eq!(check_evidence(&text), Ok(()));
 }
 
-/// 着地の印のevidenceを`ev_new`で作るテストの`Land`と、そのエントリの関数。印はフレーム自身の`ev`でなければならない
+/// 着地の印のevidenceを`evidence`で作るテストの`Land`と、そのエントリの関数。印はフレーム自身の`ev`でなければならない
 /// (docs/spec/lir.mdの「verifier」)。
 const LAND: &str = "effect Land { land(unit) -> tobj }\n";
 const LAND_ENTRY: &str =
     "internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {\n  return ()\n}\n";
 
-/// 印`ev.1`を`ev_new`で作り、エントリをすべて入れてから`body`を続ける関数`f`。
+/// 印`ev.1`をエントリとともに`evidence`で作り、`body`を続ける関数`f`。
 fn made(body: &str, ret: &str) -> String {
     format!(
         "{LAND}fn f(b.0: tobj) -> {ret} {{
   let w.5: evv = prim evv_get()
-  let ev.1: ev lin = prim ev_new[Land]((), w.5)
-  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
 {body}}}
 {LAND_ENTRY}"
     )
@@ -1046,8 +988,7 @@ fn prompt_marker_used_only_in_a_sibling_branch_is_rejected() {
     let text = format!(
         "layout Prelude.Bool {{ False, True }}\n{LAND}fn f(b.0: tobj, c.2: enum, e.3: obj) -> obj {{
   let w.5: evv = prim evv_get()
-  let ev.1: ev lin = prim ev_new[Land]((), w.5)
-  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
   switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
   let x.4: tobj = yields apply b.0(()) prompt ev.1
@@ -1072,8 +1013,7 @@ fn prompt_marker_passed_only_to_a_jump_is_accepted() {
     let text = format!(
         "{LAND}fn f(b.0: tobj) -> tobj {{
   let w.5: evv = prim evv_get()
-  let ev.1: ev lin = prim ev_new[Land]((), w.5)
-  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
   let x.2: tobj = yields apply b.0(()) prompt ev.1
   jump b1(ev.1)
 b1(p.3: ev lin):

@@ -4,7 +4,7 @@
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{InstBuilder, Value, types};
 use cranelift_module::Module;
-use eml_lir::{Atom, BlockId, Prim, Step, VarId};
+use eml_lir::{Atom, BlockId, FnIdx, Prim, Repr, Step, VarId};
 
 use super::consts::Datum;
 use super::function::FnLower;
@@ -54,6 +54,41 @@ impl<M: Module> FnLower<'_, '_, M> {
         }
     }
 
+    /// `var = evidence E(state, outer) [entries]`。エントリのクロージャを`closure`と同じく作り (捕獲のないエントリは
+    /// 静的なクロージャである)、`ev_new`でevidenceを作り、`ev_set_clause`でエントリを操作の順に表に入れる。エフェクトの
+    /// 番号は`e:`の記号から読む (docs/spec/native.mdの「エフェクト」)。
+    pub(super) fn evidence(
+        &mut self,
+        var: VarId,
+        effect: u32,
+        state: Atom,
+        outer: Atom,
+        entries: &[(FnIdx, Vec<Atom>)],
+    ) {
+        let closures: Vec<Value> = entries
+            .iter()
+            .map(|(function, captures)| {
+                if captures.is_empty() {
+                    self.fn_value(*function)
+                } else {
+                    self.closure_value(*function, captures, false)
+                }
+            })
+            .collect();
+        let state = self.atom(state, Repr::TObj);
+        let outer = self.atom(outer, Repr::Evv);
+        let number = self.datum_word(Datum::Effect(effect), types::I64);
+        let operations = self.b.ins().iconst(types::I64, entries.len() as i64);
+        let ev = self
+            .step(Step::EvNew, &[number, operations, state, outer])
+            .expect("`ev_new` returns the evidence");
+        for (op, closure) in closures.into_iter().enumerate() {
+            let index = self.b.ins().iconst(types::I64, op as i64);
+            self.step(Step::EvSetClause, &[ev, index, closure]);
+        }
+        self.bind(var, ev);
+    }
+
     /// `Ctx::yield_status`と同じ結果を、分岐でなく`select`で選ぶ。
     fn yield_status(&mut self, ev: Value) -> Value {
         let target = mem::yield_target(&mut self.b, self.ctx);
@@ -93,14 +128,6 @@ impl<M: Module> FnLower<'_, '_, M> {
                 let address = self.datum_address(Datum::Mask(items.clone()));
                 (0, vec![address, constant(self, items.len())])
             }
-            &Prim::EvNew(effect) => {
-                let operations = self.callees.program.effects[effect as usize]
-                    .operations
-                    .len();
-                let number = self.datum_word(Datum::Effect(effect), types::I64);
-                (0, vec![number, constant(self, operations)])
-            }
-            &Prim::EvSetClause { op, .. } => (1, vec![constant(self, op as usize)]),
             &Prim::RootGet(root) | &Prim::RootSet(root) => (0, vec![constant(self, root as usize)]),
             _ => (0, Vec::new()),
         }

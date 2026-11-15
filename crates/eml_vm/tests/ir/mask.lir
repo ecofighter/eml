@@ -44,8 +44,7 @@ b2:
 yields fn rehandle(p.0: unit) -> unit {
   let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: ev lin = prim ev_new[Ask]((), w.2)
-  let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &rehandle$handle0$ask$entry)
+  let ev.3: ev lin = evidence Ask((), w.2) [&rehandle$handle0$ask$entry]
   let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply &rehandle$handle0(()) prompt ev.3
@@ -53,11 +52,9 @@ yields fn rehandle(p.0: unit) -> unit {
 }
 yields fn "resumer<e>"(body.0: tobj poly, after.1: tobj) -> unit {
   let c.2: tobj poly = closure "resumer<e>$handle1"(body.0)
-  let c.3: tobj = closure "resumer<e>$handle1$yield$entry"(after.1)
   let w.5: evv = prim evv_get()
   dup w.5
-  let ev.6: ev lin = prim ev_new[Yield]((), w.5)
-  let u.7: unit = prim ev_set_clause[Yield.yield](ev.6, c.3)
+  let ev.6: ev lin = evidence Yield((), w.5) [closure "resumer<e>$handle1$yield$entry"(after.1)]
   let w.8: evv = prim evv_enter(w.5, ev.6)
   let u.9: unit = prim evv_set(w.8)
   let x.10: tobj poly = yields apply c.2(()) prompt ev.6
@@ -108,8 +105,7 @@ b6:
 yields fn main(p.0: unit) -> unit {
   let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: ev lin = prim ev_new[Ask]((), w.2)
-  let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &main$handle1$ask$entry)
+  let ev.3: ev lin = evidence Ask((), w.2) [&main$handle1$ask$entry]
   let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply &main$handle1(()) prompt ev.3
@@ -135,8 +131,7 @@ internal yields fn "resumer<e>$handle1$yield"(after.0: tobj, p.1: unit, k.2: tob
   let c.4: tobj lin = closure "resumer<e>$handle0"(k.2)
   let w.7: evv = prim evv_get()
   dup w.7
-  let ev.8: ev lin = prim ev_new[Ask]((), w.7)
-  let u.9: unit = prim ev_set_clause[Ask.ask](ev.8, &"resumer<e>$handle0$ask$entry")
+  let ev.8: ev lin = evidence Ask((), w.7) [&"resumer<e>$handle0$ask$entry"]
   let w.10: evv = prim evv_enter(w.7, ev.8)
   let u.11: unit = prim evv_set(w.10)
   let x.12: tobj poly = yields apply c.4(()) prompt ev.8
@@ -186,8 +181,7 @@ internal yields fn "resumer<e>$handle1$return"($r.0: unit, p.1: unit) -> unit {
 internal yields fn main$handle1(p.0: unit) -> unit {
   let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: ev lin = prim ev_new[Ask]((), w.2)
-  let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &main$handle0$ask$entry)
+  let ev.3: ev lin = evidence Ask((), w.2) [&main$handle0$ask$entry]
   let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply &main$handle0(()) prompt ev.3

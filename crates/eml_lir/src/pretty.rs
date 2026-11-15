@@ -165,6 +165,12 @@ impl<'p> Printer<'p> {
         match rhs {
             Rhs::Call(call) => self.call(function, call),
             Rhs::MakeClosure(target, args) => w.closure(vars, *target, args),
+            Rhs::Evidence {
+                effect,
+                state,
+                outer,
+                entries,
+            } => w.evidence(vars, *effect, *state, *outer, entries),
             Rhs::Extern { ext, args, at } => w.extern_call(vars, *ext, args, *at),
             Rhs::ConstString(index) => format!("const {}", w.string(*index)),
             Rhs::Con {

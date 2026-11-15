@@ -335,8 +335,7 @@ effect E { op(unit) -> unit }
 fn main() -> unit {
   let w.0: evv = prim evv_get()
   dup w.0
-  let e.1: ev lin = prim ev_new[E]((), w.0)
-  let u.2: unit = prim ev_set_clause[E.op](e.1, &entry)
+  let e.1: ev lin = evidence E((), w.0) [&entry]
   let w.3: evv = prim evv_enter(w.0, e.1)
   let u.4: unit = prim evv_set(w.3)
   let r.5: unit = clause E.op(())
@@ -389,8 +388,7 @@ effect E { op(unit) -> unit }
 fn main() -> tobj {
   let w.0: evv = prim evv_get()
   dup w.0
-  let e.1: ev lin = prim ev_new[E]((), w.0)
-  let u.6: unit = prim ev_set_clause[E.op](e.1, &op$entry)
+  let e.1: ev lin = evidence E((), w.0) [&op$entry]
   let w.2: evv = prim evv_enter(w.0, e.1)
   let u.3: unit = prim evv_set(w.2)
   let u.7: unit = drop e.1

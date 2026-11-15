@@ -1,7 +1,7 @@
-//! handle、`perform`、`resume`、`mask` の変換と、節ごとの in-place のエントリ
-//! (docs/spec/core-ir.md の「handle と `prompt$`」「再開と状態」
-//! 「`perform` と節の3つの形」「`mask` の包み」)。エントリを先にすべて決めてから、関数ごとに命令を置き換える。handle の場所は
-//! エントリの関数を `ev_set_clause` に入れるので、どの節がどの形になるかを先に知る必要があるためである。
+//! handle、`perform`、`resume`、`mask`の変換と、節ごとのin-placeのエントリ
+//! (docs/spec/core-ir.mdの「handle と `prompt$`」「再開と状態」
+//! 「`perform` と節の3つの形」「`mask` の包み」)。エントリを先にすべて決めてから、関数ごとに命令を置き換える。handleの場所は
+//! エントリの関数を`evidence`の命令に書くので、どの節がどの形になるかを先に知る必要があるためである。
 
 use std::mem;
 
@@ -82,8 +82,10 @@ pub(super) fn lower(
         .any(|stmt| handled(stmt).is_some());
     let mut function = source.clone();
     let prompt = handles.then(|| helpers.prompt(program));
-    // 節の値のクロージャは handle のためだけに作られるので、作る関数をエントリに替える
-    let clause_closures: FxHashSet<VarId> = function
+    // 節の値のクロージャはhandleのためだけに作られるので、その文を消し、関数と捕獲をevidenceのエントリにする。
+    // handleのほかに使いのある節の変数は内部の誤りである。translateは節の`closure`とhandleの間に、ほかの節と
+    // `return`の節の`closure`しか置かないので、捕獲は呼び出しもyieldの地点もまたがない
+    let clause_vars: FxHashSet<VarId> = function
         .blocks
         .iter()
         .flat_map(|block| &block.stmts)
@@ -91,6 +93,45 @@ pub(super) fn lower(
         .flat_map(|(_, values)| values)
         .filter_map(|value| match value {
             Atom::Var(var) => Some(*var),
+            _ => None,
+        })
+        .collect();
+    let mut uses = 0usize;
+    for block in &function.blocks {
+        let mut count = |atom: Atom| {
+            if let Atom::Var(var) = atom
+                && clause_vars.contains(&var)
+            {
+                uses += 1;
+            }
+        };
+        block
+            .stmts
+            .iter()
+            .for_each(|stmt| stmt.for_each_atom(&mut count));
+        block.term.for_each_atom(&mut count);
+    }
+    let handled_values = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(handled)
+        .flat_map(|(_, values)| values)
+        .filter(|value| matches!(value, Atom::Var(_)))
+        .count();
+    assert!(
+        uses == handled_values && clause_vars.len() == handled_values,
+        "internal error: a clause of a handle has a use other than its handle"
+    );
+    let clause_closures: FxHashMap<VarId, (FnIdx, Vec<Atom>)> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                var,
+                rhs: Rhs::MakeClosure(target, captures),
+            } if clause_vars.contains(var) => Some((*var, (*target, captures.clone()))),
             _ => None,
         })
         .collect();
@@ -108,12 +149,7 @@ pub(super) fn lower(
                 continue;
             };
             match rhs {
-                Rhs::MakeClosure(target, captures) if clause_closures.contains(&var) => {
-                    out.stmts.push(Stmt::Let {
-                        var,
-                        rhs: Rhs::MakeClosure(entries[&target], captures),
-                    });
-                }
+                Rhs::MakeClosure(..) if clause_closures.contains_key(&var) => {}
                 Rhs::Call {
                     call:
                         Call::Handle {
@@ -126,10 +162,22 @@ pub(super) fn lower(
                     mask: _,
                 } => {
                     let prompt = prompt.expect("`prompt$` is made for a function with a handle");
-                    let entries = clauses.iter().map(|&value| match value {
-                        Atom::Fn(clause) => Atom::Fn(entries[&clause]),
-                        value => value,
-                    });
+                    let entries = clauses
+                        .iter()
+                        .map(|value| {
+                            let made = match value {
+                                Atom::Fn(clause) => Some((*clause, Vec::new())),
+                                Atom::Var(var) => clause_closures.get(var).cloned(),
+                                _ => None,
+                            };
+                            let (clause, captures) = made.unwrap_or_else(|| {
+                                panic!(
+                                    "internal error: a clause of a handle is not a closure made in its function"
+                                )
+                            });
+                            (entries[&clause], captures)
+                        })
+                        .collect();
                     out.handle(
                         &mut annotations,
                         id,
@@ -597,8 +645,8 @@ impl Out<'_> {
         self.bind(name, row.ret, row.ret_mark, Rhs::Prim(prim, args))
     }
 
-    /// 新しい evidence にエントリを入れて `evv` の先頭に足し、本体を呼んで、その結果を `prompt$` に渡す。本体の
-    /// `apply` は yield の地点にしない。yield したかは `prompt$` が見る。
+    /// エントリを持つ新しいevidenceを1つの命令で作って`evv`の先頭に足し、本体を呼んで、その結果を`prompt$`に渡す。
+    /// 本体の`apply`はyieldの地点にしない。yieldしたかは`prompt$`が見る。
     #[expect(clippy::too_many_arguments, reason = "the parts of one handle")]
     fn handle(
         &mut self,
@@ -608,22 +656,22 @@ impl Out<'_> {
         effect: u32,
         init: Atom,
         body: Atom,
-        entries: impl Iterator<Item = Atom>,
+        entries: Vec<(FnIdx, Vec<Atom>)>,
         ret: Atom,
         prompt: FnIdx,
     ) {
         let outer = self.prim("w", Prim::EvvGet, Vec::new());
-        let evidence = self.prim("ev", Prim::EvNew(effect), vec![init, Atom::Var(outer)]);
-        for (op, entry) in entries.enumerate() {
-            self.prim(
-                "u",
-                Prim::EvSetClause {
-                    effect,
-                    op: op as u32,
-                },
-                vec![Atom::Var(evidence), entry],
-            );
-        }
+        let evidence = self.bind(
+            "ev",
+            Repr::Ev,
+            Mark::Lin,
+            Rhs::Evidence {
+                effect,
+                state: init,
+                outer: Atom::Var(outer),
+                entries,
+            },
+        );
         let pushed = self.prim(
             "w",
             Prim::EvvEnter,

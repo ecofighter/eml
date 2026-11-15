@@ -9,7 +9,7 @@ use crate::common::{run_lir, run_unverified};
 
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
-/// `Counter`のエントリの関数。evidenceのエントリは、どれも`ev_new`の直後に入れる (docs/spec/lir.mdの「verifier」)。
+/// `Counter`のエントリの関数。evidenceのエントリは`evidence`の命令に書く (docs/spec/lir.mdの「evidence」)。
 /// `get`は状態を取り出して返すので、`clause Counter.get`でどのevidenceが見つかったかが分かる。
 const COUNTER_ENTRIES: &str = "\
 internal clause Counter.get fn get$entry(e.0: cev, u.1: unit) -> tobj {
@@ -42,12 +42,8 @@ fn main() -> unit {{
   let w.0: evv = prim evv_get()
   dup w.0
   dup w.0
-  let e.1: ev lin = prim ev_new[Ask]((), w.0)
-  let u.90: unit = prim ev_set_clause[Ask.ask](e.1, &ask$entry)
-  let u.91: unit = prim ev_set_clause[Ask.quit](e.1, &quit$entry)
-  let e.2: ev lin = prim ev_new[Counter]((), w.0)
-  let u.92: unit = prim ev_set_clause[Counter.get](e.2, &get$entry)
-  let u.93: unit = prim ev_set_clause[Counter.put](e.2, &put$entry)
+  let e.1: ev lin = evidence Ask((), w.0) [&ask$entry, &quit$entry]
+  let e.2: ev lin = evidence Counter((), w.0) [&get$entry, &put$entry]
   let w.30: evv = prim evv_get()
   let w.31: evv = prim evv_enter(w.30, e.1)
   let u.32: unit = prim evv_set(w.31)
@@ -130,17 +126,12 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let s.1: tobj = box 1
-  let c.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.90: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
-  let u.91: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
+  let c.2: ev lin = evidence Counter(s.1, w.0) [&get$entry, &put$entry]
   let w.3: evv = prim evv_enter(w.0, c.2)
   let s.4: tobj = box 2
-  let d.5: ev lin = prim ev_new[Counter](s.4, w.0)
-  let u.92: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
-  let u.93: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
+  let d.5: ev lin = evidence Counter(s.4, w.0) [&get$entry, &put$entry]
   let w.6: evv = prim evv_enter(w.3, d.5)
-  let o.7: ev lin = prim ev_new[Other]((), w.0)
-  let u.94: unit = prim ev_set_clause[Other.ask](o.7, &ask$entry)
+  let o.7: ev lin = evidence Other((), w.0) [&ask$entry]
   let w.8: evv = prim evv_enter(w.6, o.7)
   dup w.8
   let u.9: unit = prim evv_set(w.8)
@@ -187,19 +178,13 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let s.1: tobj = box 1
-  let c.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.90: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
-  let u.91: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
+  let c.2: ev lin = evidence Counter(s.1, w.0) [&get$entry, &put$entry]
   let w.3: evv = prim evv_enter(w.0, c.2)
   let s.4: tobj = box 2
-  let d.5: ev lin = prim ev_new[Counter](s.4, w.0)
-  let u.92: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
-  let u.93: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
+  let d.5: ev lin = evidence Counter(s.4, w.0) [&get$entry, &put$entry]
   let w.6: evv = prim evv_enter(w.3, d.5)
   let s.7: tobj = box 3
-  let o.8: ev lin = prim ev_new[Counter](s.7, w.0)
-  let u.94: unit = prim ev_set_clause[Counter.get](o.8, &get$entry)
-  let u.95: unit = prim ev_set_clause[Counter.put](o.8, &put$entry)
+  let o.8: ev lin = evidence Counter(s.7, w.0) [&get$entry, &put$entry]
   let w.9: evv = prim evv_enter(w.6, o.8)
   let m.10: evv = prim evv_mask[Counter@1](w.9)
   decref w.9
@@ -243,15 +228,11 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let s.1: tobj = box 1
-  let x.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.90: unit = prim ev_set_clause[Counter.get](x.2, &get$entry)
-  let u.91: unit = prim ev_set_clause[Counter.put](x.2, &put$entry)
+  let x.2: ev lin = evidence Counter(s.1, w.0) [&get$entry, &put$entry]
   let w.3: evv = prim evv_get()
   let w.4: evv = prim evv_enter(w.3, x.2)
   let u.5: unit = prim evv_set(w.4)
-  let e.20: ev lin = prim ev_new[Counter]((), w.0)
-  let u.92: unit = prim ev_set_clause[Counter.get](e.20, &get$entry)
-  let u.93: unit = prim ev_set_clause[Counter.put](e.20, &put$entry)
+  let e.20: ev lin = evidence Counter((), w.0) [&get$entry, &put$entry]
   let h.21: rev = prim ev_retire(e.20)
   let s.6: tobj = box 2
   let r.7: ev lin = prim ev_renew(h.21, s.6)
@@ -288,9 +269,7 @@ effect Cell { get(unit) -> tobj, put(tobj) -> unit }
 fn main() -> unit {
   let w.0: evv = prim evv_get()
   dup w.0
-  let e.1: ev lin = prim ev_new[Cell]((), w.0)
-  let u.20: unit = prim ev_set_clause[Cell.get](e.1, &get)
-  let u.21: unit = prim ev_set_clause[Cell.put](e.1, &put)
+  let e.1: ev lin = evidence Cell((), w.0) [&get, &put]
   let w.2: evv = prim evv_get()
   let w.3: evv = prim evv_enter(w.2, e.1)
   let h.4: rev = prim ev_retire(e.1)
@@ -381,9 +360,7 @@ fn a_program_that_ends_with_a_nonempty_evidence_list_is_an_error() {
 fn main() -> unit {{
   let w.0: evv = prim evv_get()
   dup w.0
-  let e.1: ev lin = prim ev_new[Counter]((), w.0)
-  let u.90: unit = prim ev_set_clause[Counter.get](e.1, &get$entry)
-  let u.91: unit = prim ev_set_clause[Counter.put](e.1, &put$entry)
+  let e.1: ev lin = evidence Counter((), w.0) [&get$entry, &put$entry]
   let w.2: evv = prim evv_enter(w.0, e.1)
   let u.3: unit = prim evv_set(w.2)
   let u.92: unit = drop e.1
@@ -407,9 +384,7 @@ fn a_program_that_ends_during_a_yield_is_an_error() {
         "{COUNTER}\
 fn main() -> unit {{
   let w.0: evv = prim evv_get()
-  let e.1: ev lin = prim ev_new[Counter]((), w.0)
-  let u.90: unit = prim ev_set_clause[Counter.get](e.1, &get$entry)
-  let u.91: unit = prim ev_set_clause[Counter.put](e.1, &put$entry)
+  let e.1: ev lin = evidence Counter((), w.0) [&get$entry, &put$entry]
   let u.2: unit = prim yield_to(e.1, (), &id)
   return u.2
 }}
@@ -425,9 +400,7 @@ fn a_yield_does_not_start_during_another_yield() {
         "{COUNTER}\
 fn main() -> unit {{
   let w.0: evv = prim evv_get()
-  let e.1: ev lin = prim ev_new[Counter]((), w.0)
-  let u.90: unit = prim ev_set_clause[Counter.get](e.1, &get$entry)
-  let u.91: unit = prim ev_set_clause[Counter.put](e.1, &put$entry)
+  let e.1: ev lin = evidence Counter((), w.0) [&get$entry, &put$entry]
   dup e.1
   let u.2: unit = prim yield_to(e.1, (), &id)
   let u.3: unit = prim yield_abort(e.1, ())

@@ -687,6 +687,36 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     self.out.locations.push((pc, Loc { file, ..*loc }));
                 }
             }
+            // エントリは`closure`と同じく関数の引数のReprで捕獲を読む。捕獲のないエントリは関数の値である
+            Rhs::Evidence {
+                effect,
+                state,
+                outer,
+                entries,
+            } => {
+                let program = self.program;
+                let state = self.atom(*state, Repr::TObj);
+                let outer = self.atom(*outer, Repr::Evv);
+                let mut items = vec![
+                    self.effect(*effect).into(),
+                    entries.len() as u32,
+                    u32::from(state),
+                    u32::from(outer),
+                ];
+                for (f, captures) in entries {
+                    let callee = program.function(*f);
+                    let slots: Vec<Slot> = captures
+                        .iter()
+                        .zip(callee.params())
+                        .map(|(&capture, &param)| self.atom(capture, callee.repr(param)))
+                        .collect();
+                    items.push(self.links.functions[f.0 as usize]);
+                    items.push(slots.len() as u32);
+                    items.extend(slots.iter().map(|&slot| u32::from(slot)));
+                }
+                let at = self.out.operands(items);
+                self.out.push(Op::Evidence { dst, at });
+            }
             Rhs::Prim(prim, args) => {
                 let row = prim.row();
                 let slots: Vec<Slot> = args
@@ -727,20 +757,6 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 self.out.mask_lists.extend(items);
                 let at = self.out.operands([start, len, u32::from(a[0])]);
                 Op::EvvMask { dst, at }
-            }
-            Prim::EvNew(e) => {
-                let n_ops = self.program.effects[*e as usize].operations.len() as u32;
-                let at = self.out.operands([
-                    self.effect(*e).into(),
-                    n_ops,
-                    u32::from(a[0]),
-                    u32::from(a[1]),
-                ]);
-                Op::EvNew { dst, at }
-            }
-            Prim::EvSetClause { effect: _, op } => {
-                let at = self.out.operands([u32::from(a[0]), *op, u32::from(a[1])]);
-                Op::EvSetClause { dst, at }
             }
             Prim::EvRenew => Op::EvRenew {
                 dst,

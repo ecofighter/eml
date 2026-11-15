@@ -121,6 +121,17 @@ fn rhs(rhs: Rhs) -> eml_lir::Rhs {
         },
         Rhs::Drop(atom) => eml_lir::Rhs::Drop(atom),
         Rhs::Prim(prim, args) => eml_lir::Rhs::Prim(prim, args),
+        Rhs::Evidence {
+            effect,
+            state,
+            outer,
+            entries,
+        } => eml_lir::Rhs::Evidence {
+            effect,
+            state,
+            outer,
+            entries,
+        },
     }
 }
 

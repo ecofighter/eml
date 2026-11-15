@@ -2405,9 +2405,7 @@ const EVIDENCE_EXAMPLE: &str = "\
 effect State { get(unit) -> tobj, put(tobj) -> unit }
 yields fn f(s.0: tobj) -> tobj {
   let w.1: evv = prim evv_get()
-  let e.2: ev lin = prim ev_new[State](s.0, w.1)
-  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
-  let u.7: unit = prim ev_set_clause[State.put](e.2, &p)
+  let e.2: ev lin = evidence State(s.0, w.1) [&g, &p]
   let m.4: evv = prim evv_mask[State*2](w.1)
   let r.6: tobj = clause State.get(())
   return r.6
@@ -2444,7 +2442,7 @@ fn the_lowered_level_checks_prims_and_clauses() {
 fn the_boundaries_of_prims_and_clauses_are_compatible() {
     let errors: Vec<String> = [
         format!(
-            "{STATE}fn f(n.0: int, w.1: tobj) -> obj {{\n  let e.2: ev lin = prim ev_new[State](n.0, w.1)\n  return e.2\n}}\n"
+            "{STATE}{ENTRY}fn f(n.0: int, w.1: evv) -> unit {{\n  let e.2: ev lin = evidence State(n.0, w.1) [&get, &put]\n  let u.3: unit = drop e.2\n  return u.3\n}}\n{STATE_CLAUSES}"
         ),
         "fn f() -> int {\n  let w.0: int = prim evv_get()\n  return w.0\n}\n".to_string(),
         format!(
@@ -2460,7 +2458,7 @@ fn the_boundaries_of_prims_and_clauses_are_compatible() {
     assert_eq!(
         errors,
         [
-            "argument 0 of `prim ev_new[State]` is `n.0` (int), but the primitive takes tobj in `f`",
+            "the state of an evidence of `State` is `n.0` (int), but the evidence takes tobj in `f`",
             "`w.0` (int) is bound to `prim evv_get`, which returns evv in `f`",
             "argument 0 of a clause of `Counter.put` is `n.1` (tobj), but the operation takes int in `f`",
             "`t.0` (int) is bound to a clause of `State.get`, which returns tobj in `f`",
@@ -2568,32 +2566,168 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
         )),
         Err("`g` is a clause of `Counter.put`, but it is called directly in `f`".to_string())
     );
-    // 捕獲のある節は、同じ関数の中の `closure` でエントリの表に入れる
+    // 捕獲のある節は、evidenceのエントリに`closure`で書く
     let put = format!(
-        "{COUNTER}{ENTRY}fn f(m.0: tobj, w.1: evv) -> unit {{\n  let e.2: ev lin = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  let u.5: unit = prim ev_set_clause[Counter.get](e.2, &h)\n  return u.4\n}}\n{PUT_CLAUSE}internal clause Counter.get fn h(e.0: cev, u.1: unit) -> int {{\n  return 0\n}}\n"
+        "{COUNTER}{ENTRY}fn f(m.0: tobj, w.1: evv) -> unit {{\n  let e.2: ev lin = evidence Counter((), w.1) [&h, closure g(m.0)]\n  let u.4: unit = drop e.2\n  return u.4\n}}\n{PUT_CLAUSE}internal clause Counter.get fn h(e.0: cev, u.1: unit) -> int {{\n  return 0\n}}\n"
     );
     assert_eq!(check_lowered(&put), Ok(()));
     assert_eq!(check_scopes(&put), Ok(()));
 }
 
+/// `State`の節の関数`get`と、捕獲を1つ持つ`put`、`Counter.put`の節`g`、節でない`h`、`State.get`のforkのエントリ。
+/// Perceusの前の段の形である。
+const EVIDENCE_ENTRIES: &str = "\
+internal clause State.get fn get(e.0: cev, u.1: unit) -> tobj {
+  return ()
+}
+internal clause State.put fn put(m.0: tobj, e.1: cev, x.2: tobj) -> unit {
+  return ()
+}
+internal clause Counter.put fn g(e.0: cev, n.1: int) -> unit {
+  return ()
+}
+fn h(e.0: cev, u.1: unit) -> tobj {
+  return ()
+}
+clause State.get fn fork$State.get(e.0: fev, u.1: unit) -> tobj {
+  return ()
+}
+";
+
+/// evidenceは操作ごとに1つのエントリを操作の順に持ち、エントリiは`clause E.i`の印を持ち、forkのevidenceを取らない関数で、
+/// その関数がとる数だけ捕まえる。捕獲は文脈のReprでない。境界の段では、束縛は`ev`、状態は`tobj`、外側のリストは`evv`で、
+/// 捕獲は関数の引数に収まり`unr`に渡せる (docs/spec/lir.mdの「verifier」)。
 #[test]
-fn a_prim_names_known_effects_and_operations() {
-    assert_eq!(
-        check_lowered(
-            "fn f(w.0: tobj) -> obj {\n  let e.1: ev lin = prim ev_new[#2]((), w.0)\n  return e.1\n}\n"
-        ),
-        Err(
-            "`prim ev_new[#2]` names effect 2, which is not in the effect table in `f`".to_string()
+fn an_evidence_names_one_clause_function_per_operation() {
+    let program = |params: &str, entries: &str| {
+        format!(
+            "{STATE}{COUNTER}{ENTRY}fn f({params}) -> unit {{\n  let e.9: ev lin = evidence State(s.0, w.1) [{entries}]\n  let u.10: unit = drop e.9\n  return u.10\n}}\n{EVIDENCE_ENTRIES}"
         )
+    };
+    let entries = |entries: &str| program("s.0: tobj, w.1: evv, a.2: tobj", entries);
+    let exact = entries("&get, closure put(a.2)");
+    assert_eq!(check_lowered(&exact), Ok(()));
+    assert_eq!(check_scopes(&exact), Ok(()));
+    let refused = [
+        (
+            entries("&get"),
+            "an evidence of `State` has 1 entries, but the effect has 2 operations",
+        ),
+        (
+            entries("&h, closure put(a.2)"),
+            "entry 0 of an evidence of `State` is `h`, which is not a clause",
+        ),
+        (
+            entries("&g, closure put(a.2)"),
+            "entry 0 of an evidence of `State` is `g`, a clause of `Counter.put`",
+        ),
+        (
+            entries("closure put(a.2), &get"),
+            "entry 0 of an evidence of `State` is `put`, a clause of `State.put`",
+        ),
+        (
+            entries("&fork$State.get, closure put(a.2)"),
+            "entry 0 of an evidence of `State` is `fork$State.get`, which takes a fork evidence",
+        ),
+        (
+            entries("&get, &put"),
+            "entry 1 of an evidence of `State` gives `put` 0 captures, but the clause captures 1",
+        ),
+        (
+            entries("&get, closure put(a.2, a.2)"),
+            "entry 1 of an evidence of `State` gives `put` 2 captures, but the clause captures 1",
+        ),
+        (
+            entries("&get, closure put(w.1)"),
+            "a closure of `put` captures `w.1` (evv), but only a retired evidence can be captured",
+        ),
+    ];
+    for (text, message) in &refused {
+        for check in [check_lowered, check_scopes] {
+            assert_eq!(check(text), Err(format!("{message} in `f`")), "{text}");
+        }
+    }
+    let bound = format!(
+        "{STATE}{COUNTER}{ENTRY}fn f(s.0: tobj, w.1: evv, a.2: tobj) -> unit {{\n  let e.9: obj = evidence State(s.0, w.1) [&get, closure put(a.2)]\n  return ()\n}}\n{EVIDENCE_ENTRIES}"
     );
+    assert_eq!(check_lowered(&bound), Ok(()));
+    assert_eq!(
+        check_scopes(&bound),
+        Err("`e.9` (obj) is bound to an evidence of `State`, which is ev in `f`".to_string())
+    );
+    // 束縛、状態、外側のリスト、捕獲のReprと印は、境界の段で比べる
+    let boundaries = [
+        (
+            program("s.0: tobj, w.1: tobj, a.2: tobj", "&get, closure put(a.2)"),
+            "the outer list of an evidence of `State` is `w.1` (tobj), but the evidence takes evv",
+        ),
+        (
+            program("s.0: int, w.1: evv, a.2: tobj", "&get, closure put(a.2)"),
+            "the state of an evidence of `State` is `s.0` (int), but the evidence takes tobj",
+        ),
+        (
+            program("s.0: tobj, w.1: evv, a.2: int", "&get, closure put(a.2)"),
+            "capture 0 of entry 1 of an evidence of `State` is `a.2` (int), but the function takes tobj",
+        ),
+        (
+            program(
+                "s.0: tobj, w.1: evv, a.2: tobj lin",
+                "&get, closure put(a.2)",
+            ),
+            "capture 0 of entry 1 of an evidence of `State` is `a.2` (lin), but the evidence takes unr",
+        ),
+    ];
+    for (text, message) in &boundaries {
+        assert_eq!(check_lowered(text), Ok(()), "{text}");
+        assert_eq!(
+            check_scopes(text),
+            Err(format!("{message} in `f`")),
+            "{text}"
+        );
+    }
+}
+
+/// 節の関数は操作のABIで呼ばれるので、evidenceのエントリだけがそれを名指す。`&g`と`closure g(..)`は、使われなくても
+/// 書いた所で断る (docs/spec/lir.mdの「エントリの関数の印」)。
+#[test]
+fn a_clause_function_is_named_only_by_an_evidence() {
+    let used_as_value = Err(
+        "`get` is a clause of `State.get`, but it is used as a function value in `f`".to_string(),
+    );
+    let body = |body: &str| {
+        format!(
+            "{STATE}{COUNTER}{ENTRY}fn f(a.0: tobj, b.1: enum) -> tobj {{\n{body}}}\n{EVIDENCE_ENTRIES}"
+        )
+    };
+    for text in [
+        body("  let c.2: tobj = closure put(a.0)\n  return a.0\n"),
+        body("  let c.2: tobj = closure get(a.0)\n  return a.0\n"),
+        body("  jump b1(&get)\nb1(c.2: tobj):\n  return c.2\n"),
+        body("  let t.2: tobj = apply a.0(&get)\n  return t.2\n"),
+    ] {
+        let expected = if text.contains("closure put") {
+            Err(
+                "`put` is a clause of `State.put`, but it is used as a function value in `f`"
+                    .to_string(),
+            )
+        } else {
+            used_as_value.clone()
+        };
+        assert_eq!(check_lowered(&text), expected, "{text}");
+    }
+    assert_eq!(
+        check_lowered(&body("  let t.2: tobj = call get((), ())\n  return t.2\n")),
+        Err("`get` is a clause of `State.get`, but it is called directly in `f`".to_string())
+    );
+}
+
+#[test]
+fn an_evidence_names_a_known_effect() {
     assert_eq!(
         check_lowered(&format!(
-            "{STATE}fn f(w.0: tobj, c.1: tobj) -> unit {{\n  let e.2: ev lin = prim ev_new[State]((), w.0)\n  let u.3: unit = prim ev_set_clause[State.#2](e.2, c.1)\n  return u.3\n}}\n"
+            "{ENTRY}fn f(w.0: evv) -> unit {{\n  let e.1: ev lin = evidence #2((), w.0) []\n  let u.2: unit = drop e.1\n  return u.2\n}}\n"
         )),
-        Err(
-            "`prim ev_set_clause[State.#2]` names operation 2 of `State`, which has 2 operations in `f`"
-                .to_string()
-        )
+        Err("an evidence names effect 2, which is not in the effect table in `f`".to_string())
     );
 }
 
@@ -2700,101 +2834,6 @@ fn a_clause_call_names_an_operation_and_takes_its_arguments() {
     );
 }
 
-#[test]
-fn ev_set_clause_names_the_clause_of_its_function() {
-    let set = |entry: &str, value: &str| {
-        check_lowered(&format!(
-            "{STATE}{COUNTER}{ENTRY}fn f(s.0: tobj, w.1: evv) -> unit {{\n  let e.2: ev lin = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[{entry}](e.2, {value})\n  return u.3\n}}\ninternal clause Counter.put fn g(e.0: cev, n.1: int) -> unit {{\n  return ()\n}}\nfn h(e.0: obj, u.1: unit) -> tobj {{\n  return ()\n}}\n"
-        ))
-    };
-    assert_eq!(
-        set("State.get", "&g"),
-        Err(
-            "`g` is a clause of `Counter.put`, but it is put into the `State.get` entry in `f`"
-                .to_string()
-        )
-    );
-    assert_eq!(
-        set("State.get", "&h"),
-        Err("`h` is not a clause, but it is put into the `State.get` entry in `f`".to_string())
-    );
-    assert_eq!(
-        set("Counter.put", "&g"),
-        Err(
-            "`prim ev_set_clause[Counter.put]` is given `e.2`, the evidence of `State` in `f`"
-                .to_string()
-        )
-    );
-}
-
-#[test]
-fn a_clause_closure_captures_exactly_what_its_function_takes() {
-    let closure = |target: &str, captures: &str, entry: &str| {
-        format!(
-            "{COUNTER}{ENTRY}fn f(a.0: tobj, b.1: tobj, w.2: evv) -> unit {{\n  let e.3: ev lin = prim ev_new[Counter]((), w.2)\n  let c.4: tobj = closure {target}({captures})\n  let u.5: unit = prim ev_set_clause[{entry}](e.3, c.4)\n  let c.6: tobj = closure h(a.0, b.1)\n  let u.7: unit = prim ev_set_clause[Counter.get](e.3, c.6)\n  return u.5\n}}\ninternal clause Counter.put fn g(m.0: tobj, e.1: cev, n.2: int) -> unit {{\n  return ()\n}}\ninternal clause Counter.get fn h(m.0: tobj, k.1: tobj, e.2: cev, u.3: unit) -> int {{\n  return 0\n}}\n"
-        )
-    };
-    let too_many = closure("g", "a.0, b.1", "Counter.put");
-    let too_few = closure("h", "a.0", "Counter.get");
-    let exact = closure("g", "a.0", "Counter.put");
-    for check in [check_lowered, check_scopes] {
-        assert_eq!(
-            check(&too_many),
-            Err("a closure of `g`, a clause of `Counter.put`, has 2 arguments, but the clause captures 1 in `f`".to_string())
-        );
-        assert_eq!(
-            check(&too_few),
-            Err("a closure of `h`, a clause of `Counter.get`, has 1 arguments, but the clause captures 2 in `f`".to_string())
-        );
-        assert_eq!(check(&exact), Ok(()));
-    }
-}
-
-#[test]
-fn ev_set_clause_takes_a_function_it_can_read() {
-    let set = |binding: &str, value: &str| {
-        format!(
-            "{COUNTER}{ENTRY}fn f(c.0: tobj, w.1: evv) -> unit {{\n  let e.2: ev lin = prim ev_new[Counter]((), w.1)\n{binding}  let u.4: unit = prim ev_set_clause[Counter.put](e.2, {value})\n  return u.4\n}}\n{PUT_CLAUSE}fn r() -> tobj {{\n  return ()\n}}\n"
-        )
-    };
-    let unreadable = |value: &str| {
-        format!(
-            "the `Counter.put` entry is given `{value}` (tobj), which is neither `&g` nor a closure made in this function in `f`"
-        )
-    };
-    for check in [check_lowered, check_scopes] {
-        assert_eq!(check(&set("", "c.0")), Err(unreadable("c.0")));
-        assert_eq!(
-            check(&set("  let r.3: tobj = call r()\n", "r.3")),
-            Err(unreadable("r.3"))
-        );
-        assert_eq!(
-            check(&set("", "&g")),
-            Err(
-                "`&g` is put into the `Counter.put` entry, but the clause has captures in `f`"
-                    .to_string()
-            )
-        );
-    }
-    assert_eq!(
-        check_scopes(&set("  let b.3: tobj = box 1\n", "b.3")),
-        Err(unreadable("b.3"))
-    );
-}
-
-#[test]
-fn ev_set_clause_takes_an_evidence_made_in_the_function() {
-    let text = format!(
-        "{COUNTER}fn f(e.0: obj) -> unit {{\n  let u.1: unit = prim ev_set_clause[Counter.get](e.0, &g)\n  return u.1\n}}\ninternal clause Counter.get fn g(e.0: cev, u.1: unit) -> int {{\n  return 0\n}}\n"
-    );
-    for check in [check_lowered, check_scopes] {
-        assert_eq!(
-            check(&text),
-            Err("`prim ev_set_clause[Counter.get]` is given `e.0` (obj), which is not an evidence made by `ev_new` in this function in `f`".to_string())
-        );
-    }
-}
-
 /// `State`の2つの操作の、何もしない節の関数。
 const STATE_CLAUSES: &str = "\
 internal clause State.get fn get(e.0: cev, u.1: unit) -> tobj {
@@ -2807,43 +2846,6 @@ internal clause State.put fn put(e.0: cev, x.1: tobj) -> unit {
   return ()
 }
 ";
-
-#[test]
-fn every_entry_is_filled_once_before_the_evidence_is_used() {
-    let get = "  let u.3: unit = prim ev_set_clause[State.get](e.2, &get)\n";
-    let put = "  let u.4: unit = prim ev_set_clause[State.put](e.2, &put)\n";
-    let push = "  let v.5: evv = prim evv_get()\n  let x.6: evv = prim evv_enter(v.5, e.2)\n  let u.7: unit = prim evv_set(x.6)\n";
-    let pushed = |body: &str| {
-        format!(
-            "{STATE}{ENTRY}fn f(s.0: tobj, w.1: evv) -> unit {{\n  let e.2: ev lin = prim ev_new[State](s.0, w.1)\n{body}  let u.9: unit = drop e.2\n  return ()\n}}\n{STATE_CLAUSES}"
-        )
-    };
-    assert_eq!(check(&pushed(&format!("{get}{put}{push}"))), Ok(()));
-    let not_filled =
-        Err("the `State.put` entry of `e.2` is not filled before `e.2` is used in `f`".to_string());
-    assert_eq!(check(&pushed(&format!("{get}{push}"))), not_filled);
-    let read = format!(
-        "{STATE}{ENTRY}fn f(s.0: tobj, w.1: evv) -> tobj poly {{\n  let e.2: ev lin = prim ev_new[State](s.0, w.1)\n{get}  let t.7: tobj poly = prim ev_last_state(e.2)\n  let u.9: unit = drop e.2\n  return t.7\n}}\n{STATE_CLAUSES}"
-    );
-    assert_eq!(check(&read), not_filled);
-    assert_eq!(
-        check(&pushed(&format!(
-            "{get}  let u.8: unit = prim ev_set_clause[State.get](e.2, &get)\n{put}{push}"
-        ))),
-        Err("the `State.get` entry of `e.2` is filled twice in `f`".to_string())
-    );
-    let after_use = Err("an entry of `e.2` is filled after `e.2` is used in `f`".to_string());
-    assert_eq!(
-        check(&pushed(&format!(
-            "{get}{put}{push}  let u.8: unit = prim ev_set_clause[State.put](e.2, &put)\n"
-        ))),
-        after_use
-    );
-    let successor = format!(
-        "{STATE}{ENTRY}fn f(s.0: tobj, w.1: evv) -> unit {{\n  let e.2: ev lin = prim ev_new[State](s.0, w.1)\n{get}{put}  jump b1()\nb1:\n  let u.8: unit = prim ev_set_clause[State.put](e.2, &put)\n  let u.9: unit = drop e.2\n  return ()\n}}\n{STATE_CLAUSES}"
-    );
-    assert_eq!(check(&successor), after_use);
-}
 
 #[test]
 fn the_lowered_level_does_not_compare_boundaries() {
@@ -3122,7 +3124,7 @@ fn root_primitives_move_tobj_values() {
 /// 求める (docs/spec/lir.md の「着地の印」)。
 const PROMPT: &str = "fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {\n  let u.2: unit = drop ev.0\n  return x.1\n}\n";
 
-/// `Land`と、そのエントリの関数。着地の印のevidenceを`ev_new`で作るテストが、エントリをすべて入れるのに使う。
+/// `Land`と、そのエントリの関数。着地の印のevidenceを`evidence`で作るテストが、エントリに使う。
 const LAND: &str = "\
 effect Land { land(unit) -> tobj }
 fn entry$main() -> unit {
@@ -3139,13 +3141,12 @@ fn land_before_perceus() -> String {
     LAND.replace("  decref e.0\n", "")
 }
 
-/// 印`ev.1`を`ev_new`で作り、エントリをすべて入れてから`body`を続ける関数`f`。`land`は`LAND`か
+/// 印`ev.1`をエントリとともに`evidence`で作り、`body`を続ける関数`f`。`land`は`LAND`か
 /// `land_before_perceus()`。
 fn made(land: &str, body: &str, ret: &str) -> String {
     format!(
         "{land}fn f(b.0: tobj, w.5: evv) -> {ret} {{
-  let ev.1: ev lin = prim ev_new[Land]((), w.5)
-  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
 {body}}}
 "
     )
@@ -3155,8 +3156,7 @@ fn made(land: &str, body: &str, ret: &str) -> String {
 fn prompt_marker_is_accepted() {
     let text = format!(
         "{LAND}fn f(b.0: tobj, w.5: evv) -> tobj {{
-  let ev.1: ev lin = prim ev_new[Land]((), w.5)
-  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
   let x.2: tobj = yields apply b.0(()) prompt ev.1
   let r.3: tobj = call prompt$(ev.1, x.2)
   return r.3
@@ -3227,8 +3227,7 @@ fn prompt_marker_on_an_unowned_variable_is_rejected() {
 fn prompt_marker_used_only_in_a_sibling_branch_is_rejected() {
     let text = format!(
         "{BOOL}{}fn f(b.0: tobj, w.5: evv, c.2: enum, e.3: obj) -> obj {{
-  let ev.1: ev lin = prim ev_new[Land]((), w.5)
-  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
   switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
   let x.4: tobj = yields apply b.0(()) prompt ev.1
@@ -3254,8 +3253,7 @@ fn prompt_marker_passed_only_to_a_jump_is_refused() {
     // 呼び出しの後で印を`jump`だけが使うなら、`apply`の後に`prompt$`の呼び出しが続かないので、verifierが拒む
     let text = format!(
         "{}fn f(b.0: tobj, w.5: evv) -> tobj {{
-  let ev.1: ev lin = prim ev_new[Land]((), w.5)
-  let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
   let x.2: tobj = yields apply b.0(()) prompt ev.1
   jump b1(ev.1)
 b1(p.3: ev lin):
@@ -3291,8 +3289,7 @@ fn boom(p.0: unit) -> tobj {
 fn try_panic(f.0: tobj, c.1: tobj) -> tobj {
   let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: ev lin = prim ev_new[Prelude.Panic](c.1, w.2)
-  let u.4: unit = prim ev_set_clause[Prelude.Panic.panicked](ev.3, &panicked$entry)
+  let ev.3: ev lin = evidence Prelude.Panic(c.1, w.2) [&panicked$entry]
   let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply f.0(()) prompt ev.3
@@ -4543,8 +4540,7 @@ fn the_owner_of_an_evidence_is_linear() {
     let owner = |body: &str| {
         format!(
             "{LAND}fn f(b.0: tobj, w.1: evv) -> tobj poly {{
-  let ev.2: ev lin = prim ev_new[Land]((), w.1)
-  let u.3: unit = prim ev_set_clause[Land.land](ev.2, &land$entry)
+  let ev.2: ev lin = evidence Land((), w.1) [&land$entry]
   let x.4: tobj poly = yields apply b.0(()) prompt ev.2
 {body}}}
 {PROMPT}"
@@ -4705,8 +4701,7 @@ clause Land.land fn g(ev.0: cev, a.1: tobj) -> tobj {{
   return a.1
 }}
 fn f(b.0: tobj, w.1: evv) -> tobj poly {{
-  let ev.2: ev lin = prim ev_new[Land]((), w.1)
-  let u.3: unit = prim ev_set_clause[Land.land](ev.2, &{entry})
+  let ev.2: ev lin = evidence Land((), w.1) [&{entry}]
   let x.4: tobj poly = yields apply b.0(()) prompt ev.2
   let r.5: tobj poly = call prompt$(ev.2, x.4)
   return r.5
@@ -4722,7 +4717,7 @@ fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {{
     assert_eq!(
         check(&program("fork$Land.land")),
         Err(
-            "`fork$Land.land` is put into the `Land.land` entry, but it takes a fork evidence in `f`"
+            "entry 0 of an evidence of `Land` is `fork$Land.land`, which takes a fork evidence in `f`"
                 .to_string()
         )
     );

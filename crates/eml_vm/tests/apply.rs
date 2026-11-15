@@ -246,8 +246,7 @@ fn main() -> tobj {
 fn leave(x.0: tobj) -> tobj {
   let w.1: evv = prim evv_get()
   dup w.1
-  let e.2: ev lin = prim ev_new[E]((), w.1)
-  let u.5: unit = prim ev_set_clause[E.op](e.2, &op$entry)
+  let e.2: ev lin = evidence E((), w.1) [&op$entry]
   let w.3: evv = prim evv_enter(w.1, e.2)
   let u.4: unit = prim evv_set(w.3)
   let u.6: unit = drop e.2

@@ -187,7 +187,6 @@ impl<'a> Checker<'a> {
 
     fn run(mut self) -> Result<(), String> {
         let function = self.function;
-        self.clause_values()?;
         for (index, block) in function.blocks.iter().enumerate() {
             let index = index as u32;
             self.cx.at = Site::entry(index);
@@ -196,40 +195,7 @@ impl<'a> Checker<'a> {
             }
             self.check_block(index, block)?;
         }
-        self.cx.entries_filled()
-    }
-
-    /// `clause` の印の関数の値の使いを確かめる (`Context::clause_values`)。
-    fn clause_values(&self) -> Result<(), String> {
-        let blocks = &self.function.blocks;
-        let closures = blocks
-            .iter()
-            .flat_map(|block| &block.stmts)
-            .filter_map(|stmt| match stmt {
-                Stmt::Let {
-                    var,
-                    rhs: Rhs::MakeClosure(target, _),
-                } => Some((*var, *target)),
-                _ => None,
-            });
-        self.cx.clause_values(closures, |check| {
-            for block in blocks {
-                for stmt in &block.stmts {
-                    match stmt {
-                        Stmt::Let {
-                            var: _,
-                            rhs: Rhs::Prim(Prim::EvSetClause { .. }, args),
-                        } => args
-                            .iter()
-                            .enumerate()
-                            .filter(|&(index, _)| index != 1)
-                            .for_each(|(_, &atom)| check(atom)),
-                        _ => stmt.for_each_atom(&mut *check),
-                    }
-                }
-                block.term.for_each_atom(&mut *check);
-            }
-        })
+        Ok(())
     }
 
     fn check_block(&mut self, index: u32, block: &Block) -> Result<(), String> {
@@ -239,20 +205,11 @@ impl<'a> Checker<'a> {
                 index: at as i64,
             };
             self.check_stmt(stmt)?;
-            let prim = match stmt {
-                Stmt::Let {
-                    var,
-                    rhs: Rhs::Prim(prim, args),
-                } => Some((*var, prim, args.as_slice())),
-                _ => None,
-            };
-            self.cx.note_stmt(prim, |f| stmt.for_each_atom(f));
         }
         self.cx.at = Site {
             block: index,
             index: block.stmts.len() as i64,
         };
-        self.cx.end_block();
         self.check_term(&block.term)
     }
 
@@ -277,6 +234,7 @@ impl<'a> Checker<'a> {
                             .note_never(*var, self.program.row(*ext).ret == OpRet::Never);
                     }
                     Rhs::Prim(_, _)
+                    | Rhs::Evidence { .. }
                     | Rhs::ConstString(_)
                     | Rhs::Con { ctor: _, args: _ }
                     | Rhs::Drop(_) => {}
@@ -367,6 +325,7 @@ impl<'a> Checker<'a> {
             var,
             match rhs {
                 Rhs::Prim(prim, _) => Some(prim.row().ret),
+                Rhs::Evidence { .. } => Some(Repr::Ev),
                 _ => None,
             },
         )?;
@@ -402,6 +361,17 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 self.cx.check_prim(var, prim, args)?
+            }
+            Rhs::Evidence {
+                effect,
+                state: _,
+                outer: _,
+                entries,
+            } => {
+                if self.level == Level::Translated {
+                    return Err("an evidence is made before the evidence pass".to_string());
+                }
+                self.cx.check_evidence(*effect, entries)?;
             }
             Rhs::ConstString(index) => self.cx.const_string(*index)?,
             Rhs::Con { ctor, args } => self.cx.check_con(var, *ctor, args)?,

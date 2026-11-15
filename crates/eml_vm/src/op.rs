@@ -430,13 +430,9 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
-    /// `operands[at..]` は [エフェクト, 操作の数, 状態のスロット, 外側のスロット]。
-    EvNew {
-        dst: Slot,
-        at: u32,
-    },
-    /// `operands[at..]` は [evidence のスロット, 操作, エントリのスロット]。
-    EvSetClause {
+    /// `operands[at..]`は[エフェクト, 操作の数, 状態のスロット, 外側のスロット, 続いてエントリごとに関数, n,
+    /// 捕獲のスロット…]。
+    Evidence {
         dst: Slot,
         at: u32,
     },

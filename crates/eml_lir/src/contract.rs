@@ -216,6 +216,6 @@ pub(crate) fn pure(rhs: &Rhs, c_functions: &[CFunction]) -> bool {
             at: _,
         } => ext.row(c_functions).removable(),
         Rhs::Prim(prim, _) => prim.pure(),
-        Rhs::Call(_) | Rhs::Drop(_) => false,
+        Rhs::Call(_) | Rhs::Drop(_) | Rhs::Evidence { .. } => false,
     }
 }

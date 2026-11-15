@@ -1174,7 +1174,7 @@ fn step<R: Exec>(
             let o = ops(at);
             let (f, lin, n) = (o[0], o[1] != 0, o[2] as usize);
             task.load_scratch(slots(&o[3..3 + n]));
-            let w = apply::make_closure::<R>(code, ctx, f, lin, &task.scratch)?;
+            let w = apply::make_closure::<R>(code, ctx, f, lin, task.scratch.iter().copied())?;
             task.scratch.clear();
             task.set(dst, w);
         }
@@ -1423,18 +1423,7 @@ fn step<R: Exec>(
             let w = unsafe { ctx.evv_mask(items, task.get(o[2] as Slot)) }?;
             task.set(dst, w);
         }
-        Op::EvNew { dst, at } => {
-            let o = ops(at);
-            let (state, outer) = (task.get(o[2] as Slot), task.get(o[3] as Slot));
-            let w = unsafe { ctx.ev_new(o[0] as u16, o[1] as usize, state, outer) }?;
-            task.set(dst, w);
-        }
-        Op::EvSetClause { dst, at } => {
-            let o = ops(at);
-            let (ev, entry) = (task.get(o[0] as Slot), task.get(o[2] as Slot));
-            unsafe { ctx.ev_set_clause(ev, o[1] as usize, entry) }?;
-            task.set(dst, Word::UNIT);
-        }
+        Op::Evidence { dst, at } => evidence::<R>(code, ctx, task, dst, at)?,
         Op::EvRenew { dst, ev, state } => {
             let w = unsafe { ctx.ev_renew(task.get(ev), task.get(state)) }?;
             task.set(dst, w);
@@ -1561,6 +1550,72 @@ fn clause_call<R: Exec>(
     apply::apply_clause::<R>(code, ctx, task, callee, target)?;
     safepoint::<R>(code, ctx, task, sched)?;
     Ok(())
+}
+
+/// `evidence`の命令。オペランドは[エフェクト, 操作の数, 状態, 外側のリスト, 続いてエントリごとに関数, n, 捕獲…]である。
+/// エントリごとのクロージャを`closure`と同じ道で作り (捕獲のないエントリは関数の値である)、`ev_new`でevidenceを作って、
+/// `ev_set_clause`でエントリを操作の順に表に入れる。状態、外側のリスト、捕獲は消費する (docs/spec/vm.mdの「基本操作と extern」)。
+fn evidence<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    dst: Slot,
+    at: u32,
+) -> Result<(), RunFault> {
+    let o = &code.tables.operands[at as usize..];
+    let (effect, n_ops) = (o[0] as u16, o[1] as usize);
+    let (state, outer) = (task.get(o[2] as Slot), task.get(o[3] as Slot));
+    task.scratch.clear();
+    let mut next = 4;
+    for _ in 0..n_ops {
+        let (f, n) = (o[next], o[next + 1] as usize);
+        let captures = &o[next + 2..next + 2 + n];
+        next += 2 + n;
+        let entry = if n == 0 {
+            Ok(Word::imm(i64::from(f)))
+        } else {
+            let words = captures.iter().map(|&slot| task.get(slot as Slot));
+            apply::make_closure::<R>(code, ctx, f, false, words)
+        };
+        match entry {
+            Ok(entry) => task.scratch.push(entry),
+            Err(fault) => return Err(abandon_entries(ctx, task, 0, None, fault)),
+        }
+    }
+    let ev = match unsafe { ctx.ev_new(effect, n_ops, state, outer) } {
+        Ok(ev) => ev,
+        Err(error) => return Err(abandon_entries(ctx, task, 0, None, error.into())),
+    };
+    for op in 0..n_ops {
+        let entry = task.scratch[op];
+        if let Err(error) = unsafe { ctx.ev_set_clause(ev, op, entry) } {
+            return Err(abandon_entries(ctx, task, op, Some(ev), error.into()));
+        }
+    }
+    task.scratch.clear();
+    task.set(dst, ev);
+    Ok(())
+}
+
+/// 失敗した`evidence`が、まだ表に入れていないエントリ (`scratch`の`from..`) と、作ったevidenceを手放す。失敗した操作は
+/// ヒープを変えないので、これらの参照はまだこの命令が持っている。検査モードのリークの検査が、失敗したrunの後にこれらを
+/// 漏れとして数えないためである。最初の誤りを返す。
+fn abandon_entries<M: Mode>(
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    from: usize,
+    ev: Option<Word>,
+    fault: RunFault,
+) -> RunFault {
+    let heap = unsafe { ctx.heap_mut() };
+    for &entry in &task.scratch[from..] {
+        let _ = unsafe { heap.decref(entry) };
+    }
+    if let Some(ev) = ev {
+        let _ = unsafe { heap.decref(ev) };
+    }
+    task.scratch.clear();
+    fault
 }
 
 /// 関数の値を呼ぶ命令のオペランド [呼ばれる値, n, 引数…] の引数を scratch に読み、呼ばれる値を返す。
@@ -4666,8 +4721,7 @@ fn boom(p.0: unit) -> tobj {
 fn try_panic(f.0: tobj, c.1: tobj) -> tobj {
   let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: ev lin = prim ev_new[Prelude.Panic](c.1, w.2)
-  let u.4: unit = prim ev_set_clause[Prelude.Panic.panicked](ev.3, &panicked$entry)
+  let ev.3: ev lin = evidence Prelude.Panic(c.1, w.2) [&panicked$entry]
   let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply f.0(()) prompt ev.3
@@ -4790,8 +4844,7 @@ fn leaf(p.0: unit) -> tobj {
 fn try_io(f.0: tobj, c.1: tobj) -> tobj {
   let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: ev lin = prim ev_new[Prelude.IO](c.1, w.2)
-  let u.4: unit = prim ev_set_clause[Prelude.IO.io_failed](ev.3, &io_failed$entry)
+  let ev.3: ev lin = evidence Prelude.IO(c.1, w.2) [&io_failed$entry]
   let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply f.0(()) prompt ev.3

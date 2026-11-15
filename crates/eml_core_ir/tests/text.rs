@@ -501,8 +501,7 @@ effect State { get(unit) -> tobj, put(tobj) -> unit }
 effect Fail { never fail(tobj) -> never }
 yields fn f(s.0: tobj, o.1: tobj, c.2: tobj, k.3: tobj) -> tobj {
   let w.4: tobj = prim evv_get()
-  let e.5: obj = prim ev_new[State](s.0, w.4)
-  let u.6: unit = prim ev_set_clause[State.get](e.5, &g)
+  let e.5: obj = evidence State(s.0, w.4) [&g, closure g(o.1)]
   let m.7: tobj = prim evv_mask[State*2](w.4)
   let r.9: tobj = clause State.get(())
   let t.10: tobj = mask [State] yields apply c.2(r.9)

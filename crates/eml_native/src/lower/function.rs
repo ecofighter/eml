@@ -305,6 +305,16 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             } => self.make_closure(*var, *function, args),
             Stmt::Let {
                 var,
+                rhs:
+                    Rhs::Evidence {
+                        effect,
+                        state,
+                        outer,
+                        entries,
+                    },
+            } => self.evidence(*var, *effect, *state, *outer, entries),
+            Stmt::Let {
+                var,
                 rhs: Rhs::ConstString(index),
             } => self.const_string(*var, *index),
             Stmt::Let {

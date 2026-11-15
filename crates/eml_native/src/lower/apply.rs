@@ -429,9 +429,16 @@ struct Dispatch {
 }
 
 impl<M: Module> FnLower<'_, '_, M> {
-    /// `let var = closure function(args)`。`eml_rt_alloc_data`で物体を作り、コードの語と捕まえた値を欄に書く。タグは
-    /// まだ待つ引数の数で、`args`の所有は物体へ移る (docs/spec/native.md の「関数の値」)。
+    /// `let var = closure function(args)`。
     pub(super) fn make_closure(&mut self, var: VarId, function: FnIdx, args: &[Atom]) {
+        let lin = self.function.mark(var) == Mark::Lin;
+        let w = self.closure_value(function, args, lin);
+        self.bind(var, w);
+    }
+
+    /// `closure function(args)`の値。`eml_rt_alloc_data`で物体を作り、コードの語と捕まえた値を欄に書く。タグは
+    /// まだ待つ引数の数で、`args`の所有は物体へ移る (docs/spec/native.mdの「関数の値」)。
+    pub(super) fn closure_value(&mut self, function: FnIdx, args: &[Atom], lin: bool) -> Value {
         let program = self.callees.program;
         let target = program.function(function);
         let fields = closure_fields(target, args.len());
@@ -450,7 +457,6 @@ impl<M: Module> FnLower<'_, '_, M> {
                 .zip(&fields.fields[1..])
                 .map(|(&arg, &repr)| self.atom(arg, repr)),
         );
-        let lin = self.function.mark(var) == Mark::Lin;
         let head = [
             i64::from(arity(target, args.len())),
             i64::from(shape.scanned),
@@ -458,8 +464,7 @@ impl<M: Module> FnLower<'_, '_, M> {
             i64::from(lin),
         ]
         .map(|n| self.b.ins().iconst(types::I64, n));
-        let w = self.alloc_con(&head, &shape, &values);
-        self.bind(var, w);
+        self.alloc_con(&head, &shape, &values)
     }
 
     /// 末尾でない`var = apply callee(args)`。呼ぶ値が引数の数だけを待てば、そのエントリを直接呼び、そうでなければ
@@ -610,7 +615,7 @@ impl<M: Module> FnLower<'_, '_, M> {
     }
 
     /// 命令が走らせる`Ctx`の操作`step`のエントリの呼び出し。語を返すのは、`Step::returns`が真のstepだけである。
-    fn step(&mut self, step: eml_lir::Step, operands: &[Value]) -> Option<Value> {
+    pub(super) fn step(&mut self, step: eml_lir::Step, operands: &[Value]) -> Option<Value> {
         debug_assert_eq!(operands.len(), step.operands());
         let result = self.call_entry(&step_entry(step), operands);
         debug_assert_eq!(result.is_some(), step.returns());

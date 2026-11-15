@@ -13,18 +13,18 @@ EPの後のCore IRから写すLIRと、その実行の意味を定める。LIR�
 | 種類 | 命令 |
 |---|---|
 | 文 | `let x = 右辺`、`let (x1, .., xn) = <呼び出し>`、`unpack v L #t(f1, .., fn)`、`let (y1, .., yn) = unbox w L`、`dup x`、`decref x`、`release x L #t(p1, .., pn)` |
-| 右辺 | 呼び出し (`call`、`apply`、`clause`、`par`)、`closure`、`con`、`const`、`extern`、`prim`、`drop`、`box`、`unbox` |
+| 右辺 | 呼び出し (`call`、`apply`、`clause`、`par`)、`closure`、`con`、`const`、`extern`、`prim`、`evidence`、`drop`、`box`、`unbox` |
 | 終端 | `return a`、`return (a1, .., an)`、`tail <呼び出し>`、`jump bN(a1, .., an)`、`switch a L { #0 -> bN, #1(y1, .., yn) -> bN, _ -> bN }`、`switch a { 1 -> bN, _ -> bN }` |
 | RC (RC の対象の変数のみ) | `dup x`、`decref x`、`release x L #t(p1, .., pn)`、`release unboxed x L #t(p1, .., pn)` |
 | 手放す | `drop x` (参照を1つ手放す) |
 | reuse (token) | `let r: token = release x L #t(p1, .., pn)`、`con L #t(a1, .., an) reuse r`、`drop_token r` (下の「reuse」) |
-| evidence passing の出力 | `prim` (基本操作)、`clause` (節の呼び出し) |
+| evidence passingの出力 | `prim` (基本操作)、`evidence` (evidenceを作る)、`clause` (節の呼び出し) |
 
 - LIR は、EP の後の Core IR を写したものである ([Core IR](core-ir.md) の「Core IR から LIR への変換」)。Core IR との違いは次の2つである
   - エフェクトの命令 (`perform`、`handle`、`resume`) と、呼び出しの `mask` を持たない。LIR の型にないので、EP の後に残っていないことを verifier でなく型で保証する
   - RCの命令 (`dup`、`decref`、`release`)、`box`と`unbox`、末尾呼び出し`tail`を持つ。どれもLIRのパス (boxの挿入、縮約、借用のパス、Perceus) だけが入れる。複数の値の`let`と`return`は開くパスと借用のパスの降格だけが、構造体の`unbox`は開くパスだけが入れる (下の「開く」と「借用の推論」)。tokenの命令はreuseのパスだけが入れる (下の「reuse」)。変換の直後のLIRはこれらを持たず、`passes_until`のエントリのverifierがそれを確かめる (下の「パスの順番」)
 - 関数は、名前、内部の関数かどうかの印 (`internal`)、一様な位置の始まり (`split`)、yield しうるかの印 (`yields`)、エントリの関数の印 (`clause`)、変数の表、結果の並び (`rets`)、ブロックの列を持つ。印と `split` は Core IR と同じ意味である ([Core IR](core-ir.md) の「`yields` の印」、下の「関数の ABI」と「エントリの関数の印」)。box の挿入は `split` と `clause` を読み、`internal` は読まない。`internal` は ABI を決めない。VM は `yields` を読まない ([VM](vm.md) の「呼び出しと戻り」)
-- プログラムは、関数、エントリ、文字列の表、配置の表、構造体の形の表、エフェクトの表、ファイルの表、C の関数の表、C のハンドルの型の表を持つ。Core IR のプログラムと同じ欄である。LIR のパスは C の2つの表を変えずに写す。エフェクトの表は、`clause` の ABI (操作の Repr) と、基本操作の即値のために持つ
+- プログラムは、関数、エントリ、文字列の表、配置の表、構造体の形の表、エフェクトの表、ファイルの表、Cの関数の表、Cのハンドルの型の表を持つ。Core IRのプログラムと同じ欄である。LIRのパスはCの2つの表を変えずに写す。エフェクトの表は、`clause`のABI (操作のRepr) と、`evidence`のエントリの数と、`evv_mask`の項目のために持つ
 - `Call::Par { left, right, pair, at }` は `par` の fork と join である。テキストの形は `par (,) #0(f.1, g.2)` で、`extern` と同じく位置を後ろに書ける (`par (,) #0(f.1, g.2) @"main.em":3:5`)
   - `left` と `right` は `()` を受ける関数の値で、`apply` の呼ぶ値と同じく `tobj` の位置である。どちらも消費する
   - 結果は、2つの子の値を `pair` の構築子に入れた組で、`obj` である。`pair` は `tobj` のフィールドをちょうど2つ持つ構築子である
@@ -104,11 +104,11 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
   | Repr | 値 | 印 | 作るもの | 使うもの |
   |---|---|---|---|---|
-  | `ev` | 実行中のevidenceへの持ち主の参照 | いつも`lin` | `ev_new`、`ev_renew`、引数 | `evv_enter` (借用)、`ev_take_evv` (借用)、`yield_status` (借用)、`ev_last_state` (借用)、`ev_set_clause` (借用)、着地の印、直接の呼び出しの引数、`ev_retire`、`drop` |
+  | `ev` | 実行中のevidenceへの持ち主の参照 | いつも`lin` | `evidence`、`ev_renew`、引数 | `evv_enter` (借用)、`ev_take_evv` (借用)、`yield_status` (借用)、`ev_last_state` (借用)、着地の印、直接の呼び出しの引数、`ev_retire`、`drop` |
   | `cev` | 節のエントリが呼ばれるときに受けるevidence | `unr` | 節のエントリのevidenceの引数 | `ev_take_state` (借用)、`ev_set_state` (借用)、`ev_evv` (借用)、`yield_to`、`yield_abort` |
   | `fev` | forkのevidence | `unr` | forkのエントリのevidenceの引数 | `child_abort` (借用) |
   | `rev` | 退いたevidence (表とtagを持ち、状態と外側は`()`) | `unr` | `ev_retire` | `ev_renew` (借用)、クロージャの捕獲 |
-  | `evv` | `()`か、節点のリスト | `unr` | `evv_get`、`evv_enter`、`evv_mask`、`ev_evv`、`ev_take_evv` | `evv_set`、`evv_enter`、`evv_mask`、`ev_new` (外側) |
+  | `evv` | `()`か、節点のリスト | `unr` | `evv_get`、`evv_enter`、`evv_mask`、`ev_evv`、`ev_take_evv` | `evv_set`、`evv_enter`、`evv_mask`、`evidence` (外側) |
 
   - `evv`の機械の形は`tobj`と同じで、ほかの4つは`obj`と同じである。`()`は`evv`に収まらないので、手で書くIRは`evv_get()`からリストを取る
 - 局所の変数はスカラーと構造体のまま持ち、呼ぶ側か呼ばれる側が具体的な型を知らない位置 (一様な位置) だけを参照にする。一様な位置の Repr は `tobj` である。Lean の IR と同じ方式である。`int`、`float`、`enum`、`unit` の変数は、VM ではタグのないスロットに、ネイティブではレジスタに置ける。値を受ける位置の Repr は下の「位置の規則」が決め、変数の Repr と互換でなければ、box の挿入 (下の「box の挿入」) が変換を入れる
@@ -239,7 +239,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
   - 変種は、`yields`、`internal`、印、文の位置 (`Loc`) を `f` から写し、`clause` の印を付けない。実行時エラーの位置は `f` の位置のままで、変種の名前は逆アセンブルにだけ出る
   - 薄い形の `call f` には yield の確認がない。yield 中は `f` がダミーを返し、変種はそれを箱に入れて返す (下の「ダミーの値」)。変種のフレームは κ に入らず、再開した値は κ を通って `apply` に一様な値として届く ([Core IR](core-ir.md) の「yield の確認のない呼び出しの後」)
   - 元の関数は、値としてしか参照されなくても残す。名前で追記する REPL が、名前で関数を引くためである
-- エントリの関数の印 (`clause`) を持つ関数は、`split` でなく操作の ABI に合わせる (下の「box の挿入」)。捕獲は一様な Repr で持つ。`ev_set_clause` の引数として値で参照されるが、`apply` では呼ばれないので、変種を作らない
+- エントリの関数の印 (`clause`) を持つ関数は、`split`でなく操作のABIに合わせる (下の「box の挿入」)。捕獲は一様なReprで持つ。`evidence`のエントリとして参照されるが、`apply`では呼ばれないので、変種を作らない
 - 内部の関数かどうかの印 (`internal`) は ABI を決めない。`optimize` が包む関数を形で見分けるときと、複製の印を写すときにだけ読む ([Core IR](core-ir.md) の「包む関数」と「鍵と名前」)。テキストの形では、内部の関数を `internal fn main$lambda3(..)` と書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 - テキストの形では、`split` を `fn` の直前に `uniform from N` と書く。`split` のない関数には書かない (`internal uniform from 0 fn main$handle1(..)`)
 - ABI は具体化した型と `split` だけで決まり、どちらも名前で決まる。そのため、名前が同じ関数はいつも同じ ABI になる。`split` を外す規則は、ラムダを参照しうるコード (親の関数と、名前を引く `optimize` の複製) だけを見るので、そのコードも名前で決まる。変種の形も `f` と、`f` から末尾でたどる関数のコードだけで決まる。`optimize` はほかの定義に本体を展開し、既知の閉包への `apply` を直接の呼び出しにするので、ある関数を直接呼ぶ定義と値として使う定義は、プログラムごとに変わる。プログラム全体の使い方で ABI を決めると、名前が同じ関数の ABI がプログラムによって変わる。名前で追記する REPL では、古い入力の関数と食い違う ([VM](vm.md) の「追記」)。ネイティブ化では、翻訳した関数を使い回せなくなる
@@ -330,7 +330,7 @@ EP ([Core IR](core-ir.md) の「evidence passing」) の出力は、普通の呼
 
 evidence は、handler の1回の実行を表すヒープの物体で、次を持つ。
 
-- エントリの表: エフェクトの番号と、操作ごとのin-placeのエントリのクロージャ ([Core IR](core-ir.md)の「`perform` と節の3つの形」)を持つ物体。handleで入れた後は変えない (下の「verifier」)
+- エントリの表: エフェクトの番号と、操作ごとのin-placeのエントリのクロージャ ([Core IR](core-ir.md)の「`perform` と節の3つの形」)を持つ物体。evidenceを作る命令がすべてのエントリと一緒に作り、後で変える命令はない (下の「evidence を作る」)
 - 状態の欄 (`tobj`)
 - 外側の `evv`: その実行の外側で有効な `evv`。作るときに決め、`prompt$` が取り出すまで変えない。その evidence 自身を含まない
 
@@ -340,6 +340,15 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 状態の欄を通る参照の輪はできない。状態は値で、値から届く evidence は退いたものだけであり、退いた evidence の状態と外側の欄は `()` である ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)。そのため、evidence を通る輪はない。`prompt$` が、どの道 ([Core IR](core-ir.md) の「handle と `prompt$`」の 0〜3) でも状態の欄を空にすることは、evidence を退かせることの一部である。外側の handler O の本体の中で内側の handler I を動かし、I の継続 `k_I` をデータに包んで O の状態に入れても、`k_I` が捕まえる I の evidence は退いていて、O の evidence に届かない。これを `debug_heap` 付きの UI テスト (`tests/ui/run/effects/continuation_in_outer_state.em`) で確かめる。O の外の宛先への中断と `exit` は `prompt$` を通らない。O の handle のフレームを着地せずに外すときに、巻き戻しが O の evidence の状態を取り出して手放すのは、状態を早く解放するためだけである ([VM](vm.md) の「巻き戻しの手順」)。この場合も UI テスト (`tests/ui/run/unwind/state_holding_inner_continuation_exit.em`、`state_holding_inner_continuation_fail.em`) で確かめる。
 
+### evidence を作る
+
+右辺`Rhs::Evidence { effect, state, outer, entries }`は、evidenceをすべてのエントリと一緒に1つの命令で作る。テキストの形は`let e.3: ev lin = evidence State(s.1, w.2) [closure get$entry(a.0), &put$entry]`である。後でエントリの表を変える命令はない。
+
+- エントリはエフェクトの操作の順に書く。各エントリは、その位置の操作の`clause`の印を持つ関数と、それが捕獲する値を名指す。捕獲のないエントリは`&g`と書く
+- 命令は、エントリのクロージャ、エントリの表、evidenceを作り、状態、外側の`evv`、すべての捕獲を消費する。呼び出しではなく、巻き戻しの地点でもない。純粋でないので、縮約は消さない
+- 状態は`tobj`の位置で、各捕獲はエントリの関数の対応する引数の位置である。そのため、boxの挿入はクロージャの引数と同じく変換を入れる。印は、状態が`poly`、外側の`evv`と捕獲が`unr` (節の呼び出しはエントリを読むときに`dup`する)、結果が`lin`である
+- 実行系は、命令を`Ctx::ev_new`と、それに続くエントリごとの`Ctx::ev_set_clause`として走らせる (`eml_lir::Step`)。`ev_new`は、エフェクトの番号のほかにエントリの数も引数で受ける。VMとネイティブのコードは、エフェクトの操作の数をコードの定数として持つためである
+
 ### evidence を探す
 
 - 節の呼び出し`clause E.op`は、`evv`を先頭からたどり、エフェクトの番号がEの最初のevidenceを使う。費用は今有効なhandlerの数に比例し、呼び出しの深さにはよらない
@@ -348,7 +357,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 ### 基本操作
 
-右辺`Rhs::Prim(Prim, Vec<Atom>)`は基本操作である。`Prim`は基本操作の種類と、その即値 (エフェクトの番号、操作、`mask`の項目の並び) を持つ。テキストの形は`prim ev_new[State](s.1, w.0)`、`prim ev_set_clause[State.get](ev.2, &g)`、`prim evv_mask[State*2, Yield@1](w.3)`のように、即値を`[…]`に書く。`evv_mask`の項目はCore IRの呼び出しの`mask`と同じ型 (`eml_lir::MaskItem`) で、書き方も同じである ([テスト戦略](../implementation/testing.md)の「Core IR のテキストの形」)。
+右辺`Rhs::Prim(Prim, Vec<Atom>)`は基本操作である。`Prim`は基本操作の種類と、その即値 (`mask`の項目の並び、根の番号) を持つ。テキストの形は`prim evv_mask[State*2, Yield@1](w.3)`、`prim root_get[3]()`のように、即値を`[…]`に書く。`evv_mask`の項目はCore IRの呼び出しの`mask`と同じ型 (`eml_lir::MaskItem`) で、書き方も同じである ([テスト戦略](../implementation/testing.md)の「Core IR のテキストの形」)。
 
 - 引数と結果の Repr は、次の表で決まる。引数と結果は、直接の呼び出しの引数と結果と同じく互換の位置で、合わなければ box の挿入が変換を入れる。状態とクロージャの引数には、translate が決めた Repr の値 (`State Int` の状態なら `int`、状態のない handler なら `()`) が来るためである
 - 引数は、表の借用の列が「借用」のものを読み、ほかを消費する。結果は所有した参照である
@@ -358,7 +367,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   - 表は引数ごとの借用の印 (`PrimRow::borrowed`) を `params` と並べて持ち、長さは `params` と同じである
 - 表は `eml_lir` に置き (`Prim::row`)、`eml_extern` には入れない。`eml_extern` の表は `std/` と1対1に結び付けるテストを持ち、基本操作はソースに現れないためである。Core IR も同じ `Prim` を使う
 - 基本操作は純粋でないとみなし、縮約は消さない。例外は `root_get` と `empty_mut_array` で、根か定数を読むだけなので、結果を使わなければ消す
-- `eml_rt`の`Ctx`は、`dummy`、`empty_mut_array`、`child_abort`を除く基本操作をメソッドとして実装し、動作をVerusで証明する ([オブジェクトモデル](object-model.md)の「実行文脈 `Ctx`」)。`ev_last_state`は`ev_take_state`を走らせる。即値はメソッドの引数になる。`ev_new`は、エフェクトの番号のほかにエントリの数も引数で受ける。VMとネイティブのコードは、エフェクトの操作の数をコードの定数として持つためである
+- `eml_rt`の`Ctx`は、`dummy`、`empty_mut_array`、`child_abort`を除く基本操作をメソッドとして実装し、動作をVerusで証明する ([オブジェクトモデル](object-model.md)の「実行文脈 `Ctx`」)。`ev_last_state`は`ev_take_state`を走らせる。即値はメソッドの引数になる
 
 | 基本操作 | 引数 | 借用 | 結果 | 動作 |
 |---|---|---|---|---|
@@ -366,8 +375,6 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 | `evv_set` | `evv` | なし | `unit` | `evv`を替える。元の`evv`は手放す |
 | `evv_enter` | `evv`、`ev` | evidence | `evv` | リストの先頭にevidenceの節点を足す。節点はevidenceの新しい参照を持ち、呼ぶ側は自分の参照を持ったままである |
 | `evv_mask[items]` | `evv` | 元の`evv` | `evv` | 上の「evidence を探す」 |
-| `ev_new[E]` | `tobj` (状態)、`evv` (外側の`evv`) | なし | `ev` | 新しいエントリの表 (欄は空) と、それを指す新しいevidence |
-| `ev_set_clause[E.op]` | `ev`、`tobj` | evidence | `unit` | エントリの表の欄に入れる。handleの場所だけが、本体を始める前に使う |
 | `ev_renew` | `rev`、`tobj` (状態) | 元のevidence | `ev` | 元のevidenceと同じエントリの表を指し、状態を引数に、外側の`evv`を今の`evv`にした新しいevidence |
 | `ev_retire` | `ev` | なし | `rev` | evidenceを退かせる。一意のevidenceはそのまま返し、そうでなければtagとエントリの表を持つ新しいevidenceを返す。状態か外側の`evv`が`()`でないevidenceは、どちらのモードでも誤りである |
 | `ev_evv` | `cev` | evidence | `evv` | 外側の`evv`を読む |
@@ -388,14 +395,12 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 | `empty_mut_array` | なし | | `obj` | 長さ 0 の `MutArray` の不死の物体。`var` の配列の変数を取り出した後の状態で、translate が `take` の節に出す ([Core IR](core-ir.md) の「`var` の変換」)。VM は凍結した領域の定数の語を返す ([VM](vm.md) の「`CodeBase` と `FnEntry`」) |
 | `child_abort` | `fev`、`tobj` (起こし直しの閉包) | evidence | `unit` | `par`の子を中断し、操作の引数を捕まえた起こし直しの閉包を親に渡す。戻らない |
 
-- 表は、引数と結果のKindの印も持つ (`PrimRow::param_marks`、`ret_mark`)。`ev`の位置は`lin`、ほかのevidenceと`evv`の位置は`unr`、状態、κ、節の本体の位置は`poly`である。`ev_set_clause`に渡すエントリのクロージャは、節の呼び出しが読むときに`dup`するので`unr`である。`empty_mut_array`の結果は`MutArray`の値なので`lin`である。`child_abort`の起こし直しの閉包は操作の引数を捕まえるので`poly`である。V2が`prim`の引数と結果をこの列と比べる (下の「verifier」)
+- 表は、引数と結果のKindの印も持つ (`PrimRow::param_marks`、`ret_mark`)。`ev`の位置は`lin`、ほかのevidenceと`evv`の位置は`unr`、状態、κ、節の本体の位置は`poly`である。`empty_mut_array`の結果は`MutArray`の値なので`lin`である。`child_abort`の起こし直しの閉包は操作の引数を捕まえるので`poly`である。V2が`prim`の引数と結果をこの列と比べる (下の「verifier」)
 
   | 基本操作 | 引数の印 | 結果の印 |
   |---|---|---|
   | `evv_get` | なし | `unr` |
   | `evv_set` / `evv_enter` / `evv_mask` | `unr` / `unr`、`lin` / `unr` | `unr` |
-  | `ev_new[E]` | `poly` (状態)、`unr` | `lin` |
-  | `ev_set_clause` | `lin`、`unr` | `unr` |
   | `ev_renew` | `unr`、`poly` | `lin` |
   | `ev_retire` | `lin` | `unr` |
   | `ev_evv` / `ev_take_evv` | `unr` / `lin` | `unr` |
@@ -409,7 +414,6 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   | `empty_mut_array` | なし | `lin` |
   | `child_abort` | `unr`、`poly` | `unr` |
 
-- `ev_set_clause`の即値は、操作をエフェクトで修飾して書く (`ev_set_clause[State.get]`)。テキストの形で操作の名前をエフェクトで修飾するためである
 - `yielding` と `yield_status` の結果を `int` にするのは、リテラルの `switch` で分けるためである。`Bool` で分けると、EP が配置の表に `Prelude.Bool` を足すことになり、translate の後のパスは配置の表を変えないという規則 ([Core IR](core-ir.md) の「translate の配置」) を崩す
 
 ### 節の呼び出し
@@ -433,7 +437,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 ### エントリの関数の印
 
 - 関数は、in-place のエントリの関数にだけ `(effect, op)` の印 (`clause`) を持つ。テキストの形では `internal yields clause State.get fn …` と書く
-- エントリの関数は、捕獲の後にevidenceと操作の引数を受け、操作の結果を返す。evidenceの引数は`cev`で、forkのエントリ (`fork$E.op`) では`fev`である。`ev_set_clause`に渡す値としてだけ参照され、`apply`でも直接の呼び出しでも呼ばれない。エントリの表に入るクロージャが捕獲する値の数は、関数の引数の数と操作の引数の数から決まる (下の「verifier」)
+- エントリの関数は、捕獲の後にevidenceと操作の引数を受け、操作の結果を返す。evidenceの引数は`cev`で、forkのエントリ (`fork$E.op`) では`fev`である。エントリの関数を名指すのは`evidence`のエントリだけ (forkのエントリではその名前) で、`apply`でも直接の呼び出しでも呼ばれない。エントリの表に入るクロージャが捕獲する値の数は、関数の引数の数と操作の引数の数から決まる (下の「verifier」)
 
 ### ダミーの値
 
@@ -710,7 +714,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 ### verifier
 
 - LIRのverifierは6つの段を持つ。段はパスの順に直線に並ぶので、境界の検査だけを切り替える別の旗は持たない
-  - エントリの段 (`verify_lowered`) は、`passes_until` が入力にかける (上の「パスの順番」)。構造の規則のうち境界と所有に関わらないもの (R1〜R5、R6 の支配、R7 と R8 のうち境界の検査を除くもの) と、下の引き継ぐ検査と、基本操作と `clause` の検査を確かめ、`tail`、`box`、`unbox`、`dup`、`decref`、`release` がないことを確かめる。box の挿入は末尾呼び出しと変換のない入力を前提にし、`let` と `return` の形から末尾の位置を見るためである。Perceus より前に `release` を拒むのと同じく、パスの入力の約束を verifier が確かめる
+  - エントリの段 (`verify_lowered`) は、`passes_until`が入力にかける (上の「パスの順番」)。構造の規則のうち境界と所有に関わらないもの (R1〜R5、R6の支配、R7とR8のうち境界の検査を除くもの) と、下の引き継ぐ検査と、基本操作と`evidence`と`clause`の検査を確かめ、`tail`、`box`、`unbox`、`dup`、`decref`、`release`がないことを確かめる。boxの挿入は末尾呼び出しと変換のない入力を前提にし、`let`と`return`の形から末尾の位置を見るためである。Perceusより前に`release`を拒むのと同じく、パスの入力の約束をverifierが確かめる
   - 範囲の段 (`verify_scopes`) は box の挿入の後にかける。エントリの段から `box` と `unbox` の拒否を除き、`box` と `unbox` の規則 (上の「値の表現」) と境界の検査を足す。構造体の変数を受け、複数の値の `let` と `return`、構造体の `unbox` を拒む。互換でない `return` は、末尾の位置の呼び出しの結果を返す形のときだけ許す (上の「末尾の位置の呼び出し」)
   - 開いた後の段 (`verify_flattened`) は開くパスの後にかける。範囲の段に加えて、変数、関数の結果、配置のフィールドのどこにも構造体が残らないことを確かめ、複数の値の `let` と `return`、構造体の `unbox` を受ける
   - 借用の段 (`verify_borrowed`) は借用のパスの後にかける。開いた後の段に加えて、下の貸された引数の静的な規則を確かめる。これより前の段は`borrowed`の印を拒む (上の「ブロックの列」)
@@ -724,7 +728,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 印のほかの検査の後に、印の付いた呼び出しに`prompt$`が続くことを確かめる (上の「着地の印」。`` the apply with the prompt marker `ev.1` is not followed by `prompt$` ``)
 - 所有の段の走査は、関数のエントリと巻き戻しの地点ごとの所有を書き留める。所有を求める走査を、verifierと巻き戻しの表で2つ持たないためである。`eml_lir::unwind::verified(program)`は、プログラム全体の検査と同じ1回の走査で、すべての関数の表を`program.functions`の順に返す。`eml_lir::unwind::verified_for(program, walked)`は同じ検査をするが、たどるのは`walked`の関数だけで、プログラム全体の規則 (forkの関数、`clause`の印の関数のABI、値の参照など) はすべての関数に当て、`walked`の関数の表だけを返す。外した関数は、前の確かめが同じ名前でたどっていなければならず、そのコードが同じであることは呼ぶ側の約束である ([VM](vm.md)の「追記」)。VMの読み込みは、これですでにある関数をたどり直さない ([VM](vm.md)の「追記」)。`eml_lir::unwind::points(program, wanted)`はプログラム全体の規則を確かめず、関数ごとに表か誤りを返す。verifierを通らないIRの地点を見るテストと、VMの確かめない読み込み (下の「実行の前提」) が使う
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)
-- 境界の検査は、R7 と R8 の検査のうち、`jump`、`return`、`box`、`unbox` を除くものである。直接の呼び出しの引数と結果、`closure` の引数、`apply` の呼ばれる値と引数と結果 (`tobj` と比べる)、`par` の子 (`tobj` と比べる) と結果 (`obj`)、`clause` と `prim` のオペランドと結果、`clause` の印の関数の引数と `ret` が操作の表と互換であること、宣言した Repr が `tobj` のフィールドである。`tail` の結果は、呼び出し元の `rets` と Repr と印を比べる。translate と EP の出力は、box の挿入より前には境界に合わないので、Core IR の verifier と LIR のエントリの段は境界を見ない
+- 境界の検査は、R7とR8の検査のうち、`jump`、`return`、`box`、`unbox`を除くものである。直接の呼び出しの引数と結果、`closure`の引数、`apply`の呼ばれる値と引数と結果 (`tobj`と比べる)、`par`の子 (`tobj`と比べる) と結果 (`obj`)、`clause`と`prim`のオペランドと結果、`evidence`の状態と外側のリストと捕獲と束縛、`clause`の印の関数の引数と`ret`が操作の表と互換であること、宣言したReprが`tobj`のフィールドである。`tail`の結果は、呼び出し元の`rets`とReprと印を比べる。translateとEPの出力は、boxの挿入より前には境界に合わないので、Core IRのverifierとLIRのエントリの段は境界を見ない
 - 所有は、どの経路でも、関数のエントリと束縛で得た参照と、`dup` と `release` で増やした参照が、消費と `decref` と `release` でちょうど使い切られることを確かめる。経路ごとに持つのは、RC の対象の変数ごとの所有の数だけである。`return` と `tail` の時点では、所有が残らない
 - RC の対象のフィールドには、定義のとき (R5 で1回だけ) 持ち主と出どころを記録する
   - 持ち主: 分解した値 s が、束縛の時点で所有の数を1つ以上持っていれば s、そうでなければ s の持ち主
@@ -800,7 +804,8 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `apply` のオペランド: ``the callee of an apply is `n.1` (int), but an apply takes tobj``、``argument 0 of an apply is `n.1` (int), but an apply takes tobj``
   - `par` の子と結果: ``argument 0 of a par is `n.0` (int), but a par takes tobj`` (右の子は `argument 1`)、`` `t.2` (int) is bound to a par, which returns obj ``
   - `clause`のオペランド: ``argument 0 of a clause of `Counter.put` is `n.1` (tobj), but the operation takes int``
-  - `prim` のオペランド: ``argument 0 of `prim ev_new[State]` is `n.0` (int), but the primitive takes tobj``
+  - `prim`のオペランド: ``argument 0 of `prim ev_renew` is `n.0` (int), but the primitive takes rev``
+  - `evidence`: `` `e.3` (obj) is bound to an evidence of `State`, which is ev ``、``the state of an evidence of `State` is `n.1` (int), but the evidence takes tobj``、``the outer list of an evidence of `State` is `s.1` (tobj), but the evidence takes evv``、``capture 0 of entry 0 of an evidence of `State` is `n.1` (int), but the function takes tobj``
   - `extern` の引数と結果: ``argument 0 of `Prelude.Num Int.+` is `s.0` (obj), but the extern takes int``、``argument 1 of `Prelude.Num Int.+` is (), but the extern takes int``、`` `t.1` (obj) is bound to `Prelude.Ord Int.<`, which returns enum ``。引数の数を確かめた後で、引数を左から、最後に束縛する変数を比べる
   - `apply` の結果: `` `t.0` (int) is bound to an apply, which returns tobj ``
   - `tail` の結果: ``a tail call to `k` returns int, but this function returns tobj``、``a tail apply returns tobj poly, but this function returns int``。印は ``a tail call to `h` returns lin, but this function returns unr`` の形である
@@ -813,20 +818,19 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `unbox` のオペランド: `` `p.0` (obj) is unboxed, but only tobj can be ``、``5 is unboxed, but only tobj can be``
   - `unbox` の束縛: `` `n.2` (tobj) is bound to an unbox, which gives int, float or enum ``
 - 引き継ぐ検査は次のとおりである。2つの IR のすべての段で走る。直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数と、`extern Std.Par.par` を拒むこと (`` `Std.Par.par` is not an extern instruction ``。`Extern::Par` の行は std の宣言を型検査に結ぶためだけにあり、translate は呼び出しを `par` にする。[Core IR](core-ir.md) の「`par` の呼び出し」)、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`。Core IR のエフェクトの命令の検査は [Core IR](core-ir.md) の「verifier」にある
-- 基本操作と`clause`の検査は次のとおりである。Core IRのEPの段と、LIRの6つの段のすべてで走る
-  - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask` の項目は、呼び出しの `mask` と同じく空でなく、番号の真に昇順に並び (同じエフェクトの項目が2つない)、どの項目も1つ以上の evidence を飛ばす (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``、``an item of `prim evv_mask[State*0]` skips no handler``)
+- 基本操作と`evidence`と`clause`の検査は次のとおりである。Core IRのEPの段と、LIRの6つの段のすべてで走る
+  - `prim`の即値の`mask`の項目のエフェクトがエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask`の項目は、呼び出しの`mask`と同じく空でなく、番号の真に昇順に並び (同じエフェクトの項目が2つない)、どの項目も1つ以上のevidenceを飛ばす (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``、``an item of `prim evv_mask[State*0]` skips no handler``)
   - `clause`の操作がエフェクトの表にあり、引数の数が操作の引数の数と同じである
-  - `ev_set_clause[E.op]`に渡す値は、`&g`か、同じ関数の中の`closure g(..)`で束縛した変数で、gは`E.op`の`clause`の印を持ち、forkのevidenceを取らない。表を通る節の呼び出しは、走っているevidenceをエントリに渡すためである (`` `fork$Land.land` is put into the `Land.land` entry, but it takes a fork evidence``)。evidenceは、同じ関数の中の`ev_new[E]`で束縛した変数である。関数の引数、呼び出しの結果、ブロックの引数のように、同じ関数の中で関数が読めない値は拒み、同じ関数が作っていないevidenceも拒む (``the `Counter.get` entry is given `c.3` (tobj), which is neither `&g` nor a closure made in this function``、`` `prim ev_set_clause[Counter.get]` is given `e.1` (ev), which is not an evidence made by `ev_new` in this function``)。節の呼び出しは、エントリのクロージャを確かめずに操作のシグネチャで呼ぶので、エントリに入るものを、入れる所で決める
-  - `clause`の印の関数gの`closure g(..)`は、ちょうど「gの引数の数 - 1 - 操作の引数の数」個の値を捕獲する (``a closure of `g`, a clause of `Counter.get`, has 2 arguments, but the clause captures 1``)。`&g`を`ev_set_clause`に渡せるのは、この数が0のときだけである (`` `&g` is put into the `Counter.get` entry, but the clause has captures``)
-  - `ev_new[E]`が束縛するevidenceのエントリは、どれも、その`ev_new`のブロックの中で、evidenceのほかの最初の使いより前、ブロックの終わりより前に、ちょうど1回入れる。`dup`、`decref`、`release`、`drop_token`と着地の印は使いに数えない。その使いの後や別のブロックの`ev_set_clause`は拒む (``the `State.put` entry of `e.2` is not filled before `e.2` is used``、``the `State.get` entry of `e.2` is filled twice``、``an entry of `e.2` is filled after `e.2` is used``)。入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むためである
-  - これらの規則と、節の呼び出しが自分の操作のエントリを読むことで、節の呼び出しが呼ぶクロージャは、handleが同じ操作のエントリに入れたものになり、そのコードは操作のシグネチャを持つ。下のevidenceの役の規則で`evv`はevidenceだけを持ち、実行系が`par`の子のために作るevidenceのエントリは、下のforkの関数の規則Fが確かめる
+  - `evidence`のエフェクトがエフェクトの表にあり (``an evidence names effect 7, which is not in the effect table``)、エントリの数が操作の数と同じである (``an evidence of `State` has 1 entries, but the effect has 2 operations``)。各エントリは、その位置の操作の`clause`の印を持ち、`cev`を受ける関数である (``entry 0 of an evidence of `State` is `g`, which is not a clause``、``entry 0 of an evidence of `State` is `g`, a clause of `Counter.get` ``、``entry 0 of an evidence of `State` is `g`, which takes a fork evidence``)。各エントリは、節が捕獲する数 (関数の引数の数 - 1 - 操作の引数の数) と同じ数の値をちょうど捕獲する (``entry 0 of an evidence of `State` gives `g` 2 captures, but the clause captures 1``)。節の呼び出しは、読んだクロージャを確かめずに操作のシグネチャで呼ぶので、エントリに入るものをevidenceを作る所で決める
+  - 境界の段では、束縛は`ev`で、状態は`tobj`に、外側のリストは`evv`に渡り、各捕獲はエントリの関数の対応する引数と`unr`に渡る
+  - これらの規則と、節の呼び出しが自分の操作のエントリを読むことで、節の呼び出しが呼ぶクロージャは、evidenceを作った命令がその操作のエントリにしたものになり、そのコードは操作のシグネチャを持つ。下のevidenceの役の規則で`evv`はevidenceだけを持ち、実行系が`par`の子のために作るevidenceのエントリは、下のforkの関数の規則Fが確かめる
   - どちらの読み込みも、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムを断る。ネイティブの読み込みは`eml_lir::unwind::verified`でプログラム全体をたどってpanicする。VMの読み込みは`eml_lir::unwind::verified_for`で、プログラム全体の規則をすべての関数に当て、変換する関数 (debugのビルドではすべての関数) だけをたどり、`CompileError::Invalid`を返す。すでにある関数を飛ばすのは、名前が同じ関数は同じコードであるという約束による ([VM](vm.md)の「追記」)
-  - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける
+  - `clause`の印の関数は、値として参照されず (`&g`、`closure g(..)`。`` `g` is a clause of `E.op`, but it is used as a function value ``)、直接も呼ばれない。名指すのは`evidence`のエントリだけである。印のエフェクトと操作が表にあり、捕獲の後にevidenceと操作の引数を受ける
 - evidenceの役の検査は次のとおりである。Core IRのEPの段と、LIRの6つの段のすべてで走る
-  - 文脈のReprの変数は、関数かブロックの引数か、そのReprを返す行の基本操作が束縛する。呼び出し、戻らない束縛、複数の値の`let`、フィールドはどれも束縛しない (`` `e.3` is ev, but it is not bound by a primitive that returns ev ``)
+  - 文脈のReprの変数は、関数かブロックの引数か、`evidence`か、そのReprを返す行の基本操作が束縛する。呼び出し、戻らない束縛、複数の値の`let`、フィールドはどれも束縛しない (`` `e.3` is ev, but it is not bound by a primitive that returns ev ``)
   - 戻らない束縛は、使う所に制御が届かないので、どの値の位置にも渡せる。ただし文脈の位置には渡せない。ランタイムはそこでevidenceを確かめずに読むためである。文言は位置の文言である
   - 配置のフィールド、構造体の葉、操作の引数と結果、externの行、関数の結果はどれも文脈のReprを持たない (``the layout `L` has a field of ev``、``the struct shape of `L` has a leaf of ev``、``the operation `E.op` takes ev``、``the extern `X` returns ev``、``the function returns ev``)。プログラムのエントリと`RuntimeEntry::ALL`の関数は文脈のReprを受けない (`` `main` is entered by the run time, but its parameter 0 is ev ``)。これはプログラム全体の規則で、`verify.rs`が確かめる
-  - クロージャは`ev`、`cev`、`fev`、`evv`を捕獲しない。捕獲できるのは、`resume$`が新しくする退いたevidenceだけである (``a closure of `g` captures `e.1` (cev), but only a retired evidence can be captured``)
+  - クロージャと`evidence`のエントリは`ev`、`cev`、`fev`、`evv`を捕獲しない。捕獲できるのは、`resume$`が新しくする退いたevidenceだけである (``a closure of `g` captures `e.1` (cev), but only a retired evidence can be captured``)
   - `ev`の変数の印は`lin`である (`` `ev.2` is ev, but its mark is unr, not lin ``)
   - `clause`の印の関数のevidenceの引数は、`cev`か`fev`である (`` `g` is a clause of `E.op`, but its parameter 1 is obj ``)
   - これらの規則で、値から届くevidenceは退いたものだけになり、`evv`はevidenceだけを持ち、ランタイムはverifierがevidenceを見た位置でだけevidenceを読む
@@ -919,18 +923,19 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 
 ## 実行の前提
 
-VMの速いモードとネイティブのコードは、読む値の形を確かめずにLIRを実行する。渡されたプログラムについて、次のことを前提にする。
+プログラムは読み込みを通ってだけエンジンに届き、読み込みは最後の段のverifierが拒むプログラムを断る (上の「verifier」。例外は下の`eml_vm`のテストだけの確かめない読み込みである)。verifierは、所有、Repr、印、evidenceの役、すべてのevidenceのエントリ、forkのエントリを確かめる。VMの速いモードとネイティブのコードは、渡されたプログラムについて、verifierが確かめられない次のことをなお前提にする。
 
-- 最後のパスの後のLIRである (上の「パスの順番」)
-- 誤りなく型検査を通ったプログラムからコンパイラが作ったLIRか、同じ規則を守る手書きのLIRである。同じ規則とは、次のことである
-  - どの値も、作ったときの配置、Repr、印で読み、手放す
-  - verifierの所有の規則が成り立つ (上の「verifier」)
-  - `evv`の不変条件が成り立つ (上の「`evv` の不変条件」)
-  - externの行は、標準ライブラリのシグネチャの型の値を受け取る (上の「extern の行」)
+- どの`obj`と`tobj`の値も、作ったときの配置で読み、手放す。evidenceの状態もこれに含まれ、最後に入れた値として読む (取り出した後の状態は`()`である)
+- 実行時に`Lin`である値に付いた`poly`や`unr`の印は確かめない
+- 戻るときに`evv`が元に戻り、どの`clause E.op`と`evv_mask`のどの項目も、そのevidenceを見つける (上の「`evv` の不変条件」)
+- yieldの基本操作はEPが出す順に走り、`prompt$`は`yield_finish`の前に呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない (上の「着地の印」)
+- externの行は、標準ライブラリのシグネチャの型の値を受け取る (上の「extern の行」)
+
+これらは、ソースのプログラムの型と、各パスの正しさから従う。
 
 前提を満たさないプログラムの振る舞いは、速いモードとネイティブのコードでは未定義である。検査モードはその一部を止めるが、すべては止めない。形が同じ別の配置で読んだ値には気付かない (上の「構造の規則」のR8)。
 
-verifierを通ることは、この前提を保証しない。verifierは命令ごとに所有、Repr、印を確かめるが、値を作ったときの配置を追わず、`poly`の印が指す物体のKindも確かめられない (上の「Kind の印の検査」)。externの引数は、Reprと印でしか比べない。前提を保証するのは、ソースのプログラムの型と、各パスの正しさである。
+verifierは命令ごとに所有、Repr、印を確かめるが、値を作ったときの配置を追わず、`poly`の印が指す物体のKindも確かめられない (上の「Kind の印の検査」)。externの引数は、Reprと印でしか比べない。そのため、verifierを通ることは、verifierが確かめる規則を保証するが、上の前提は保証しない。
 
 エンジンのエントリ (`eml_vm::execute`、`Machine::load`、`eml_native::execute`、`NativeMachine::load`) はRustの安全な関数である。読み込みは、どのビルドでもverifierが確かめることを確かめ、verifierが拒むプログラムを断る (上の「verifier」)。残りの前提を約束するのは呼ぶ側である。`eml_cli`は、検査を通ったプログラムから自分で作ったLIRだけを渡す。テストは手書きのLIRを渡し、まず検査モードで実行する。verifierが拒むIRを読み込めるのは`eml_vm`のテストだけで、開発だけのfeature `testing`の後ろにある確かめない読み込み (`unsafe fn load_unverified`) を使う ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)。`Machine`に続けて読み込むときの約束は、[VM](vm.md)の「追記」にある。
 

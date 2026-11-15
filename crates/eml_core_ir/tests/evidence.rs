@@ -619,7 +619,7 @@ const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
 const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";
 
 /// handle の場所の形 (docs/spec/core-ir.md の「handle と `prompt$`」)。
-/// in-place のエントリを `ev_set_clause` で入れてから `evv` を替え、本体の結果を `prompt$` に渡す。
+/// in-placeのエントリを持つevidenceを1つの命令で作ってから`evv`を替え、本体の結果を`prompt$`に渡す。
 #[test]
 fn a_handle_installs_evidence_and_calls_prompt() {
     let text = format!(
@@ -632,15 +632,42 @@ fn a_handle_installs_evidence_and_calls_prompt() {
       unpack t.1 Box #0(b.2: tobj)
       let c.3: tobj = closure main$handle0(b.2)
       let w.7: evv = prim evv_get()
-      let ev.8: ev lin = prim ev_new[Ask]((), w.7)
-      let u.9: unit = prim ev_set_clause[Ask.ask](ev.8, &main$handle0$ask$entry)
-      let w.10: evv = prim evv_enter(w.7, ev.8)
-      let u.11: unit = prim evv_set(w.10)
-      let x.12: tobj poly = yields apply c.3(()) prompt ev.8
-      let t.4: int = call prompt$(ev.8, &main$handle0$return, x.12)
+      let ev.8: ev lin = evidence Ask((), w.7) [&main$handle0$ask$entry]
+      let w.9: evv = prim evv_enter(w.7, ev.8)
+      let u.10: unit = prim evv_set(w.9)
+      let x.11: tobj poly = yields apply c.3(()) prompt ev.8
+      let t.4: int = call prompt$(ev.8, &main$handle0$return, x.11)
       let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
+    }
+    "#);
+}
+
+/// handleの節のクロージャは、evidenceのエントリになって消える。捕獲のある節は`closure`のエントリで、その捕獲は
+/// evidenceの命令が受け取る (docs/spec/core-ir.mdの「handle と `prompt$`」)。
+#[test]
+fn a_handle_becomes_one_evidence_instruction() {
+    let text = format!(
+        "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let Box m = hide 0 41\n  let r =\n    handle b () with\n      | ctl ask () k -> k m\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let t.1: Box{tobj} = call "hide@[Unit -> <Ask, Panic> Int]{1=main$lambda0}"(0)
+      unpack t.1 Box #0(b.2: tobj)
+      let t.3: Box{int} = call "hide@[Int]"(0, 41)
+      unpack t.3 Box #0(m.4: int)
+      let c.5: tobj = closure main$handle0(b.2)
+      let w.10: evv = prim evv_get()
+      let ev.11: ev lin = evidence Ask((), w.10) [closure main$handle0$ask$entry(m.4)]
+      let w.12: evv = prim evv_enter(w.10, ev.11)
+      let u.13: unit = prim evv_set(w.12)
+      let x.14: tobj poly = yields apply c.5(()) prompt ev.11
+      let t.7: int = call prompt$(ev.11, &main$handle0$return, x.14)
+      let t.8: obj = extern "Prelude.Show Int.show"(t.7)
+      let t.9: unit = extern Prelude.println(t.8)
+      return t.9
     }
     "#);
 }
@@ -1027,6 +1054,11 @@ fn evidence_is_lin_evv_is_unr_and_state_is_poly() {
                         );
                     }
                 }
+                eml_core_ir::Rhs::Evidence { .. } => {
+                    seen.insert("evidence");
+                    assert_eq!(info.mark, eml_lir::Mark::Lin, "`{}`", info.name);
+                    assert_eq!(info.repr, eml_lir::Repr::Ev, "`{}`", info.name);
+                }
                 eml_core_ir::Rhs::Call {
                     call: eml_core_ir::Call::Apply { .. },
                     mask: _,
@@ -1039,7 +1071,7 @@ fn evidence_is_lin_evv_is_unr_and_state_is_poly() {
     }
     for prim in [
         "evv_get",
-        "ev_new",
+        "evidence",
         "evv_enter",
         "ev_take_evv",
         "ev_last_state",

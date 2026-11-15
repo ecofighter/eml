@@ -271,6 +271,15 @@ impl Parser<'_> {
                 let (prim, args) = self.reader.prim_call(state)?;
                 Rhs::Prim(prim, args)
             }
+            "evidence" => {
+                let parts = self.reader.evidence(state)?;
+                Rhs::Evidence {
+                    effect: parts.effect,
+                    state: parts.state,
+                    outer: parts.outer,
+                    entries: parts.entries,
+                }
+            }
             "const" => Rhs::ConstString(self.reader.const_string()?),
             "con" => self.con(state)?,
             "drop" => Rhs::Drop(self.reader.atom(state)?),

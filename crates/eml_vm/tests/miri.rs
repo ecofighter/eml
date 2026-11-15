@@ -133,9 +133,7 @@ fn main() -> unit {
   dup w.0
   dup w.0
   let s.1: tobj = box 3
-  let e.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.3: unit = prim ev_set_clause[Counter.get](e.2, &get)
-  let u.4: unit = prim ev_set_clause[Counter.put](e.2, &put)
+  let e.2: ev lin = evidence Counter(s.1, w.0) [&get, &put]
   let w.5: evv = prim evv_enter(w.0, e.2)
   let u.6: unit = prim evv_set(w.5)
   let f.9: tobj = box 5
@@ -426,8 +424,7 @@ effect Fail { never fail(int) -> never }
 fn main() -> unit {
   let w.0: evv = prim evv_get()
   dup w.0
-  let ev.1: ev lin = prim ev_new[Fail]((), w.0)
-  let u.18: unit = prim ev_set_clause[Fail.fail](ev.1, &fail$entry)
+  let ev.1: ev lin = evidence Fail((), w.0) [&fail$entry]
   let w.2: evv = prim evv_enter(w.0, ev.1)
   let u.3: unit = prim evv_set(w.2)
   let a.4: obj = con (,) #0(#5, #6)

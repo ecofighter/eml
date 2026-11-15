@@ -4,8 +4,7 @@ effect Ask { ask(unit) -> int }
 yields fn main(p.0: unit) -> unit {
   let w.4: evv = prim evv_get()
   dup w.4
-  let ev.5: ev lin = prim ev_new[Choose]((), w.4)
-  let u.6: unit = prim ev_set_clause[Choose.choose](ev.5, &main$handle1$choose$entry)
+  let ev.5: ev lin = evidence Choose((), w.4) [&main$handle1$choose$entry]
   let w.7: evv = prim evv_enter(w.4, ev.5)
   let u.8: unit = prim evv_set(w.7)
   let x.9: tobj poly = yields apply &main$handle1(()) prompt ev.5
@@ -35,8 +34,7 @@ b4:
 internal yields fn main$handle1(p.0: unit) -> tobj {
   let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: ev lin = prim ev_new[Ask]((), w.2)
-  let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &main$handle0$ask$entry)
+  let ev.3: ev lin = evidence Ask((), w.2) [&main$handle0$ask$entry]
   let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply &main$handle0(()) prompt ev.3

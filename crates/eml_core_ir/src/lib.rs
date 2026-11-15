@@ -95,9 +95,9 @@ pub struct CoreFn {
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
-    /// in-place のエントリの関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
-    /// 返す。`ev_set_clause` に渡す値としてだけ参照される。テキストの形では `yields` の後に `clause E.op fn` と書く
-    /// (docs/spec/lir.md の「エントリの関数の印」)。
+    /// in-placeのエントリの関数が受け持つ (エフェクト, 操作)。捕獲の後にevidenceと操作の引数を受け、操作の結果を
+    /// 返す。`evidence`のエントリとしてだけ参照される。テキストの形では`yields`の後に`clause E.op fn`と書く
+    /// (docs/spec/lir.mdの「エントリの関数の印」)。
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
@@ -121,9 +121,9 @@ impl CoreFn {
         Some((first + added - opened.len()) as u32)
     }
 
-    /// 本体が参照する関数を訪れる。直接の呼び出しの相手は `FnRef::Direct`、`closure` の関数と関数の値 `&f` は
-    /// `FnRef::Value` で渡す。関数の表を書き換えるパス (到達の除去、融合の順、`yields` と `split` の見直し) が、
-    /// どれも同じ3つの形を見るようにする。
+    /// 本体が参照する関数を訪れる。直接の呼び出しの相手は`FnRef::Direct`、`closure`の関数と関数の値`&f`と
+    /// evidenceのエントリは`FnRef::Value`で渡す。関数の表を書き換えるパス (到達の除去、融合の順、`yields`と`split`の
+    /// 見直し) が、どれも同じ形を見るようにする。
     pub(crate) fn for_each_fn_ref(&self, mut f: impl FnMut(FnIdx, FnRef)) {
         fn atom(atom: Atom, f: &mut impl FnMut(FnIdx, FnRef)) {
             if let Atom::Fn(target) = atom {
@@ -141,6 +141,9 @@ impl CoreFn {
                         mask: _,
                     } => f(*target, FnRef::Direct),
                     Rhs::MakeClosure(target, _) => f(*target, FnRef::Value),
+                    Rhs::Evidence { entries, .. } => entries
+                        .iter()
+                        .for_each(|&(target, _)| f(target, FnRef::Value)),
                     _ => {}
                 }
                 rhs.for_each_atom(|a| atom(a, &mut f));
@@ -168,6 +171,9 @@ impl CoreFn {
                 } = rhs
                 {
                     f(target);
+                }
+                if let Rhs::Evidence { entries, .. } = rhs {
+                    entries.iter_mut().for_each(|(target, _)| f(target));
                 }
                 rhs.for_each_atom_mut(|a| atom(a, &mut f));
             }
@@ -405,6 +411,14 @@ pub enum Rhs {
     /// evidence passing の基本操作。LIR と同じ操作で、結果は所有した値である。引数を消費するか借りるかは基本操作の表
     /// (`PrimRow::borrowed`) が決め、所有を扱う Perceus から後でだけ意味を持つ (docs/spec/lir.md の「基本操作」)。
     Prim(Prim, Vec<Atom>),
+    /// エフェクトのevidenceを、状態、外側のリスト、操作の順のエントリ (節の関数と捕獲) とともに作る。EPだけが出し、
+    /// LIRの同じ命令になる (docs/spec/lir.mdの「evidence」)。
+    Evidence {
+        effect: u32,
+        state: Atom,
+        outer: Atom,
+        entries: Vec<(FnIdx, Vec<Atom>)>,
+    },
 }
 
 impl Rhs {
@@ -431,6 +445,19 @@ impl Rhs {
             | Rhs::Prim(_, args) => args.iter().for_each(|&atom| f(atom)),
             Rhs::Drop(atom) => f(*atom),
             Rhs::ConstString(_) => {}
+            Rhs::Evidence {
+                effect: _,
+                state,
+                outer,
+                entries,
+            } => {
+                f(*state);
+                f(*outer);
+                entries
+                    .iter()
+                    .flat_map(|(_, captures)| captures)
+                    .for_each(|&atom| f(atom));
+            }
         }
     }
 
@@ -447,6 +474,19 @@ impl Rhs {
             | Rhs::Prim(_, args) => args.iter_mut().for_each(f),
             Rhs::Drop(atom) => f(atom),
             Rhs::ConstString(_) => {}
+            Rhs::Evidence {
+                effect: _,
+                state,
+                outer,
+                entries,
+            } => {
+                f(state);
+                f(outer);
+                entries
+                    .iter_mut()
+                    .flat_map(|(_, captures)| captures)
+                    .for_each(f);
+            }
         }
     }
 }

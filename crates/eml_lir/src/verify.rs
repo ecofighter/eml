@@ -33,7 +33,7 @@ use crate::check::{
 };
 use crate::liveness;
 use crate::reuse;
-use crate::syntax::{layout_text, operation_text, prim_text, repr_text, rets_text};
+use crate::syntax::{effect_text, layout_text, operation_text, prim_text, repr_text, rets_text};
 use crate::unwind::{self, UnwindPoint, Unwinds};
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, EP_PROMPT, FnIdx, Lends, LirFn, Mark, OpRet,
@@ -393,25 +393,20 @@ fn value_references(program: &Program, function: &LirFn) -> Result<(), String> {
         }
     };
     let mut result = Ok(());
-    let mut atom = |atom: Atom| {
-        if let Atom::Fn(target) = atom
-            && result.is_ok()
-        {
-            result = check(target, 0);
+    let mut reference = |target: FnIdx, captured: usize| {
+        if result.is_ok() {
+            result = check(target, captured);
         }
     };
     for block in &function.blocks {
         for stmt in &block.stmts {
-            if let Stmt::Let {
-                var: _,
-                rhs: Rhs::MakeClosure(target, args),
-            } = stmt
-            {
-                check(*target, args.len())?;
-            }
-            stmt.for_each_atom(&mut atom);
+            stmt.for_each_fn(&mut reference);
         }
-        block.term.for_each_atom(&mut atom);
+        block.term.for_each_atom(|atom| {
+            if let Atom::Fn(target) = atom {
+                reference(target, 0);
+            }
+        });
     }
     result
 }
@@ -735,7 +730,6 @@ impl<'a> Checker<'a> {
 
     fn run(mut self) -> Result<Option<Unwinds>, String> {
         let function = self.function;
-        self.clause_values()?;
         for (index, block) in function.blocks.iter().enumerate() {
             let index = index as u32;
             let mut owned = if index == 0 {
@@ -758,44 +752,10 @@ impl<'a> Checker<'a> {
             }
             self.check_block(index, block, owned)?;
         }
-        self.cx.entries_filled()?;
         Ok(self.unwind.map(|recorder| Unwinds {
             entry: recorder.entry,
             points: recorder.points,
         }))
-    }
-
-    /// `clause` の印の関数の値の使いを確かめる (`Context::clause_values`)。
-    fn clause_values(&self) -> Result<(), String> {
-        let blocks = &self.function.blocks;
-        let closures = blocks
-            .iter()
-            .flat_map(|block| &block.stmts)
-            .filter_map(|stmt| match stmt {
-                Stmt::Let {
-                    var,
-                    rhs: Rhs::MakeClosure(target, _),
-                } => Some((*var, *target)),
-                _ => None,
-            });
-        self.cx.clause_values(closures, |check| {
-            for block in blocks {
-                for stmt in &block.stmts {
-                    match stmt {
-                        Stmt::Let {
-                            var: _,
-                            rhs: Rhs::Prim(Prim::EvSetClause { .. }, args),
-                        } => args
-                            .iter()
-                            .enumerate()
-                            .filter(|&(index, _)| index != 1)
-                            .for_each(|(_, &atom)| check(atom)),
-                        _ => stmt.for_each_atom(&mut *check),
-                    }
-                }
-                block.term.for_each_atom(&mut *check);
-            }
-        })
     }
 
     fn check_block(&mut self, index: u32, block: &Block, mut owned: Owned) -> Result<(), String> {
@@ -815,14 +775,6 @@ impl<'a> Checker<'a> {
                 index: at as i64,
             };
             self.check_stmt(&mut owned, stmt)?;
-            let prim = match stmt {
-                Stmt::Let {
-                    var,
-                    rhs: Rhs::Prim(prim, args),
-                } => Some((*var, prim, args.as_slice())),
-                _ => None,
-            };
-            self.cx.note_stmt(prim, |f| stmt.for_each_atom(f));
             let marked = match stmt {
                 Stmt::Let {
                     var: _,
@@ -856,7 +808,6 @@ impl<'a> Checker<'a> {
             block: index,
             index: block.stmts.len() as i64,
         };
-        self.cx.end_block();
         self.check_term(owned, block)
     }
 
@@ -894,6 +845,7 @@ impl<'a> Checker<'a> {
                             .note_never(*var, self.program.row(*ext).ret == OpRet::Never);
                     }
                     Rhs::Prim(_, _)
+                    | Rhs::Evidence { .. }
                     | Rhs::ConstString(_)
                     | Rhs::Con { .. }
                     | Rhs::Drop(_)
@@ -1665,17 +1617,92 @@ impl<'a> Checker<'a> {
         self.give_up(owned, var, "used")
     }
 
+    /// 境界の段の`evidence`の検査。束縛は`ev`、状態は`tobj`、外側のリストは`evv`の位置で、捕獲はエントリの関数の引数の
+    /// Reprに収まる。表は`ev`の持ち主のほかに退いたevidenceと複製した継続からも届くので、捕獲はどれも`unr`の位置に渡せる
+    /// (docs/spec/lir.mdの「verifier」)。
+    fn evidence_boundaries(
+        &self,
+        var: VarId,
+        effect: u32,
+        state: Atom,
+        outer: Atom,
+        entries: &[(FnIdx, Vec<Atom>)],
+    ) -> Result<(), String> {
+        let subject = format!(
+            "an evidence of `{}`",
+            effect_text(&self.program.effects, effect)
+        );
+        let repr = self.function.repr(var);
+        if repr != Repr::Ev {
+            return Err(format!(
+                "`{}` ({}) is bound to {subject}, which is ev",
+                self.cx.name(var),
+                self.cx.repr_text(repr)
+            ));
+        }
+        if !self.cx.passes(state, Repr::TObj) {
+            return Err(format!(
+                "the state of {subject} is {}, but the evidence takes tobj",
+                self.cx.typed_atom_text(state)
+            ));
+        }
+        if !self.cx.passes(outer, Repr::Evv) {
+            return Err(format!(
+                "the outer list of {subject} is {}, but the evidence takes evv",
+                self.cx.typed_atom_text(outer)
+            ));
+        }
+        if !self.cx.mark_passes(outer, Mark::Unr) {
+            return Err(format!(
+                "the outer list of {subject} is {}, but the evidence takes unr",
+                self.cx.marked_atom_text(outer)
+            ));
+        }
+        for (op, (target, captures)) in entries.iter().enumerate() {
+            let target = self.function_at(*target)?;
+            for (index, (&capture, &param)) in captures.iter().zip(target.params()).enumerate() {
+                let expected = target.repr(param);
+                if !self.cx.passes(capture, expected) {
+                    return Err(format!(
+                        "capture {index} of entry {op} of {subject} is {}, but the function takes {}",
+                        self.cx.typed_atom_text(capture),
+                        self.cx.repr_text(expected)
+                    ));
+                }
+                if !self.cx.mark_passes(capture, Mark::Unr) {
+                    return Err(format!(
+                        "capture {index} of entry {op} of {subject} is {}, but the evidence takes unr",
+                        self.cx.marked_atom_text(capture)
+                    ));
+                }
+            }
+        }
+        self.cx.bound_mark(var, Mark::Lin, || subject.clone())
+    }
+
     fn check_rhs(&self, owned: &mut Owned, var: VarId, rhs: &Rhs) -> Result<(), String> {
         self.cx.context_binding(
             var,
             match rhs {
                 Rhs::Prim(prim, _) => Some(prim.row().ret),
+                Rhs::Evidence { .. } => Some(Repr::Ev),
                 _ => None,
             },
         )?;
         match rhs {
             Rhs::Call(call) => {
                 return self.check_call(owned, call, Receiver::Bound(var));
+            }
+            Rhs::Evidence {
+                effect,
+                state,
+                outer,
+                entries,
+            } => {
+                self.cx.check_evidence(*effect, entries)?;
+                if self.cx.boundaries {
+                    self.evidence_boundaries(var, *effect, *state, *outer, entries)?;
+                }
             }
             Rhs::MakeClosure(index, args) => {
                 self.cx.closure_arity(*index, args.len())?;

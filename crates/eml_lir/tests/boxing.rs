@@ -209,15 +209,13 @@ fn f() -> int {
 
 #[test]
 fn prim_operands_are_converted_like_call_arguments() {
-    // `ev_new` は状態を `tobj` で受けるので、`int` の状態は `box` して渡す
-    let text = "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(n.0: int) -> unit {\n  let w.1: evv = prim evv_get()\n  let e.2: ev lin = prim ev_new[State](n.0, w.1)\n  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)\n  let u.4: unit = prim ev_set_clause[State.put](e.2, &p)\n  let u.5: unit = drop e.2\n  return ()\n}\ninternal clause State.get fn g(e.0: cev, u.1: unit) -> tobj {\n  return ()\n}\ninternal clause State.put fn p(e.0: cev, x.1: tobj) -> unit {\n  return ()\n}\n";
+    // `evidence`は状態を`tobj`で受けるので、`int`の状態は`box`して渡す
+    let text = "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(n.0: int) -> unit {\n  let w.1: evv = prim evv_get()\n  let e.2: ev lin = evidence State(n.0, w.1) [&g, &p]\n  let u.5: unit = drop e.2\n  return ()\n}\ninternal clause State.get fn g(e.0: cev, u.1: unit) -> tobj {\n  return ()\n}\ninternal clause State.put fn p(e.0: cev, x.1: tobj) -> unit {\n  return ()\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
     fn f(n.0: int) -> unit {
       let w.1: evv = prim evv_get()
       let n.6: tobj = box n.0
-      let e.2: ev lin = prim ev_new[State](n.6, w.1)
-      let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
-      let u.4: unit = prim ev_set_clause[State.put](e.2, &p)
+      let e.2: ev lin = evidence State(n.6, w.1) [&g, &p]
       let u.5: unit = drop e.2
       return ()
     }
@@ -256,7 +254,7 @@ fn a_clause_call_uses_the_reprs_of_its_operation() {
 #[test]
 fn a_clause_function_takes_the_reprs_of_its_operation() {
     // 引数 n は `put` の `int` になり、エントリで元の `tobj` の変数を `box` で定義する。`ret` は `unit` になる
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn main() -> unit {\n  let w.0: evv = prim evv_get()\n  let e.1: ev lin = prim ev_new[Counter](0, w.0)\n  let u.2: unit = prim ev_set_clause[Counter.put](e.1, &g)\n  let u.3: unit = prim ev_set_clause[Counter.get](e.1, &h)\n  return ()\n}\ninternal yields clause Counter.put fn g(e.0: cev, n.1: tobj) -> tobj {\n  return ()\n}\ninternal clause Counter.get fn h(e.0: cev, u.1: unit) -> int {\n  return 0\n}\n";
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn main() -> unit {\n  let w.0: evv = prim evv_get()\n  let e.1: ev lin = evidence Counter(0, w.0) [&h, &g]\n  return ()\n}\ninternal yields clause Counter.put fn g(e.0: cev, n.1: tobj) -> tobj {\n  return ()\n}\ninternal clause Counter.get fn h(e.0: cev, u.1: unit) -> int {\n  return 0\n}\n";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "g"), @"
     internal yields clause Counter.put fn g(e.0: cev, n.2: int) -> unit {
@@ -267,10 +265,8 @@ fn a_clause_function_takes_the_reprs_of_its_operation() {
     insta::assert_snapshot!(function(&shown, "main"), @"
     fn main() -> unit {
       let w.0: evv = prim evv_get()
-      let b.4: tobj = box 0
-      let e.1: ev lin = prim ev_new[Counter](b.4, w.0)
-      let u.2: unit = prim ev_set_clause[Counter.put](e.1, &g)
-      let u.3: unit = prim ev_set_clause[Counter.get](e.1, &h)
+      let b.2: tobj = box 0
+      let e.1: ev lin = evidence Counter(b.2, w.0) [&h, &g]
       return ()
     }
     ");
@@ -280,7 +276,7 @@ fn a_clause_function_takes_the_reprs_of_its_operation() {
 fn a_clause_function_keeps_its_captures_uniform() {
     // `int` の捕獲は `tobj` で受けてエントリで `unbox` し、`closure` は捕獲を `box` して渡す。evidence と `get` の引数と
     // `ret` はすでに操作の表と合っている
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn main(k.0: int) -> unit {\n  let w.1: evv = prim evv_get()\n  let e.2: ev lin = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(k.0)\n  let u.4: unit = prim ev_set_clause[Counter.get](e.2, g.3)\n  let u.5: unit = prim ev_set_clause[Counter.put](e.2, &p)\n  return ()\n}\ninternal yields clause Counter.get fn g(k.0: int, e.1: cev, u.2: unit) -> int {\n  return k.0\n}\ninternal clause Counter.put fn p(e.0: cev, n.1: int) -> unit {\n  return ()\n}\n";
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn main(k.0: int) -> unit {\n  let w.1: evv = prim evv_get()\n  let e.2: ev lin = evidence Counter((), w.1) [closure g(k.0), &p]\n  return ()\n}\ninternal yields clause Counter.get fn g(k.0: int, e.1: cev, u.2: unit) -> int {\n  return k.0\n}\ninternal clause Counter.put fn p(e.0: cev, n.1: int) -> unit {\n  return ()\n}\n";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "g"), @"
     internal yields clause Counter.get fn g(k.3: tobj, e.1: cev, u.2: unit) -> int {
@@ -291,11 +287,8 @@ fn a_clause_function_keeps_its_captures_uniform() {
     insta::assert_snapshot!(function(&shown, "main"), @"
     fn main(k.0: int) -> unit {
       let w.1: evv = prim evv_get()
-      let e.2: ev lin = prim ev_new[Counter]((), w.1)
-      let k.6: tobj = box k.0
-      let g.3: tobj = closure g(k.6)
-      let u.4: unit = prim ev_set_clause[Counter.get](e.2, g.3)
-      let u.5: unit = prim ev_set_clause[Counter.put](e.2, &p)
+      let k.3: tobj = box k.0
+      let e.2: ev lin = evidence Counter((), w.1) [closure g(k.3), &p]
       return ()
     }
     ");
@@ -350,7 +343,7 @@ fn the_result_of_exit_is_not_converted() {
 #[test]
 fn a_clause_function_unboxes_its_return_to_a_scalar_operation_result() {
     // `Counter.get` の結果は `int` なので、節の関数の `ret` を `int` にし、`tobj` の値を返す `return` の前で `unbox` する
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn main() -> unit {\n  let w.0: evv = prim evv_get()\n  let e.1: ev lin = prim ev_new[Counter]((), w.0)\n  let u.2: unit = prim ev_set_clause[Counter.get](e.1, &g)\n  let u.3: unit = prim ev_set_clause[Counter.put](e.1, &p)\n  return ()\n}\ninternal yields clause Counter.get fn g(e.0: cev, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\ninternal clause Counter.put fn p(e.0: cev, n.1: int) -> unit {\n  return ()\n}\n";
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn main() -> unit {\n  let w.0: evv = prim evv_get()\n  let e.1: ev lin = evidence Counter((), w.0) [&g, &p]\n  return ()\n}\ninternal yields clause Counter.get fn g(e.0: cev, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\ninternal clause Counter.put fn p(e.0: cev, n.1: int) -> unit {\n  return ()\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "g"), @"
     internal yields clause Counter.get fn g(e.0: cev, u.1: unit) -> int {
       let s.2: tobj = prim ev_take_state(e.0)
@@ -363,7 +356,7 @@ fn a_clause_function_unboxes_its_return_to_a_scalar_operation_result() {
 #[test]
 fn a_never_clause_function_returns_obj() {
     // `never` の操作の節のエントリはダミーの物体を返すので、`ret` は `obj` になる
-    let text = "effect Fail { never fail(tobj) -> never }\nfn main() -> unit {\n  let w.0: evv = prim evv_get()\n  let e.1: ev lin = prim ev_new[Fail]((), w.0)\n  let u.2: unit = prim ev_set_clause[Fail.fail](e.1, &g)\n  return ()\n}\ninternal yields clause Fail.fail fn g(e.0: cev, s.1: tobj) -> tobj {\n  let d.2: obj = prim dummy()\n  return d.2\n}\n";
+    let text = "effect Fail { never fail(tobj) -> never }\nfn main() -> unit {\n  let w.0: evv = prim evv_get()\n  let e.1: ev lin = evidence Fail((), w.0) [&g]\n  return ()\n}\ninternal yields clause Fail.fail fn g(e.0: cev, s.1: tobj) -> tobj {\n  let d.2: obj = prim dummy()\n  return d.2\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "g"), @"
     internal yields clause Fail.fail fn g(e.0: cev, s.1: tobj) -> obj {
       let d.2: obj = prim dummy()
@@ -644,8 +637,7 @@ internal yields clause Put.put fn h(e.0: cev, p.1: P{int, float}) -> unit {
 }
 fn main() -> unit {
   let w.0: evv = prim evv_get()
-  let e.1: ev lin = prim ev_new[Put]((), w.0)
-  let u.2: unit = prim ev_set_clause[Put.put](e.1, &h)
+  let e.1: ev lin = evidence Put((), w.0) [&h]
   return ()
 }
 ";

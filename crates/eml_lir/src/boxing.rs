@@ -513,6 +513,23 @@ impl Converter<'_> {
                         }
                         Some(row.ret)
                     }
+                    // 状態は`tobj`の位置で、捕獲は`closure`と同じくエントリの関数の引数の位置である
+                    Rhs::Evidence {
+                        effect: _,
+                        state,
+                        outer: _,
+                        entries,
+                    } => {
+                        *state = self.convert(*state, Repr::TObj, out);
+                        for (target, captures) in entries.iter_mut() {
+                            let target = target.0 as usize;
+                            for (index, capture) in captures.iter_mut().enumerate() {
+                                let param = self.signatures[target].params[index];
+                                *capture = self.convert(*capture, param, out);
+                            }
+                        }
+                        Some(Repr::Ev)
+                    }
                     // 入力にある `unbox` と `box` は、`split` と `clause` の印の関数のエントリで引数を合わせたものだけである
                     Rhs::Unbox(Atom::Var(from)) => {
                         self.unboxed_from.insert(var, *from);

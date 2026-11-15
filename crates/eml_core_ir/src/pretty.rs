@@ -128,6 +128,12 @@ impl<'p> Printer<'p> {
             }
             Rhs::Drop(a) => format!("drop {}", w.atom(vars, a)),
             Rhs::Prim(prim, args) => w.prim_call(vars, prim, args),
+            Rhs::Evidence {
+                effect,
+                state,
+                outer,
+                entries,
+            } => w.evidence(vars, *effect, *state, *outer, entries),
         }
     }
 

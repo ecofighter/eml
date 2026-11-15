@@ -3,8 +3,7 @@
 
 use crate::{Mark, MaskItem, Repr};
 
-/// 基本操作の種類と即値。エフェクトと操作は`Program.effects`の番号である。`EvSetClause`は、テキストの形で操作の名前を
-/// エフェクトで修飾するために、操作だけでなくエフェクトも持つ。`RootGet`と`RootSet`の即値は根の番号である。
+/// 基本操作の種類と即値。エフェクトは`Program.effects`の番号である。`RootGet`と`RootSet`の即値は根の番号である。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Prim {
     EvvGet,
@@ -13,11 +12,6 @@ pub enum Prim {
     EvvEnter,
     /// 飛ばす項目。呼び出しの `mask` と同じく、空でなく、エフェクトの番号の真に昇順に並ぶ。
     EvvMask(Vec<MaskItem>),
-    EvNew(u32),
-    EvSetClause {
-        effect: u32,
-        op: u32,
-    },
     EvRenew,
     /// 状態と外側のリストを取り出し終えた持ち主のevidenceを退かせる (docs/spec/lir.mdの「基本操作」)。
     EvRetire,
@@ -44,21 +38,31 @@ pub enum Prim {
 }
 
 /// 命令が自分の意味の一部として走らせる`Ctx`の操作で、それ自身は基本操作でない。`clause E.op`は`ev_lookup`、続いて
-/// `ev_clause`を走らせる (docs/spec/lir.mdの「節の呼び出し」)。ネイティブのコードはそれぞれをエントリ
+/// `ev_clause`を走らせ (docs/spec/lir.mdの「節の呼び出し」)、`evidence`は`ev_new`、続いてエントリごとに`ev_set_clause`を
+/// 走らせる (docs/spec/lir.mdの「evidence」)。ネイティブのコードはそれぞれをエントリ
 /// `eml_rt_<Step::name()>`で呼び、エントリは`Ctx`のメソッドと同じ引数を持つshimである。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Step {
     EvLookup,
     EvClause,
+    EvNew,
+    EvSetClause,
 }
 
 impl Step {
-    pub const ALL: [Step; 2] = [Step::EvLookup, Step::EvClause];
+    pub const ALL: [Step; 4] = [
+        Step::EvLookup,
+        Step::EvClause,
+        Step::EvNew,
+        Step::EvSetClause,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Step::EvLookup => "ev_lookup",
             Step::EvClause => "ev_clause",
+            Step::EvNew => "ev_new",
+            Step::EvSetClause => "ev_set_clause",
         }
     }
 
@@ -67,13 +71,16 @@ impl Step {
         match self {
             Step::EvLookup => 1,
             Step::EvClause => 2,
+            Step::EvNew => 4,
+            Step::EvSetClause => 3,
         }
     }
 
     /// エントリが語を1つ返すか。
     pub fn returns(self) -> bool {
         match self {
-            Step::EvLookup | Step::EvClause => true,
+            Step::EvLookup | Step::EvClause | Step::EvNew => true,
+            Step::EvSetClause => false,
         }
     }
 }
@@ -100,8 +107,6 @@ pub struct PrimRow {
 pub enum Immediates<'a> {
     None,
     Mask(&'a [MaskItem]),
-    Effect(u32),
-    Operation { effect: u32, op: u32 },
     Root(u32),
 }
 
@@ -128,8 +133,6 @@ kinds! {
     Prim::EvvSet => "evv_set", Prim::EvvSet;
     Prim::EvvEnter => "evv_enter", Prim::EvvEnter;
     Prim::EvvMask(_) => "evv_mask", Prim::EvvMask(Vec::new());
-    Prim::EvNew(_) => "ev_new", Prim::EvNew(0);
-    Prim::EvSetClause { .. } => "ev_set_clause", Prim::EvSetClause { effect: 0, op: 0 };
     Prim::EvRenew => "ev_renew", Prim::EvRenew;
     Prim::EvRetire => "ev_retire", Prim::EvRetire;
     Prim::EvEvv => "ev_evv", Prim::EvEvv;
@@ -160,11 +163,6 @@ impl Prim {
     pub fn immediates(&self) -> Immediates<'_> {
         match self {
             Prim::EvvMask(items) => Immediates::Mask(items),
-            Prim::EvNew(effect) => Immediates::Effect(*effect),
-            Prim::EvSetClause { effect, op } => Immediates::Operation {
-                effect: *effect,
-                op: *op,
-            },
             Prim::RootGet(root) | Prim::RootSet(root) => Immediates::Root(*root),
             Prim::EvvGet
             | Prim::EvvSet
@@ -205,8 +203,6 @@ impl Prim {
             Prim::EvvSet => (&[Evv], &[false], Unit, &[Unr], Unr),
             Prim::EvvEnter => (&[Evv, Ev], &[false, true], Evv, &[Unr, Lin], Unr),
             Prim::EvvMask(_) => (&[Evv], &[true], Evv, &[Unr], Unr),
-            Prim::EvNew(_) => (&[TObj, Evv], &[false, false], Ev, &[Poly, Unr], Lin),
-            Prim::EvSetClause { .. } => (&[Ev, TObj], &[true, false], Unit, &[Lin, Unr], Unr),
             Prim::EvRenew => (&[Rev, TObj], &[true, false], Ev, &[Unr, Poly], Lin),
             Prim::EvRetire => (&[Ev], &[false], Rev, &[Lin], Unr),
             Prim::EvEvv => (&[Cev], &[true], Evv, &[Unr], Unr),
@@ -290,13 +286,11 @@ mod tests {
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
         use Mark::{Lin, Poly, Unr};
-        let table: [(&str, &[Mark], Mark); 25] = [
+        let table: [(&str, &[Mark], Mark); 23] = [
             ("evv_get", &[], Unr),
             ("evv_set", &[Unr], Unr),
             ("evv_enter", &[Unr, Lin], Unr),
             ("evv_mask", &[Unr], Unr),
-            ("ev_new", &[Poly, Unr], Lin),
-            ("ev_set_clause", &[Lin, Unr], Unr),
             ("ev_renew", &[Unr, Poly], Lin),
             ("ev_retire", &[Lin], Unr),
             ("ev_evv", &[Unr], Unr),

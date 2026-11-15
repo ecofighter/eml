@@ -118,8 +118,7 @@ fn fail8(p.0: unit) -> tobj {
 fn with_outer(f.0: tobj) -> tobj {
   let w.1: evv = prim evv_get()
   dup w.1
-  let ev.2: ev lin = prim ev_new[Fail]((), w.1)
-  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &outer$entry)
+  let ev.2: ev lin = evidence Fail((), w.1) [&outer$entry]
   let w.4: evv = prim evv_enter(w.1, ev.2)
   let u.5: unit = prim evv_set(w.4)
   let x.6: tobj poly = yields apply f.0(()) prompt ev.2
@@ -140,8 +139,7 @@ fn outer$clause(n.0: tobj, s.1: unit) -> tobj {
 fn with_inner(f.0: tobj) -> tobj {
   let w.1: evv = prim evv_get()
   dup w.1
-  let ev.2: ev lin = prim ev_new[Fail]((), w.1)
-  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &inner$entry)
+  let ev.2: ev lin = evidence Fail((), w.1) [&inner$entry]
   let w.4: evv = prim evv_enter(w.1, ev.2)
   let u.5: unit = prim evv_set(w.4)
   let x.6: tobj poly = yields apply f.0(()) prompt ev.2
@@ -162,8 +160,7 @@ fn inner$clause(n.0: tobj, s.1: unit) -> tobj {
 fn try_panic(f.0: tobj, c.1: tobj) -> tobj {
   let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: ev lin = prim ev_new[Prelude.Panic](c.1, w.2)
-  let u.4: unit = prim ev_set_clause[Prelude.Panic.panicked](ev.3, &panicked$entry)
+  let ev.3: ev lin = evidence Prelude.Panic(c.1, w.2) [&panicked$entry]
   let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply f.0(()) prompt ev.3

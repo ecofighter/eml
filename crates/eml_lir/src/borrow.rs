@@ -620,21 +620,22 @@ impl Adapter {
         let mut wanted = Vec::new();
         for block in &function.blocks {
             for stmt in &block.stmts {
-                if let Stmt::Let {
-                    rhs: Rhs::MakeClosure(target, _),
-                    ..
-                } = stmt
-                    && self.has_borrowed(*target)
-                {
-                    wanted.push(*target);
-                }
-                stmt.for_each_atom(|atom| {
-                    if let Atom::Fn(target) = atom
-                        && self.has_borrowed(target)
-                    {
+                stmt.for_each_fn(|target, _| {
+                    if self.has_borrowed(target) {
                         wanted.push(target);
                     }
                 });
+                // evidenceのエントリは固定の関数なので、貸された引数を持たず写しも要らない
+                if let Stmt::Let {
+                    rhs: Rhs::Evidence { entries, .. },
+                    ..
+                } = stmt
+                {
+                    debug_assert!(
+                        entries.iter().all(|&(entry, _)| !self.has_borrowed(entry)),
+                        "an evidence entry is pinned"
+                    );
+                }
             }
             block.term.for_each_atom(|atom| {
                 if let Atom::Fn(target) = atom
@@ -675,18 +676,7 @@ impl Adapter {
         let LirFn { vars, blocks, .. } = function;
         for block in blocks {
             for stmt in &mut block.stmts {
-                if let Stmt::Let {
-                    rhs: Rhs::MakeClosure(target, _),
-                    ..
-                } = stmt
-                {
-                    *target = self.value(*target);
-                }
-                stmt.for_each_atom_mut(|atom| {
-                    if let Atom::Fn(target) = atom {
-                        *target = self.value(*target);
-                    }
-                });
+                stmt.for_each_fn_mut(|target, _| *target = self.value(*target));
             }
             block.term.for_each_atom_mut(|atom| {
                 if let Atom::Fn(target) = atom {

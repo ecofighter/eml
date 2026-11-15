@@ -65,7 +65,7 @@ fn each_form(function: &LirFn, note: &mut impl FnMut(Form, Option<&'static str>)
                     Rhs::Call(call) => call_form(call, note),
                     Rhs::Extern { ext, .. } => extern_form(*ext, note),
                     Rhs::Prim(Prim::EmptyMutArray, _) => {}
-                    Rhs::Prim(..) => note(Form::Prim, None),
+                    Rhs::Prim(..) | Rhs::Evidence { .. } => note(Form::Prim, None),
                     Rhs::MakeClosure(..)
                     | Rhs::ConstString(_)
                     | Rhs::Con { .. }

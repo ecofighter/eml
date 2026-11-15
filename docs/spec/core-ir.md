@@ -21,13 +21,13 @@
 | 種類 | 命令 |
 |---|---|
 | 文 | `let x = 右辺`、`unpack v L #t(f1, .., fn)` |
-| 右辺 | 呼び出し (`call`、`apply`、`clause`、`par`、`perform`、`resume`、`handle`)、`closure`、`con`、`const`、`extern`、`prim`、`drop` |
+| 右辺 | 呼び出し (`call`、`apply`、`clause`、`par`、`perform`、`resume`、`handle`)、`closure`、`con`、`const`、`extern`、`prim`、`evidence`、`drop` |
 | 終端 | `return a`、`jump bN(a1, .., an)`、`switch a L { #0 -> bN, #1(y1, .., yn) -> bN, _ -> bN }`、`switch a { 1 -> bN, _ -> bN }` |
 | 手放す | `drop x` (参照を1つ手放す) |
 | エフェクト (translate の出力だけ) | `perform op args`、`handle E(init, body) { 節 } return r`、`resume k(v, s)` (内部の命令)、`drop k`、呼び出しの `mask` |
-| evidence passing の出力 | `prim` (基本操作)、`clause` (節の呼び出し) |
+| evidence passingの出力 | `prim` (基本操作)、`evidence` (evidenceを作る)、`clause` (節の呼び出し) |
 
-- `perform`、`handle`、`resume`、呼び出しの `mask` は translate だけが出し、evidence passing (EP) が基本操作と節の呼び出しに置き換える (下の「evidence passing」)。`clause` と、REPL の根の2つ (`root_get`、`root_set`) と `var` の節の空の配列 (`empty_mut_array`) を除く `prim` は EP だけが出す
+- `perform`、`handle`、`resume`、呼び出しの`mask`はtranslateだけが出し、evidence passing (EP) が基本操作と`evidence`と節の呼び出しに置き換える (下の「evidence passing」)。`clause`、`evidence`と、REPLの根の2つ (`root_get`、`root_set`) と`var`の節の空の配列 (`empty_mut_array`) を除く`prim`はEPだけが出す
 - LIR との違いは、RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持たないことと、エフェクトの命令と `mask` を持つことである。RC の命令などは LIR のパスだけが入れる
 - `par` (`Call::Par`) は LIR と同じ命令で、テキストの形も同じである ([LIR](lir.md) の「LIR の命令」)。`call`、`apply`、`resume` と同じく `mask` を持てる (`mask [State] par (,) #0(f.1, g.2)`)。EP は `mask` のある `par` をほかの呼び出しと同じく包み、`mask` のない `par` はそのまま残す。子が起こせるのは `never` の操作だけで、親はそれを継続を作らずに起こし直すので、`par` は yield の地点にならない。最適化も、`par` を handler に触れない文として扱う (下の「handler への特殊化」)。その場で動く節の本体に `par` があれば、ほかの呼び出しと同じく under の形にする (下の「`perform` と節の3つの形」)
 - 関数は、名前、内部の関数かどうかの印 (`internal`。[LIR](lir.md) の「関数の ABI」)、一様な位置の始まり (`split`。[LIR](lir.md) の「関数の ABI」)、yield しうるかの印 (`yields`。下の「`yields` の印」)、エントリの関数の印 (`clause`。[LIR](lir.md) の「エントリの関数の印」)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。プログラムは、関数、エントリ、文字列の表、配置の表、構造体の形の表、エフェクトの表、ファイルの表、C の関数の表、C のハンドルの型の表を持つ。extern の行は、`extern` 命令が持つ `ExternRef` と、プログラムの C の関数の表から引く (`Program::row`)。どちらも LIR と同じ欄で、LIR への変換がそのまま写す (下の「Core IR から LIR への変換」)
@@ -135,7 +135,7 @@
 
 | 変数 | 印 | 理由 |
 |---|---|---|
-| handleの箇所の`ev_new`の結果と、`prompt$`と`resume$`のフレーム自身のevidence (`ev`) | `lin` | 実行中のevidenceの持ち主は1つで、それを1回消費する ([LIR](lir.md)の「Kind の印」) |
+| handleの箇所の`evidence`の結果と、`prompt$`と`resume$`のフレーム自身のevidence (`ev`) | `lin` | 実行中のevidenceの持ち主は1つで、それを1回消費する ([LIR](lir.md)の「Kind の印」) |
 | 節とforkのエントリのevidence、退いたevidence、`evv`、`unit`と`int`の一時変数 (`prompt$`の`s`、つまり`yield_status`の`int`を含む) | `unr` | Perceusか基本操作が`dup`する、実行系の中で共有する入れ物である。操作の節は`Unr`の値しか捕まえない ([エフェクトとhandler](effects.md)の「handler の意味」) |
 | 状態 (`ev_take_state`)、κ、`closure resume$`・`closure rewind$`・`closure mask$[..]` で作る継続、handle の箇所の `x = apply body(())`、補助の関数 (`id$`、`compose$`、`prompt$`、`resume$`、`rewind$`、`mask$[..]`) の `ret`、`x`、`k`、`r`、`v` (値) と `resume$` の `s` (状態) と戻り値 | `poly` | `FileIn` を持ちうる。in-place のエントリの状態は、translate がその状態の変数に付けた印を残す (`poly` より正確で、渡せる) |
 | ダミー (`prim dummy()`) | `poly` | 戻り値の印が `lin` の関数からも返す |
@@ -974,15 +974,14 @@ translate の `let r = handle E(init, body) { c_0, .., c_n } return ret` を、�
 
 ```
   let w0 = prim evv_get()
-  let ev = prim ev_new[E](init, w0)
-  (操作ごとに) let u_i = prim ev_set_clause[E.op_i](ev, <i 番目の in-place のエントリ>)
+  let ev = evidence E(init, w0) [<0番目のin-placeのエントリ>, .., <n番目のin-placeのエントリ>]
   let w1 = prim evv_enter(w0, ev)
   let u = prim evv_set(w1)
   let x = yields apply body(()) prompt ev
   let r = call prompt$(ev, ret, x)
 ```
 
-- `w0`は2回消費するので、Perceusが`dup`を足す。`ev`は`lin`で、`ev_set_clause`と`evv_enter`は`ev`を借りるだけなので、`ev`を消費するのは`prompt$`の呼び出しだけである ([LIR](lir.md)の「基本操作」)
+- `w0`は2回消費するので、Perceusが`dup`を足す。`ev`は`lin`で、`evv_enter`は`ev`を借りるだけなので、`ev`を消費するのは`prompt$`の呼び出しだけである ([LIR](lir.md)の「基本操作」)。エントリは操作の順に`evidence`の命令に書く ([LIR](lir.md)の「evidence を作る」)
 - `apply body(())` は yield の地点にしない。yield したかは `prompt$` が見る。`call prompt$` は、handle を含む関数が `yields` なら yield の地点である (その関数が `yields` でなければ、その row から外へ出る yield はない)
 - `apply body(())`には着地の印`prompt ev`を付ける ([LIR](lir.md)の「着地の印」)。`ev`宛ての中断は、VMの巻き戻しがこの`apply`の結果xにダミーを書いて止まり、続く`prompt$`が状態2の経路に進む ([VM](vm.md)の「巻き戻し」)。印を付けるのはEPだけで、付ける所はここと、下の「再開と状態」の`resume$`の2か所である。どちらの印もフレーム自身の`ev`で、verifierはどのビルドでも印のReprが`ev`であることを求める ([LIR](lir.md)の「verifier」)
 - 着地から`yield_finish`までの間に、呼び出しの巻き戻しの地点を通らない。印の付いた`apply`のすぐ後に`call prompt$`が続き、`prompt$`は状態1と2の経路で、`yield_finish`の前に呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを確かめるので、これに頼る ([ネイティブの実行系](native.md)の「巻き戻しの地点」)。前半は、LIRのverifierと、ネイティブの読み込みと下ろしがどのビルドでも確かめる ([LIR](lir.md)の「着地の印」)。後半はEPの単体テストが確かめる。releaseのビルドで違反したときの動きが定まらないのは、後半 (`prompt$`の本体を変えたとき) だけである
@@ -1066,8 +1065,8 @@ in-place のエントリは、translate が作った節の関数 g から、EP �
   何も呼ばず、`Pure` の extern だけを使う節 (`State` の `get` と `put`) は、under の形にしない。`evv` を読む命令がなく、中断も起こさないので、`perform` の場所の `evv` のまま動かしてよい。数を数える節 (`fn tick () st -> ((), st + 1)`) は `+` が `Panic` を起こしうるので under の形になり、桁あふれは handle の外の `try_panic` に届く
 - **再開する節** (`once` と `multi` の操作のうち、上に当たらない節): エントリの関数は、捕獲、`ev`、操作の引数を受け、`c = closure g(捕獲, 操作の引数)` を作り、`yield_to(ev, c, &id$)` を呼んで、ダミーを返す。エントリはいつも yield を始めるので、g の印によらず `yields` の印を立てる。`prompt$` が後で `apply c(k, st)` を呼ぶ。g は `k` と状態を受ける最後の2個の引数と結果が一様である。yield しうる外のエフェクトを呼ぶすぐに再開する節もここに入り、節の本体は handle の外側の `evv` で動く。under の形は、本体が yield しないすぐに再開する節だけに使う。yield する本体を under で動かすと、yield と再開のたびに `evv` を替え直す包みが要る。そのうえ再開で evidence を作り直すと、包みと節の本体が古い evidence を持ち続けるので、探し直す仕組みも要るためである
 - **`never` の節**: エントリは c を同じ形で作り、`yield_abort(ev, c)` を呼んで中断を始める。最初の κ は渡さず、`yields` の印も立てない。中断は κ を組み立てず、VM がタスクのスタックを巻き戻すので、エントリを呼んだ側に yield は返らないためである (下の「`never` の中断」)。`prompt$` が着地の後に `apply c(st)` を呼ぶ。g は状態を受ける最後の1個の引数と結果が一様である。エントリの `ret` は `obj` で、`yield_abort` の後に `prim dummy()` を返す形のままにする。`yield_abort` は戻らないので、この `return` には実行が届かない。`never` の操作の `clause` の束縛は、`OpRet::Never` なので位置と比べない。`clause` の後へ制御は戻らないので、その束縛を使う所にも実行は届かない
-- handle の場所では、節の値 c_i がどの関数のクロージャかを知る必要がある。translate は節を `&g` か、同じ関数の中の `closure g(..)` で渡すので、EP はそれを読む。そうでない形は内部の誤りとしてパニックする
-- `ev_set_clause` には、エントリの関数のクロージャ (捕獲がなければ関数の値) を渡す。捕獲は節の捕獲をそのまま写す。再開する節と `never` の節のエントリが作る c も、捕獲も操作の引数もなければ `&g` にする (`closure` は引数を1つ以上とる)
+- handleの場所では、節の値c_iがどの関数のクロージャかを知る必要がある。translateは節を`&g`か、同じ関数の中の`closure g(..)`で束縛した変数で渡すので、EPはそれを読み、その`closure`の文を除いて、エントリを`evidence`の命令に書く。そうでない形は内部の誤りとしてパニックする
+- `evidence`のエントリは、エントリの関数のクロージャ (捕獲がなければ関数の値) である。捕獲は節の捕獲をそのまま写す。再開する節と`never`の節のエントリが作るcも、捕獲も操作の引数もなければ`&g`にする (`closure`は引数を1つ以上とる)
 
 #### `never` の中断
 
@@ -1137,8 +1136,8 @@ b_fast:
 ## verifier
 
 - Core IR の verifier は2つの段を持つ。段はパスの順に並ぶ
-  - 変換の段 (`verify_translated`) は translate と `optimize` の後にかける。[LIR](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (REPL の根の `root_get` と `root_set` と、`var` の節の `empty_mut_array` を除く `prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
-  - EPの段 (`verify_evidence`) はEPの後にかける。変換の段の検査からEPが作るものの拒否を除き、基本操作と`clause`の検査 (`ev_set_clause`の値とevidenceの出どころ、`clause`の印の関数の捕獲の数を含む。[LIR](lir.md)の「verifier」) を足す。`handle`、`perform`、`resume`と、呼び出しの`mask`を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask`も同じ形)。EPの段は、LIRのverifierのエントリの規則と`callee`の規則とevidenceの役の規則を、同じ部品 (`eml_lir::check`) で確かめる ([LIR](lir.md)の「verifier」)
+  - 変換の段 (`verify_translated`) はtranslateと`optimize`の後にかける。[LIR](lir.md)の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EPが作るもの (REPLの根の`root_get`と`root_set`と、`var`の節の`empty_mut_array`を除く`prim`、`evidence`、`clause`、`clause`の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`an evidence is made before the evidence pass`、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
+  - EPの段 (`verify_evidence`) はEPの後にかける。変換の段の検査からEPが作るものの拒否を除き、基本操作と`evidence`と`clause`の検査 (`evidence`のエントリの数、エントリの関数の印、捕獲の数を含む。[LIR](lir.md)の「verifier」) を足す。`handle`、`perform`、`resume`と、呼び出しの`mask`を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask`も同じ形)。EPの段は、LIRのverifierのエントリの規則と`callee`の規則とevidenceの役の規則を、同じ部品 (`eml_lir::check`) で確かめる ([LIR](lir.md)の「verifier」)
 - 着地の印 ([LIR](lir.md)の「着地の印」) もEPが作るものなので、変換の段は拒む (`a prompt marker appears before the evidence pass`)。EPの段は、`apply`のほかの検査の後に、印の変数vが見えること、印の付いた`apply`が末尾の位置 ([LIR](lir.md)の「末尾の位置の呼び出し」) にないこと、vのReprが`ev`であること、vが呼び出しの直後で生きていることを、この順に確かめる (``an apply with the prompt marker `ev.2` is in a tail position, which leaves no frame to land on``、`` `ev.2` is the prompt marker of an apply, but it is tobj, not ev ``、`` `ev.2` is the prompt marker of an apply, but it is not used after the call ``)。生きているかは、生存解析のエントリの集合を関数ごとに1回だけ求め、ブロックの終端と後ろの文から逆にたどって決める。印の変数は呼び出しの使いではないので、生存解析は印を使いに数えない
 - 印の検査は、Core IR の2つの段で、`jump` と `return` の V2 と、作る所の検査を行う。それ以外の受け渡しは、境界に合うようになってから LIR の範囲の段で比べる。`perform`、`handle`、`resume` の受け渡しは比べず、EP がそれらを `clause` と基本操作に置き換えた後の段で比べる。`never` の操作の `perform` (変換の段) と `clause` (EP の段) の結果を束縛する変数は、使いに制御が届かないので、V2 と作る所の検査の対象にしない。V1 は `dup` と `decref` が Core IR にないので走らない ([LIR](lir.md) の「Kind の印の検査」)
 - `par` は2つの段のどちらでも受ける。`mask` を持てるのは変換の段だけである。組の構築子の検査は LIR と同じ部品で、同じ文言である ([LIR](lir.md) の「verifier」)。子の Repr と印は、境界に合うようになってから LIR の範囲の段で比べる

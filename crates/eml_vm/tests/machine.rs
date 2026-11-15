@@ -408,8 +408,7 @@ effect A { a(unit) -> unit }
 fn main() -> unit {
   let w.0: evv = prim evv_get()
   dup w.0
-  let e.1: ev lin = prim ev_new[A]((), w.0)
-  let u.5: unit = prim ev_set_clause[A.a](e.1, &a$entry)
+  let e.1: ev lin = evidence A((), w.0) [&a$entry]
   let w.2: evv = prim evv_enter(w.0, e.1)
   let u.3: unit = prim evv_set(w.2)
   let u.6: unit = drop e.1

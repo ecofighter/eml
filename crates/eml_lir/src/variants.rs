@@ -106,21 +106,24 @@ impl Maker {
         let mut sources = Vec::new();
         for block in &function.blocks {
             for stmt in &block.stmts {
-                if let Stmt::Let {
-                    var: _,
-                    rhs: Rhs::MakeClosure(target, args),
-                } = stmt
-                    && self.needs_variant(*target, args.len())
-                {
-                    sources.push(*target);
-                }
-                stmt.for_each_atom(|atom| {
-                    if let Atom::Fn(target) = atom
-                        && self.needs_variant(target, 0)
-                    {
+                stmt.for_each_fn(|target, captured| {
+                    if self.needs_variant(target, captured) {
                         sources.push(target);
                     }
                 });
+                // evidenceのエントリは節の関数で、操作のABIで呼ばれるので変種を持たない
+                if let Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Evidence { entries, .. },
+                } = stmt
+                {
+                    debug_assert!(
+                        entries
+                            .iter()
+                            .all(|&(entry, _)| program.function(entry).pinned()),
+                        "an evidence entry is pinned"
+                    );
+                }
             }
             block.term.for_each_atom(|atom| {
                 if let Atom::Fn(target) = atom
@@ -140,18 +143,7 @@ impl Maker {
             std::mem::replace(&mut program.functions[index.0 as usize], placeholder());
         for block in &mut function.blocks {
             for stmt in &mut block.stmts {
-                if let Stmt::Let {
-                    var: _,
-                    rhs: Rhs::MakeClosure(target, args),
-                } = stmt
-                {
-                    *target = self.value(*target, args.len());
-                }
-                stmt.for_each_atom_mut(|atom| {
-                    if let Atom::Fn(target) = atom {
-                        *target = self.value(*target, 0);
-                    }
-                });
+                stmt.for_each_fn_mut(|target, captured| *target = self.value(*target, captured));
             }
             block.term.for_each_atom_mut(|atom| {
                 if let Atom::Fn(target) = atom {

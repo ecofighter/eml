@@ -10,11 +10,11 @@ use crate::common::native::{
     program, visit, visit_each,
 };
 
-/// 即値の数。`evv_mask`は項目の列の長さ、`ev_new`は操作の数、`ev_set_clause`、`root_get`、`root_set`は番号である。
+/// 即値の数。`evv_mask`は項目の列とその長さ、`root_get`と`root_set`は番号である。
 fn immediates(prim: &Prim) -> usize {
     match prim.name() {
-        "evv_mask" | "ev_new" => 2,
-        "ev_set_clause" | "root_get" | "root_set" => 1,
+        "evv_mask" => 2,
+        "root_get" | "root_set" => 1,
         _ => 0,
     }
 }
@@ -54,7 +54,7 @@ fn every_prim_entry_is_named_after_its_prim() {
 
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
-/// `Counter`のエントリの関数。evidenceのエントリは、どれも`ev_new`の直後に入れる (docs/spec/lir.mdの「verifier」)。
+/// `Counter`のエントリの関数。evidenceのエントリは`evidence`の命令に書く (docs/spec/lir.mdの「evidence」)。
 /// `get`は状態を取り出して返すので、`clause Counter.get`でどのevidenceが見つかったかが分かる。
 const COUNTER_ENTRIES: &str = "\
 internal clause Counter.get fn get$entry(e.0: cev, u.1: unit) -> tobj {
@@ -127,12 +127,8 @@ fn main() -> unit {{
   let w.0: evv = prim evv_get()
   dup w.0
   dup w.0
-  let e.1: ev lin = prim ev_new[Ask]((), w.0)
-  let u.90: unit = prim ev_set_clause[Ask.ask](e.1, &ask$entry)
-  let u.91: unit = prim ev_set_clause[Ask.quit](e.1, &quit$entry)
-  let e.2: ev lin = prim ev_new[Counter]((), w.0)
-  let u.92: unit = prim ev_set_clause[Counter.get](e.2, &get$entry)
-  let u.93: unit = prim ev_set_clause[Counter.put](e.2, &put$entry)
+  let e.1: ev lin = evidence Ask((), w.0) [&ask$entry, &quit$entry]
+  let e.2: ev lin = evidence Counter((), w.0) [&get$entry, &put$entry]
   let w.30: evv = prim evv_get()
   let w.31: evv = prim evv_enter(w.30, e.1)
   let u.32: unit = prim evv_set(w.31)
@@ -181,9 +177,7 @@ fn main() -> unit {{
   let a.0: int = prim yielding()
   let w.1: evv = prim evv_get()
   dup w.1
-  let e.2: ev lin = prim ev_new[Ask]((), w.1)
-  let u.90: unit = prim ev_set_clause[Ask.ask](e.2, &ask$entry)
-  let u.91: unit = prim ev_set_clause[Ask.quit](e.2, &quit$entry)
+  let e.2: ev lin = evidence Ask((), w.1) [&ask$entry, &quit$entry]
   let w.20: evv = prim evv_get()
   let w.21: evv = prim evv_enter(w.20, e.2)
   let u.22: unit = prim evv_set(w.21)
@@ -219,9 +213,7 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let s.1: tobj = box 5
-  let e.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.4: unit = prim ev_set_clause[Counter.get](e.2, &get)
-  let u.6: unit = prim ev_set_clause[Counter.put](e.2, &put)
+  let e.2: ev lin = evidence Counter(s.1, w.0) [&get, &put]
   let w.7: evv = prim evv_enter(w.0, e.2)
   let u.8: unit = prim evv_set(w.7)
   let p.5: tobj = box 20
@@ -275,17 +267,12 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let s.1: tobj = box 1
-  let c.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.90: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
-  let u.91: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
+  let c.2: ev lin = evidence Counter(s.1, w.0) [&get$entry, &put$entry]
   let w.3: evv = prim evv_enter(w.0, c.2)
   let s.4: tobj = box 2
-  let d.5: ev lin = prim ev_new[Counter](s.4, w.0)
-  let u.92: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
-  let u.93: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
+  let d.5: ev lin = evidence Counter(s.4, w.0) [&get$entry, &put$entry]
   let w.6: evv = prim evv_enter(w.3, d.5)
-  let o.7: ev lin = prim ev_new[Other]((), w.0)
-  let u.94: unit = prim ev_set_clause[Other.ask](o.7, &ask$entry)
+  let o.7: ev lin = evidence Other((), w.0) [&ask$entry]
   let w.8: evv = prim evv_enter(w.6, o.7)
   dup w.8
   let u.9: unit = prim evv_set(w.8)
@@ -316,22 +303,16 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let s.1: tobj = box 1
-  let c.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.95: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
-  let u.96: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
+  let c.2: ev lin = evidence Counter(s.1, w.0) [&get$entry, &put$entry]
   let w.3: evv = prim evv_enter(w.0, c.2)
   let s.4: tobj = box 2
-  let d.5: ev lin = prim ev_new[Counter](s.4, w.0)
-  let u.97: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
-  let u.98: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
+  let d.5: ev lin = evidence Counter(s.4, w.0) [&get$entry, &put$entry]
   let w.6: evv = prim evv_enter(w.3, d.5)
   let s.7: tobj = box 3
-  let o.8: ev lin = prim ev_new[Other](s.7, w.0)
-  let u.99: unit = prim ev_set_clause[Other.ask](o.8, &ask$entry)
+  let o.8: ev lin = evidence Other(s.7, w.0) [&ask$entry]
   let w.9: evv = prim evv_enter(w.6, o.8)
   let s.10: tobj = box 4
-  let q.11: ev lin = prim ev_new[Other](s.10, w.0)
-  let u.100: unit = prim ev_set_clause[Other.ask](q.11, &ask$entry)
+  let q.11: ev lin = evidence Other(s.10, w.0) [&ask$entry]
   let w.12: evv = prim evv_enter(w.9, q.11)
   let m.13: evv = prim evv_mask[Counter, Other](w.12)
   decref w.12
@@ -429,12 +410,10 @@ fn f() -> int {{
   dup w.0
   dup w.0
   let s.1: tobj = box 1
-  let a.2: ev lin = prim ev_new[A](s.1, w.0)
-  let u.90: unit = prim ev_set_clause[A.a](a.2, &a$entry)
+  let a.2: ev lin = evidence A(s.1, w.0) [&a$entry]
   let w.3: evv = prim evv_enter(w.0, a.2)
   let s.4: tobj = box 2
-  let b.5: ev lin = prim ev_new[B](s.4, w.0)
-  let u.91: unit = prim ev_set_clause[B.b](b.5, &b$entry)
+  let b.5: ev lin = evidence B(s.4, w.0) [&b$entry]
   let w.6: evv = prim evv_enter(w.3, b.5)
   let u.7: unit = prim evv_set(w.6)
   let t.9: tobj = clause A.a(())
@@ -599,11 +578,8 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let s.1: tobj = box 41
-  let e.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.3: unit = prim ev_set_clause[Counter.get](e.2, {value})
   let k.10: tobj = box 0
-  let p.11: tobj = closure put$captured(k.10)
-  let u.12: unit = prim ev_set_clause[Counter.put](e.2, p.11)
+  let e.2: ev lin = evidence Counter(s.1, w.0) [{value}, closure put$captured(k.10)]
   let w.4: evv = prim evv_enter(w.0, e.2)
   let u.5: unit = prim evv_set(w.4)
   let r.8: tobj = clause Counter.get(())
@@ -650,15 +626,11 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let s.1: tobj = box 1
-  let a.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.90: unit = prim ev_set_clause[Counter.get](a.2, &get$entry)
-  let u.91: unit = prim ev_set_clause[Counter.put](a.2, &put$entry)
+  let a.2: ev lin = evidence Counter(s.1, w.0) [&get$entry, &put$entry]
   let w.3: evv = prim evv_enter(w.0, a.2)
   dup w.3
   let s.4: tobj = box 2
-  let b.5: ev lin = prim ev_new[Counter](s.4, w.3)
-  let u.6: unit = prim ev_set_clause[Counter.get](b.5, &under)
-  let u.92: unit = prim ev_set_clause[Counter.put](b.5, &put$entry)
+  let b.5: ev lin = evidence Counter(s.4, w.3) [&under, &put$entry]
   let w.7: evv = prim evv_enter(w.3, b.5)
   let u.8: unit = prim evv_set(w.7)
   let r.11: tobj = clause Counter.get(())
@@ -691,10 +663,7 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let n.1: obj = extern \"Prelude.Show Int.show\"(7)
-  let k.2: tobj = closure captured(n.1)
-  let e.3: ev lin = prim ev_new[Counter]((), w.0)
-  let u.4: unit = prim ev_set_clause[Counter.get](e.3, k.2)
-  let u.90: unit = prim ev_set_clause[Counter.put](e.3, &put$entry)
+  let e.3: ev lin = evidence Counter((), w.0) [closure captured(n.1), &put$entry]
   let w.5: evv = prim evv_enter(w.0, e.3)
   let u.6: unit = prim evv_set(w.5)
   let r.9: tobj = call ask()
@@ -725,9 +694,7 @@ fn main() -> unit {
   dup w.0
   dup w.0
   let k.1: tobj = box 2.5
-  let m.2: tobj = closure times(k.1)
-  let e.3: ev lin = prim ev_new[Scale]((), w.0)
-  let u.4: unit = prim ev_set_clause[Scale.scale](e.3, m.2)
+  let e.3: ev lin = evidence Scale((), w.0) [closure times(k.1)]
   let w.5: evv = prim evv_enter(w.0, e.3)
   let u.6: unit = prim evv_set(w.5)
   let x.9: float = clause Scale.scale(4.0)
@@ -763,18 +730,13 @@ fn main() -> unit {{
   dup w.0
   dup w.0
   let s.1: tobj = box 1
-  let c.2: ev lin = prim ev_new[Counter](s.1, w.0)
-  let u.90: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
-  let u.91: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
+  let c.2: ev lin = evidence Counter(s.1, w.0) [&get$entry, &put$entry]
   let w.3: evv = prim evv_enter(w.0, c.2)
   let s.4: tobj = box 2
-  let d.5: ev lin = prim ev_new[Counter](s.4, w.0)
-  let u.92: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
-  let u.93: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
+  let d.5: ev lin = evidence Counter(s.4, w.0) [&get$entry, &put$entry]
   let w.6: evv = prim evv_enter(w.3, d.5)
   let s.7: tobj = box 3
-  let o.8: ev lin = prim ev_new[Other](s.7, w.0)
-  let u.94: unit = prim ev_set_clause[Other.ask](o.8, &ask$entry)
+  let o.8: ev lin = evidence Other(s.7, w.0) [&ask$entry]
   let w.9: evv = prim evv_enter(w.6, o.8)
   let u.10: unit = prim evv_set(w.9)
   let a.11: tobj = clause Counter.get(())
@@ -827,8 +789,7 @@ fn main() -> unit {{
   let w.0: evv = prim evv_get()
   dup w.0
   dup w.0
-  let e.1: ev lin = prim ev_new[Fail]((), w.0)
-  let u.2: unit = prim ev_set_clause[Fail.fail](e.1, &quit)
+  let e.1: ev lin = evidence Fail((), w.0) [&quit]
   let w.3: evv = prim evv_enter(w.0, e.1)
   let u.4: unit = prim evv_set(w.3)
   let s.5: obj = extern \"Prelude.Show Int.show\"(5)
@@ -933,9 +894,7 @@ fn release_check_a_clause_entry_signature_mismatch_panics() {
         "{COUNTER}\
 fn main() -> unit {{
   let w.0: evv = prim evv_get()
-  let e.1: ev lin = prim ev_new[Counter]((), w.0)
-  let u.2: unit = prim ev_set_clause[Counter.get](e.1, &g)
-  let u.3: unit = prim ev_set_clause[Counter.put](e.1, &p)
+  let e.1: ev lin = evidence Counter((), w.0) [&g, &p]
   let u.4: unit = drop e.1
   return ()
 }}
@@ -952,53 +911,6 @@ internal clause Counter.put fn p(e.0: cev, x.1: tobj) -> unit {{
     ));
     let expected = "invalid LIR at the native load";
     assert!(message.contains(expected), "{message}");
-}
-
-/// 節の呼び出しは、エントリのクロージャを確かめずに操作のシグネチャで呼ぶので、読めない関数を入れる`ev_set_clause`は、
-/// どのビルドでも読み込みのverifierが断る (docs/spec/lir.md の「verifier」)。
-#[test]
-fn release_check_an_unreadable_clause_entry_panics() {
-    let message = load_panic(&format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  return ()
-}}
-fn f(c.0: tobj, w.1: evv) -> unit {{
-  let e.2: ev lin = prim ev_new[Counter]((), w.1)
-  let u.3: unit = prim ev_set_clause[Counter.get](e.2, c.0)
-  let u.4: unit = drop e.2
-  return ()
-}}
-"
-    ));
-    let expected = "invalid LIR at the native load";
-    assert!(message.contains(expected), "{message}");
-}
-
-/// 入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むので、ほかの最初の使いより前に
-/// エントリをすべて入れていないevidenceは、どのビルドでも読み込みのverifierが断る (docs/spec/lir.md の「verifier」)。
-#[test]
-fn release_check_an_unfilled_entry_panics() {
-    let message = load_panic(&format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  return ()
-}}
-fn f(w.0: evv) -> unit {{
-  let e.1: ev lin = prim ev_new[Counter]((), w.0)
-  let u.2: unit = prim ev_set_clause[Counter.get](e.1, &g)
-  let u.3: unit = drop e.1
-  return ()
-}}
-internal clause Counter.get fn g(e.0: cev, u.1: unit) -> tobj {{
-  decref e.0
-  return ()
-}}
-"
-    ));
-    let rule = "the `Counter.put` entry of `e.1` is not filled before `e.1` is used";
-    let expected = format!("invalid LIR at the native load: {rule} in `f`");
-    assert!(message.contains(&expected), "{message}");
 }
 
 /// `agree_source`と同じだが、先にコンパイルしたプログラムが着地の印を持つ巻き戻しの地点を持つことを確かめる。optimizeは
@@ -1126,8 +1038,7 @@ fn main() -> unit {{
   let s.0: obj = extern \"Prelude.Show Int.show\"(9)
   let w.1: evv = prim evv_get()
   dup w.1
-  let ev.2: ev lin = prim ev_new[Fail]((), w.1)
-  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &fail$entry)
+  let ev.2: ev lin = evidence Fail((), w.1) [&fail$entry]
   let w.4: evv = prim evv_enter(w.1, ev.2)
   let u.5: unit = prim evv_set(w.4)
   let x.6: tobj = yields apply &body(()) prompt ev.2
@@ -1325,8 +1236,7 @@ fn make() -> obj {
 fn probe(s.0: obj) -> unit {
   let w.1: evv = prim evv_get()
   dup w.1
-  let ev.2: ev lin = prim ev_new[Fail]((), w.1)
-  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &fail$entry)
+  let ev.2: ev lin = evidence Fail((), w.1) [&fail$entry]
   let w.4: evv = prim evv_enter(w.1, ev.2)
   let u.5: unit = prim evv_set(w.4)
   let x.6: tobj = yields apply &inner(s.0) prompt ev.2
@@ -1337,8 +1247,7 @@ fn probe(s.0: obj) -> unit {
 yields fn inner(s.0: tobj) -> tobj {
   let w.1: evv = prim evv_get()
   dup w.1
-  let ev.2: ev lin = prim ev_new[Inner](s.0, w.1)
-  let u.3: unit = prim ev_set_clause[Inner.op](ev.2, &op$entry)
+  let ev.2: ev lin = evidence Inner(s.0, w.1) [&op$entry]
   let w.4: evv = prim evv_enter(w.1, ev.2)
   let u.5: unit = prim evv_set(w.4)
   let x.6: tobj = yields apply &fail(()) prompt ev.2
@@ -1372,14 +1281,14 @@ fn prompt$(ev.0: ev lin, x.1: tobj) -> tobj {
     // `fail`は`evv_mask[Fail]`で内側のhandlerを飛ばし、外側のevidenceへ中断する
     let same = text
         .replace(
-            "prim ev_new[Inner](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[Inner.op](ev.2, &op$entry)",
-            "prim ev_new[Fail](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &fail$entry)",
+            "evidence Inner(s.0, w.1) [&op$entry]",
+            "evidence Fail(s.0, w.1) [&fail$entry]",
         )
         .replace(
             "  decref u.0\n  tail clause Fail.fail(())",
             "  decref u.0\n  let w.3: evv = prim evv_get()\n  let m.4: evv = prim evv_mask[Fail](w.3)\n  decref w.3\n  let u.5: unit = prim evv_set(m.4)\n  tail clause Fail.fail(())",
         );
-    assert!(same.contains("ev_new[Fail](s.0") && same.contains("evv_mask[Fail]"));
+    assert!(same.contains("evidence Fail(s.0") && same.contains("evv_mask[Fail]"));
     let (finished, record) = visit_each(&same, &["make", "probe"], state_released, None);
     finished.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(
@@ -1427,8 +1336,7 @@ fn main() -> unit {{
 fn run(b.0: tobj) -> obj {{
   let w.1: evv = prim evv_get()
   dup w.1
-  let ev.2: ev lin = prim ev_new[Fail]((), w.1)
-  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &fail$entry)
+  let ev.2: ev lin = evidence Fail((), w.1) [&fail$entry]
   let w.4: evv = prim evv_enter(w.1, ev.2)
   let u.5: unit = prim evv_set(w.4)
   let x.6: tobj = yields apply b.0(()) prompt ev.2
@@ -1468,9 +1376,7 @@ yields fn g(u.0: tobj) -> tobj {{
   return u.0
 }}
 fn f(w.2: evv) -> tobj {{
-  let ev.0: ev lin = prim ev_new[Counter]((), w.2)
-  let u.3: unit = prim ev_set_clause[Counter.get](ev.0, &get$entry)
-  let u.4: unit = prim ev_set_clause[Counter.put](ev.0, &put$entry)
+  let ev.0: ev lin = evidence Counter((), w.2) [&get$entry, &put$entry]
   let x.1: tobj = yields apply &g(()) prompt ev.0
   let u.5: unit = drop ev.0
   return x.1

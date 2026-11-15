@@ -13,20 +13,11 @@ fn Std.Async.start_task(f.0: tobj poly) -> unit {
   let c.1: tobj poly = closure Std.Async.start_task$handle0(f.0)
   let w.3: evv = prim evv_get()
   dup w.3
-  let ev.4: ev lin = prim ev_new[Std.Async.Async]((), w.3)
-  let u.5: unit = prim ev_set_clause[Std.Async.Async.await_cell](ev.4, &Std.Async.start_task$handle0$await_cell$entry)
-  let u.6: unit = prim ev_set_clause[Std.Async.Async.reschedule](ev.4, &Std.Async.start_task$handle0$reschedule$entry)
-  let u.7: unit = prim ev_set_clause[Std.Async.Async.await_time](ev.4, &Std.Async.start_task$handle0$await_time$entry)
-  let u.8: unit = prim ev_set_clause[Std.Async.Async.await_drain](ev.4, &Std.Async.start_task$handle0$await_drain$entry)
-  let u.9: unit = prim ev_set_clause[Std.Async.Async.await_send](ev.4, &Std.Async.start_task$handle0$await_send$entry)
-  let u.10: unit = prim ev_set_clause[Std.Async.Async.await_recv](ev.4, &Std.Async.start_task$handle0$await_recv$entry)
-  let u.11: unit = prim ev_set_clause[Std.Async.Async.await_io](ev.4, &Std.Async.start_task$handle0$await_io$entry)
-  let u.12: unit = prim ev_set_clause[Std.Async.Async.await_io_until](ev.4, &Std.Async.start_task$handle0$await_io_until$entry)
-  let u.13: unit = prim ev_set_clause[Std.Async.Async.await_signal](ev.4, &Std.Async.start_task$handle0$await_signal$entry)
-  let w.14: evv = prim evv_enter(w.3, ev.4)
-  let u.15: unit = prim evv_set(w.14)
-  let x.16: tobj poly = yields apply c.1(()) prompt ev.4
-  tail call prompt$(ev.4, &Std.Async.start_task$handle0$return, x.16)
+  let ev.4: ev lin = evidence Std.Async.Async((), w.3) [&Std.Async.start_task$handle0$await_cell$entry, &Std.Async.start_task$handle0$reschedule$entry, &Std.Async.start_task$handle0$await_time$entry, &Std.Async.start_task$handle0$await_drain$entry, &Std.Async.start_task$handle0$await_send$entry, &Std.Async.start_task$handle0$await_recv$entry, &Std.Async.start_task$handle0$await_io$entry, &Std.Async.start_task$handle0$await_io_until$entry, &Std.Async.start_task$handle0$await_signal$entry]
+  let w.5: evv = prim evv_enter(w.3, ev.4)
+  let u.6: unit = prim evv_set(w.5)
+  let x.7: tobj poly = yields apply c.1(()) prompt ev.4
+  tail call prompt$(ev.4, &Std.Async.start_task$handle0$return, x.7)
 }
 fn Std.Async.resume_task(k.0: tobj lin, w.1: enum) -> unit {
   let w.3: tobj = box w.1
@@ -186,22 +177,20 @@ b6:
 yields fn "Prelude.try_io@#70c9981cb5940bd2"() -> obj {
   let w.3: evv = prim evv_get()
   dup w.3
-  let ev.4: ev lin = prim ev_new[Prelude.IO]((), w.3)
-  let u.5: unit = prim ev_set_clause[Prelude.IO.io_failed](ev.4, &"Prelude.try_io@#b12fbf5b85ccaa63$entry")
-  let w.6: evv = prim evv_enter(w.3, ev.4)
-  let u.7: unit = prim evv_set(w.6)
-  let x.8: tobj poly = yields apply &"Prelude.try_io@#1e74c3d30a482244"(()) prompt ev.4
-  tail call prompt$(ev.4, &"Prelude.try_io@#4d6854fb746ffdb8", x.8)
+  let ev.4: ev lin = evidence Prelude.IO((), w.3) [&"Prelude.try_io@#b12fbf5b85ccaa63$entry"]
+  let w.5: evv = prim evv_enter(w.3, ev.4)
+  let u.6: unit = prim evv_set(w.5)
+  let x.7: tobj poly = yields apply &"Prelude.try_io@#1e74c3d30a482244"(()) prompt ev.4
+  tail call prompt$(ev.4, &"Prelude.try_io@#4d6854fb746ffdb8", x.7)
 }
 yields fn "Prelude.try_panic@[Unit]<e>{0=main$lambda0}"() -> obj {
   let w.3: evv = prim evv_get()
   dup w.3
-  let ev.4: ev lin = prim ev_new[Prelude.Panic]((), w.3)
-  let u.5: unit = prim ev_set_clause[Prelude.Panic.panicked](ev.4, &"Prelude.try_panic@#b463fd5a69ae6ed2$entry")
-  let w.6: evv = prim evv_enter(w.3, ev.4)
-  let u.7: unit = prim evv_set(w.6)
-  let x.8: tobj poly = yields apply &"Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}"(()) prompt ev.4
-  tail call prompt$(ev.4, &"Prelude.try_panic@#64740e57080cab89", x.8)
+  let ev.4: ev lin = evidence Prelude.Panic((), w.3) [&"Prelude.try_panic@#b463fd5a69ae6ed2$entry"]
+  let w.5: evv = prim evv_enter(w.3, ev.4)
+  let u.6: unit = prim evv_set(w.5)
+  let x.7: tobj poly = yields apply &"Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}"(()) prompt ev.4
+  tail call prompt$(ev.4, &"Prelude.try_panic@#64740e57080cab89", x.7)
 }
 internal yields uniform from 0 fn "Prelude.try_io@#1e74c3d30a482244"(p.1: unit) -> obj {
   tail call "Prelude.try_panic@[Unit]<e>{0=main$lambda0}"()

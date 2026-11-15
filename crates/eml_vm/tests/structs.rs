@@ -323,8 +323,7 @@ effect E {{ op(unit) -> unit }}
 fn main() -> unit {{
   let w.0: evv = prim evv_get()
   dup w.0
-  let e.1: ev lin = prim ev_new[E]((), w.0)
-  let u.9: unit = prim ev_set_clause[E.op](e.1, &op$entry)
+  let e.1: ev lin = evidence E((), w.0) [&op$entry]
   let w.10: evv = prim evv_get()
   let w.11: evv = prim evv_enter(w.10, e.1)
   let u.12: unit = prim evv_set(w.11)
