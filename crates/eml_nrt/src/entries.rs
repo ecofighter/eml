@@ -36,6 +36,21 @@ macro_rules! __kind {
     (token) => {
         $crate::Kind::I64
     };
+    (ev) => {
+        $crate::Kind::I64
+    };
+    (cev) => {
+        $crate::Kind::I64
+    };
+    (fev) => {
+        $crate::Kind::I64
+    };
+    (rev) => {
+        $crate::Kind::I64
+    };
+    (evv) => {
+        $crate::Kind::I64
+    };
     (unit) => {
         $crate::Kind::I64
     };
@@ -57,7 +72,7 @@ macro_rules! __kind {
 }
 
 /// 引数と結果のRustの型。`i64`と`f64`のほかに、行の表が書くReprの名前も受ける。ほかのトークンはコンパイルの誤りになる。
-/// 機械の型はどの引数も`i64`か`f64`だが、物体の語 (`obj`、`tobj`、`token`) のRustの型は`Word`である。`Word`は
+/// 機械の型はどの引数も`i64`か`f64`だが、物体の語 (`obj`、`tobj`、`token`と文脈のRepr) のRustの型は`Word`である。`Word`は
 /// `repr(transparent)`のポインタなので、どの対象でも`i64`と同じ渡し方で、語のprovenanceが入口をまたいで残る。引数の
 /// `ptr`は語の並びへのポインタで、Rustの型は`*const Word`なので、それを通して読む語もprovenanceを保つ。引数の`dtor`は
 /// ハンドルの型のdtorかなしで、Rustの型は`Option<eml_rows::ffi::Dtor>`である。関数ポインタの`Option`はポインタと同じ
@@ -87,6 +102,21 @@ macro_rules! __ty {
         $crate::__rt::Word
     };
     (token) => {
+        $crate::__rt::Word
+    };
+    (ev) => {
+        $crate::__rt::Word
+    };
+    (cev) => {
+        $crate::__rt::Word
+    };
+    (fev) => {
+        $crate::__rt::Word
+    };
+    (rev) => {
+        $crate::__rt::Word
+    };
+    (evv) => {
         $crate::__rt::Word
     };
     (ptr) => {
@@ -642,7 +672,7 @@ mod tests {
     #[test]
     fn the_effect_entries_install_and_find_a_handler() {
         use crate::effects::{
-            ev_clause, ev_lookup, ev_new, ev_set_clause, evv_get, evv_push, evv_set,
+            ev_clause, ev_lookup, ev_new, ev_set_clause, evv_enter, evv_get, evv_set,
         };
         use crate::heap::eml_rt_decref;
         let mut ctx = ctx();
@@ -654,7 +684,7 @@ mod tests {
             let ev = ev_new(c, 3, 1, Word::imm(7), outer);
             let clause = closure(c, 2, false);
             ev_set_clause(c, ev, 0, clause);
-            let installed = evv_push(c, evv_get(c), ev);
+            let installed = evv_enter(c, evv_get(c), ev);
             evv_set(c, installed);
             let found = ev_lookup(c, 3);
             let found_clause = ev_clause(c, found, 0);
@@ -663,6 +693,7 @@ mod tests {
             eml_rt_decref(c, found_clause);
             eml_rt_decref(c, found);
             evv_set(c, Word::UNIT);
+            eml_rt_decref(c, ev);
             assert_eq!(live(&mut *c), []);
             assert_eq!((*c).take_fault(), None);
         }

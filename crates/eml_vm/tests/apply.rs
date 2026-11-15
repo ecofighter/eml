@@ -244,15 +244,16 @@ fn main() -> tobj {
   tail apply &leave(b.0)
 }
 fn leave(x.0: tobj) -> tobj {
-  let w.1: tobj = prim evv_get()
+  let w.1: evv = prim evv_get()
   dup w.1
-  let e.2: obj = prim ev_new[E]((), w.1)
+  let e.2: ev lin = prim ev_new[E]((), w.1)
   let u.5: unit = prim ev_set_clause[E.op](e.2, &op$entry)
-  let w.3: tobj = prim evv_push(w.1, e.2)
+  let w.3: evv = prim evv_enter(w.1, e.2)
   let u.4: unit = prim evv_set(w.3)
+  let u.6: unit = drop e.2
   return x.0
 }
-internal clause E.op fn op$entry(e.0: obj, u.1: unit) -> unit {
+internal clause E.op fn op$entry(e.0: cev, u.1: unit) -> unit {
   decref e.0
   return ()
 }

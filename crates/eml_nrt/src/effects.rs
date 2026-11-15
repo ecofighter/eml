@@ -27,7 +27,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::evv_get`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn evv_get(ctx) -> tobj {
+    pub(crate) shim fn evv_get(ctx) -> evv {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.evv_get() }
     }
@@ -36,18 +36,18 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::evv_set`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn evv_set(ctx, l: tobj) {
+    pub(crate) shim fn evv_set(ctx, l: evv) {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.evv_set(l) }
     }
 
-    /// リスト`l`の先頭にevidence `e`を足した`evv`を返す。`l`と`e`の参照は消費する。
+    /// リスト`l`の先頭にevidence `e`の節点を足した`evv`を返す。`l`は消費し、`e`は借りる。節点の参照は`Ctx`が足す。
     ///
     /// # Safety
-    /// `Ctx::evv_push`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn evv_push(ctx, l: tobj, e: obj) -> tobj {
+    /// `Ctx::evv_enter`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
+    pub(crate) shim fn evv_enter(ctx, l: evv, e: ev) -> evv {
         // SAFETY: 呼ぶ側の約束
-        unsafe { ctx.evv_push(l, e) }
+        unsafe { ctx.evv_enter(l, e) }
     }
 
     /// リスト`w`から`items`の項目に当たるevidenceを飛ばした`evv`を返す。
@@ -55,7 +55,7 @@ crate::entries! {
     /// # Safety
     /// `Ctx::evv_mask`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。加えて、`items`は
     /// 生きている`MaskItem`を`n`個並べた領域の先頭で、`n`個の項目はこの呼び出しの間変わらない。
-    pub(crate) shim fn evv_mask(ctx, items: ptr, n: i64, w: tobj) -> tobj {
+    pub(crate) shim fn evv_mask(ctx, items: ptr, n: i64, w: evv) -> evv {
         let n = usize::try_from(n).map_err(|_| HeapError::BadEvidence)?;
         // SAFETY: 呼ぶ側の約束。生成したコードは`MaskItem`と同じ並びの行を、8に揃えた領域に置く
         let items = unsafe { std::slice::from_raw_parts(items.cast::<MaskItem>(), n) };
@@ -68,7 +68,7 @@ crate::entries! {
     /// # Safety
     /// `Ctx::ev_new`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。`effect`が65535以上の番号なら
     /// 参照を手放さずに致命的な誤りで終わる。
-    pub(crate) shim fn ev_new(ctx, effect: i64, n_ops: i64, state: tobj, outer: tobj) -> obj {
+    pub(crate) shim fn ev_new(ctx, effect: i64, n_ops: i64, state: tobj, outer: evv) -> ev {
         let effect = effect_number(effect)?;
         let n_ops = operation_index(n_ops)?;
         // SAFETY: 呼ぶ側の約束
@@ -79,7 +79,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_set_clause`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_set_clause(ctx, ev: obj, op: i64, c: tobj) {
+    pub(crate) shim fn ev_set_clause(ctx, ev: ev, op: i64, c: tobj) {
         let op = operation_index(op)?;
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_set_clause(ev, op, c) }
@@ -89,9 +89,19 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_renew`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_renew(ctx, ev: obj, state: tobj) -> obj {
+    pub(crate) shim fn ev_renew(ctx, ev: rev, state: tobj) -> ev {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_renew(ev, state) }
+    }
+
+    /// 状態と外側のリストが`()`のevidence`ev`を退かせ、退いたevidenceを返す。`ev`は消費する。状態か外側のリストがまだ残
+    /// るevidenceは、どちらのモードでも致命的な誤りで終わる。
+    ///
+    /// # Safety
+    /// `Ctx::ev_retire`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
+    pub(crate) shim fn ev_retire(ctx, ev: ev) -> rev {
+        // SAFETY: 呼ぶ側の約束
+        unsafe { ctx.ev_retire(ev) }
     }
 
     /// 今の`evv`をたどり、エフェクト`effect`の最初のevidenceを`dup`して返す。
@@ -119,7 +129,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_evv`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_evv(ctx, ev: obj) -> tobj {
+    pub(crate) shim fn ev_evv(ctx, ev: cev) -> evv {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_evv(ev) }
     }
@@ -128,7 +138,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_take_evv`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_take_evv(ctx, ev: obj) -> tobj {
+    pub(crate) shim fn ev_take_evv(ctx, ev: ev) -> evv {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_take_evv(ev) }
     }
@@ -137,7 +147,16 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_take_state`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_take_state(ctx, ev: obj) -> tobj {
+    pub(crate) shim fn ev_take_state(ctx, ev: cev) -> tobj {
+        // SAFETY: 呼ぶ側の約束
+        unsafe { ctx.ev_take_state(ev) }
+    }
+
+    /// `Ctx::ev_take_state`の持ち主の行。フレーム自身のevidence`ev`の状態を返し、その欄を`()`にする。`ev`は借りる。
+    ///
+    /// # Safety
+    /// `Ctx::ev_take_state`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
+    pub(crate) shim fn ev_last_state(ctx, ev: ev) -> tobj {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_take_state(ev) }
     }
@@ -146,7 +165,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_set_state`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_set_state(ctx, ev: obj, s: tobj) {
+    pub(crate) shim fn ev_set_state(ctx, ev: cev, s: tobj) {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_set_state(ev, s) }
     }
@@ -155,7 +174,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::yield_to`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn yield_to(ctx, ev: obj, clause: tobj, k: tobj) {
+    pub(crate) shim fn yield_to(ctx, ev: cev, clause: tobj, k: tobj) {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.yield_to(ev, clause, k) }
     }
@@ -164,7 +183,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::yield_abort`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn yield_abort(ctx, ev: obj, clause: tobj) {
+    pub(crate) shim fn yield_abort(ctx, ev: cev, clause: tobj) {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.yield_abort(ev, clause) }
     }

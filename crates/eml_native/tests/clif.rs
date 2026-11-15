@@ -1151,26 +1151,26 @@ b2:
 #[test]
 fn a_landing_point() {
     // 着地の印を持つ`apply`の後、中断の確かめの冷たいブロックは`target`をロードして印`ev.0`と比べる。着地のブロックは
-    // `eml_nrt_landed`を呼び、そのダミーを結果として熱いブロックへ飛ぶ。もう一方のブロックは`eml_rt_ev_take_state`で
+    // `eml_nrt_landed`を呼び、そのダミーを結果として熱いブロックへ飛ぶ。もう一方のブロックは`eml_rt_ev_last_state`で
     // handlerの状態を取り出して手放し、フレームが持つものを手放して戻る。熱い道はほかの呼び出しと同じである
     let text = "\
 effect Land { land(unit) -> tobj }
 yields fn g(u.0: tobj) -> tobj {
   return u.0
 }
-fn prompt$(ev.0: obj, x.1: tobj) -> tobj {
-  decref ev.0
+fn prompt$(ev.0: ev lin, x.1: tobj) -> tobj {
+  let u.2: unit = drop ev.0
   return x.1
 }
-fn f(w.4: tobj, s.1: obj) -> obj {
-  let ev.0: obj = prim ev_new[Land]((), w.4)
+fn f(w.4: evv, s.1: obj) -> obj {
+  let ev.0: ev lin = prim ev_new[Land]((), w.4)
   let u.5: unit = prim ev_set_clause[Land.land](ev.0, &land$entry)
   let x.2: tobj = yields apply &g(()) prompt ev.0
   let r.3: tobj = call prompt$(ev.0, x.2)
   decref r.3
   return s.1
 }
-internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {
+internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
   decref e.0
   return ()
 }
@@ -1197,7 +1197,7 @@ internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {
         fn4 = %eml_rt_ev_set_clause sig4
         fn5 = colocated %eml$apply$1 sig6
         fn6 = %eml_nrt_landed sig7
-        fn7 = %eml_rt_ev_take_state sig8
+        fn7 = %eml_rt_ev_last_state sig8
         fn8 = colocated %f:prompt$ sig9
 
     block0(v0: i64, v1: i64, v2: i64):

@@ -24,8 +24,8 @@ b4:
   return t.2
 }
 yields fn "masked@[Unit]<e>"(f.0: tobj poly) -> unit {
-  let w.2: tobj = prim evv_get()
-  let w.3: tobj = prim evv_mask[Ask](w.2)
+  let w.2: evv = prim evv_get()
+  let w.3: evv = prim evv_mask[Ask](w.2)
   let u.4: unit = prim evv_set(w.3)
   let t.1: unit = yields apply f.0(())
   let y.6: int = prim yielding()
@@ -42,12 +42,11 @@ b2:
   return t.1
 }
 yields fn rehandle(p.0: unit) -> unit {
-  let w.2: tobj = prim evv_get()
+  let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: obj = prim ev_new[Ask]((), w.2)
+  let ev.3: ev lin = prim ev_new[Ask]((), w.2)
   let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &rehandle$handle0$ask$entry)
-  dup ev.3
-  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply &rehandle$handle0(()) prompt ev.3
   tail call prompt$(ev.3, &rehandle$handle0$return, x.7)
@@ -55,12 +54,11 @@ yields fn rehandle(p.0: unit) -> unit {
 yields fn "resumer<e>"(body.0: tobj poly, after.1: tobj) -> unit {
   let c.2: tobj poly = closure "resumer<e>$handle1"(body.0)
   let c.3: tobj = closure "resumer<e>$handle1$yield$entry"(after.1)
-  let w.5: tobj = prim evv_get()
+  let w.5: evv = prim evv_get()
   dup w.5
-  let ev.6: obj = prim ev_new[Yield]((), w.5)
+  let ev.6: ev lin = prim ev_new[Yield]((), w.5)
   let u.7: unit = prim ev_set_clause[Yield.yield](ev.6, c.3)
-  dup ev.6
-  let w.8: tobj = prim evv_push(w.5, ev.6)
+  let w.8: evv = prim evv_enter(w.5, ev.6)
   let u.9: unit = prim evv_set(w.8)
   let x.10: tobj poly = yields apply c.2(()) prompt ev.6
   tail call prompt$(ev.6, &"resumer<e>$handle1$return", x.10)
@@ -108,12 +106,11 @@ b6:
   tail call "masked@[Unit]<e>"(&asker)
 }
 yields fn main(p.0: unit) -> unit {
-  let w.2: tobj = prim evv_get()
+  let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: obj = prim ev_new[Ask]((), w.2)
+  let ev.3: ev lin = prim ev_new[Ask]((), w.2)
   let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &main$handle1$ask$entry)
-  dup ev.3
-  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply &main$handle1(()) prompt ev.3
   tail call prompt$(ev.3, &main$handle1$return, x.7)
@@ -121,7 +118,7 @@ yields fn main(p.0: unit) -> unit {
 internal yields fn rehandle$handle0(p.0: unit) -> unit {
   tail call asker(())
 }
-internal yields clause Ask.ask fn rehandle$handle0$ask$entry(e.5: obj, p.0: unit) -> obj {
+internal yields clause Ask.ask fn rehandle$handle0$ask$entry(e.5: cev, p.0: unit) -> obj {
   let p.2: unit = prim ev_take_state(e.5)
   let s.3: obj = const "new"
   let u.6: unit = prim ev_set_state(e.5, ())
@@ -136,12 +133,11 @@ internal yields fn "resumer<e>$handle1"(body.0: tobj poly, p.1: unit) -> unit {
 }
 internal yields fn "resumer<e>$handle1$yield"(after.0: tobj, p.1: unit, k.2: tobj lin, p.3: unit) -> unit {
   let c.4: tobj lin = closure "resumer<e>$handle0"(k.2)
-  let w.7: tobj = prim evv_get()
+  let w.7: evv = prim evv_get()
   dup w.7
-  let ev.8: obj = prim ev_new[Ask]((), w.7)
+  let ev.8: ev lin = prim ev_new[Ask]((), w.7)
   let u.9: unit = prim ev_set_clause[Ask.ask](ev.8, &"resumer<e>$handle0$ask$entry")
-  dup ev.8
-  let w.10: tobj = prim evv_push(w.7, ev.8)
+  let w.10: evv = prim evv_enter(w.7, ev.8)
   let u.11: unit = prim evv_set(w.10)
   let x.12: tobj poly = yields apply c.4(()) prompt ev.8
   let t.5: unit = call prompt$(ev.8, &"resumer<e>$handle0$return", x.12)
@@ -157,8 +153,8 @@ b2:
   tail yields apply after.0(())
 }
 internal yields fn "resumer<e>$handle0"(k.0: tobj lin, p.1: unit) -> unit {
-  let w.3: tobj = prim evv_get()
-  let w.4: tobj = prim evv_mask[Ask](w.3)
+  let w.3: evv = prim evv_get()
+  let w.4: evv = prim evv_mask[Ask](w.3)
   let u.5: unit = prim evv_set(w.4)
   let t.2: unit = yields apply k.0((), ())
   let y.7: int = prim yielding()
@@ -174,7 +170,7 @@ b2:
   let u.6: unit = prim evv_set(w.3)
   return t.2
 }
-internal yields clause Ask.ask fn "resumer<e>$handle0$ask$entry"(e.5: obj, p.0: unit) -> obj {
+internal yields clause Ask.ask fn "resumer<e>$handle0$ask$entry"(e.5: cev, p.0: unit) -> obj {
   let p.2: unit = prim ev_take_state(e.5)
   let s.3: obj = const "clause"
   let u.6: unit = prim ev_set_state(e.5, ())
@@ -188,12 +184,11 @@ internal yields fn "resumer<e>$handle1$return"($r.0: unit, p.1: unit) -> unit {
   return $r.0
 }
 internal yields fn main$handle1(p.0: unit) -> unit {
-  let w.2: tobj = prim evv_get()
+  let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: obj = prim ev_new[Ask]((), w.2)
+  let ev.3: ev lin = prim ev_new[Ask]((), w.2)
   let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &main$handle0$ask$entry)
-  dup ev.3
-  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply &main$handle0(()) prompt ev.3
   tail call prompt$(ev.3, &main$handle0$return, x.7)
@@ -201,7 +196,7 @@ internal yields fn main$handle1(p.0: unit) -> unit {
 internal yields fn main$handle0(p.0: unit) -> unit {
   tail call body(())
 }
-internal yields clause Ask.ask fn main$handle0$ask$entry(e.5: obj, p.0: unit) -> obj {
+internal yields clause Ask.ask fn main$handle0$ask$entry(e.5: cev, p.0: unit) -> obj {
   let p.2: unit = prim ev_take_state(e.5)
   let s.3: obj = const "inner"
   let u.6: unit = prim ev_set_state(e.5, ())
@@ -211,7 +206,7 @@ internal yields clause Ask.ask fn main$handle0$ask$entry(e.5: obj, p.0: unit) ->
 internal yields fn main$handle0$return($r.0: unit, p.1: unit) -> unit {
   return $r.0
 }
-internal yields clause Ask.ask fn main$handle1$ask$entry(e.5: obj, p.0: unit) -> obj {
+internal yields clause Ask.ask fn main$handle1$ask$entry(e.5: cev, p.0: unit) -> obj {
   let p.2: unit = prim ev_take_state(e.5)
   let s.3: obj = const "outer"
   let u.6: unit = prim ev_set_state(e.5, ())
@@ -227,7 +222,7 @@ yields fn entry$main() -> unit {
 yields fn id$(x.0: tobj poly) -> tobj poly {
   return x.0
 }
-internal yields clause Yield.yield fn "resumer<e>$handle1$yield$entry"(after.0: tobj, e.1: obj, p.2: unit) -> unit {
+internal yields clause Yield.yield fn "resumer<e>$handle1$yield$entry"(after.0: tobj, e.1: cev, p.2: unit) -> unit {
   let c.3: tobj = closure "resumer<e>$handle1$yield"(after.0, p.2)
   let u.4: unit = prim yield_to(e.1, c.3, &id$)
   return ()
@@ -265,8 +260,8 @@ internal yields fn "masked@[Unit]<e>$k0"(t.0: unit) -> unit {
   return t.0
 }
 yields fn "mask$[Ask]"(k.0: tobj poly, v.1: tobj poly) -> tobj poly {
-  let w.2: tobj = prim evv_get()
-  let m.3: tobj = prim evv_mask[Ask](w.2)
+  let w.2: evv = prim evv_get()
+  let m.3: evv = prim evv_mask[Ask](w.2)
   let u.4: unit = prim evv_set(m.3)
   let r.5: tobj poly = yields apply k.0(v.1)
   let y.6: int = prim yielding()
@@ -283,21 +278,22 @@ b2:
   let u.12: unit = prim evv_set(w.2)
   return r.5
 }
-yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
-  let w.3: tobj = prim ev_take_evv(ev.0)
+yields fn prompt$(ev.0: ev lin, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: evv = prim ev_take_evv(ev.0)
   let u.4: unit = prim evv_set(w.3)
   let s.5: int = prim yield_status(ev.0)
   switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
 b1:
-  let st.6: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.6: tobj poly = prim ev_last_state(ev.0)
+  let u.27: unit = drop ev.0
   tail yields apply ret.1(x.2, st.6)
 b2:
   let u.8: unit = drop x.2
   let k.9: tobj poly = prim yield_cont_take()
   let c.10: tobj poly = prim yield_finish()
-  let st.11: tobj poly = prim ev_take_state(ev.0)
-  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  let st.11: tobj poly = prim ev_last_state(ev.0)
+  let h.28: rev = prim ev_retire(ev.0)
+  let k.12: tobj poly = closure resume$(h.28, ret.1, k.9)
   tail yields apply c.10(k.12, st.11)
 b3:
   let u.14: unit = drop ret.1
@@ -305,30 +301,30 @@ b3:
   let k.16: tobj poly = prim yield_cont_take()
   let u.17: unit = drop k.16
   let c.18: tobj poly = prim yield_finish()
-  let st.19: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.19: tobj poly = prim ev_last_state(ev.0)
+  let u.29: unit = drop ev.0
   tail yields apply c.18(st.19)
 b4:
   let u.21: unit = drop x.2
-  let st.22: tobj poly = prim ev_take_state(ev.0)
+  let st.22: tobj poly = prim ev_last_state(ev.0)
   let k.23: tobj poly = prim yield_cont_take()
-  let k.24: tobj poly = closure rewind$(ev.0, ret.1, st.22, k.23)
+  let h.30: rev = prim ev_retire(ev.0)
+  let k.24: tobj poly = closure rewind$(h.30, ret.1, st.22, k.23)
   let u.25: unit = prim yield_cont_set(k.24)
   let d.26: obj poly = prim dummy()
   return d.26
 }
-yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
-  let e.5: obj = prim ev_renew(ev.0, s.4)
-  decref ev.0
-  let w.6: tobj = prim evv_get()
-  dup e.5
-  let w.7: tobj = prim evv_push(w.6, e.5)
+yields fn resume$(h.0: rev, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: ev lin = prim ev_renew(h.0, s.4)
+  decref h.0
+  let w.6: evv = prim evv_get()
+  let w.7: evv = prim evv_enter(w.6, e.5)
   let u.8: unit = prim evv_set(w.7)
   let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
   tail call prompt$(e.5, ret.1, x.9)
 }
-yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
-  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+yields fn rewind$(h.0: rev, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(h.0, ret.1, k.3, v.4, s.2)
 }
 internal yields fn yielder$k0(t.0: unit) -> unit {
   tail call asker(())

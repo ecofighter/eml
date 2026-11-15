@@ -1,8 +1,8 @@
-//! EP が作る補助の関数の中身 (docs/spec/core-ir.md の「EP が作る補助の関数」)。どれも `yields` の印を立て、
-//! `internal` にしない。多くの定義から直接呼ばれるためである。evidence を受ける引数は `obj`、ほかの引数と `ret` は
-//! `tobj` で、どれも一様である。印は evidence の引数が `unr`、ほかの引数と `ret` が `poly` である。κ や状態は `FileIn` を
-//! 持ちうるためである (docs/spec/core-ir.md の「EP が足す変数の印」)。中の
-//! `apply` はどれも印を立てる。補助の関数は作るときに最終の形にするので、yield の確認と遅い道もここで置き、後で分けない。
+//! EPが作る補助の関数の中身 (docs/spec/core-ir.mdの「EP が作る補助の関数」)。どれも`yields`の印を立て、`internal`にしな
+//! い。多くの定義から直接呼ばれるためである。`prompt$`はフレーム自身のevidenceを`ev`で受け、その印は`lin`である。
+//! `resume$`と`rewind$`は退いたevidenceを`rev`で受ける。ほかの引数と`ret`は`tobj`で、印は`poly`である。κや状態は
+//! `FileIn`を持ちうるためである (docs/spec/core-ir.mdの「EP が足す変数の印」)。中の`apply`はどれも印を立てる。補助の関
+//! 数は作るときに最終の形にするので、yieldの確認と遅い道もここで置き、後で分けない。
 
 use crate::builder::FnBuilder;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
@@ -42,32 +42,20 @@ pub(super) fn compose(compose: FnIdx) -> CoreFn {
     b.finish(EP_COMPOSE.to_string(), false, true, Repr::TObj, Mark::Poly)
 }
 
-/// `prompt$(ev, ret, x)`。`ev` の外側の `evv` を `ev_take_evv` で取り出して `evv` に戻し、`yield_status(ev)` で4つに
-/// 分ける (docs/spec/core-ir.md の「handle と `prompt$`」)。外側を `ev` に残さないのは、値から届く evidence を退いた
-/// ものだけにするためである (docs/spec/object-model.md の「evidence の3つの物体」)。状態 1、2、3 の道では `x` はダミーで使われないので、道の先頭で
-/// drop する。`x` は `poly` なので、Perceus の `decref` には任せない。ダミーの drop は何もしない。中断の道では `ret` も
-/// 使われないので drop する。捕まえたハンドルを閉じる本当の後始末はこれだけである
-/// (docs/spec/core-ir.md の「EP の明示の `drop`」)。
+/// `prompt$(ev, ret, x)`。`ev`の外側の`evv`を`ev_take_evv`で取り出して`evv`に戻し、`yield_status(ev)`で4つに分ける (
+/// docs/spec/core-ir.mdの「handle と `prompt$`」)。どの道も`ev_last_state`で状態を取り出す。道0と2は`ev`をdropし、道1と
+/// 3は`ev_retire`で退かせて、継続は退いたevidenceを捕獲する。値から届くevidenceを退いたものだけにするためである (
+/// docs/spec/object-model.mdの「evidence の3つの物体」)。状態1、2、3の道では`x`はダミーで使われないので、道の先頭でdrop
+/// する。`x`は`poly`なので、Perceusの`decref`には任せない。ダミーのdropは何もしない。中断の道では`ret`も使われないので
+/// dropする。捕まえたハンドルを閉じる本当の後始末はこれだけである (docs/spec/core-ir.mdの「EP の明示の `drop`」)。
 pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();
-    let ev = b.param(VarInfo::new("ev", Repr::Obj, Mark::Unr));
+    let ev = b.param(VarInfo::new("ev", Repr::Ev, Mark::Lin));
     let ret = b.param(VarInfo::new("ret", Repr::TObj, Mark::Poly));
     let x = b.param(VarInfo::new("x", Repr::TObj, Mark::Poly));
-    let w = prim(
-        &mut b,
-        "w",
-        Repr::TObj,
-        Prim::EvTakeEvv,
-        vec![Atom::Var(ev)],
-    );
-    prim(&mut b, "u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(w)]);
-    let status = prim(
-        &mut b,
-        "s",
-        Repr::Int,
-        Prim::YieldStatus,
-        vec![Atom::Var(ev)],
-    );
+    let w = prim(&mut b, "w", Prim::EvTakeEvv, vec![Atom::Var(ev)]);
+    prim(&mut b, "u", Prim::EvvSet, vec![Atom::Var(w)]);
+    let status = prim(&mut b, "s", Prim::YieldStatus, vec![Atom::Var(ev)]);
     let targets: Vec<_> = (0..4).map(|_| b.new_block()).collect();
     b.terminate(Term::Switch {
         scrutinee: Atom::Var(status),
@@ -84,7 +72,8 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
 
     // yield していない
     b.reopen(targets[0]);
-    let state = take_state(&mut b, ev);
+    let state = last_state(&mut b, ev);
+    drop(&mut b, ev);
     let r = apply(&mut b, "r", ret, vec![Atom::Var(x), Atom::Var(state)]);
     b.terminate(Term::Return(Atom::Var(r)));
 
@@ -92,12 +81,13 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
     b.reopen(targets[1]);
     drop(&mut b, x);
     let k = take(&mut b);
-    let clause = prim(&mut b, "c", Repr::TObj, Prim::YieldFinish, Vec::new());
-    let state = take_state(&mut b, ev);
+    let clause = prim(&mut b, "c", Prim::YieldFinish, Vec::new());
+    let state = last_state(&mut b, ev);
+    let retired = retire(&mut b, ev);
     let resumption = closure(
         &mut b,
         resume,
-        vec![Atom::Var(ev), Atom::Var(ret), Atom::Var(k)],
+        vec![Atom::Var(retired), Atom::Var(ret), Atom::Var(k)],
     );
     let r = apply(
         &mut b,
@@ -112,21 +102,23 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
     b.reopen(targets[2]);
     drop(&mut b, ret);
     drop(&mut b, x);
-    let clause = prim(&mut b, "c", Repr::TObj, Prim::YieldFinish, Vec::new());
-    let state = take_state(&mut b, ev);
+    let clause = prim(&mut b, "c", Prim::YieldFinish, Vec::new());
+    let state = last_state(&mut b, ev);
+    drop(&mut b, ev);
     let r = apply(&mut b, "r", clause, vec![Atom::Var(state)]);
     b.terminate(Term::Return(Atom::Var(r)));
 
     // ほかの宛先。再開されたら `rewind$` が今の状態で handler をつなぎ直す
     b.reopen(targets[3]);
     drop(&mut b, x);
-    let state = take_state(&mut b, ev);
+    let state = last_state(&mut b, ev);
     let k = take(&mut b);
+    let retired = retire(&mut b, ev);
     let rebuilt = closure(
         &mut b,
         rewind,
         vec![
-            Atom::Var(ev),
+            Atom::Var(retired),
             Atom::Var(ret),
             Atom::Var(state),
             Atom::Var(k),
@@ -140,7 +132,7 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
 /// `prompt$` に渡す (docs/spec/core-ir.md の「再開と状態」)。
 pub(super) fn resume(prompt: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();
-    let ev = b.param(VarInfo::new("ev", Repr::Obj, Mark::Unr));
+    let retired = b.param(VarInfo::new("h", Repr::Rev, Mark::Unr));
     let ret = b.param(VarInfo::new("ret", Repr::TObj, Mark::Poly));
     let k = b.param(VarInfo::new("k", Repr::TObj, Mark::Poly));
     let v = b.param(VarInfo::new("v", Repr::TObj, Mark::Poly));
@@ -148,25 +140,17 @@ pub(super) fn resume(prompt: FnIdx) -> CoreFn {
     let renewed = prim(
         &mut b,
         "e",
-        Repr::Obj,
         Prim::EvRenew,
-        vec![Atom::Var(ev), Atom::Var(s)],
+        vec![Atom::Var(retired), Atom::Var(s)],
     );
-    let w = prim(&mut b, "w", Repr::TObj, Prim::EvvGet, Vec::new());
+    let w = prim(&mut b, "w", Prim::EvvGet, Vec::new());
     let pushed = prim(
         &mut b,
         "w",
-        Repr::TObj,
-        Prim::EvvPush,
+        Prim::EvvEnter,
         vec![Atom::Var(w), Atom::Var(renewed)],
     );
-    prim(
-        &mut b,
-        "u",
-        Repr::Unit,
-        Prim::EvvSet,
-        vec![Atom::Var(pushed)],
-    );
+    prim(&mut b, "u", Prim::EvvSet, vec![Atom::Var(pushed)]);
     let x = apply_marked(&mut b, "x", k, vec![Atom::Var(v)], Some(renewed));
     let r = bind(
         &mut b,
@@ -186,7 +170,7 @@ pub(super) fn resume(prompt: FnIdx) -> CoreFn {
 /// `resume$` を呼ぶ。
 pub(super) fn rewind(resume: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();
-    let ev = b.param(VarInfo::new("ev", Repr::Obj, Mark::Unr));
+    let retired = b.param(VarInfo::new("h", Repr::Rev, Mark::Unr));
     let ret = b.param(VarInfo::new("ret", Repr::TObj, Mark::Poly));
     let s = b.param(VarInfo::new("s", Repr::TObj, Mark::Poly));
     let k = b.param(VarInfo::new("k", Repr::TObj, Mark::Poly));
@@ -198,7 +182,7 @@ pub(super) fn rewind(resume: FnIdx) -> CoreFn {
         Mark::Poly,
         direct(
             resume,
-            [ev, ret, k, v, s].into_iter().map(Atom::Var).collect(),
+            [retired, ret, k, v, s].into_iter().map(Atom::Var).collect(),
         ),
     );
     b.terminate(Term::Return(Atom::Var(r)));
@@ -216,21 +200,14 @@ pub(super) fn mask(mask: FnIdx, name: String, items: &[MaskItem]) -> CoreFn {
     let mut b = FnBuilder::new();
     let k = b.param(VarInfo::new("k", Repr::TObj, Mark::Poly));
     let v = b.param(VarInfo::new("v", Repr::TObj, Mark::Poly));
-    let w = prim(&mut b, "w", Repr::TObj, Prim::EvvGet, Vec::new());
+    let w = prim(&mut b, "w", Prim::EvvGet, Vec::new());
     let masked = prim(
         &mut b,
         "m",
-        Repr::TObj,
         Prim::EvvMask(items.to_vec()),
         vec![Atom::Var(w)],
     );
-    prim(
-        &mut b,
-        "u",
-        Repr::Unit,
-        Prim::EvvSet,
-        vec![Atom::Var(masked)],
-    );
+    prim(&mut b, "u", Prim::EvvSet, vec![Atom::Var(masked)]);
     let r = apply(&mut b, "r", k, vec![Atom::Var(v)]);
     let (slow, fast) = check(&mut b);
     b.reopen(slow);
@@ -240,7 +217,7 @@ pub(super) fn mask(mask: FnIdx, name: String, items: &[MaskItem]) -> CoreFn {
     let rebuilt = closure(&mut b, mask, vec![Atom::Var(taken)]);
     yield_dummy(&mut b, rebuilt);
     b.reopen(fast);
-    prim(&mut b, "u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(w)]);
+    prim(&mut b, "u", Prim::EvvSet, vec![Atom::Var(w)]);
     b.terminate(Term::Return(Atom::Var(r)));
     b.finish(name, false, true, Repr::TObj, Mark::Poly)
 }
@@ -249,10 +226,10 @@ fn bind(b: &mut FnBuilder, name: &str, repr: Repr, mark: Mark, rhs: Rhs) -> VarI
     b.bind(VarInfo::new(name, repr, mark), rhs)
 }
 
-/// 結果の印は基本操作の表の印である。表は EP が自分の変数に付ける印と同じに作ってある。
-fn prim(b: &mut FnBuilder, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) -> VarId {
-    let mark = prim.row().ret_mark;
-    bind(b, name, repr, mark, Rhs::Prim(prim, args))
+/// 結果のReprと印は基本操作の表の行のものである。表はEPが自分の変数に付けるReprと印と同じに作ってある。
+fn prim(b: &mut FnBuilder, name: &str, prim: Prim, args: Vec<Atom>) -> VarId {
+    let row = prim.row();
+    bind(b, name, row.ret, row.ret_mark, Rhs::Prim(prim, args))
 }
 
 /// κ を包むクロージャ。
@@ -288,16 +265,20 @@ fn apply_marked(
 }
 
 fn take(b: &mut FnBuilder) -> VarId {
-    prim(b, "k", Repr::TObj, Prim::YieldContTake, Vec::new())
+    prim(b, "k", Prim::YieldContTake, Vec::new())
 }
 
-fn take_state(b: &mut FnBuilder, ev: VarId) -> VarId {
-    prim(b, "st", Repr::TObj, Prim::EvTakeState, vec![Atom::Var(ev)])
+fn last_state(b: &mut FnBuilder, ev: VarId) -> VarId {
+    prim(b, "st", Prim::EvLastState, vec![Atom::Var(ev)])
+}
+
+fn retire(b: &mut FnBuilder, ev: VarId) -> VarId {
+    prim(b, "h", Prim::EvRetire, vec![Atom::Var(ev)])
 }
 
 /// 直前の呼び出しが yield したかで分ける。遅い道と速い道のブロックを、この順に作って返す。
 fn check(b: &mut FnBuilder) -> (BlockId, BlockId) {
-    let yielding = prim(b, "y", Repr::Int, Prim::Yielding, Vec::new());
+    let yielding = prim(b, "y", Prim::Yielding, Vec::new());
     let slow = b.new_block();
     let fast = b.new_block();
     b.terminate(yield_switch(yielding, fast, slow));
@@ -306,7 +287,7 @@ fn check(b: &mut FnBuilder) -> (BlockId, BlockId) {
 
 /// 作り直した κ を戻し、ダミーを返して今のブロックを閉じる。
 fn yield_dummy(b: &mut FnBuilder, k: VarId) {
-    prim(b, "u", Repr::Unit, Prim::YieldContSet, vec![Atom::Var(k)]);
+    prim(b, "u", Prim::YieldContSet, vec![Atom::Var(k)]);
     let value = dummy(Repr::TObj, |info, rhs| {
         let var = b.var(info);
         b.emit(Stmt::Let { var, rhs });

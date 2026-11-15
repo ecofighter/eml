@@ -9,7 +9,8 @@ use crate::{Mark, MaskItem, Repr};
 pub enum Prim {
     EvvGet,
     EvvSet,
-    EvvPush,
+    /// 借りたevidenceの節点をリストの先頭に足す。節点の参照はランタイムが自分で取る (docs/spec/lir.mdの「基本操作」)。
+    EvvEnter,
     /// 飛ばす項目。呼び出しの `mask` と同じく、空でなく、エフェクトの番号の真に昇順に並ぶ。
     EvvMask(Vec<MaskItem>),
     EvNew(u32),
@@ -18,9 +19,13 @@ pub enum Prim {
         op: u32,
     },
     EvRenew,
+    /// 状態と外側のリストを取り出し終えた持ち主のevidenceを退かせる (docs/spec/lir.mdの「基本操作」)。
+    EvRetire,
     EvEvv,
     EvTakeEvv,
     EvTakeState,
+    /// `Ctx::ev_take_state`の持ち主の行。フレーム自身のevidenceの状態を取り出す。
+    EvLastState,
     EvSetState,
     Yielding,
     YieldStatus,
@@ -83,8 +88,8 @@ pub struct PrimRow {
     /// (docs/spec/lir.md の「基本操作」)。
     pub borrowed: &'static [bool],
     pub ret: Repr,
-    /// 引数ごとの印で、長さは `params` と同じである。evidence と `evv` の位置は `unr`、状態、継続、節の本体の位置は
-    /// `poly` である。evidence passing が自分の変数に付ける印と同じなので、`prim` の検査が evidence passing 自身を確かめる
+    /// 引数ごとの印で、長さは`params`と同じである。`ev`の位置は`lin`、ほかのevidenceと`evv`の位置は`unr`、状態、継続、
+    /// 節の本体の位置は`poly`である。evidence passingが自分の変数に付ける印と同じなので、`prim`の検査がevidence passing自身を確かめる
     /// (docs/spec/lir.md の「基本操作」)。
     pub param_marks: &'static [Mark],
     pub ret_mark: Mark,
@@ -121,14 +126,16 @@ macro_rules! kinds {
 kinds! {
     Prim::EvvGet => "evv_get", Prim::EvvGet;
     Prim::EvvSet => "evv_set", Prim::EvvSet;
-    Prim::EvvPush => "evv_push", Prim::EvvPush;
+    Prim::EvvEnter => "evv_enter", Prim::EvvEnter;
     Prim::EvvMask(_) => "evv_mask", Prim::EvvMask(Vec::new());
     Prim::EvNew(_) => "ev_new", Prim::EvNew(0);
     Prim::EvSetClause { .. } => "ev_set_clause", Prim::EvSetClause { effect: 0, op: 0 };
     Prim::EvRenew => "ev_renew", Prim::EvRenew;
+    Prim::EvRetire => "ev_retire", Prim::EvRetire;
     Prim::EvEvv => "ev_evv", Prim::EvEvv;
     Prim::EvTakeEvv => "ev_take_evv", Prim::EvTakeEvv;
     Prim::EvTakeState => "ev_take_state", Prim::EvTakeState;
+    Prim::EvLastState => "ev_last_state", Prim::EvLastState;
     Prim::EvSetState => "ev_set_state", Prim::EvSetState;
     Prim::Yielding => "yielding", Prim::Yielding;
     Prim::YieldStatus => "yield_status", Prim::YieldStatus;
@@ -161,11 +168,13 @@ impl Prim {
             Prim::RootGet(root) | Prim::RootSet(root) => Immediates::Root(*root),
             Prim::EvvGet
             | Prim::EvvSet
-            | Prim::EvvPush
+            | Prim::EvvEnter
             | Prim::EvRenew
+            | Prim::EvRetire
             | Prim::EvEvv
             | Prim::EvTakeEvv
             | Prim::EvTakeState
+            | Prim::EvLastState
             | Prim::EvSetState
             | Prim::Yielding
             | Prim::YieldStatus
@@ -182,7 +191,7 @@ impl Prim {
 
     pub fn row(&self) -> PrimRow {
         use Mark::{Lin, Poly, Unr};
-        use Repr::{Int, Obj, TObj, Unit};
+        use Repr::{Cev, Ev, Evv, Fev, Int, Obj, Rev, TObj, Unit};
         const NONE: &[bool] = &[];
         const NO_MARKS: &[Mark] = &[];
         let (params, borrowed, ret, param_marks, ret_mark): (
@@ -192,27 +201,29 @@ impl Prim {
             &'static [Mark],
             Mark,
         ) = match self {
-            Prim::EvvGet => (&[], NONE, TObj, NO_MARKS, Unr),
-            Prim::EvvSet => (&[TObj], &[false], Unit, &[Unr], Unr),
-            Prim::EvvPush => (&[TObj, Obj], &[false, false], TObj, &[Unr, Unr], Unr),
-            Prim::EvvMask(_) => (&[TObj], &[true], TObj, &[Unr], Unr),
-            Prim::EvNew(_) => (&[TObj, TObj], &[false, false], Obj, &[Poly, Unr], Unr),
-            Prim::EvSetClause { .. } => (&[Obj, TObj], &[true, false], Unit, &[Unr, Unr], Unr),
-            Prim::EvRenew => (&[Obj, TObj], &[true, false], Obj, &[Unr, Poly], Unr),
-            Prim::EvEvv => (&[Obj], &[true], TObj, &[Unr], Unr),
-            Prim::EvTakeEvv => (&[Obj], &[true], TObj, &[Unr], Unr),
-            Prim::EvTakeState => (&[Obj], &[true], TObj, &[Unr], Poly),
-            Prim::EvSetState => (&[Obj, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
+            Prim::EvvGet => (&[], NONE, Evv, NO_MARKS, Unr),
+            Prim::EvvSet => (&[Evv], &[false], Unit, &[Unr], Unr),
+            Prim::EvvEnter => (&[Evv, Ev], &[false, true], Evv, &[Unr, Lin], Unr),
+            Prim::EvvMask(_) => (&[Evv], &[true], Evv, &[Unr], Unr),
+            Prim::EvNew(_) => (&[TObj, Evv], &[false, false], Ev, &[Poly, Unr], Lin),
+            Prim::EvSetClause { .. } => (&[Ev, TObj], &[true, false], Unit, &[Lin, Unr], Unr),
+            Prim::EvRenew => (&[Rev, TObj], &[true, false], Ev, &[Unr, Poly], Lin),
+            Prim::EvRetire => (&[Ev], &[false], Rev, &[Lin], Unr),
+            Prim::EvEvv => (&[Cev], &[true], Evv, &[Unr], Unr),
+            Prim::EvTakeEvv => (&[Ev], &[true], Evv, &[Lin], Unr),
+            Prim::EvTakeState => (&[Cev], &[true], TObj, &[Unr], Poly),
+            Prim::EvLastState => (&[Ev], &[true], TObj, &[Lin], Poly),
+            Prim::EvSetState => (&[Cev, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
             Prim::Yielding => (&[], NONE, Int, NO_MARKS, Unr),
-            Prim::YieldStatus => (&[Obj], &[true], Int, &[Unr], Unr),
+            Prim::YieldStatus => (&[Ev], &[true], Int, &[Lin], Unr),
             Prim::YieldTo => (
-                &[Obj, TObj, TObj],
+                &[Cev, TObj, TObj],
                 &[false, false, false],
                 Unit,
                 &[Unr, Poly, Poly],
                 Unr,
             ),
-            Prim::YieldAbort => (&[Obj, TObj], &[false, false], Unit, &[Unr, Poly], Unr),
+            Prim::YieldAbort => (&[Cev, TObj], &[false, false], Unit, &[Unr, Poly], Unr),
             Prim::YieldContTake => (&[], NONE, TObj, NO_MARKS, Poly),
             Prim::YieldContSet => (&[TObj], &[false], Unit, &[Poly], Unr),
             Prim::YieldFinish => (&[], NONE, TObj, NO_MARKS, Poly),
@@ -223,7 +234,7 @@ impl Prim {
             // 結果は `MutArray` の値なので `lin` である
             Prim::EmptyMutArray => (&[], NONE, Obj, NO_MARKS, Lin),
             // evidence は節のエントリが持ち続けるので借りる。操作の引数を捕まえた起こし直しの閉包は親に渡る
-            Prim::ChildAbort => (&[Obj, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
+            Prim::ChildAbort => (&[Fev, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
         };
         PrimRow {
             params,
@@ -274,25 +285,27 @@ mod tests {
         }
     }
 
-    /// 状態、κ、節の本体の位置だけが `poly` で、ほかは `unr` である。根の位置も `unr` である。空の配列の結果だけが
-    /// `lin` である (docs/spec/lir.md の「基本操作」)。
+    /// 状態、κ、節の本体の位置だけが`poly`で、`ev`の位置と結果、空の配列の結果が`lin`で、ほかは`unr`である。根の
+    /// 位置も`unr`である (docs/spec/lir.mdの「基本操作」)。
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
         use Mark::{Lin, Poly, Unr};
-        let table: [(&str, &[Mark], Mark); 23] = [
+        let table: [(&str, &[Mark], Mark); 25] = [
             ("evv_get", &[], Unr),
             ("evv_set", &[Unr], Unr),
-            ("evv_push", &[Unr, Unr], Unr),
+            ("evv_enter", &[Unr, Lin], Unr),
             ("evv_mask", &[Unr], Unr),
-            ("ev_new", &[Poly, Unr], Unr),
-            ("ev_set_clause", &[Unr, Unr], Unr),
-            ("ev_renew", &[Unr, Poly], Unr),
+            ("ev_new", &[Poly, Unr], Lin),
+            ("ev_set_clause", &[Lin, Unr], Unr),
+            ("ev_renew", &[Unr, Poly], Lin),
+            ("ev_retire", &[Lin], Unr),
             ("ev_evv", &[Unr], Unr),
-            ("ev_take_evv", &[Unr], Unr),
+            ("ev_take_evv", &[Lin], Unr),
             ("ev_take_state", &[Unr], Poly),
+            ("ev_last_state", &[Lin], Poly),
             ("ev_set_state", &[Unr, Poly], Unr),
             ("yielding", &[], Unr),
-            ("yield_status", &[Unr], Unr),
+            ("yield_status", &[Lin], Unr),
             ("yield_to", &[Unr, Poly, Poly], Unr),
             ("yield_abort", &[Unr, Poly], Unr),
             ("yield_cont_take", &[], Poly),

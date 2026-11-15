@@ -343,18 +343,18 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     let params = function.params().to_vec();
     let captures = params.len() - operation_params - 2;
     let state = params[params.len() - 1];
-    let evidence = fresh(&mut function.vars, "e", Repr::Obj, Mark::Unr);
+    let evidence = fresh(&mut function.vars, "e", Repr::Cev, Mark::Unr);
     let outer_evv = under.then(|| {
         let w = fresh(
             &mut function.vars,
             "w",
-            Repr::TObj,
+            Prim::EvvGet.row().ret,
             Prim::EvvGet.row().ret_mark,
         );
         let o = fresh(
             &mut function.vars,
             "o",
-            Repr::TObj,
+            Prim::EvEvv.row().ret,
             Prim::EvEvv.row().ret_mark,
         );
         (w, o)
@@ -517,7 +517,7 @@ fn yielding_entry(
     for &param in &params[..captures] {
         args.push(Atom::Var(b.param(function.vars[param.0 as usize].clone())));
     }
-    let evidence = b.param(VarInfo::new("e", Repr::Obj, Mark::Unr));
+    let evidence = b.param(VarInfo::new("e", Repr::Cev, Mark::Unr));
     for (&param, &repr) in params[captures..].iter().zip(&operation.params) {
         let VarInfo { name, mark, .. } = &function.vars[param.0 as usize];
         args.push(Atom::Var(b.param(VarInfo::new(name, repr, *mark))));
@@ -591,10 +591,10 @@ impl Out<'_> {
         var
     }
 
-    /// 結果の印は基本操作の表の印である。evidence、`evv`、エントリのクロージャは `unr` になる。
-    fn prim(&mut self, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) -> VarId {
-        let mark = prim.row().ret_mark;
-        self.bind(name, repr, mark, Rhs::Prim(prim, args))
+    /// 結果のReprと印は基本操作の表の行のものである。evidenceは`lin`の`ev`、`evv`は`unr`になる。
+    fn prim(&mut self, name: &str, prim: Prim, args: Vec<Atom>) -> VarId {
+        let row = prim.row();
+        self.bind(name, row.ret, row.ret_mark, Rhs::Prim(prim, args))
     }
 
     /// 新しい evidence にエントリを入れて `evv` の先頭に足し、本体を呼んで、その結果を `prompt$` に渡す。本体の
@@ -612,17 +612,11 @@ impl Out<'_> {
         ret: Atom,
         prompt: FnIdx,
     ) {
-        let outer = self.prim("w", Repr::TObj, Prim::EvvGet, Vec::new());
-        let evidence = self.prim(
-            "ev",
-            Repr::Obj,
-            Prim::EvNew(effect),
-            vec![init, Atom::Var(outer)],
-        );
+        let outer = self.prim("w", Prim::EvvGet, Vec::new());
+        let evidence = self.prim("ev", Prim::EvNew(effect), vec![init, Atom::Var(outer)]);
         for (op, entry) in entries.enumerate() {
             self.prim(
                 "u",
-                Repr::Unit,
                 Prim::EvSetClause {
                     effect,
                     op: op as u32,
@@ -632,11 +626,10 @@ impl Out<'_> {
         }
         let pushed = self.prim(
             "w",
-            Repr::TObj,
-            Prim::EvvPush,
+            Prim::EvvEnter,
             vec![Atom::Var(outer), Atom::Var(evidence)],
         );
-        self.prim("u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(pushed)]);
+        self.prim("u", Prim::EvvSet, vec![Atom::Var(pushed)]);
         annotations
             .not_yield_points
             .insert((block, self.stmts.len()));
@@ -685,14 +678,9 @@ impl Out<'_> {
             });
             return;
         }
-        let outer = self.prim("w", Repr::TObj, Prim::EvvGet, Vec::new());
-        let masked = self.prim(
-            "w",
-            Repr::TObj,
-            Prim::EvvMask(mask.clone()),
-            vec![Atom::Var(outer)],
-        );
-        self.prim("u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(masked)]);
+        let outer = self.prim("w", Prim::EvvGet, Vec::new());
+        let masked = self.prim("w", Prim::EvvMask(mask.clone()), vec![Atom::Var(outer)]);
+        self.prim("u", Prim::EvvSet, vec![Atom::Var(masked)]);
         // 子は親へ yield しないので、`par` は `mask` があっても地点にしない (docs/spec/core-ir.md の「yield の地点」)
         if yields && !matches!(target, Call::Par { .. }) {
             let at = (block, self.stmts.len());
@@ -703,6 +691,6 @@ impl Out<'_> {
             var: result,
             rhs: Rhs::call(target),
         });
-        self.prim("u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(outer)]);
+        self.prim("u", Prim::EvvSet, vec![Atom::Var(outer)]);
     }
 }

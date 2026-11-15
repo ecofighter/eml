@@ -1,8 +1,8 @@
 //! 結合テストの入力 (translate の出力の形) からは作れないものを確かめる。handle と perform の変換が使う補助の関数と、
 //! その変換が付ける `Annotations` と、節の呼び出しの地点である。
 
-use crate::{Program, parse, pretty, verify_evidence};
-use eml_lir::{BlockId, FnIdx, MaskItem};
+use crate::{Program, Rhs, Stmt, Term, parse, pretty, verify_evidence};
+use eml_lir::{BlockId, FnIdx, MaskItem, Prim};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::Helpers;
@@ -54,55 +54,59 @@ fn helpers_have_their_final_form() {
     yields fn id$(x.0: tobj poly) -> tobj poly {
       return x.0
     }
-    yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
-      let w.3: tobj = prim ev_take_evv(ev.0)
+    yields fn prompt$(ev.0: ev lin, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+      let w.3: evv = prim ev_take_evv(ev.0)
       let u.4: unit = prim evv_set(w.3)
       let s.5: int = prim yield_status(ev.0)
       switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
     b1:
-      let st.6: tobj poly = prim ev_take_state(ev.0)
-      let r.7: tobj poly = yields apply ret.1(x.2, st.6)
-      return r.7
+      let st.6: tobj poly = prim ev_last_state(ev.0)
+      let u.7: unit = drop ev.0
+      let r.8: tobj poly = yields apply ret.1(x.2, st.6)
+      return r.8
     b2:
-      let u.8: unit = drop x.2
-      let k.9: tobj poly = prim yield_cont_take()
-      let c.10: tobj poly = prim yield_finish()
-      let st.11: tobj poly = prim ev_take_state(ev.0)
-      let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
-      let r.13: tobj poly = yields apply c.10(k.12, st.11)
-      return r.13
+      let u.9: unit = drop x.2
+      let k.10: tobj poly = prim yield_cont_take()
+      let c.11: tobj poly = prim yield_finish()
+      let st.12: tobj poly = prim ev_last_state(ev.0)
+      let h.13: rev = prim ev_retire(ev.0)
+      let k.14: tobj poly = closure resume$(h.13, ret.1, k.10)
+      let r.15: tobj poly = yields apply c.11(k.14, st.12)
+      return r.15
     b3:
-      let u.14: unit = drop ret.1
-      let u.15: unit = drop x.2
-      let c.16: tobj poly = prim yield_finish()
-      let st.17: tobj poly = prim ev_take_state(ev.0)
-      let r.18: tobj poly = yields apply c.16(st.17)
-      return r.18
+      let u.16: unit = drop ret.1
+      let u.17: unit = drop x.2
+      let c.18: tobj poly = prim yield_finish()
+      let st.19: tobj poly = prim ev_last_state(ev.0)
+      let u.20: unit = drop ev.0
+      let r.21: tobj poly = yields apply c.18(st.19)
+      return r.21
     b4:
-      let u.19: unit = drop x.2
-      let st.20: tobj poly = prim ev_take_state(ev.0)
-      let k.21: tobj poly = prim yield_cont_take()
-      let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
-      let u.23: unit = prim yield_cont_set(k.22)
-      let d.24: obj poly = prim dummy()
-      return d.24
+      let u.22: unit = drop x.2
+      let st.23: tobj poly = prim ev_last_state(ev.0)
+      let k.24: tobj poly = prim yield_cont_take()
+      let h.25: rev = prim ev_retire(ev.0)
+      let k.26: tobj poly = closure rewind$(h.25, ret.1, st.23, k.24)
+      let u.27: unit = prim yield_cont_set(k.26)
+      let d.28: obj poly = prim dummy()
+      return d.28
     }
-    yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
-      let e.5: obj = prim ev_renew(ev.0, s.4)
-      let w.6: tobj = prim evv_get()
-      let w.7: tobj = prim evv_push(w.6, e.5)
+    yields fn resume$(h.0: rev, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+      let e.5: ev lin = prim ev_renew(h.0, s.4)
+      let w.6: evv = prim evv_get()
+      let w.7: evv = prim evv_enter(w.6, e.5)
       let u.8: unit = prim evv_set(w.7)
       let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
       let r.10: tobj poly = call prompt$(e.5, ret.1, x.9)
       return r.10
     }
-    yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
-      let r.5: tobj poly = call resume$(ev.0, ret.1, k.3, v.4, s.2)
+    yields fn rewind$(h.0: rev, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+      let r.5: tobj poly = call resume$(h.0, ret.1, k.3, v.4, s.2)
       return r.5
     }
     yields fn "mask$[State]"(k.0: tobj poly, v.1: tobj poly) -> tobj poly {
-      let w.2: tobj = prim evv_get()
-      let m.3: tobj = prim evv_mask[State](w.2)
+      let w.2: evv = prim evv_get()
+      let m.3: evv = prim evv_mask[State](w.2)
       let u.4: unit = prim evv_set(m.3)
       let r.5: tobj poly = yields apply k.0(v.1)
       let y.6: int = prim yielding()
@@ -212,8 +216,8 @@ yields fn f(a.0: int, h.1: tobj) -> int {
       return s.4
     }
     yields fn "mask$[State]"(k.0: tobj poly, v.1: tobj poly) -> tobj poly {
-      let w.2: tobj = prim evv_get()
-      let m.3: tobj = prim evv_mask[State](w.2)
+      let w.2: evv = prim evv_get()
+      let m.3: evv = prim evv_mask[State](w.2)
       let u.4: unit = prim evv_set(m.3)
       let r.5: tobj poly = yields apply k.0(v.1)
       let y.6: int = prim yielding()
@@ -364,14 +368,15 @@ yields fn f() -> tobj lin {
 #[test]
 fn prompt_drops_x_on_its_yield_paths_and_ret_on_abort() {
     // 状態 1、2、3 の道の `x` はいつもダミーで、状態 2 (中断) の道では `return` の節のクロージャ `ret` も使われない。
-    // どれも `poly` なので、Perceus の `decref` でなく EP の drop で道の先頭で手放す
-    // (docs/spec/core-ir.md の「EP の明示の `drop`」)
+    // どれも`poly`なので、Perceusの`decref`でなくEPのdropで道の先頭で手放す。`lin`の`ev`は、状態0と2の道で
+    // 状態を読んだ後にdropし、ほかの道では退かせる (docs/spec/core-ir.mdの「EP の明示の `drop`」)
     let mut program =
         program("effect State { get(unit) -> tobj }\nfn main() -> unit {\n  return ()\n}\n");
     Helpers::default().prompt(&mut program);
     let shown = pretty(&program);
-    assert!(
-        drops(&block_lines(&shown, "prompt$", "b1")).is_empty(),
+    assert_eq!(
+        drops(&block_lines(&shown, "prompt$", "b1")),
+        ["ev.0"],
         "{shown}"
     );
     for (label, expected) in [
@@ -386,11 +391,11 @@ fn prompt_drops_x_on_its_yield_paths_and_ret_on_abort() {
             "{label}\n{shown}"
         );
     }
-    // 中断は κ を持たないので、中断の道が捨てるのは `ret` と `x` だけである
+    // 中断は κ を持たないので、中断の道が捨てるのは`ret`と`x`と`ev`だけである
     // (docs/spec/core-ir.md の「handle と `prompt$`」)
     assert_eq!(
-        drops(&block_lines(&shown, "prompt$", "b3")).len(),
-        2,
+        drops(&block_lines(&shown, "prompt$", "b3")),
+        ["ret.1", "x.2", "ev.0"],
         "{shown}"
     );
 }
@@ -467,4 +472,107 @@ fn compose_and_mask_drop_r_on_their_slow_paths() {
             "{shown}"
         );
     }
+}
+
+/// EPはdocs/spec/core-ir.mdの「EP が作る補助の関数」の不変条件を守る。yieldの地点で生きている文脈の変数はない。プログラムは
+/// 文脈の変数を束縛するすべての形 (handleの所、`mask`の包み、underの形のエントリ、再開するエントリ、`never`のエントリ、補助
+/// の関数、`par`を通る`fork$`) を持ち、EPの出力のどのyieldの地点でも、遅い道の入口で生きている変数は文脈のReprを持たない。
+/// 継続は遅い道で作るので、そこで生きている変数が継続の区間に持ち越すものである。速い道は`mask`の包みが`w0`を使うので見ない。
+#[test]
+fn no_context_variable_is_live_at_a_yield_point() {
+    let mut program = program(
+        "\
+layout (,) { (,)(tobj, tobj) }
+effect Ask { ask(tobj) -> tobj }
+effect Log { log(tobj) -> tobj }
+effect Fail { never fail(tobj) -> never }
+fn g(x.0: tobj) -> tobj {
+  return x.0
+}
+yields fn main() -> tobj {
+  let r.0: tobj = handle Ask((), &body) { ask: &ask } return &ret
+  let r.1: tobj = handle Log((), &body) { log: &log } return &ret
+  let r.2: tobj = handle Fail((), &body) { fail: &fail } return &ret
+  let r.3: tobj = mask [Ask] call body(())
+  let r.4: tobj = call g(r.3)
+  let p.5: obj = par (,) #0(r.3, r.4)
+  return p.5
+}
+yields fn body(u.0: unit) -> tobj {
+  let t.1: tobj = perform Ask.ask(())
+  let t.2: tobj = perform Log.log(t.1)
+  let t.3: tobj = perform never Fail.fail(t.2)
+  return t.3
+}
+fn ask(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
+  let t.3: tobj = call g(x.0)
+  let t.4: tobj = resume k.1(t.3, s.2)
+  return t.4
+}
+yields fn log(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
+  let t.3: tobj = resume k.1(x.0, s.2)
+  let t.4: tobj = call g(t.3)
+  return t.4
+}
+fn fail(x.0: tobj, s.1: unit) -> tobj {
+  return x.0
+}
+fn ret(x.0: tobj, s.1: unit) -> tobj {
+  return x.0
+}
+",
+    );
+    super::evidence(&mut program);
+    let shown = shown(&program);
+    assert!(
+        program
+            .functions
+            .iter()
+            .any(|function| function.name.starts_with("fork$")),
+        "{shown}"
+    );
+    let mut points = 0;
+    for function in &program.functions {
+        let live_in = crate::liveness::live_in(function);
+        for block in &function.blocks {
+            let [.., call, check] = &block.stmts[..] else {
+                continue;
+            };
+            let point = matches!(
+                call,
+                Stmt::Let {
+                    rhs: Rhs::Call { .. },
+                    ..
+                }
+            ) && matches!(
+                check,
+                Stmt::Let {
+                    rhs: Rhs::Prim(Prim::Yielding, _),
+                    ..
+                }
+            );
+            let Term::Switch {
+                default: Some(slow),
+                ..
+            } = &block.term
+            else {
+                continue;
+            };
+            if !point {
+                continue;
+            }
+            points += 1;
+            for &var in &live_in[slow.0 as usize] {
+                assert!(
+                    !function.repr(var).is_context(),
+                    "`{}.{}` is live at a yield point of `{}`\n{shown}",
+                    function.vars[var.0 as usize].name,
+                    var.0,
+                    function.name
+                );
+            }
+        }
+    }
+    // `body`、`log$entry`、`main`、`compose$`、`mask$[Ask]`のyieldの地点
+    assert!(points >= 5, "{points}\n{shown}");
 }

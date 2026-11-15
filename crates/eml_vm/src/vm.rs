@@ -1413,8 +1413,8 @@ fn step<R: Exec>(
             unsafe { ctx.evv_set(task.get(l)) }?;
             task.set(dst, Word::UNIT);
         }
-        Op::EvvPush { dst, l, e } => {
-            let w = unsafe { ctx.evv_push(task.get(l), task.get(e)) }?;
+        Op::EvvEnter { dst, l, e } => {
+            let w = unsafe { ctx.evv_enter(task.get(l), task.get(e)) }?;
             task.set(dst, w);
         }
         Op::EvvMask { dst, at } => {
@@ -1437,6 +1437,10 @@ fn step<R: Exec>(
         }
         Op::EvRenew { dst, ev, state } => {
             let w = unsafe { ctx.ev_renew(task.get(ev), task.get(state)) }?;
+            task.set(dst, w);
+        }
+        Op::EvRetire { dst, ev } => {
+            let w = unsafe { ctx.ev_retire(task.get(ev)) }?;
             task.set(dst, w);
         }
         Op::EvEvv { dst, ev } => {
@@ -4660,17 +4664,16 @@ fn boom(p.0: unit) -> tobj {
   return r.2
 }
 fn try_panic(f.0: tobj, c.1: tobj) -> tobj {
-  let w.2: tobj = prim evv_get()
+  let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: obj = prim ev_new[Prelude.Panic](c.1, w.2)
+  let ev.3: ev lin = prim ev_new[Prelude.Panic](c.1, w.2)
   let u.4: unit = prim ev_set_clause[Prelude.Panic.panicked](ev.3, &panicked$entry)
-  dup ev.3
-  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply f.0(()) prompt ev.3
   tail call prompt$(ev.3, &return$, x.7)
 }
-clause Prelude.Panic.panicked fn panicked$entry(e.0: obj, m.1: obj) -> obj poly {
+clause Prelude.Panic.panicked fn panicked$entry(e.0: cev, m.1: obj) -> obj poly {
   decref m.1
   let u.2: unit = prim yield_abort(e.0, &panicked$clause)
   let d.3: obj poly = prim dummy()
@@ -4679,50 +4682,51 @@ clause Prelude.Panic.panicked fn panicked$entry(e.0: obj, m.1: obj) -> obj poly 
 fn panicked$clause(c.0: tobj) -> tobj {
   return c.0
 }
-yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
-  let w.3: tobj = prim ev_take_evv(ev.0)
+yields fn prompt$(ev.0: ev lin, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: evv = prim ev_take_evv(ev.0)
   let u.4: unit = prim evv_set(w.3)
   let s.5: int = prim yield_status(ev.0)
   switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
 b1:
-  let st.6: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.6: tobj poly = prim ev_last_state(ev.0)
+  let u.25: unit = drop ev.0
   tail yields apply ret.1(x.2, st.6)
 b2:
   let u.8: unit = drop x.2
   let k.9: tobj poly = prim yield_cont_take()
   let c.10: tobj poly = prim yield_finish()
-  let st.11: tobj poly = prim ev_take_state(ev.0)
-  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  let st.11: tobj poly = prim ev_last_state(ev.0)
+  let h.26: rev = prim ev_retire(ev.0)
+  let k.12: tobj poly = closure resume$(h.26, ret.1, k.9)
   tail yields apply c.10(k.12, st.11)
 b3:
   let u.14: unit = drop ret.1
   let u.15: unit = drop x.2
   let c.16: tobj poly = prim yield_finish()
-  let st.17: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.17: tobj poly = prim ev_last_state(ev.0)
+  let u.27: unit = drop ev.0
   tail yields apply c.16(st.17)
 b4:
   let u.19: unit = drop x.2
-  let st.20: tobj poly = prim ev_take_state(ev.0)
+  let st.20: tobj poly = prim ev_last_state(ev.0)
   let k.21: tobj poly = prim yield_cont_take()
-  let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+  let h.28: rev = prim ev_retire(ev.0)
+  let k.22: tobj poly = closure rewind$(h.28, ret.1, st.20, k.21)
   let u.23: unit = prim yield_cont_set(k.22)
   let d.24: obj poly = prim dummy()
   return d.24
 }
-yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
-  let e.5: obj = prim ev_renew(ev.0, s.4)
-  decref ev.0
-  let w.6: tobj = prim evv_get()
-  dup e.5
-  let w.7: tobj = prim evv_push(w.6, e.5)
+yields fn resume$(h.0: rev, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: ev lin = prim ev_renew(h.0, s.4)
+  decref h.0
+  let w.6: evv = prim evv_get()
+  let w.7: evv = prim evv_enter(w.6, e.5)
   let u.8: unit = prim evv_set(w.7)
   let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
   tail call prompt$(e.5, ret.1, x.9)
 }
-yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
-  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+yields fn rewind$(h.0: rev, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(h.0, ret.1, k.3, v.4, s.2)
 }
 fn return$(r.0: tobj, s.1: unit) -> tobj {
   return r.0
@@ -4784,17 +4788,16 @@ fn leaf(p.0: unit) -> tobj {
   return b.1
 }
 fn try_io(f.0: tobj, c.1: tobj) -> tobj {
-  let w.2: tobj = prim evv_get()
+  let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: obj = prim ev_new[Prelude.IO](c.1, w.2)
+  let ev.3: ev lin = prim ev_new[Prelude.IO](c.1, w.2)
   let u.4: unit = prim ev_set_clause[Prelude.IO.io_failed](ev.3, &io_failed$entry)
-  dup ev.3
-  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply f.0(()) prompt ev.3
   tail call prompt$(ev.3, &return$, x.7)
 }
-clause Prelude.IO.io_failed fn io_failed$entry(e.0: obj, k.1: enum, m.2: obj) -> obj poly {
+clause Prelude.IO.io_failed fn io_failed$entry(e.0: cev, k.1: enum, m.2: obj) -> obj poly {
   decref m.2
   let u.3: unit = prim yield_abort(e.0, &io_failed$clause)
   let d.4: obj poly = prim dummy()
@@ -4803,50 +4806,51 @@ clause Prelude.IO.io_failed fn io_failed$entry(e.0: obj, k.1: enum, m.2: obj) ->
 fn io_failed$clause(c.0: tobj) -> tobj {
   return c.0
 }
-yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
-  let w.3: tobj = prim ev_take_evv(ev.0)
+yields fn prompt$(ev.0: ev lin, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: evv = prim ev_take_evv(ev.0)
   let u.4: unit = prim evv_set(w.3)
   let s.5: int = prim yield_status(ev.0)
   switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
 b1:
-  let st.6: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.6: tobj poly = prim ev_last_state(ev.0)
+  let u.25: unit = drop ev.0
   tail yields apply ret.1(x.2, st.6)
 b2:
   let u.8: unit = drop x.2
   let k.9: tobj poly = prim yield_cont_take()
   let c.10: tobj poly = prim yield_finish()
-  let st.11: tobj poly = prim ev_take_state(ev.0)
-  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  let st.11: tobj poly = prim ev_last_state(ev.0)
+  let h.26: rev = prim ev_retire(ev.0)
+  let k.12: tobj poly = closure resume$(h.26, ret.1, k.9)
   tail yields apply c.10(k.12, st.11)
 b3:
   let u.14: unit = drop ret.1
   let u.15: unit = drop x.2
   let c.16: tobj poly = prim yield_finish()
-  let st.17: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.17: tobj poly = prim ev_last_state(ev.0)
+  let u.27: unit = drop ev.0
   tail yields apply c.16(st.17)
 b4:
   let u.19: unit = drop x.2
-  let st.20: tobj poly = prim ev_take_state(ev.0)
+  let st.20: tobj poly = prim ev_last_state(ev.0)
   let k.21: tobj poly = prim yield_cont_take()
-  let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+  let h.28: rev = prim ev_retire(ev.0)
+  let k.22: tobj poly = closure rewind$(h.28, ret.1, st.20, k.21)
   let u.23: unit = prim yield_cont_set(k.22)
   let d.24: obj poly = prim dummy()
   return d.24
 }
-yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
-  let e.5: obj = prim ev_renew(ev.0, s.4)
-  decref ev.0
-  let w.6: tobj = prim evv_get()
-  dup e.5
-  let w.7: tobj = prim evv_push(w.6, e.5)
+yields fn resume$(h.0: rev, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: ev lin = prim ev_renew(h.0, s.4)
+  decref h.0
+  let w.6: evv = prim evv_get()
+  let w.7: evv = prim evv_enter(w.6, e.5)
   let u.8: unit = prim evv_set(w.7)
   let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
   tail call prompt$(e.5, ret.1, x.9)
 }
-yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
-  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+yields fn rewind$(h.0: rev, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(h.0, ret.1, k.3, v.4, s.2)
 }
 fn return$(r.0: tobj, s.1: unit) -> tobj {
   return r.0

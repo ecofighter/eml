@@ -186,7 +186,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 ### evidence の3つの物体
 
 - `evv` の節点の tag は、エフェクトの番号に 1 を足した値である。`ev_lookup` と `evv_mask` は、節点ごとに節点自身の `meta` の tag を比べるだけで済み、evidence の物体を読まない。`perform` のたびに、節点ごとの依存した読み込みが1回減る
-- evidenceのtagも、エフェクトの番号に1を足した値である。`evv_push`は、引数のevidenceのtagを1回読んで節点のtagに写す。エントリの表のtagは読まないので0にする。1を足すのは、tag 0のエントリの表とVMのクロージャからevidenceを見分けて、検査モードがevidenceの形を確かめられるようにするためである
+- evidenceのtagも、エフェクトの番号に1を足した値である。`evv_push`と`evv_enter`は、引数のevidenceのtagを1回読んで節点のtagに写す。エントリの表のtagは読まないので0にする。1を足すのは、tag 0のエントリの表とVMのクロージャからevidenceを見分けて、検査モードがevidenceの形を確かめられるようにするためである
 - エフェクトの数の上限は、16 ビットの tag から 0 を除いた 65535 になる
 - VMの関数の値`&f`は関数の番号の即値なので (上の「語」)、関数0の値と`()`は同じ語である。そのため、エントリの欄やκの欄が空 (`()`) かを確かめる検査モードの確かめは、関数0の値が入った欄を空と見て、誤りを見逃しうる。空の欄を空でないと見ることはないので、正しい呼び出しを誤って断ることはない
 - 物体の欄の役割は、`eml_rt`の`heap/ctx.rs`のcrateの中だけの定数として、1か所で名前を付ける。evidenceは`EV_TABLE` (エントリの表)、`EV_STATE` (状態)、`EV_OUTER` (外側の`evv`)、走査する語の数は`EV_WORDS`である。`evv`の節点は`NODE_EV` (evidence)、`NODE_NEXT` (次の節点)、走査する語の数は`NODE_WORDS`である。これらは公開せず、`layout`にも置かない。evidenceと節点の欄を読み書きするコードは、番号でなくこの名前を使う
@@ -194,8 +194,9 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 - fork evidenceは`Ctx::fork_ev(effect, table, depth)`だけが作る。tagが`effect + 1`で、エントリの表がforkの表の局所のevidence `[table, 即値 depth, ()]`である。`ev_shape`を満たすので、`evv_push`はほかのevidenceと同じに受け取る。evidenceは表の参照を1つ持つ。検査モードは表を`dup`し、このヒープの不死の物体の表はこれで数え、凍結した領域の表は数えない (下の「不死の物体の数え方」)。速いモードは`dup`を省く。不死の物体の`dup`は何もしないためである。エフェクトの番号と表を確かめるのは検査モードだけである。`fork_ev`は、forkのたびに写すevidenceごとに1回走るためである。`Ctx::fork_of(ev)`はfork evidenceのエフェクトの番号 (tagから1を引いた値) と深さを読み、`Ctx::evv_step(w)`は`evv`のリストの節点を1つ読む。`()`なら`None`を、そうでなければその節点のエフェクトの番号と次の節点を返す。どちらも引数を借り、RCに触れない。evidenceをほかのworkerに渡す (`par`のforkは共有の印を付けて渡す) なら、表は数える不死の物体でなく、凍結した領域の物体でなければならない (下の「核の操作」)
 - 3つの物体を別の種類にしない。速いモードの振る舞いは `Data` と同じで、分けて得られるのは、リークの報告の名前と検査モードの種類の検査だけだからである。リークの報告では、クロージャと evidence の物体も `Data` と数える
 - `ev_set_state` と `ev_take_state` は状態の欄を、`ev_take_evv` は外側の欄を、`set_field` でその場で書き換える。`set_field` の前提 (ほかのスレッドが読めない) は成り立つ。ほかの worker で動く eml のコードは `par` の右の子だけで、`par` は、これらの操作が書く evidence を子のタスクに渡さず、共有の印も付けないためである。`par` の子の `evv` は、fork のときに作る fork evidence の列で、親の evidence を含まない。fork の `share` が届くのは値から届く物体だけで、そこには退いた evidence しかない (次の項目)。fork evidence の状態の欄は深さを持つが、fork evidence は `ev_take_state`、`ev_set_state`、`ev_take_evv` の宛先にならない。fork evidence を包む `prompt$` はなく、`fork$E.op` の節は状態の欄を書かず、`prim child_abort` が深さを読むだけだからである。fork evidence は凍結した物体か、fork で共有の印を付けた物体なので、`set_field` の前提も満たさない ([VM](vm.md) の「`par` の fork と join」)
-- 値 (閉包、データ、根) から届くevidenceは、退いたevidenceだけである。`prompt$`は、どの道でも初めに`ev_take_evv`で外側の`evv`をevidenceから取り出して`Ctx`に戻し、状態を`ev_take_state`で取り出す ([Core IR](core-ir.md)の「handle と `prompt$`」)。そのため、退いたevidenceはエントリの表とtagだけを持ち、状態と外側の欄は`()`である。`resume$`と`rewind$`は`ev_renew`で表とtagだけを使うので、退いたevidenceの外側を読む操作はない。走っているevidenceに届く道は、値から始まらず、フレームかVMの構造から始まる。たとえば、`Ctx`の`evv`、yieldの状態、handleのフレーム (handleの場所と`prompt$`)、`apply κ`の間の`resume$`、`yield_to`までの再開する節のエントリ、in-placeのエントリ、フレームが持つ`evv` (`mask`の包みの`w0`、underの形のエントリの`w`)、`par`のjoinの節点が持つ親の`evv`、止まっているタスクが退避した`evv`である。ほかの走っているevidenceの外側の欄も、これらからたどって届く
-- この不変条件があるので、`par` の fork が値に呼ぶ `share` (`par` の引数の閉包と根) は、前提で rc が正であることを求める物体に届かない。その物体は、`ev_take_state`、`ev_take_evv`、`ev_set_state` の evidence と、`ev_set_clause` のエントリの表である (下の「基本操作の契約」)。エントリの表を書くのは `ev_new` から `evv_push` までで、その間はまだ値が表に届かない。退いた evidence が外側の欄を持ち続けると、継続が捕まえた退いた evidence から、親で走っている evidence に `share` が届く。その後の親のその場の書き換えは、検査モードでは `NotWritable` になり、速いモードでは契約の外の呼び出しになる。値を公開する新しい基本操作も、この不変条件に頼る
+- 値 (閉包、データ、根) から届くevidenceは、退いたevidenceだけである。`prompt$`は、どの道でも初めに`ev_take_evv`で外側の`evv`をevidenceから取り出して`Ctx`に戻し、状態を`ev_last_state`で取り出す。状態1と3の道は、その後`ev_retire`で退いたevidenceを作り、継続はそれだけを捕まえる ([Core IR](core-ir.md)の「handle と `prompt$`」)。そのため、退いたevidenceはエントリの表とtagだけを持ち、状態と外側の欄は`()`である。`resume$`と`rewind$`は`ev_renew`で表とtagだけを使うので、退いたevidenceの外側を読む操作はない。走っているevidenceに届く道は、値から始まらず、フレームかVMの構造から始まる。たとえば、`Ctx`の`evv`、yieldの状態、handleのフレーム (handleの場所と`prompt$`)、`apply κ`の間の`resume$`、`yield_to`までの再開する節のエントリ、in-placeのエントリ、フレームが持つ`evv` (`mask`の包みの`w0`、underの形のエントリの`w`)、`par`のjoinの節点が持つ親の`evv`、止まっているタスクが退避した`evv`である。ほかの走っているevidenceの外側の欄も、これらからたどって届く
+- 退いたevidenceを作るのは`ev_retire`だけで、`ev_retire`は状態と外側のリストが`()`でないevidenceを断る。値から届くevidenceが退いたものだけであることはverifierの規則である。どのクロージャも、実行中のevidenceもリストも捕獲しない ([LIR](lir.md)の「verifier」)
+- この不変条件があるので、`par`のforkが値に呼ぶ`share` (`par`の引数の閉包と根) は、前提でrcが正であることを求める物体に届かない。その物体は、`ev_take_state`、`ev_take_evv`、`ev_set_state`のevidenceと、`ev_set_clause`のエントリの表である (下の「基本操作の契約」)。エントリの表を書くのは`ev_new`から`evv_enter`までで、その間はまだ値が表に届かない。退いたevidenceが外側の欄を持ち続けると、継続が捕まえた退いたevidenceから、親で走っているevidenceに`share`が届く。その後の親のその場の書き換えは、検査モードでは`NotWritable`になり、速いモードでは契約の外の呼び出しになる。値を公開する新しい基本操作も、この不変条件に頼る
 - handlerのevidenceは`CodeBase`の不死の定数にしない。不死のevidenceの物体は、上のforkの表と`Panic`の末尾だけである。空の`evv`は即値の`()`である
 
 ## 確保器
@@ -846,7 +847,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## 実行文脈 `Ctx`
 
-実行文脈 `Ctx<M>` は、ヒープと、[LIR](lir.md) の「実行の文脈」の `evv` と yield の状態を持ち、同じ文書の「基本操作」の表のうち `dummy` を除く22個をメソッドにする (`dummy` は上の「ダミーの値」の `Heap::dummy`)。このほかに、タスクの切り替えのための `switch_task` と `evv_word` を持つ (下の「タスクの切り替え」)。VM は `&mut Ctx` だけを持ち回す。ヒープと実行の状態を別の構造体にしないのは、持ち回すものが2つになり、基本操作の契約が2つの値をまたぐためである。
+実行文脈`Ctx<M>`は、ヒープと、[LIR](lir.md)の「実行の文脈」の`evv`とyieldの状態を持ち、同じ文書の「基本操作」の表のうち`dummy`、`empty_mut_array`、`child_abort`、`ev_last_state`を除く21個をメソッドにする (`dummy`は上の「ダミーの値」の`Heap::dummy`で、`ev_last_state`は`ev_take_state`を走らせる。`empty_mut_array`と`child_abort`は同じ文書の「基本操作」が述べる)。このほかに、タスクの切り替えのための`switch_task`と`evv_word`を持つ (下の「タスクの切り替え」)。VMは`&mut Ctx`だけを持ち回す。ヒープと実行の状態を別の構造体にしないのは、持ち回すものが2つになり、基本操作の契約が2つの値をまたぐためである。
 
 ### 欄
 
@@ -1006,7 +1007,7 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 
 外側の `evv` が `evv_wf` であることは、`ev_shape` に入れない。入れると2つの述語が互いに再帰し、検査モードで確かめる費用が、handler の入れ子の深さについて指数で増えるためである。外側の `evv` が正しいことは EP の不変条件として速いモードの前提にし、`ev_evv` と `ev_take_evv` の結果は語そのものだけを約束する。
 
-どの基本操作も `held_ok()` を前提にし、保つ。`switch_task` は、切り替えた後の文脈の `held_ok()` を前提にし、それを保つ。VM の義務は、基本操作の合間に、`Ctx` の持つ語とそこからたどれる物体に触れないことである (`heap_mut()` の前提)。各操作の結果は、RC のモデルで物体ごとの外の参照の数がどう増減するかで書く。借用の引数 ([LIR](lir.md) の「基本操作」の表) は手放さず、ほかの引数は消費する。消費する引数の参照は、呼ぶ側が `Ctx` の参照と別に持つ。同じ物体を指す引数が並べば、その数だけ持つ。`evv_set(evv_get())` のように、`Ctx` の持つ物体を引数に渡せるようにするためである。
+verifierが確かめるReprが、どの基本操作でも`ev_shape`と`evv_wf`を与える。どの基本操作も`held_ok()`を前提にし、保つ。`switch_task`は、切り替えた後の文脈の`held_ok()`を前提にし、それを保つ。VMの義務は、基本操作の合間に、`Ctx`の持つ語とそこからたどれる物体に触れないことである (`heap_mut()`の前提)。各操作の結果は、RCのモデルで物体ごとの外の参照の数がどう増減するかで書く。借用の引数 ([LIR](lir.md)の「基本操作」の表) は手放さず、ほかの引数は消費する。消費する引数の参照は、呼ぶ側が`Ctx`の参照と別に持つ。同じ物体を指す引数が並べば、その数だけ持つ。`evv_set(evv_get())`のように、`Ctx`の持つ物体を引数に渡せるようにするためである。
 
 | 操作 | 前提 (速いモード) | 結果と動作 |
 |---|---|---|

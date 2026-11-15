@@ -364,7 +364,7 @@ impl<'a> Splitter<'a> {
             let point = &self.points[index];
             let continuation = self.continuations[index];
             stmts.extend_from_slice(&block.stmts[next..=point.call]);
-            let yielding = out.prim(&mut stmts, "y", Repr::Int, Prim::Yielding, Vec::new());
+            let yielding = out.prim(&mut stmts, "y", Prim::Yielding, Vec::new());
             let here = out.blocks.len() as u32;
             out.blocks.push(Block {
                 params: mem::take(&mut params),
@@ -472,17 +472,10 @@ impl Out<'_> {
         var
     }
 
-    /// 結果の印は基本操作の表の印である。
-    fn prim(
-        &mut self,
-        stmts: &mut Vec<Stmt>,
-        name: &str,
-        repr: Repr,
-        prim: Prim,
-        args: Vec<Atom>,
-    ) -> VarId {
-        let mark = prim.row().ret_mark;
-        self.bind(stmts, name, repr, mark, Rhs::Prim(prim, args))
+    /// 結果のReprと印は基本操作の表の行のものである。
+    fn prim(&mut self, stmts: &mut Vec<Stmt>, name: &str, prim: Prim, args: Vec<Atom>) -> VarId {
+        let row = prim.row();
+        self.bind(stmts, name, row.ret, row.ret_mark, Rhs::Prim(prim, args))
     }
 
     /// 印は捕まえた値の印の結びである。
@@ -528,7 +521,7 @@ fn slow_path(
             Rhs::Drop(Atom::Var(point.result)),
         );
     }
-    let mut k = out.prim(&mut stmts, "k", Repr::TObj, Prim::YieldContTake, Vec::new());
+    let mut k = out.prim(&mut stmts, "k", Prim::YieldContTake, Vec::new());
     if let Some(items) = &point.mask {
         let mask = helpers.mask(program, items);
         k = out.closure(&mut stmts, "k", mask, vec![Atom::Var(k)]);
@@ -545,7 +538,6 @@ fn slow_path(
     out.prim(
         &mut stmts,
         "u",
-        Repr::Unit,
         Prim::YieldContSet,
         vec![Atom::Var(composed)],
     );

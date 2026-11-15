@@ -158,8 +158,8 @@ effect A { a(unit) -> unit }
 fn g(p.0: unit) -> unit {
   let r.1: unit = clause A.a(())
   let r.2: unit = clause B.b(())
-  let w.3: tobj = prim evv_get()
-  let w.4: tobj = prim evv_mask[B, A@1](w.3)
+  let w.3: evv = prim evv_get()
+  let w.4: evv = prim evv_mask[B, A@1](w.3)
   decref w.3
   decref w.4
   return ()
@@ -383,7 +383,7 @@ fn second() -> unit {
   let u.1: unit = extern Prelude.println(t.0)
   return u.1
 }
-clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {
+clause Fail.fail fn fork$Fail.fail(ev.0: fev, a.1: tobj poly) -> obj poly {
   let c.2: tobj poly = closure reperform$Fail.fail(a.1)
   let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
@@ -406,16 +406,17 @@ fn a_continuable_error_recovers_the_heap_for_the_next_run() {
     let first = "\
 effect A { a(unit) -> unit }
 fn main() -> unit {
-  let w.0: tobj = prim evv_get()
+  let w.0: evv = prim evv_get()
   dup w.0
-  let e.1: obj = prim ev_new[A]((), w.0)
+  let e.1: ev lin = prim ev_new[A]((), w.0)
   let u.5: unit = prim ev_set_clause[A.a](e.1, &a$entry)
-  let w.2: tobj = prim evv_push(w.0, e.1)
+  let w.2: evv = prim evv_enter(w.0, e.1)
   let u.3: unit = prim evv_set(w.2)
+  let u.6: unit = drop e.1
   let n.4: int = extern \"Prelude.Div Int.%\"(1, 0)
   return ()
 }
-internal clause A.a fn a$entry(e.0: obj, u.1: unit) -> unit {
+internal clause A.a fn a$entry(e.0: cev, u.1: unit) -> unit {
   decref e.0
   return ()
 }

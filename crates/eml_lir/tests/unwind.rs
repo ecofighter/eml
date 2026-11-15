@@ -114,15 +114,15 @@ b1:
 #[test]
 fn effectful_extern_and_yield_abort_are_points() {
     let text = "\
-fn f(s.0: obj, t.1: obj, e.2: obj, c.3: tobj) -> obj {
-  let u.5: unit = extern Prelude.println(s.0)
-  let w.6: unit = prim yield_abort(e.2, c.3)
-  return t.1
-}
 fn g(t.0: obj) -> obj {
   let z.1: obj = extern Prelude.exit(1)
   decref t.0
   return z.1
+}
+fn f(s.0: obj, t.1: obj, e.2: cev, c.3: tobj) -> obj {
+  let u.5: unit = extern Prelude.println(s.0)
+  let w.6: unit = prim yield_abort(e.2, c.3)
+  return t.1
 }
 ";
     assert_eq!(
@@ -171,18 +171,21 @@ fn f(n.0: int, s.1: obj) -> obj {
 fn landing_is_the_prompt_variable() {
     let text = "\
 effect Land { land(unit) -> tobj }
-yields fn f(b.0: tobj, w.5: tobj) -> obj {
-  let ev.1: obj = prim ev_new[Land]((), w.5)
+fn entry$main() -> unit {
+  return ()
+}
+yields fn f(b.0: tobj, w.5: evv) -> tobj {
+  let ev.1: ev lin = prim ev_new[Land]((), w.5)
   let u.6: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
   let x.2: tobj = yields apply b.0(()) prompt ev.1
-  let r.3: obj = call prompt$(ev.1, x.2)
+  let r.3: tobj = call prompt$(ev.1, x.2)
   return r.3
 }
-fn prompt$(ev.0: obj, x.1: tobj) -> obj {
-  decref x.1
-  return ev.0
+fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {
+  let u.2: unit = drop ev.0
+  return x.1
 }
-internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {
+internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
   decref e.0
   return ()
 }
@@ -255,7 +258,7 @@ effect E { op(unit) -> unit }
 fn main() -> unit {
   return ()
 }
-internal clause E.op fn g(e.0: obj, x.1: float) -> unit {
+internal clause E.op fn g(e.0: cev, x.1: float) -> unit {
   decref e.0
   return ()
 }
@@ -344,7 +347,7 @@ fn f(a.0: tobj, b.1: tobj, s.2: obj) -> obj {
   decref t.3
   return s.2
 }
-fn g(e.0: obj, c.1: tobj poly) -> obj poly {
+fn g(e.0: fev, c.1: tobj poly) -> obj poly {
   let u.2: unit = prim child_abort(e.0, c.1)
   decref e.0
   let d.3: obj poly = prim dummy()

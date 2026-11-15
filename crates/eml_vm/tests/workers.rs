@@ -95,7 +95,7 @@ effect Prelude.Panic { never panicked(obj) -> never }
 
 /// `par` の右の子の中断に要る関数と、左の子の `one`。エントリより後ろに置く。
 const FORKS: &str = "\
-clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
+clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: fev, a.1: obj) -> obj poly {
   let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
   let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0

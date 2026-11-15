@@ -56,7 +56,7 @@ fn may_fork(program: &Program) -> bool {
 fn fork(program: &Program, effect: u32, op: u32, reperform: FnIdx) -> crate::CoreFn {
     let operation = eml_lir::operation(&program.effects, effect, op).clone();
     let mut b = FnBuilder::new();
-    let ev = b.param(VarInfo::new("ev", Repr::Obj, Mark::Unr));
+    let ev = b.param(VarInfo::new("ev", Repr::Fev, Mark::Unr));
     let args: Vec<Atom> = operation
         .params
         .iter()

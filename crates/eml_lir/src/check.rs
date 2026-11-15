@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::syntax::{REPRS, effect_text, layout_text, operation_text, prim_text, repr_text};
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, Mark, OpRet, Prim, Repr, StructId, StructShape, Structs, VarId, VarInfo,
+    LayoutId, Mark, OpRet, Prim, Repr, StructId, StructShape, Structs, VarId, VarInfo, VerifyError,
 };
 
 /// 一様な位置の始まりは、関数の引数の数を超えない (docs/spec/lir.md の「関数の ABI」)。
@@ -24,8 +24,8 @@ pub fn split(split: Option<u32>, params: usize) -> Result<(), String> {
     }
 }
 
-/// `clause` の印の関数は、捕獲の後に evidence と操作の引数を受け、操作の結果を返す。境界の段では、捕獲が `tobj`、
-/// evidence が `obj`、残りの引数と `ret` が操作の表の Repr (`never` の操作の `ret` は `obj`) と互換であることも
+/// `clause`の印の関数は、捕獲の後にevidenceと操作の引数を受け、操作の結果を返す。evidenceは`cev`か`fev`である。
+/// 境界の段では、捕獲が`tobj`、残りの引数と`ret`が操作の表のRepr (`never`の操作の`ret`は`obj`) と互換であることも
 /// 確かめる (docs/spec/lir.md の「box の挿入」と「verifier」)。印も同じ段で、evidence が `unr`、残りの引数と戻り値が
 /// 操作の表の印と互換であることを確かめる。捕獲の印は、`closure` を作る所で比べる
 /// (docs/spec/lir.md の「Kind の印の検査」)。
@@ -61,12 +61,21 @@ pub fn clause_function<'v>(
             operation.params.len(),
         ));
     };
+    let params: Vec<(VarId, &VarInfo)> = params.collect();
+    // evidenceの引数はEPから後は役を持つので、どの段でも確かめる。`cev`か、forkのエントリなら`fev`で、その名前は規則Fが
+    // 確かめる (docs/spec/lir.mdの「エントリの関数の印」)
+    let evidence = params[captures].1.repr;
+    if !matches!(evidence, Repr::Cev | Repr::Fev) {
+        return Err(format!(
+            "`{name}` is a clause of `{clause}`, but its parameter {captures} is {}",
+            evidence.name()
+        ));
+    }
     if !boundaries {
         return Ok(());
     }
-    let params: Vec<(VarId, &VarInfo)> = params.collect();
     let expected = std::iter::repeat_n(Repr::TObj, captures)
-        .chain([Repr::Obj])
+        .chain([evidence])
         .chain(operation.params.iter().copied());
     for (index, ((_, param), expected)) in params.iter().zip(expected).enumerate() {
         if !param.repr.compatible(expected) {
@@ -107,6 +116,108 @@ pub fn clause_function<'v>(
             ret_mark.name(),
             operation.ret_mark.name()
         ));
+    }
+    Ok(())
+}
+
+/// 配置のフィールド、構造体の葉、操作の引数と結果、Cの関数の行、関数の結果はどれも文脈のReprを持たず、ランタイムが入る
+/// 関数は文脈のReprを受けない。文脈のReprはランタイムが持つ物体の役を名指し、それは値の中に置かれず、操作やexternのABI
+/// を越えないためである (docs/spec/lir.mdの「verifier」)。`functions`は、関数ごとの名前、引数のRepr、結果のRepr、ランタ
+/// イムがその関数に入るか (プログラムのエントリと`RuntimeEntry::ALL`の関数) を与える。静的なexternの行は、`eml_extern`
+/// のテストがこの規則に結び付ける。
+pub fn no_context_reprs<'f>(
+    layouts: &[Layout],
+    structs: &Structs,
+    effects: &[EffectInfo],
+    c_functions: &[CFunction],
+    functions: impl Iterator<Item = (&'f str, Vec<Repr>, Vec<Repr>, bool)>,
+) -> Result<(), VerifyError> {
+    let refuse = |function: &str, message: String| VerifyError {
+        function: function.to_string(),
+        message,
+    };
+    for layout in layouts {
+        let fields = layout.constructors.iter().flat_map(|ctor| &ctor.fields);
+        if let Some(repr) = fields.copied().find(|repr| repr.is_context()) {
+            return Err(refuse(
+                &layout.name,
+                format!(
+                    "the layout `{}` has a field of {}",
+                    layout.name,
+                    repr.name()
+                ),
+            ));
+        }
+    }
+    for (id, shape) in structs.shapes().iter().enumerate() {
+        let leaves = structs.leaves(StructId(id as u32));
+        if let Some(&(repr, _)) = leaves.iter().find(|(repr, _)| repr.is_context()) {
+            let name = &layouts[shape.layout.0 as usize].name;
+            return Err(refuse(
+                name,
+                format!("the struct shape of `{name}` has a leaf of {}", repr.name()),
+            ));
+        }
+    }
+    let takes_or_returns = |params: &[Repr], ret: OpRet| -> Option<(&'static str, Repr)> {
+        if let Some(&repr) = params.iter().find(|repr| repr.is_context()) {
+            return Some(("takes", repr));
+        }
+        match ret {
+            OpRet::Repr(repr) if repr.is_context() => Some(("returns", repr)),
+            _ => None,
+        }
+    };
+    for (effect, info) in effects.iter().enumerate() {
+        for (op, operation) in info.operations.iter().enumerate() {
+            if let Some((verb, repr)) = takes_or_returns(&operation.params, operation.ret) {
+                return Err(refuse(
+                    &info.name,
+                    format!(
+                        "the operation `{}` {verb} {}",
+                        operation_text(effects, effect as u32, op as u32),
+                        repr.name()
+                    ),
+                ));
+            }
+        }
+    }
+    for function in c_functions {
+        let rows = [
+            Some(function.row()),
+            function.submit_row(),
+            function.take_row(),
+        ];
+        for row in rows.into_iter().flatten() {
+            if let Some((verb, repr)) = takes_or_returns(row.params, row.ret) {
+                return Err(refuse(
+                    row.name,
+                    format!("the extern `{}` {verb} {}", row.name, repr.name()),
+                ));
+            }
+        }
+    }
+    for (name, params, rets, entered) in functions {
+        if let Some(&repr) = rets.iter().find(|repr| repr.is_context()) {
+            return Err(refuse(
+                name,
+                format!("the function returns {}", repr.name()),
+            ));
+        }
+        if entered
+            && let Some((index, repr)) = params
+                .iter()
+                .enumerate()
+                .find(|(_, repr)| repr.is_context())
+        {
+            return Err(refuse(
+                name,
+                format!(
+                    "`{name}` is entered by the run time, but its parameter {index} is {}",
+                    repr.name()
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -338,6 +449,8 @@ pub struct FnSummary<'a> {
     pub clause: Option<(u32, u32)>,
     /// 引数の数。
     pub params: usize,
+    /// 引数に`fev`がある。
+    pub takes_fork: bool,
 }
 
 /// verifier を始めるときに1回だけ求める、プログラム全体の表。
@@ -417,8 +530,6 @@ pub struct Context<'a> {
     /// `ev_new[E]`で束縛した変数の、エフェクトの番号。`ev_set_clause`のevidenceが同じ関数の中の`ev_new`で作った
     /// ものであることと、そのエフェクトの操作のエントリであることを確かめるのに使う。
     evidences: FxHashMap<VarId, u32>,
-    /// `ev_renew`で束縛した変数。`ev_new`で束縛した変数と同じくevidenceで、着地の印はこの2つのどちらかである。
-    renewed: FxHashSet<VarId>,
     /// 今のブロックの`ev_new`のevidenceのうち、まだほかに使っていないものと、それまでに入れたエントリ。
     filling: Vec<Filling>,
     /// エントリの規則の最初の違反。文ごとの検査の誤りを先に出すため、関数の文をたどり終えてから出す。
@@ -444,7 +555,6 @@ impl<'a> Context<'a> {
             never: vec![false; vars.len()],
             closures: FxHashMap::default(),
             evidences: FxHashMap::default(),
-            renewed: FxHashSet::default(),
             filling: Vec::new(),
             unfilled: None,
             dominators,
@@ -460,7 +570,51 @@ impl<'a> Context<'a> {
             return Err(format!("`{}` is defined twice", self.name(var)));
         }
         *slot = Some(site);
+        // 実行中のevidenceの持ち主は1つである (docs/spec/lir.mdの「Kind の印」)
+        let info = &self.vars[var.0 as usize];
+        if info.repr == Repr::Ev && info.mark != Mark::Lin {
+            return Err(format!(
+                "`{}` is ev, but its mark is {}, not lin",
+                self.name(var),
+                info.mark.name()
+            ));
+        }
         Ok(())
+    }
+
+    /// 文脈のReprの変数は、関数かブロックの引数か、そのReprを返す行の基本操作が束縛する。`made`は束縛が作るReprで、基本
+    /// 操作なら行の結果、ほかの束縛 (複数の値の`let`、フィールド) では`None`である (docs/spec/lir.mdの「verifier」)。
+    pub fn context_binding(&self, var: VarId, made: Option<Repr>) -> Result<(), String> {
+        let repr = self.repr(var);
+        if repr.is_context() && made != Some(repr) {
+            return Err(format!(
+                "`{}` is {}, but it is not bound by a primitive that returns {}",
+                self.name(var),
+                repr.name(),
+                repr.name()
+            ));
+        }
+        Ok(())
+    }
+
+    /// クロージャは実行中のevidence、節やforkのevidence、リストを捕獲しない。捕獲できるのは退いたevidenceだけである (
+    /// docs/spec/lir.mdの「verifier」)。
+    pub fn context_captures(&self, target: FnIdx, args: &[Atom]) -> Result<(), String> {
+        let captured = args.iter().find_map(|&arg| match arg {
+            Atom::Var(var) if self.repr(var).is_context() && self.repr(var) != Repr::Rev => {
+                Some(var)
+            }
+            _ => None,
+        });
+        match captured {
+            Some(var) => Err(format!(
+                "a closure of `{}` captures `{}` ({}), but only a retired evidence can be captured",
+                self.function(target)?.name,
+                self.name(var),
+                self.repr(var).name()
+            )),
+            None => Ok(()),
+        }
     }
 
     /// 定義の位置が今の位置を支配する (R6)。
@@ -737,9 +891,6 @@ impl<'a> Context<'a> {
                     });
                 }
             }
-            Some((var, &Prim::EvRenew, _)) => {
-                self.renewed.insert(var);
-            }
             Some((_, &Prim::EvSetClause { effect: _, op }, &[Atom::Var(evidence), _])) => {
                 self.fill_entry(evidence, op);
                 return;
@@ -825,19 +976,6 @@ impl<'a> Context<'a> {
         self.unfilled.get_or_insert(message);
     }
 
-    /// 着地の印は、同じ関数の中で`ev_new`か`ev_renew`が束縛した変数で、どちらもevidenceを返す。中断が着地しない
-    /// フレームを通るとき、巻き戻しは印から`ev_take_state`で状態を取り出し、速いモードではそれがevidenceの欄を確かめずに
-    /// 書くためである (docs/spec/lir.mdの「着地の印」)。
-    pub fn prompt_marker(&self, marker: VarId) -> Result<(), String> {
-        if self.evidences.contains_key(&marker) || self.renewed.contains(&marker) {
-            return Ok(());
-        }
-        Err(format!(
-            "the prompt marker `{}` is not an evidence made by `ev_new` or `ev_renew` in this function",
-            self.name(marker)
-        ))
-    }
-
     /// `closure` で束縛した変数の関数と、捕獲した値の数。
     pub fn closure(&self, var: VarId) -> Option<(FnIdx, usize)> {
         self.closures.get(&var).copied()
@@ -850,11 +988,11 @@ impl<'a> Context<'a> {
     }
 
     /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` と
-    /// `clause` の束縛と、戻らない extern の束縛は、それに加えて、どの位置にも収まる。関数の値として使う関数が一様で
+    /// `clause`の束縛と、戻らないexternの束縛は、それに加えて、文脈のReprでないどの位置にも収まる。関数の値として使う関数が一様で
     /// あることは、ここでなく verifier の値の参照の規則が確かめる (docs/spec/lir.md の「verifier」)。
     pub fn passes(&self, atom: Atom, expected: Repr) -> bool {
         match atom {
-            Atom::Var(var) if self.never[var.0 as usize] => true,
+            Atom::Var(var) if self.never[var.0 as usize] && !expected.is_context() => true,
             _ => atom.fits_compatible(self.vars, self.tables.structs, expected),
         }
     }
@@ -1428,7 +1566,7 @@ impl<'a> Context<'a> {
     }
 
     /// `ev_set_clause[E.op](ev, c)`のcは`&g`か、同じ関数の中の`closure g(..)`の変数で、gは`E.op`の`clause`の
-    /// 印を持つ。`&g`のgは捕獲を持たない。evは同じ関数の中の`ev_new[E]`の変数である。節の呼び出しはエントリの
+    /// 印を持ち、`fev`を取らない。`&g`のgは捕獲を持たない。evは同じ関数の中の`ev_new[E]`の変数である。節の呼び出しはエントリの
     /// クロージャを確かめずに操作のシグネチャで呼ぶので、読めない値と作っていないevidenceは、エントリに入れる所で
     /// 断る (docs/spec/lir.mdの「verifier」)。
     pub fn check_set_clause(
@@ -1467,6 +1605,14 @@ impl<'a> Context<'a> {
                     function.name
                 ));
             }
+        }
+        // ハンドラの表を通る節の呼び出しは、走っているevidenceをエントリに渡すので、`fev`を取るforkのエントリは
+        // 表に入らない (docs/spec/lir.mdの「verifier」)
+        if function.takes_fork {
+            return Err(format!(
+                "`{}` is put into the `{entry}` entry, but it takes a fork evidence",
+                function.name
+            ));
         }
         if matches!(args[1], Atom::Fn(_)) && self.clause_captures(function).is_some_and(|n| n != 0)
         {
@@ -1654,12 +1800,18 @@ impl<'a> Context<'a> {
 /// 箱を要するスカラーの Repr の名前を、文言に並べる形 (`int and enum`) にする。名前を持つ Repr のうち箱を要するもの
 /// なので、規則と同じ `Repr::needs_box` から作る。
 pub fn boxed_scalars(conjunction: &str) -> String {
+    repr_names(|repr| repr.needs_box(), conjunction)
+}
+
+/// 名前を持つReprのうち`keep`が取るものの名前を、文言に並べる形 (`int and enum`) にする。規則と同じ述語と`REPRS`から
+/// 作るので、一覧は規則からずれない。
+pub fn repr_names(keep: impl Fn(&Repr) -> bool, conjunction: &str) -> String {
     let names: Vec<&str> = REPRS
         .iter()
-        .filter(|repr| repr.needs_box())
+        .filter(|repr| keep(repr))
         .map(|repr| repr.name())
         .collect();
-    let (last, rest) = names.split_last().expect("some scalars need a box");
+    let (last, rest) = names.split_last().expect("some named repr is kept");
     if rest.is_empty() {
         last.to_string()
     } else {

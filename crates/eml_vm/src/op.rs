@@ -419,7 +419,8 @@ pub enum Op {
         dst: Slot,
         l: Slot,
     },
-    EvvPush {
+    /// `Ctx::evv_enter`。`l`は消費し、evidence`e`は借りる。
+    EvvEnter {
         dst: Slot,
         l: Slot,
         e: Slot,
@@ -443,6 +444,11 @@ pub enum Op {
         dst: Slot,
         ev: Slot,
         state: Slot,
+    },
+    /// `Ctx::ev_retire`。evidence`ev`は消費する。
+    EvRetire {
+        dst: Slot,
+        ev: Slot,
     },
     EvEvv {
         dst: Slot,

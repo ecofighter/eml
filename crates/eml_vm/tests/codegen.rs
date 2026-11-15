@@ -491,8 +491,8 @@ effect Land { land(unit) -> tobj }
 fn main() -> unit {
   return ()
 }
-yields fn land(b.0: tobj, w.7: tobj, s.2: obj) -> unit {
-  let ev.1: obj = prim ev_new[Land]((), w.7)
+yields fn land(b.0: tobj, w.7: evv, s.2: obj) -> unit {
+  let ev.1: ev lin = prim ev_new[Land]((), w.7)
   let u.8: unit = prim ev_set_clause[Land.land](ev.1, &land$entry)
   dup s.2
   let x.3: tobj = yields apply b.0(()) prompt ev.1
@@ -502,11 +502,11 @@ yields fn land(b.0: tobj, w.7: tobj, s.2: obj) -> unit {
   let u.5: unit = extern Prelude.println(t.4)
   return u.5
 }
-fn prompt$(ev.0: obj, x.1: tobj) -> obj {
-  decref x.1
-  return ev.0
+fn prompt$(ev.0: ev lin, x.1: tobj) -> tobj {
+  let u.2: unit = drop ev.0
+  return x.1
 }
-internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {
+internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
   decref e.0
   return ()
 }
@@ -528,8 +528,8 @@ internal clause Land.land fn land$entry(e.0: obj, u.1: unit) -> tobj {
         15  extern s0 = Prelude.println(s0)
         16  ret s0
     fn prompt$ (arity 2, frame 2) entry unwind [s0, s1]
-        17  decref s1
-        18  ret s0
+        17  decref s0
+        18  ret s1
     fn land$entry (arity 2, frame 3) entry unwind [s0]
         19  decref s0
         20  load_imm s2, 0

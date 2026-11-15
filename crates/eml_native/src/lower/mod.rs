@@ -95,7 +95,17 @@ impl Callees<'_> {
 pub fn kind(repr: Repr) -> Kind {
     match repr {
         Repr::Float => Kind::F64,
-        Repr::Obj | Repr::TObj | Repr::Int | Repr::Enum | Repr::Unit | Repr::Token => Kind::I64,
+        Repr::Obj
+        | Repr::TObj
+        | Repr::Ev
+        | Repr::Cev
+        | Repr::Fev
+        | Repr::Rev
+        | Repr::Evv
+        | Repr::Int
+        | Repr::Enum
+        | Repr::Unit
+        | Repr::Token => Kind::I64,
         Repr::Struct(_) => unreachable!("flattening leaves no struct value"),
     }
 }

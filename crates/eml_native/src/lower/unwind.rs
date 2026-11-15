@@ -258,8 +258,8 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
 
         self.b.switch_to_block(other);
         let state = self
-            .call_entry(&effects::entry(&Prim::EvTakeState), &[ev])
-            .expect("`ev_take_state` returns a word");
+            .call_entry(&effects::entry(&Prim::EvLastState), &[ev])
+            .expect("`ev_last_state` returns a word");
         self.call_entry("eml_rt_decref", &[state]);
         self.cleanup(point);
     }
@@ -296,7 +296,14 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
 pub(super) fn placeholder(b: &mut FunctionBuilder, repr: Repr) -> Value {
     match repr {
         Repr::Float => b.ins().f64const(0.0),
-        Repr::Obj | Repr::TObj | Repr::Unit => b.ins().iconst(types::I64, mem::UNIT),
+        Repr::Obj
+        | Repr::TObj
+        | Repr::Unit
+        | Repr::Ev
+        | Repr::Cev
+        | Repr::Fev
+        | Repr::Rev
+        | Repr::Evv => b.ins().iconst(types::I64, mem::UNIT),
         Repr::Int | Repr::Enum => b.ins().iconst(types::I64, 0),
         Repr::Token => b.ins().iconst(types::I64, mem::EMPTY_TOKEN),
         Repr::Struct(_) => unreachable!("flattening leaves no struct value"),

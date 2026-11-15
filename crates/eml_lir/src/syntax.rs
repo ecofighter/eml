@@ -150,10 +150,16 @@ pub struct Token {
 
 const PUNCTS: &[char] = &['(', ')', '{', '}', '[', ']', ','];
 
-/// テキストの形で名前を書く、値の Repr。構造体は形の中身を書き、token は reuse のパスだけが作るので別に扱う。
-pub(crate) const REPRS: [Repr; 6] = [
+/// テキストの形で名前を書くRepr。値のReprと文脈のReprである。構造体は形の中身を書き、tokenはreuseのパスだけが作るので
+/// 別に扱う。
+pub(crate) const REPRS: [Repr; 11] = [
     Repr::Obj,
     Repr::TObj,
+    Repr::Ev,
+    Repr::Cev,
+    Repr::Fev,
+    Repr::Rev,
+    Repr::Evv,
     Repr::Int,
     Repr::Float,
     Repr::Enum,
@@ -1441,7 +1447,8 @@ impl<'t> Reader<'t> {
                 error(
                     line,
                     format!(
-                        "expected a repr (obj, tobj, int, float, enum or unit), found `{word}`"
+                        "expected a repr ({}), found `{word}`",
+                        crate::check::repr_names(|_| true, "or")
                     ),
                 )
             })

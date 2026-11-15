@@ -22,6 +22,7 @@
 use crate::liveness;
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_extern::RuntimeEntry;
 use eml_lir::check::{
     BlockShape, Context, Dominators, FnSummary, Site, Tables, TermShape, shape, with_tables,
 };
@@ -50,6 +51,27 @@ enum Level {
 }
 
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
+    eml_lir::check::no_context_reprs(
+        &program.layouts,
+        &program.structs,
+        &program.effects,
+        &program.c_functions,
+        program
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(index, function)| {
+                let params = function.params().iter().map(|&param| function.repr(param));
+                let name = function.name.as_str();
+                (
+                    name,
+                    params.collect(),
+                    vec![function.ret],
+                    index == program.entry.0 as usize
+                        || RuntimeEntry::ALL.iter().any(|entry| entry.name() == name),
+                )
+            }),
+    )?;
     // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
     for function in &program.functions {
         clause_function(program, function, level)
@@ -63,6 +85,10 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         name: &function.name,
         clause: function.clause,
         params: function.params().len(),
+        takes_fork: function
+            .params()
+            .iter()
+            .any(|&param| function.repr(param) == Repr::Fev),
     });
     with_tables(
         &program.layouts,
@@ -311,6 +337,7 @@ impl<'a> Checker<'a> {
 
     fn define_all(&mut self, vars: &[VarId], site: Site) -> Result<(), String> {
         for &var in vars {
+            self.cx.context_binding(var, None)?;
             self.cx.define(var, site)?;
         }
         Ok(())
@@ -336,6 +363,13 @@ impl<'a> Checker<'a> {
     }
 
     fn check_rhs(&self, var: VarId, rhs: &Rhs) -> Result<(), String> {
+        self.cx.context_binding(
+            var,
+            match rhs {
+                Rhs::Prim(prim, _) => Some(prim.row().ret),
+                _ => None,
+            },
+        )?;
         match rhs {
             Rhs::Call { call, mask } => {
                 self.check_mask(call, mask)?;
@@ -344,6 +378,7 @@ impl<'a> Checker<'a> {
             }
             Rhs::MakeClosure(index, args) => {
                 self.cx.closure_arity(*index, args.len())?;
+                self.cx.context_captures(*index, args)?;
                 let target = self.cx.function(*index)?;
                 self.cx.check_built(
                     var,
@@ -478,8 +513,7 @@ impl<'a> Checker<'a> {
     }
 
     /// 着地の印`prompt v`の検査。印はEPだけが出し、末尾の位置の呼び出しには付かず、`v`は呼び出しの後も
-    /// 生きている`obj`の変数で、同じ関数の中で`ev_new`か`ev_renew`が束縛したevidenceでなければならない
-    /// (docs/spec/lir.mdの「着地の印」)。
+    /// 生きている`ev`の変数、つまりフレーム自身のevidenceでなければならない (docs/spec/lir.mdの「着地の印」)。
     fn check_prompt(&self, call: &Call) -> Result<(), String> {
         let Some(marker) = call.prompt() else {
             return Ok(());
@@ -498,9 +532,9 @@ impl<'a> Checker<'a> {
             ));
         }
         let repr = self.function.repr(marker);
-        if repr != Repr::Obj {
+        if repr != Repr::Ev {
             return Err(format!(
-                "`{}` is the prompt marker of an apply, but it is {}, not obj",
+                "`{}` is the prompt marker of an apply, but it is {}, not ev",
                 self.cx.name(marker),
                 repr.name()
             ));
@@ -511,7 +545,7 @@ impl<'a> Checker<'a> {
                 self.cx.name(marker)
             ));
         }
-        self.cx.prompt_marker(marker)
+        Ok(())
     }
 
     /// 呼び出しの直後で `var` が生きているか。生存解析のエントリの集合から、終端と後ろの文を逆にたどって求める。

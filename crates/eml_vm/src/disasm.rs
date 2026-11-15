@@ -333,7 +333,7 @@ impl<'a> View<'a> {
             Op::UnboxFloat { dst, src } => format!("unbox_float s{dst}, s{src}"),
             Op::EvvGet { dst } => format!("evv_get s{dst}"),
             Op::EvvSet { dst, l } => format!("evv_set s{dst}, s{l}"),
-            Op::EvvPush { dst, l, e } => bin("evv_push", dst, l, e),
+            Op::EvvEnter { dst, l, e } => bin("evv_enter", dst, l, e),
             Op::EvvMask { dst, at } => {
                 let o = ops(at);
                 let items: Vec<String> = self.tables.mask_lists
@@ -355,6 +355,7 @@ impl<'a> View<'a> {
                 format!("ev_set_clause s{dst}, s{}, op{}, s{}", o[0], o[1], o[2])
             }
             Op::EvRenew { dst, ev, state } => bin("ev_renew", dst, ev, state),
+            Op::EvRetire { dst, ev } => format!("ev_retire s{dst}, s{ev}"),
             Op::EvEvv { dst, ev } => format!("ev_evv s{dst}, s{ev}"),
             Op::EvTakeEvv { dst, ev } => format!("ev_take_evv s{dst}, s{ev}"),
             Op::EvTakeState { dst, ev } => format!("ev_take_state s{dst}, s{ev}"),

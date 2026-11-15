@@ -20,7 +20,7 @@
 ### 記述子の表
 
 - `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`const NAME = "接頭辞";`の形では、エントリの記号は接頭辞に関数の識別子を続けたものになり、`const NAME;`の形では識別子そのものになる。`Entry`の欄は、`symbol` (記号)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
-- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`のRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`と、ハンドルの型のdtor`dtor`も受ける。どちらも`Kind`は`I64`である。`ptr`のRustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。`dtor`のRustの型は`Option<eml_rows::ffi::Dtor>`である (「エントリのABI」)。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
+- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum`、文脈のRepr`ev`、`cev`、`fev`、`rev`、`evv` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`と文脈のReprのRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`と、ハンドルの型のdtor`dtor`も受ける。どちらも`Kind`は`I64`である。`ptr`のRustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。`dtor`のRustの型は`Option<eml_rows::ffi::Dtor>`である (「エントリのABI」)。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
 - エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は7つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`effects.rs`の`EFFECTS`、`closures.rs`の`CLOSURES`、`c.rs`の`C`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
 - 生成したコードは、エントリを記号で取り込み、呼び出しの型を行だけから作る。宣言が1つなので、関数と呼び出しの型が食い違うことはない
 - エントリに`#[no_mangle]`は付けない。JITはアドレスを記号の名前で登録する
@@ -41,7 +41,7 @@
 - `eml_x_*`: 失敗しうる行 (`faults`の行) は、失敗を`Ctx`に置き (`set_fault`)、仮の値を返す。生成したコードは、呼び出しのすぐ後でfaultの語 (`CTX_FAULT`) を確かめる。ほかの誤りは内部の種類のもので、捕まえたpanicと同じく`shim`の致命的な誤りの道で終わる。包みの本体は`eml_fatal`を名指さない。利用者のCの関数の呼び出しの補助`eml_x_c_*`は行ではなく、利用者のpanicを`worker::park_panic`で置き、ほかの誤りは記録して致命的な誤りの道で終わる (「externの失敗」)
 - `eml_nrt_*`: サービスは、生成したコードが分岐に使う行動の語を返すか、失敗の道が致命的な誤りだけなら値の語を返す
 
-速いモードでヒープの操作が`Err`を返すのは、次の場合だけである: `WrongKind` (`foreign*`の種類か、型の食い違い)、`StaleToken` (空のtokenへの`reuse_in_place`。生成したコードは`reuse_in_place`を呼ばず、tokenの語をそのまま箱にする。「データ」を見る)、`RootMisuse`と`Unrecoverable` (根と回復の操作)。どれも生成したコードからは回復できない。だからヒープのエントリは致命的な誤りだけで終わる。
+速いモードでヒープの操作が`Err`を返すのは、次の場合だけである: `WrongKind` (`foreign*`の種類か、型の食い違い)、`StaleToken` (空のtokenへの`reuse_in_place`。生成したコードは`reuse_in_place`を呼ばず、tokenの語をそのまま箱にする。「データ」を見る)、`RootMisuse`と`Unrecoverable` (根と回復の操作)、`ev_retire`の`BadEvidence` (状態か外側の`evv`が`()`でないevidence。EPの`prompt$`は先に両方を取るので届かないが、verifierが受け入れる手書きのIRは、たとえば状態を持つ`ev_new`の結果を`ev_retire`に渡して届きうる。断ってもヒープは何も変わらない)。どれも生成したコードからは回復できない。だからヒープのエントリは致命的な誤りだけで終わる。
 
 ### ヒープのエントリ
 
@@ -176,7 +176,7 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 - `self`は関数自身のコードのアドレス (自分の記号の`func_addr`) で、冷たいコードだけがそれを作る。`site`は、関数自身の`FnRow.sites`での位置の行の添字である。この組が場所を表すので、プログラムのほかの部分で変わる番号はコードに現れない (「`Image`」)
 - 位置の行 (`FnRow.sites`の`SiteRow`) は、失敗を上げる文ごとに1つある。`Faults`、`Arith`、上げる`Never`で下ろした`extern`の文で、文の順 (ブロックの順、ブロックの中の文の順) に並ぶ。行は文の位置を持ち、位置のない文なら`file`は`NO_FILE`である。だから位置の行は巻き戻しの地点の一部にだけある。何も上げない地点、つまり`exit`と末尾でない呼び出しは、位置の行を持たない
 - 後始末は、地点ごとの冷たいブロック1つである。地点の直後に所有している変数ごとに、その数だけ`eml_rt_decref`を呼び、生きているtokenごとに`eml_rt_drop_token`を呼び、関数の結果ごとに仮の値を返す。仮の値は、`float`では0.0、`obj`、`tobj`、`unit`ではUnitの語、`int`と`enum`では0、`token`では空のtoken (0) である。呼んだ側は中断か置いた失敗を見るので、仮の値を使わない
-- 着地の印`v`を持つ地点の冷たいブロックは、`yielding.target`をロードして`v`と比べる。等しければ、中断はこのフレームに着地する。サービス`eml_nrt_landed(ctx) -> obj`を呼び、それが返すヒープのダミーを持って熱いブロックへ飛ぶ。熱いブロックは`apply`の変数をそれに束縛し直すので、着地したフレームはダミーを値として`prompt$`の呼び出しへ進む。`abort`のバイトは立ったままで、`prompt$`の`yield_finish`が中断を終える。等しくなければ、中断はこのhandleを外す。`eml_rt_ev_take_state(ctx, v)`でhandlerの状態を取り出して`eml_rt_decref`で手放し、その後に地点の後始末へ進む。速いモードの`ev_take_state`は`v`がevidenceであることを前提にするので、これは`v`が同じ関数の中で`ev_new`か`ev_renew`が束縛した変数であるという、どのビルドでも確かめるverifierの規則に頼る ([LIR](lir.md)の「verifier」)。VMの巻き戻しと同じ順である ([VM](vm.md)の「巻き戻し」)。`target`をロードするのは冷たい道だけなので、熱い道の費用は`Call`と同じである
+- 着地の印`v`を持つ地点の冷たいブロックは、`yielding.target`をロードして`v`と比べる。等しければ、中断はこのフレームに着地する。サービス`eml_nrt_landed(ctx) -> obj`を呼び、それが返すヒープのダミーを持って熱いブロックへ飛ぶ。熱いブロックは`apply`の変数をそれに束縛し直すので、着地したフレームはダミーを値として`prompt$`の呼び出しへ進む。`abort`のバイトは立ったままで、`prompt$`の`yield_finish`が中断を終える。等しくなければ、中断はこのhandleを外す。`eml_rt_ev_last_state(ctx, v)`でhandlerの状態を取り出して`eml_rt_decref`で手放し、その後に地点の後始末へ進む。速いモードの`ev_take_state`は`v`がevidenceであることを前提にするので、これは`v`のReprが`ev`であるという、どのビルドでも確かめるverifierの規則に頼る ([LIR](lir.md)の「verifier」)。VMの巻き戻しと同じ順である ([VM](vm.md)の「巻き戻し」)。`target`をロードするのは冷たい道だけなので、熱い道の費用は`Call`と同じである
 - `eml_nrt_landed`は`services.rs`の表`SERVICES`にあり、ヒープのダミーを返すだけである。印を持つ`apply`の結果の語として、VMの着地と同じ値を渡すためである
 - `Never`の行の後のLIRの続きはどこからも届かない。下ろしは、前のブロックのない新しいブロックで続け、行の変数をそのReprの仮の値に束縛する。だからブロックの残りもふつうに下ろせる
 - `never`の操作の節の呼び出しは、末尾の位置でも末尾呼び出しにせず、その後に`unwind::if_aborting`の確かめが続き、熱い側はtrapする。続きは`Never`と同じく仮の値で下ろす (「関数の値」)

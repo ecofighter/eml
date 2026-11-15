@@ -705,7 +705,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         match prim {
             Prim::EvvGet => Op::EvvGet { dst },
             Prim::EvvSet => Op::EvvSet { dst, l: a[0] },
-            Prim::EvvPush => Op::EvvPush {
+            Prim::EvvEnter => Op::EvvEnter {
                 dst,
                 l: a[0],
                 e: a[1],
@@ -747,9 +747,11 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 ev: a[0],
                 state: a[1],
             },
+            Prim::EvRetire => Op::EvRetire { dst, ev: a[0] },
             Prim::EvEvv => Op::EvEvv { dst, ev: a[0] },
             Prim::EvTakeEvv => Op::EvTakeEvv { dst, ev: a[0] },
-            Prim::EvTakeState => Op::EvTakeState { dst, ev: a[0] },
+            // `ev_last_state`は`Ctx::ev_take_state`の持ち主の行なので、2つの行は同じ命令を走らせる
+            Prim::EvTakeState | Prim::EvLastState => Op::EvTakeState { dst, ev: a[0] },
             Prim::EvSetState => Op::EvSetState {
                 dst,
                 ev: a[0],

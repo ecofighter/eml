@@ -29,7 +29,7 @@ use rustc_hash::FxHashMap;
 
 use crate::check::{
     self, BlockShape, Context, Dominators, FnSummary, Site, Tables, TermShape, boxed_scalars,
-    clause_function, field_count, shape,
+    clause_function, field_count, repr_names, shape,
 };
 use crate::liveness;
 use crate::reuse;
@@ -39,6 +39,7 @@ use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, EP_PROMPT, FnIdx, Lends, LirFn, Mark, OpRet,
     Prim, Program, Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
 };
+use eml_extern::RuntimeEntry;
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
 pub fn verify(program: &Program) -> Result<(), VerifyError> {
@@ -124,6 +125,25 @@ fn verify_at(
     if level >= Level::Flattened {
         no_struct_layouts(program)?;
     }
+    check::no_context_reprs(
+        &program.layouts,
+        &program.structs,
+        &program.effects,
+        &program.c_functions,
+        program
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(index, function)| {
+                let params = function.params().iter().map(|&param| function.repr(param));
+                (
+                    function.name.as_str(),
+                    params.collect(),
+                    function.rets.iter().map(|&(repr, _)| repr).collect(),
+                    entered(program, FnIdx(index as u32)),
+                )
+            }),
+    )?;
     forks(program)?;
     let callees = program.lends();
     with_tables(program, |tables| {
@@ -198,6 +218,12 @@ fn verify_at(
     })
 }
 
+/// ランタイムがその関数に入るか。プログラムのエントリと`RuntimeEntry::ALL`の関数で、エンジンは名前でそれを探す。
+fn entered(program: &Program, index: FnIdx) -> bool {
+    let name = program.functions[index.0 as usize].name.as_str();
+    index == program.entry || RuntimeEntry::ALL.iter().any(|entry| entry.name() == name)
+}
+
 /// 1つの関数の走査。ブロックの列の形を確かめ、本体を確かめる。`record`なら関数の巻き戻しの表も返す。
 fn walk(
     program: &Program,
@@ -227,16 +253,82 @@ fn walk(
 /// 子を fork しうるプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を持つ
 /// `fork$E.op` と `reperform$E.op` を持つ。VM は子の evidence をこの名前で作るためである
 /// (docs/spec/core-ir.md の「`par` の子の中断」)。関数の形は、ほかの関数と同じく本体の検査が確かめる。
+/// 規則Fはどのプログラムでも成り立つ。`E.op`のforkの名前の関数は`E.op`の節で、evidenceと操作の引数を受け、evidenceを
+/// `fev`で受ける。`fev`を受ける節の関数は、その操作のforkの名前を持つ。エンジンは持つすべての関数から名前でforkのエント
+/// リを探し、どの読み込みもプログラムを確かめるので、forkの名前の関数はその名前の下で確かめてある (docs/spec/lir.mdの
+/// 「verifier」)。
 fn forks(program: &Program) -> Result<(), VerifyError> {
-    if !program.may_fork() {
-        return Ok(());
-    }
+    let effects = &program.effects;
     let by_name: FxHashMap<&str, &LirFn> = program
         .functions
         .iter()
         .map(|function| (function.name.as_str(), function))
         .collect();
     let find = |name: &str| by_name.get(name).copied();
+    for (effect, info) in effects.iter().enumerate() {
+        let effect = effect as u32;
+        for (op, operation) in info.operations.iter().enumerate() {
+            let op = op as u32;
+            let fork = crate::fork_name(effects, effect, op);
+            let Some(function) = find(&fork) else {
+                continue;
+            };
+            let refuse = |message: String| VerifyError {
+                function: fork.clone(),
+                message,
+            };
+            if function.clause != Some((effect, op)) {
+                return Err(refuse(format!(
+                    "the fork entry is not a clause of `{}`",
+                    operation_text(effects, effect, op)
+                )));
+            }
+            let params = function.params();
+            if params.len() != 1 + operation.params.len() {
+                return Err(refuse(format!(
+                    "the fork entry has {} parameters, but it takes the evidence and {} arguments of the operation",
+                    params.len(),
+                    operation.params.len()
+                )));
+            }
+            let evidence = function.repr(params[0]);
+            if evidence != Repr::Fev {
+                return Err(refuse(format!(
+                    "the fork entry takes its evidence as {}, not fev",
+                    evidence.name()
+                )));
+            }
+        }
+    }
+    for function in &program.functions {
+        let Some((effect, op)) = function.clause else {
+            continue;
+        };
+        let Some(operation) = effects
+            .get(effect as usize)
+            .and_then(|info| info.operations.get(op as usize))
+        else {
+            continue;
+        };
+        let params = function.params();
+        // 引数が足りない節の関数は`clause_function`が拒む
+        let Some(captures) = params.len().checked_sub(1 + operation.params.len()) else {
+            continue;
+        };
+        let fork = crate::fork_name(effects, effect, op);
+        if function.repr(params[captures]) == Repr::Fev && function.name != fork {
+            return Err(VerifyError {
+                function: function.name.clone(),
+                message: format!(
+                    "`{}` takes a fork evidence, but its name is not `{fork}`",
+                    function.name
+                ),
+            });
+        }
+    }
+    if !program.may_fork() {
+        return Ok(());
+    }
     for effect in crate::fork_effects(&program.effects) {
         let info = &program.effects[effect as usize];
         for op in 0..info.operations.len() as u32 {
@@ -248,18 +340,8 @@ fn forks(program: &Program) -> Result<(), VerifyError> {
                 ),
             };
             let fork = crate::fork_name(&program.effects, effect, op);
-            match find(&fork) {
-                None => return Err(missing("fork", fork)),
-                Some(function) if function.clause != Some((effect, op)) => {
-                    return Err(VerifyError {
-                        function: fork,
-                        message: format!(
-                            "the fork entry is not a clause of `{}`",
-                            operation_text(&program.effects, effect, op)
-                        ),
-                    });
-                }
-                Some(_) => {}
+            if find(&fork).is_none() {
+                return Err(missing("fork", fork));
             }
             let reperform = crate::reperform_name(&program.effects, effect, op);
             if find(&reperform).is_none() {
@@ -391,9 +473,10 @@ fn borrowed_params(program: &Program, function: &LirFn) -> Result<(), String> {
             let info = &function.vars[var.0 as usize];
             if !info.repr.is_rc() {
                 return Err(format!(
-                    "`{}` ({}) is a borrowed parameter, but only obj and tobj can be",
+                    "`{}` ({}) is a borrowed parameter, but only {} can be",
                     name(var),
-                    repr_text(&program.layouts, &program.structs, info.repr)
+                    repr_text(&program.layouts, &program.structs, info.repr),
+                    repr_names(|repr| repr.is_rc(), "and")
                 ));
             }
             if info.mark != Mark::Unr {
@@ -511,6 +594,10 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
         name: &function.name,
         clause: function.clause,
         params: function.params().len(),
+        takes_fork: function
+            .params()
+            .iter()
+            .any(|&param| function.repr(param) == Repr::Fev),
     });
     check::with_tables(
         &program.layouts,
@@ -821,6 +908,9 @@ impl<'a> Checker<'a> {
                         "a let of {} values is formed before flatten",
                         vars.len()
                     ));
+                }
+                for &var in vars {
+                    self.cx.context_binding(var, None)?;
                 }
                 self.check_call(owned, call, Receiver::Many(vars))?;
                 if reuse::may_yield(self.program, self.function, call) {
@@ -1406,6 +1496,7 @@ impl<'a> Checker<'a> {
         let entry_borrowed = self.entry_borrowed[value.0 as usize];
         let entry_backed = self.entry_backed[value.0 as usize] && !owned.contains_key(&value);
         for (slot, field) in fields {
+            self.cx.context_binding(field, None)?;
             self.define(owned, field, site)?;
             owned.remove(&field);
             self.entry_borrowed[field.0 as usize] = entry_borrowed;
@@ -1575,12 +1666,20 @@ impl<'a> Checker<'a> {
     }
 
     fn check_rhs(&self, owned: &mut Owned, var: VarId, rhs: &Rhs) -> Result<(), String> {
+        self.cx.context_binding(
+            var,
+            match rhs {
+                Rhs::Prim(prim, _) => Some(prim.row().ret),
+                _ => None,
+            },
+        )?;
         match rhs {
             Rhs::Call(call) => {
                 return self.check_call(owned, call, Receiver::Bound(var));
             }
             Rhs::MakeClosure(index, args) => {
                 self.cx.closure_arity(*index, args.len())?;
+                self.cx.context_captures(*index, args)?;
                 let target = self.function_at(*index)?;
                 if self.cx.boundaries {
                     for (index, (&arg, &param)) in args.iter().zip(target.params()).enumerate() {
@@ -1846,15 +1945,14 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 着地の印`prompt v`の検査。`v`は呼び出しの後も生きている`obj`の変数で、同じ関数の中で`ev_new`か`ev_renew`が
-    /// 束縛したevidenceでなければならない。所有の段では、呼び出しの直後にも所有していなければならない
-    /// (docs/spec/lir.mdの「着地の印」)。
+    /// 着地の印`prompt v`の検査。`v`は呼び出しの後も生きている`ev`の変数、つまりフレーム自身のevidenceである。
+    /// 所有の段では、呼び出しの直後にも所有していなければならない (docs/spec/lir.mdの「着地の印」)。
     fn check_prompt(&self, owned: &Owned, call: &Call, marker: VarId) -> Result<(), String> {
         let what = self.call_text(call, false);
         self.cx.visible(marker)?;
-        if self.function.repr(marker) != Repr::Obj {
+        if self.function.repr(marker) != Repr::Ev {
             return Err(format!(
-                "`{}` is the prompt marker of {what}, but it is {}, not obj",
+                "`{}` is the prompt marker of {what}, but it is {}, not ev",
                 self.cx.name(marker),
                 self.function.repr(marker).name()
             ));
@@ -1871,7 +1969,7 @@ impl<'a> Checker<'a> {
                 self.cx.name(marker)
             ));
         }
-        self.cx.prompt_marker(marker)
+        Ok(())
     }
 
     /// 呼び出しの直後で `var` が生きているか。生存解析のエントリの集合から、終端と後ろの文を逆にたどって求める。

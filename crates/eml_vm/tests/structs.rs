@@ -292,10 +292,11 @@ fn stop(c.0: int) -> tobj {
 #[test]
 fn a_struct_unbox_on_a_dummy_gives_leaf_dummies() {
     let text = |yielding: bool| {
-        let (leave, after) = if yielding {
+        let (op, leave, after) = if yielding {
             (
-                "  let u.1: unit = prim yield_to(e.0, (), ())
-  let d.2: obj = prim dummy()
+                "  let u.2: unit = prim yield_to(e.0, (), ())
+  return ()",
+                "  let d.2: obj = prim dummy()
   return d.2",
                 "  decref n.3
   let k.5: tobj = prim yield_cont_take()
@@ -307,7 +308,8 @@ fn a_struct_unbox_on_a_dummy_gives_leaf_dummies() {
         } else {
             (
                 "  decref e.0
-  let s.1: obj = const \"named\"
+  return ()",
+                "  let s.1: obj = const \"named\"
   let n.2: obj = con Named #0(s.1, 2.5)
   return n.2",
                 "  let v.5: unit = extern Prelude.println(n.3)
@@ -319,22 +321,28 @@ fn a_struct_unbox_on_a_dummy_gives_leaf_dummies() {
 layout Named {{ Named(obj, float) }}
 effect E {{ op(unit) -> unit }}
 fn main() -> unit {{
-  let w.0: tobj = prim evv_get()
-  let e.1: obj = prim ev_new[E]((), w.0)
+  let w.0: evv = prim evv_get()
+  dup w.0
+  let e.1: ev lin = prim ev_new[E]((), w.0)
   let u.9: unit = prim ev_set_clause[E.op](e.1, &op$entry)
-  let r.2: tobj = apply &leave(e.1)
+  let w.10: evv = prim evv_get()
+  let w.11: evv = prim evv_enter(w.10, e.1)
+  let u.12: unit = prim evv_set(w.11)
+  let r.2: tobj = apply &leave(())
   let (n.3: obj, x.4: float) = unbox r.2 Named
   release unboxed r.2 Named #0(n.3, _)
 {after}  let s.7: obj = extern \"Prelude.Show Float.show\"(x.4)
   let u.8: unit = extern Prelude.println(s.7)
+  let u.13: unit = prim evv_set(w.0)
+  let u.14: unit = drop e.1
   return u.8
 }}
-fn leave(e.0: obj) -> obj {{
+fn leave(p.0: unit) -> obj {{
+  let u.5: unit = clause E.op(())
 {leave}
 }}
-internal clause E.op fn op$entry(e.0: obj, u.1: unit) -> unit {{
-  decref e.0
-  return ()
+internal clause E.op fn op$entry(e.0: cev, u.1: unit) -> unit {{
+{op}
 }}
 "
         )
