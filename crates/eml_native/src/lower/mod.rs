@@ -22,6 +22,7 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataId, FuncId, Linkage, Module};
+use eml_lir::unwind::Unwinds;
 use eml_lir::{FnIdx, LirFn, Program, Repr};
 use eml_nrt::Kind;
 use eml_nrt::image::SiteRow;
@@ -115,7 +116,13 @@ pub fn signature_of(function: &LirFn) -> Signature {
     tail_signature(&params(function), &rets(function))
 }
 
-pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) -> Built<Lowered> {
+/// `unwinds`は、`eml_lir::unwind::verified`が`program`について返した表である。
+pub fn program<M: Module>(
+    module: &mut M,
+    program: &Program,
+    unwinds: Vec<Unwinds>,
+    keep_clif: bool,
+) -> Built<Lowered> {
     // エントリと`eml$raise`は、プログラムの関数より前に決まった順で宣言する。どの本体もそれらを名指せ、その番号は
     // プログラムによらない
     let mut entries = HashMap::new();
@@ -158,10 +165,6 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
             &signature_of(function),
         )?);
     }
-    let unwinds = match eml_lir::unwind::verified(program) {
-        Ok(unwinds) => unwinds,
-        Err(error) => panic!("internal error: invalid LIR at the native load: {error}"),
-    };
     let mut ctx = module.make_context();
     let mut fctx = FunctionBuilderContext::new();
     let mut functions = Vec::with_capacity(ids.len());

@@ -4410,10 +4410,16 @@ fn f(p.0: unit) -> unit {
 }
 ";
 
-    /// どの関数も、先頭の位置にエントリの行を持つ。RC の対象の引数を持たない関数と、verifier の拒む関数の行は空である
-    /// (docs/spec/vm.md の「巻き戻しの表」)。
+    /// どの関数も、先頭の位置にエントリの行を持つ。RCの対象の引数を持たない関数の行は空である。確かめない読み込みは、
+    /// verifierの拒む関数も空のエントリの行で読む (docs/spec/vm.mdの「巻き戻しの表」)。
     #[test]
     fn every_function_has_an_entry_row_at_its_start() {
+        let entry_row = |code: &CodeBase<eml_rt::Checked>, name: &str| {
+            let start = code.functions[function(code, name) as usize].start;
+            let row = code.tables.unwind_at(start).expect(name);
+            assert_ne!(row.entry, UnwindEntry::No, "{name}");
+            row.slots.clone()
+        };
         let text = "\
 fn main() -> unit {
   let n.0: int = call count(3)
@@ -4426,24 +4432,27 @@ fn keep(a.0: obj, n.1: int) -> unit {
   decref a.0
   return ()
 }
+";
+        let (code, _, _) = limit_fixture(text);
+        for (name, slots) in [("main", vec![]), ("count", vec![]), ("keep", vec![(0, 1)])] {
+            assert_eq!(entry_row(&code, name), slots, "{name}");
+        }
+
+        let text = "\
+fn main() -> unit {
+  return ()
+}
 fn leaks(a.0: obj) -> unit {
   return ()
 }
 ";
         let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
         assert!(eml_lir::verify(&program).is_err(), "`leaks` is rejected");
-        let (code, _, _) = limit_fixture(text);
-        for (name, slots) in [
-            ("main", vec![]),
-            ("count", vec![]),
-            ("keep", vec![(0, 1)]),
-            ("leaks", vec![]),
-        ] {
-            let start = code.functions[function(&code, name) as usize].start;
-            let row = code.tables.unwind_at(start).expect(name);
-            assert_ne!(row.entry, UnwindEntry::No, "{name}");
-            assert_eq!(row.slots, slots, "{name}");
-        }
+        let mut code =
+            CodeBase::<eml_rt::Checked>::new(Arc::new(Control::new(eml_rt::Limits::default())));
+        // SAFETY: `leaks`の漏れはわざと置いた誤りで、実行すれば検査モードのリークの検査が止める。ここでは読み込むだけである
+        unsafe { code.load_unverified(&program, &crate::Linked::default()) }.unwrap();
+        assert_eq!(entry_row(&code, "leaks"), vec![]);
     }
 
     /// タスクの外で深さの上限を超えたら、run を止める。

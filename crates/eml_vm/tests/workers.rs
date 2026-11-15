@@ -368,7 +368,10 @@ fn twice(p.0: unit) -> tobj {{
 }}
 {FORKS}"
     );
-    let (_, result) = run_program(&parse(&text), limits(2));
+    let config = RunConfig::default()
+        .with_debug_heap(true)
+        .with_control(limits(2));
+    let (_, result) = crate::common::execute_unverified(&parse(&text), &config);
     let error = result.unwrap_err();
     assert!(
         matches!(

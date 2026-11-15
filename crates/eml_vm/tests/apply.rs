@@ -232,9 +232,9 @@ fn first(a.0: tobj, b.1: tobj) -> tobj {
     );
 }
 
-/// `Finish` はどの関数にも属さないので、そこで起きた誤りには最後に戻った関数の名前を付ける。`leave` は `evv` を残して
-/// `Finish` へ戻り、`Finish` の後の確かめがそれを誤りにする。`evv` を残すのは verifier の見ない誤りなので、VM 自身の
-/// 見張りを確かめるため通さずに実行する。
+/// `Finish`はどの関数にも属さないので、そこで起きた誤りには最後に戻った関数の名前を付ける。`leave`は`evv`を残して
+/// `Finish`へ戻り、`Finish`の後の確かめがそれを誤りにする。`evv`を残すのはverifierの見ない誤りなので、このIRは
+/// verifierを通る。
 #[test]
 fn an_error_at_finish_names_the_function_that_returned_last() {
     let text = "\
@@ -247,12 +247,17 @@ fn leave(x.0: tobj) -> tobj {
   let w.1: tobj = prim evv_get()
   dup w.1
   let e.2: obj = prim ev_new[E]((), w.1)
+  let u.5: unit = prim ev_set_clause[E.op](e.2, &op$entry)
   let w.3: tobj = prim evv_push(w.1, e.2)
   let u.4: unit = prim evv_set(w.3)
   return x.0
 }
+internal clause E.op fn op$entry(e.0: obj, u.1: unit) -> unit {
+  decref e.0
+  return ()
+}
 ";
-    let (_, result) = run_unverified(text);
+    let (_, result) = run_lir_stats(text);
     assert_eq!(
         result.unwrap_err().to_string(),
         "internal error: the evidence list or a yield is left at the end in `leave`"

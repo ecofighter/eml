@@ -709,7 +709,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
   - その後に、vが同じ関数の中で`ev_new`か`ev_renew`が束縛した変数であることを確かめる。どちらもevidenceを返す (``the prompt marker `ev.1` is not an evidence made by `ev_new` or `ev_renew` in this function``)。中断が着地しないフレームを通るとき、巻き戻しはvから`ev_take_state`で状態を取り出し、速いモードではそれが物体を確かめずにevidenceの欄を書くためである
   - 印のほかの検査の後に、印の付いた呼び出しに`prompt$`が続くことを確かめる (上の「着地の印」。`` the apply with the prompt marker `ev.1` is not followed by `prompt$` ``)
-- `eml_lir::unwind::points`は、所有の段の走査に、関数のエントリと巻き戻しの地点ごとの所有を書き留めさせる。VMのコード生成が、これで巻き戻しの表を作る ([VM](vm.md)の「巻き戻し」)。所有を求める走査を、verifierと巻き戻しの表で2つ持たないためである。`eml_lir::unwind::verified(program)`は、プログラム全体の検査と同じ1回の走査で、すべての関数の表を`program.functions`の順に返す
+- 所有の段の走査は、関数のエントリと巻き戻しの地点ごとの所有を書き留める。所有を求める走査を、verifierと巻き戻しの表で2つ持たないためである。`eml_lir::unwind::verified(program)`は、プログラム全体の検査と同じ1回の走査で、すべての関数の表を`program.functions`の順に返す。`eml_lir::unwind::verified_for(program, walked)`は同じ検査をするが、たどるのは`walked`の関数だけで、プログラム全体の規則 (forkの関数、`clause`の印の関数のABI、値の参照など) はすべての関数に当て、`walked`の関数の表だけを返す。外した関数は、前の確かめが同じ名前でたどっていなければならず、そのコードが同じであることは呼ぶ側の約束である ([VM](vm.md)の「追記」)。VMの読み込みは、これですでにある関数をたどり直さない ([VM](vm.md)の「追記」)。`eml_lir::unwind::points(program, wanted)`はプログラム全体の規則を確かめず、関数ごとに表か誤りを返す。verifierを通らないIRの地点を見るテストと、VMの確かめない読み込み (下の「実行の前提」) が使う
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)
 - 境界の検査は、R7 と R8 の検査のうち、`jump`、`return`、`box`、`unbox` を除くものである。直接の呼び出しの引数と結果、`closure` の引数、`apply` の呼ばれる値と引数と結果 (`tobj` と比べる)、`par` の子 (`tobj` と比べる) と結果 (`obj`)、`clause` と `prim` のオペランドと結果、`clause` の印の関数の引数と `ret` が操作の表と互換であること、宣言した Repr が `tobj` のフィールドである。`tail` の結果は、呼び出し元の `rets` と Repr と印を比べる。translate と EP の出力は、box の挿入より前には境界に合わないので、Core IR の verifier と LIR のエントリの段は境界を見ない
 - 所有は、どの経路でも、関数のエントリと束縛で得た参照と、`dup` と `release` で増やした参照が、消費と `decref` と `release` でちょうど使い切られることを確かめる。経路ごとに持つのは、RC の対象の変数ごとの所有の数だけである。`return` と `tail` の時点では、所有が残らない
@@ -808,7 +808,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `ev_new[E]`が束縛するevidenceのエントリは、どれも、その`ev_new`のブロックの中で、evidenceのほかの最初の使いより前、ブロックの終わりより前に、ちょうど1回入れる。`dup`、`decref`、`release`、`drop_token`と着地の印は使いに数えない。その使いの後や別のブロックの`ev_set_clause`は拒む (``the `State.put` entry of `e.2` is not filled before `e.2` is used``、``the `State.get` entry of `e.2` is filled twice``、``an entry of `e.2` is filled after `e.2` is used``)。入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むためである
   - `clause E.op`の`callee`は、同じ関数の中の`prim ev_clause[E.op](v)`で束縛した変数で、vは同じ関数の中の`ev_lookup[E]`か`ev_new[E]`で束縛した変数である。関数の引数、呼び出しの結果、別の操作のエントリを`callee`にした呼び出しは拒む (``a clause of `Counter.get` calls `c.0` (tobj), which `ev_clause[Counter.get]` did not bind in this function``、``a clause of `Counter.get` calls `c.3`, read from `e.1` (obj), which is not an evidence of `Counter` found or made in this function``)
   - これらの規則で、節の呼び出しが呼ぶクロージャは、handleが同じ操作のエントリに入れたものになり、そのコードは操作のシグネチャを持つ。`evv`がevidenceだけを持つことと、実行系が`par`の子のために作るevidenceのエントリは、verifierが確かめない。この2つは実行の前提に残る (下の「実行の前提」)
-  - ネイティブの読み込みは、どのビルドでもプログラム全体に所有の段のverifierを走らせ、verifierが拒むプログラムを断る (`eml_lir::unwind::verified`)。VMは拒まれた関数を表のない関数として読む
+  - どちらの読み込みも、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムを断る。ネイティブの読み込みは`eml_lir::unwind::verified`でプログラム全体をたどってpanicする。VMの読み込みは`eml_lir::unwind::verified_for`で、プログラム全体の規則をすべての関数に当て、変換する関数 (debugのビルドではすべての関数) だけをたどり、`CompileError::Invalid`を返す。すでにある関数を飛ばすのは、名前が同じ関数は同じコードであるという約束による ([VM](vm.md)の「追記」)
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける
 - `par`の検査は次のとおりである。Core IRの2つの段と、LIRの6つの段のすべてで走る
   - `pair` は、`tobj` のフィールドをちょうど2つ持つ構築子である。VM は子の一様な結果を2つ並べて組を作るためである (``the pair of a par is `Box` #0, which does not have two tobj fields``)。表にない配置とタグの範囲は R8 と同じ文言で、主語を ``the pair of a par`` にする
@@ -893,7 +893,7 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 - `faults` でない extern、prim、末尾の呼び出し (`tail call`、`tail apply`、`tail clause`) は地点にならない。末尾の呼び出しはフレームを呼ばれる側に渡すので、その位置に止まるフレームがない
 - 地点でないものは、関数の中で中断が始まらない。中断が通るフレームは、いつも地点の命令の直後で止まっているか、関数のエントリで止まっている
 - 関数ごとにエントリの行を1つ持つ。エントリの行は、関数に入った直後に所有している値を並べる。エントリのフレームは、貸された引数を除くRCの表現を持つ引数をすべて所有し、借りたフィールドもtokenも着地の印も持たない。そのため行は、所有しているRCの表現を持つ引数を数1で、`VarId`の昇順に並べるだけである。貸された引数は呼んだ側が生かしておき、呼んだ側の行が手放す
-- `eml_lir::unwind::points(program, wanted)` は、関数ごとに `Unwinds { entry, points }` を `FnIdx` の番号で返す。`entry` がエントリの行、`points` が地点で、ブロックの順、文の順に並ぶ。所有は、所有の段の走査 (上の「verifier」) が、ブロック 0 の最初の文の前と各地点で書き留める ([VM](vm.md) の「巻き戻しの表」)
+- `eml_lir::unwind::verified`、`verified_for`、`points`は、関数ごとに`Unwinds { entry, points }`を`FnIdx`の番号で返す。`entry`がエントリの行、`points`が地点で、ブロックの順、文の順に並ぶ。所有は、所有の段の走査 (上の「verifier」) が、ブロック0の最初の文の前と各地点で書き留める ([VM](vm.md)の「巻き戻しの表」)
 - 名前が同じ関数の表は、REPL のどの入力で作っても同じになる。表は関数のコードだけで決まり、ほかの関数に依存しない。名前が同じ関数は同じコードなので ([VM](vm.md) の「追記」)、表も同じになる
 
 ## 実行の前提
@@ -913,7 +913,7 @@ VMの速いモードとネイティブのコードは、読む値の形を確か
 
 verifierを通ることは、この前提を保証しない。verifierは命令ごとに所有、Repr、印を確かめるが、値を作ったときの配置を追わず、`poly`の印が指す物体のKindも確かめられない (上の「Kind の印の検査」)。externの引数は、Reprと印でしか比べない。前提を保証するのは、ソースのプログラムの型と、各パスの正しさである。
 
-エンジンのエントリ (`eml_vm::execute`、`Machine::load`、`eml_native::execute`、`NativeMachine::load`) はRustの安全な関数で、releaseのビルドではこの前提を確かめない。約束するのは呼ぶ側である。`eml_cli`は、検査を通ったプログラムから自分で作ったLIRだけを渡す。テストは手書きのLIRを渡し、まず検査モードで実行する ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)。`Machine`に続けて読み込むときの約束は、[VM](vm.md)の「追記」にある。
+エンジンのエントリ (`eml_vm::execute`、`Machine::load`、`eml_native::execute`、`NativeMachine::load`) はRustの安全な関数である。読み込みは、どのビルドでもverifierが確かめることを確かめ、verifierが拒むプログラムを断る (上の「verifier」)。残りの前提を約束するのは呼ぶ側である。`eml_cli`は、検査を通ったプログラムから自分で作ったLIRだけを渡す。テストは手書きのLIRを渡し、まず検査モードで実行する。verifierが拒むIRを読み込めるのは`eml_vm`のテストだけで、開発だけのfeature `testing`の後ろにある確かめない読み込み (`unsafe fn load_unverified`) を使う ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)。`Machine`に続けて読み込むときの約束は、[VM](vm.md)の「追記」にある。
 
 ## 実行時エラー
 

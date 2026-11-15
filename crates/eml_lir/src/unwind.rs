@@ -34,13 +34,12 @@ pub struct Unwinds {
     pub points: Vec<UnwindPoint>,
 }
 
-/// 関数ごとの巻き戻しの表。`FnIdx` の番号で引く。地点は、すべての関数の末尾でない呼び出し、末尾でない `apply` と
-/// `clause` と `par`、`Pure` でない extern (誤りが `try_io` か `try_panic` まで巻き戻す)、`prim yield_abort` と
-/// `prim child_abort` である。呼ばれる側が中断するかは問わない。所有の段の verifier が拒む関数は、表の代わりにその
-/// 誤りを返す。VM は verifier を通さない IR も読み込むので (VM 自身の見張りを確かめるテスト)、panic せず、拒まれた
-/// 関数を表のない関数として扱えるようにする。`wanted` でない関数は求めずに `None` にする。VM の追記は新しい関数の
-/// 表だけを要るので、すでにある関数の走査を省く。プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り
-/// 直さないためである。
+/// 関数ごとの巻き戻しの表。`FnIdx`の番号で引く。地点は、すべての関数の末尾でない呼び出し、末尾でない`apply`と
+/// `clause`と`par`、`Pure`でないextern (誤りが`try_io`か`try_panic`まで巻き戻す)、`prim yield_abort`と
+/// `prim child_abort`である。呼ばれる側が中断するかは問わない。関数を1つずつ確かめ、プログラム全体の規則は
+/// 確かめない。所有の段で拒まれた関数は表の代わりにその誤りを返し、ほかの関数は表を返す。verifierを通さないIRの
+/// 地点を見るテストと、VMの確かめない読み込み (feature `testing`) のためである。`wanted`でない関数は求めずに`None`に
+/// する。プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り直さないためである。
 pub fn points(
     program: &Program,
     wanted: impl Fn(FnIdx) -> bool,
@@ -52,7 +51,23 @@ pub fn points(
 /// `eml_lir::verify` が拒むプログラムは、表の代わりにその誤りを返す。検査と表の記録は関数ごとに1回の走査で行う
 /// (docs/spec/lir.md の「verifier」)。
 pub fn verified(program: &Program) -> Result<Vec<Unwinds>, VerifyError> {
-    verify::verified(program)
+    verify::verified(program, |_| true).map(|unwinds| {
+        unwinds
+            .into_iter()
+            .map(|table| table.expect("every function is walked"))
+            .collect()
+    })
+}
+
+/// `verified`と同じくプログラム全体を所有の段で確かめるが、たどるのは`walked`の関数だけで、その表を
+/// `program.functions`の欄に返す (ほかの欄は`None`)。プログラム全体の規則は、関数どうしを結ぶうえに走査を要らない
+/// ので、すべての関数に当てる。外した関数は、同じ名前で前の確かめの走査を通っていなければならない。VMの追記は、
+/// これですでにある関数の走査を省く (docs/spec/vm.mdの「追記」)。
+pub fn verified_for(
+    program: &Program,
+    walked: impl Fn(FnIdx) -> bool,
+) -> Result<Vec<Option<Unwinds>>, VerifyError> {
+    verify::verified(program, walked)
 }
 
 /// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。複数の値を返す呼び出しは、葉をすべて束縛する

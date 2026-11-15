@@ -247,6 +247,11 @@ impl NativeMachine {
         if !linked.fits(&program.c_functions, &program.c_handles) {
             return Err(LoadError::LinkMismatch);
         }
+        // プログラムを信頼するコード (エントリの形、エフェクトの番号、下ろし) より前に確かめる
+        let unwinds = match eml_lir::unwind::verified(program) {
+            Ok(unwinds) => unwinds,
+            Err(error) => panic!("internal error: invalid LIR at the native load: {error}"),
+        };
         let entry = program.function(program.entry);
         if lower::rets(entry) != [Kind::I64] {
             return Err(LoadError::Entry {
@@ -275,7 +280,7 @@ impl NativeMachine {
             }
         }
         let module = self.module.insert(JITModule::new(builder));
-        let defined = lower::program(module, program, self.keep_clif)
+        let defined = lower::program(module, program, unwinds, self.keep_clif)
             .and_then(|defined| Ok(module.finalize_definitions().map(|()| defined)?));
         let lowered = match defined {
             Ok(lowered) => lowered,

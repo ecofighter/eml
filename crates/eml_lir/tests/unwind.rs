@@ -1,8 +1,8 @@
 //! 巻き戻しの点 (`eml_lir::unwind::points`)。入力は所有の段の verifier を通る、Perceus の後の LIR のテキストである
 //! (docs/spec/vm.md の「巻き戻しの表」)。
 
-use eml_lir::unwind::{UnwindPoint, Unwinds, points};
-use eml_lir::{BlockId, VarId, parse, verify};
+use eml_lir::unwind::{UnwindPoint, Unwinds, points, verified_for};
+use eml_lir::{BlockId, FnIdx, VarId, parse, verify};
 
 /// `name` の関数の巻き戻しの表。入力が所有の段の verifier を通ることも確かめる。
 fn unwinds_of(text: &str, name: &str) -> Unwinds {
@@ -208,7 +208,8 @@ fn f(k.2: obj) -> obj {
     assert_eq!(points_of(text, "f"), [point(0, 2, &[(2, 1)], None)]);
 }
 
-/// 所有の段の verifier が拒む関数は、地点の代わりにその誤りを返す。VM は、その関数を表のない関数として扱う。
+/// 所有の段のverifierが拒む関数は、地点の代わりにその誤りを返す。VMは、確かめない読み込みでだけ、その関数を表の
+/// ない関数として読む。
 #[test]
 fn unverified_lir_has_no_points() {
     let program = parse("fn f(a.0: obj) -> unit {\n  return ()\n}\n")
@@ -221,6 +222,50 @@ fn unverified_lir_has_no_points() {
         error.to_string(),
         "`a.0` is still owned at the end of the function in `f`"
     );
+}
+
+/// `verified_for`は`walked`の関数だけをたどり、その表を`program.functions`の欄に返す。外した関数の本体の誤りは
+/// 見ない (docs/spec/lir.mdの「verifier」)。
+#[test]
+fn verified_for_walks_only_the_selected_functions() {
+    let program = parse(
+        "fn f(a.0: obj) -> unit {\n  return ()\n}\nfn g(a.0: obj) -> unit {\n  decref a.0\n  return ()\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        verified_for(&program, |FnIdx(i)| i == 1),
+        Ok(vec![
+            None,
+            Some(Unwinds {
+                entry: vec![(VarId(0), 1)],
+                points: Vec::new(),
+            }),
+        ])
+    );
+    assert_eq!(
+        verified_for(&program, |_| true).map_err(|error| error.to_string()),
+        Err("`a.0` is still owned at the end of the function in `f`".to_string())
+    );
+}
+
+/// `verified_for`は、たどらない関数にもプログラム全体の規則を当てる。`g`の引数のReprは操作と違う。
+#[test]
+fn verified_for_applies_the_program_rules_to_every_function() {
+    let program = parse(
+        "\
+effect E { op(unit) -> unit }
+fn main() -> unit {
+  return ()
+}
+internal clause E.op fn g(e.0: obj, x.1: float) -> unit {
+  decref e.0
+  return ()
+}
+",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let error = verified_for(&program, |FnIdx(i)| i == 0).unwrap_err();
+    assert_eq!(error.function, "g", "{error}");
 }
 
 #[test]

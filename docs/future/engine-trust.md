@@ -10,7 +10,7 @@ VMの速いモードとネイティブのコードは、LIRについて前提に
 
 | | 約束 | エントリ | 破れる理由 |
 |---|---|---|---|
-| P1 | プログラムは実行の前提を満たす | `eml_vm::execute`、`Machine::load`と、`eml_native`の同じエントリ | `Program`の欄はすべて公開で、`eml_lir::parse`はverifierを通さないので、安全なコードが前提を満たさないプログラムを組める |
+| P1 | プログラムは実行の前提を満たす | `eml_vm::execute`、`Machine::load`と、`eml_native`の同じエントリ | `Program`の欄はすべて公開で、`eml_lir::parse`はverifierを通さないので、安全なコードが前提を満たさないプログラムを組める。読み込みのverifierは確かめられることを断るが、挙げた前提は残る |
 | P2 | すでにコードを持つマシンに足すプログラムは、前に読み込んだプログラムと同じセッションから作ったものである。名前が同じ関数は同じコードで、根は書いたときの型のまま読む | 2回目からの`Machine::load` | debugのビルドは命令列を比べるが、releaseのビルドは比べない ([VM](../spec/vm.md)の「追記」) |
 | P3 | `run`に渡すエントリの番号は、同じマシンの`load`が返した番号である | `Machine::run`、`run_shown` | 番号は`u32`で、`Loaded`の欄は公開である |
 | P4 | `run_shown`に渡すエントリは文字列を返す | `Machine::run_shown` | 速いモードは、確かめずに結果を文字列として写す |
@@ -36,7 +36,8 @@ VMの速いモードとネイティブのコードは、LIRについて前提に
 - `eml_lir::Trusted`は、`Program`を非公開の欄に包む。作るのは`unsafe fn Trusted::new(program)`だけで、その安全の約束がP1である。読むのは`Deref<Target = Program>`を通し、中のプログラムを書き換える道は置かない。`eml_lir`は約束の中身を定めるだけで、自分では約束しないので、`unsafe`のブロックを持たないままである
 - `eml_vm`と`eml_native`の公開の関数のうち、プログラムを受け取るものは、`CodeBase::load`も含めて、すべて`&Trusted`を受け取る。`eml_lir::parse`、各パス、verifier、`pretty`は`Program`を使い続ける
 - テストの外で`Trusted::new`を呼ぶのは`Session`だけである。`Session::compile`が`Trusted`を返し、REPLも入力のプログラムを同じ関数で作る。`Session::compile_with`は、引数の関数が作ったものをそのまま返す。パスの途中で止めるテストは`Program`を受け取る
-- `Trusted::new`はverifierを通さない。パスの後のverifierと、ネイティブの読み込みのverifierは、debugのビルドに残す。VMの見張りを確かめるテストは、verifierが拒むIRから`Trusted`を作り、検査モードだけで実行する
+- `Trusted::new`はverifierを通さない。どちらの読み込みも、どのビルドでも最後の段のverifierを走らせ、verifierが拒むプログラムを断る ([LIR](../spec/lir.md)の「実行の前提」)。そのためP1が覆うのは、verifierが確かめられないこと、つまりそこに挙げた前提だけである
+- verifierが拒むIRを要るテストは、`Trusted`を作らない。開発だけのfeature `testing`の後ろにある`eml_vm`の確かめない読み込み (`unsafe fn`) を使う
 - P2: `Machine::load`は、コードを持たないマシンだけが受け付け、ほかではpanicする。コードを持つマシンに足すのは`unsafe fn Machine::extend`で、その安全の約束がP2である。呼ぶのはREPLである。debugのビルドの比べは残す
 - P3: `Loaded`は欄を隠し、`run`は`Loaded`を受け取る。マシンは、自分が返していないエントリを内部の誤りとして断る
 - P4: `run_shown`は`unsafe fn`で、その安全の約束がP4である。REPLは、入力の型からこれを約束する。結果の種類を実行時に確かめる形は採らない。速いモードで語の種類を読む操作を`eml_rt`に足すことになり、呼ぶ所はREPLの1か所だけである
@@ -56,7 +57,6 @@ VMの速いモードとネイティブのコードは、LIRについて前提に
 - 読み込むときの健全な検査: 一様な位置、クロージャ、evidence、根を通して、すべての値の型を追うことになる。そのためには、EPと各パスを通してLIRに型を残さなければならない。印はLIRから復元できない。これは[Verus で検証する範囲](verification.md)が検討する証明で、段1つの大きさではない
 - 型検査からLIRまでの各段の型を非公開の欄で閉じる: Rustには決めたcrateにだけ見せる可視性がないので、crateをまたぐたびに`unsafe`のコンストラクタが要り、テキストで書くIRのテストが入力を組めなくなる。すべての段の診断を見て誤りがないと分かるのは`Session`だけなので、そこで1回約束するのと同じことしか言えない
 - テストにコンストラクタを開けるfeature: featureはワークスペースで1つにまとまり、どのcrateからでも入れられるので、安全の境目にならない
-- releaseのビルドでも読み込みのたびにverifierを通す: 実行のたびに時間がかかり、P1を保証しない
 
 ## 論点
 

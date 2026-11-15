@@ -5,7 +5,7 @@
 use eml_vm::CompileError;
 
 use crate::common::{
-    compile, disasm_lowered, parse, run_lir_stats, run_lowered_stats, run_unverified,
+    compile, disasm_lowered, parse, run_lir, run_lir_stats, run_lowered_stats, run_unverified,
 };
 
 const V: &str = "Vec3{float, float, float}";
@@ -368,7 +368,7 @@ fn main() -> unit {
   return u.7
 }
 ";
-    let (out, result) = run_unverified(text);
+    let (out, result) = run_lir(text);
     result.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "ok\n");
 

@@ -67,11 +67,69 @@ impl<M: Mode> CodeBase<M> {
     /// `linked` は、このプログラムの C の表をつないだ結果である。ポインタが組にした宣言を解決したものであることは
     /// `Linked::new` の約束で、ここでは `fits` でその宣言をプログラムの表と比べる。合わないのは呼び手の誤りなので、
     /// panic する (docs/spec/vm.md の「C の関数の命令」)。
+    ///
+    /// `linked`を比べた後に、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムは
+    /// `CodeBase`に何も書かずに`Invalid`で断る。たどるのは変換する関数だけで、debugのビルドでは変換し直す関数もたどる。プログラム全体の規則は
+    /// プログラム全体に当てる (docs/spec/vm.mdの「追記」)。
     pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<u32, CompileError> {
+        self.load_with(program, linked, |code| {
+            eml_lir::unwind::verified_for(program, |index| code.walked(program, index))
+                .map_err(CompileError::Invalid)
+        })
+    }
+
+    /// verifierを通さずにプログラムを読み込む。verifierが拒む関数はエントリの行だけを持ち、地点の行を持たないので、
+    /// その関数の地点で止まったフレームを通る中断は内部の誤りになる。VM自身の見張りと検査モードを確かめるテストの
+    /// ためだけにある (docs/implementation/testing.mdの「`eml_vm` のテスト」)。
+    ///
+    /// # Safety
+    ///
+    /// プログラムは、呼ぶテストがわざと起こす誤りを除いて、verifierが確かめる規則をすべて含む実行の前提を満たす
+    /// (docs/spec/lir.mdの「実行の前提」)。テストは、VMの見張りと検査モードだけを守りとして受け入れる。
+    #[cfg(feature = "testing")]
+    pub unsafe fn load_unverified(
+        &mut self,
+        program: &Program,
+        linked: &Linked,
+    ) -> Result<u32, CompileError> {
+        self.load_with(program, linked, |code| {
+            Ok(
+                eml_lir::unwind::points(program, |index| code.walked(program, index))
+                    .into_iter()
+                    .map(|table| {
+                        table.map(|table| {
+                            table.unwrap_or(Unwinds {
+                                entry: Vec::new(),
+                                points: Vec::new(),
+                            })
+                        })
+                    })
+                    .collect(),
+            )
+        })
+    }
+
+    /// 読み込みが表を要る関数。変換する関数 (名前がまだない関数) と、debugのビルドでは変換し直して比べる関数である。
+    fn walked(&self, program: &Program, FnIdx(i): FnIdx) -> bool {
+        cfg!(debug_assertions)
+            || !self
+                .index
+                .functions
+                .contains_key(&program.functions[i as usize].name)
+    }
+
+    /// `tables`は`walked`の関数の巻き戻しの表を、`program.functions`の欄に並べて返す。
+    fn load_with(
+        &mut self,
+        program: &Program,
+        linked: &Linked,
+        tables: impl FnOnce(&Self) -> Result<Vec<Option<Unwinds>>, CompileError>,
+    ) -> Result<u32, CompileError> {
         assert!(
             linked.fits(&program.c_functions, &program.c_handles),
             "the linked calls and dtors line up with the C tables of the program"
         );
+        let unwinds = tables(self)?;
         let entry = program.function(program.entry);
         if entry.rets.len() > 1 {
             return Err(CompileError::MultiValueEntry {
@@ -105,20 +163,6 @@ impl<M: Mode> CodeBase<M> {
         let strings: Vec<u32> = strings.iter().map(|text| pool.string(text)).collect();
         let links = Links { strings, ..links };
         let known = functions.len();
-        // verifier の拒む関数は空のエントリの行だけを持ち、地点の行を持たない。その関数の地点で止まったフレームを
-        // 通る中断は内部の誤りになる。VM 自身の見張りを確かめるテストが、verifier を通さない IR を読み込むためである。
-        // 表を作るのは変換する関数だけで、debug ビルドではすでにある関数も変換し直して比べる
-        let unwinds: Vec<Unwinds> = eml_lir::unwind::points(program, |FnIdx(i)| {
-            cfg!(debug_assertions) || links.functions[i as usize] as usize >= known
-        })
-        .into_iter()
-        .map(|unwinds| {
-            unwinds.and_then(Result::ok).unwrap_or(Unwinds {
-                entry: Vec::new(),
-                points: Vec::new(),
-            })
-        })
-        .collect();
         let mut result = Ok(());
         for (i, function) in program.functions.iter().enumerate() {
             if links.functions[i] as usize >= known {
@@ -126,7 +170,7 @@ impl<M: Mode> CodeBase<M> {
                     program,
                     FnIdx(i as u32),
                     function,
-                    &unwinds[i],
+                    unwinds[i].as_ref().expect("a converted function is walked"),
                     &links,
                     &mut pool,
                     out,
@@ -346,7 +390,7 @@ fn async_entries(program: &Program, index: &Index) -> Result<Option<AsyncEntries
 )]
 fn check_known<M: Mode>(
     program: &Program,
-    unwinds: &[Unwinds],
+    unwinds: &[Option<Unwinds>],
     links: &Links,
     functions: &[FnEntry],
     known: usize,
@@ -365,7 +409,9 @@ fn check_known<M: Mode>(
             program,
             FnIdx(i as u32),
             function,
-            &unwinds[i],
+            unwinds[i]
+                .as_ref()
+                .expect("a debug build walks every function"),
             links,
             pool,
             out,

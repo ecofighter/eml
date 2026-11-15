@@ -66,7 +66,9 @@ default = ["run"]
 hir = ["dep:eml_hir", "dep:eml_cli"]
 types = ["hir", "dep:eml_types", "eml_cli/types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir", "eml_cli/core"]
-run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_native", "dep:eml_nrt", "dep:eml_rt", "dep:eml_sched", "eml_cli/run"]'
+run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_native", "dep:eml_nrt", "dep:eml_rt", "dep:eml_sched", "eml_cli/run"]
+[eml_vm]
+testing = []'
 
 # eml_cliとeml_test_support以外のcrateが、ほかのworkspaceのcrateから再exportする項目。再exportするのは自分の公開の
 # シグネチャの型だけで、moduleはeml_nrtの__rtだけである
@@ -224,6 +226,15 @@ fi
 testing=$(cargo tree -p eml_cli -e normal,build -f '{p} {f}' | tr -d '\r' | { grep -c 'eml_sched.*testing' || true; })
 if [ "$testing" -ne 0 ]; then
   fail "eml_sched's feature testing is in eml_cli's tree"
+fi
+
+# 実行のバイナリの依存の木に、eml_vmのtestingはない。確かめない読み込みを名指すのはeml_vmだけである
+testing=$(cargo tree -p eml_cli -e normal,build -f '{p} {f}' | tr -d '\r' | { grep -c 'eml_vm.*testing' || true; })
+if [ "$testing" -ne 0 ]; then
+  fail "eml_vm's feature testing is in eml_cli's tree"
+fi
+if grep -rn --include='*.rs' load_unverified crates | grep -v '^crates/eml_vm/'; then
+  fail "load_unverified is named outside crates/eml_vm"
 fi
 
 if grep -rn unsafe crates/eml_extern/src; then

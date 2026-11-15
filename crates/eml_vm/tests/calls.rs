@@ -363,17 +363,17 @@ fn make(x.0: tobj) -> tobj {
   return x.0
 }
 ";
-    let (_, result) = run_unverified(text);
+    let (_, result) = run_lir(text);
     assert_eq!(
         result.unwrap_err().to_string(),
         "internal error: applying a value that is not a function in `make`"
     );
 }
 
-/// `ApplyRest` が末尾で部分適用のクロージャを返しても、最後に戻った関数は変わらない。`main` の末尾の `apply` は
-/// `make` の後に `ApplyRest` で `two` を部分適用し、そのまま `Finish` に戻る。`Finish` で起きた誤り (エフェクトの
-/// リストが残っている) には、最後に戻った `make` の名前を付ける。`evv` を残すのは verifier の見ない誤りなので、
-/// VM 自身の見張りを確かめるため通さずに実行する。
+/// `ApplyRest`が末尾で部分適用のクロージャを返しても、最後に戻った関数は変わらない。`main`の末尾の`apply`は
+/// `make`の後に`ApplyRest`で`two`を部分適用し、そのまま`Finish`に戻る。`Finish`で起きた誤り (エフェクトの
+/// リストが残っている) には、最後に戻った`make`の名前を付ける。`evv`を残すのはverifierの見ない誤りなので、
+/// このIRはverifierを通る。
 #[test]
 fn a_partial_application_in_apply_rest_keeps_the_function_that_returned_last() {
     let text = "\
@@ -382,6 +382,7 @@ fn main() -> tobj {
   let w.0: tobj = prim evv_get()
   dup w.0
   let e.1: obj = prim ev_new[E]((), w.0)
+  let u.6: unit = prim ev_set_clause[E.op](e.1, &op$entry)
   let w.2: tobj = prim evv_push(w.0, e.1)
   let u.3: unit = prim evv_set(w.2)
   let a.4: tobj = box 1
@@ -393,29 +394,35 @@ fn make(x.0: tobj) -> tobj {
   return c.1
 }
 fn two(x.0: tobj, y.1: tobj, z.2: tobj) -> tobj {
+  decref y.1
+  decref z.2
   return x.0
 }
+internal clause E.op fn op$entry(e.0: obj, u.1: unit) -> unit {
+  decref e.0
+  return ()
+}
 ";
-    let (_, result) = run_unverified(text);
+    let (_, result) = run_lir(text);
     assert_eq!(
         result.unwrap_err().to_string(),
         "internal error: the evidence list or a yield is left at the end in `make`"
     );
 }
 
-/// 走査する語を持たない物体 (文字列) を適用すると、検査モードは走査する語の数を先に見て断る。数を見ずに 0 番目を読むと、
-/// ヒープの範囲外の誤りになってしまう。文字列は関数でないので、verifier が型の誤りは見ないが、VM 自身の見張りを確かめる
-/// ため通さずに実行する。
+/// 走査する語を持たない物体 (文字列) を適用すると、検査モードは走査する語の数を先に見て断る。数を見ずに0番目を読むと、
+/// ヒープの範囲外の誤りになってしまう。文字列は関数でないが、verifierは型の誤りを見ないので、このIRはverifierを通る。
 #[test]
 fn applying_a_string_is_not_a_function() {
     let text = "\
 fn main() -> unit {
   let s.0: obj = const \"hello\"
   let r.1: tobj = apply s.0(())
+  decref r.1
   return ()
 }
 ";
-    let (_, result) = run_unverified(text);
+    let (_, result) = run_lir(text);
     assert_eq!(
         result.unwrap_err().to_string(),
         "internal error: applying a value that is not a function in `main`"

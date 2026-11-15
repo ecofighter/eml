@@ -42,32 +42,32 @@ use crate::{
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
 pub fn verify(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Ownership, false).map(drop)
+    verify_at(program, Level::Ownership, |_| true, false).map(drop)
 }
 
 /// 開くパス (flatten) より前の LIR を確かめる。形と範囲と境界を確かめ、RC の命令がまだないことを確かめる。構造体の
 /// 変数を受け、複数の値の `let` と `return` と構造体の `unbox` を拒む。
 pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Scopes, false).map(drop)
+    verify_at(program, Level::Scopes, |_| true, false).map(drop)
 }
 
 /// 開くパスの後で Perceus より前の LIR (縮約の後も) を確かめる。範囲の段の検査に加えて、構造体がどこにも残らないことを確かめ、
 /// 複数の値の `let` と `return` と構造体の `unbox` を受ける
 /// (docs/spec/lir.md の「verifier」)。
 pub fn verify_flattened(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Flattened, false).map(drop)
+    verify_at(program, Level::Flattened, |_| true, false).map(drop)
 }
 
 /// 借用のパスの後でPerceusより前のLIRを確かめる。開いた後の段の検査に、貸された引数の規則を足す (docs/spec/lir.mdの「verifier」)。
 pub fn verify_borrowed(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Borrowed, false).map(drop)
+    verify_at(program, Level::Borrowed, |_| true, false).map(drop)
 }
 
 /// box の挿入の前の LIR を確かめる。範囲の段と同じ形と範囲を確かめ、境界は比べない。box の挿入と縮約が作るもの
 /// (`box`、`unbox`、`tail`) と、Perceus が入れるもの (`dup`、`decref`、`release`) がまだないことを確かめる。
 /// box の挿入は、末尾呼び出しと変換のない入力を前提にするためである (docs/spec/lir.md の「パスの順番」)。
 pub fn verify_lowered(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Lowered, false).map(drop)
+    verify_at(program, Level::Lowered, |_| true, false).map(drop)
 }
 
 /// 検査の段。段はパスの順に直線に並ぶ。エントリの段の LIR には、box の挿入と縮約が作るものがまだない。開くパスより前の
@@ -81,8 +81,9 @@ enum Level {
     Ownership,
 }
 
-/// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points`)。
-/// 検査の表は、プログラムに1回だけ求める。`wanted` でない関数はたどらずに `None` にする。
+/// Perceusの後の`wanted`の関数を所有の段で1つずつ確かめながら、巻き戻しの地点ごとの所有を書き留める
+/// (`unwind::points`)。プログラム全体の規則は確かめない。拒まれた関数はその関数の欄に誤りを返すので、呼ぶ側はほかの
+/// 関数の表を読める。検査の表は、プログラムに1回だけ求める。`wanted`でない関数はたどらずに`None`にする。
 pub(crate) fn unwind_points(
     program: &Program,
     wanted: impl Fn(FnIdx) -> bool,
@@ -94,42 +95,32 @@ pub(crate) fn unwind_points(
             .iter()
             .enumerate()
             .map(|(index, function)| {
-                if !wanted(FnIdx(index as u32)) {
-                    return None;
-                }
-                let points = shape(&block_shapes(function))
-                    .and_then(|dominators| {
-                        let mut checker = Checker::new(
-                            program,
-                            tables,
-                            &callees,
-                            function,
-                            Level::Ownership,
-                            dominators,
-                        );
-                        checker.unwind = Some(Recorder {
-                            entry: Vec::new(),
-                            points: Vec::new(),
-                        });
-                        checker.run()
-                    })
-                    .map(|points| points.expect("the checker was given a list"))
-                    .map_err(|message| VerifyError {
-                        function: function.name.clone(),
-                        message,
-                    });
-                Some(points)
+                wanted(FnIdx(index as u32)).then(|| {
+                    walk(program, tables, &callees, function, Level::Ownership, true)
+                        .map(|table| table.expect("the walk was given a recorder"))
+                })
             })
             .collect()
     })
 }
 
-/// `verify` と同じ検査を走らせ、`record` なら同じ走査で関数ごとの巻き戻しの表も求める (`unwind::verified`)。
-pub(crate) fn verified(program: &Program) -> Result<Vec<Unwinds>, VerifyError> {
-    verify_at(program, Level::Ownership, true)
+/// `verify`と同じ検査を走らせ、同じ走査で関数ごとの巻き戻しの表も求める (`unwind::verified`、
+/// `unwind::verified_for`)。たどるのは`walked`の関数だけで、プログラム全体の規則はすべての関数に当てる。
+pub(crate) fn verified(
+    program: &Program,
+    walked: impl Fn(FnIdx) -> bool,
+) -> Result<Vec<Option<Unwinds>>, VerifyError> {
+    verify_at(program, Level::Ownership, walked, true)
 }
 
-fn verify_at(program: &Program, level: Level, record: bool) -> Result<Vec<Unwinds>, VerifyError> {
+/// `level`の検査。すべての関数にプログラム全体の規則を当て、`walked`の関数を1つずつたどり、最後に値の参照の規則を
+/// 当てる。結果は`program.functions`の関数ごとに1つの欄を持ち、`record`でたどった関数の欄だけが`Some`である。
+fn verify_at(
+    program: &Program,
+    level: Level,
+    walked: impl Fn(FnIdx) -> bool,
+    record: bool,
+) -> Result<Vec<Option<Unwinds>>, VerifyError> {
     if level >= Level::Flattened {
         no_struct_layouts(program)?;
     }
@@ -178,25 +169,13 @@ fn verify_at(program: &Program, level: Level, record: bool) -> Result<Vec<Unwind
                 message,
             })?;
         }
-        let mut unwinds = Vec::new();
-        for function in &program.functions {
-            let table = shape(&block_shapes(function))
-                .and_then(|dominators| {
-                    let mut checker =
-                        Checker::new(program, tables, &callees, function, level, dominators);
-                    if record {
-                        checker.unwind = Some(Recorder {
-                            entry: Vec::new(),
-                            points: Vec::new(),
-                        });
-                    }
-                    checker.run()
-                })
-                .map_err(|message| VerifyError {
-                    function: function.name.clone(),
-                    message,
-                })?;
-            unwinds.extend(table);
+        let mut unwinds = Vec::with_capacity(program.functions.len());
+        for (index, function) in program.functions.iter().enumerate() {
+            unwinds.push(if walked(FnIdx(index as u32)) {
+                walk(program, tables, &callees, function, level, record)?
+            } else {
+                None
+            });
         }
         // 値の参照の規則は、参照の形 (`closure` の引数の数など) を本体の検査が確かめた後に見る
         if level >= Level::Scopes {
@@ -217,6 +196,32 @@ fn verify_at(program: &Program, level: Level, record: bool) -> Result<Vec<Unwind
         }
         Ok(unwinds)
     })
+}
+
+/// 1つの関数の走査。ブロックの列の形を確かめ、本体を確かめる。`record`なら関数の巻き戻しの表も返す。
+fn walk(
+    program: &Program,
+    tables: Tables<'_>,
+    callees: &[Vec<bool>],
+    function: &LirFn,
+    level: Level,
+    record: bool,
+) -> Result<Option<Unwinds>, VerifyError> {
+    shape(&block_shapes(function))
+        .and_then(|dominators| {
+            let mut checker = Checker::new(program, tables, callees, function, level, dominators);
+            if record {
+                checker.unwind = Some(Recorder {
+                    entry: Vec::new(),
+                    points: Vec::new(),
+                });
+            }
+            checker.run()
+        })
+        .map_err(|message| VerifyError {
+            function: function.name.clone(),
+            message,
+        })
 }
 
 /// 子を fork しうるプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を持つ
@@ -601,7 +606,7 @@ struct Checker<'a> {
     /// (docs/spec/lir.md の「ダミーの値」)。変数は1回だけ
     /// 定義されるので (R5)、関数に1つの表にする。
     unboxed: Vec<bool>,
-    /// 巻き戻しの地点ごとの所有を書き留める先。`unwind_points` だけが与える。
+    /// 巻き戻しの地点ごとの所有を書き留める先。表を求める走査だけが与える。
     unwind: Option<Recorder>,
 }
 

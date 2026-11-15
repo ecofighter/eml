@@ -1,6 +1,6 @@
 //! コード生成の形を逆アセンブラの出力で固定する (docs/spec/vm.md の「命令とフレーム」)。
 
-use crate::common::{compile, disasm, disasm_unverified};
+use crate::common::{compile, disasm};
 
 #[test]
 fn a_call_passes_its_arguments_by_slot() {
@@ -59,7 +59,7 @@ fn main() -> unit {
 /// 生きている値を上書きする (docs/spec/vm.md の「スロットの割り当て」)。
 #[test]
 fn a_dead_call_result_takes_a_slot_of_its_own() {
-    insta::assert_snapshot!(disasm_unverified("\
+    insta::assert_snapshot!(disasm("\
 fn main() -> unit {
   let k.0: int = extern \"Prelude.Num Int.+\"(1, 2)
   let r.1: int = call one()
@@ -662,16 +662,17 @@ fn main(a.0: float, b.1: float) -> enum {
 /// (docs/spec/vm.md の「基本操作と extern」)。
 #[test]
 fn array_rows_use_dedicated_ops() {
-    let text = disasm_unverified(
+    let text = disasm(
         "\
-fn main(a.0: obj, m.1: obj) -> unit {
+fn main(a.0: obj, m.1: obj lin) -> obj lin {
   let n.2: int = extern Std.Array.length(a.0)
   let x.3: tobj = extern Std.Array.get(a.0, n.2)
   let k.4: int = extern Std.MutArray.length(m.1)
   let y.5: tobj = extern Std.MutArray.read(m.1, k.4)
   let b.6: obj = extern Std.Array.set(a.0, n.2, x.3)
-  let c.7: obj = extern Std.MutArray.write(m.1, k.4, y.5)
-  return ()
+  decref b.6
+  let c.7: obj lin = extern Std.MutArray.write(m.1, k.4, y.5)
+  return c.7
 }
 ",
     );
@@ -688,7 +689,7 @@ fn main(a.0: obj, m.1: obj) -> unit {
 /// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn an_apply_carries_only_its_callee_and_argument_slots() {
-    insta::assert_snapshot!(disasm_unverified("\
+    insta::assert_snapshot!(disasm("\
 fn main(f.0: tobj, x.1: tobj) -> tobj {
   dup f.0
   let a.2: tobj = apply f.0(x.1, #2)
