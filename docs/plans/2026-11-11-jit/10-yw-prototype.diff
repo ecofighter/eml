@@ -1,0 +1,164 @@
+crates/eml_lir/src/verify.rs --- 1/3 --- Rust
+ 802  802             if let Some(marker) = marked {
+ 803  803                 self.check_landing(block, at, marker)?;
+ 804  804             }
+ ...  805             let yield_point = match stmt {
+ ...  806                 Stmt::Let {
+ ...  807                     var: _,
+ ...  808                     rhs: Rhs::Call(call),
+ ...  809                 }
+ ...  810                 | Stmt::LetMany { vars: _, call } => {
+ ...  811                     call.prompt().is_none() && reuse::may_yield(self.program, self.function, call)
+ ...  812                 }
+ ...  813                 _ => false,
+ ...  814             };
+ ...  815             if yield_point {
+ ...  816                 self.check_yield_window(index, block, at)?;
+ ...  817             }
+ 805  818             if let Some(Recorder { entry: _, points }) = &mut self.unwind
+ 806  819                 && let Some((vars, landing)) = unwind::point(stmt, &self.program.c_functions)
+ 807  820             {
+
+crates/eml_lir/src/verify.rs --- 2/3 --- Rust
+1944 1957         }
+1945 1958     }
+.... 1959 
+.... 1960     fn check_yield_window(&self, index: u32, block: &Block, at: usize) -> Result<(), String> {
+.... 1961         let refused = |what: &str| {
+.... 1962             format!("YW: a call that may yield in b{index} at {at} is followed by {what} before `prim yielding()`")
+.... 1963         };
+.... 1964         for (offset, stmt) in block.stmts[at + 1..].iter().enumerate() {
+.... 1965             if let Stmt::Let { var, rhs: Rhs::Prim(Prim::Yielding, _) } = stmt {
+.... 1966                 let rest = &block.stmts[at + 1 + offset + 1..];
+.... 1967                 if std::env::var("YW_STRICT").is_ok() && !rest.is_empty() {
+.... 1968                     return Err(refused("a test that is not the last statement"));
+.... 1969                 }
+.... 1970                 if rest.iter().any(|stmt| Self::crosses(stmt, &self.program.c_functions)) {
+.... 1971                     return Err(refused("a test and then an unwind point"));
+.... 1972                 }
+.... 1973                 let Term::Switch { scrutinee, layout: None, cases, default: Some(slow) } = &block.term else {
+.... 1974                     return Err(refused("a test with no switch"));
+.... 1975                 };
+.... 1976                 if *scrutinee != Atom::Var(*var)
+.... 1977                     || cases.len() != 1
+.... 1978                     || !matches!(cases[0].pattern, CasePattern::Int(0))
+.... 1979                 {
+.... 1980                     return Err(refused("a test with another switch"));
+.... 1981                 }
+.... 1982                 let slow = &self.function.blocks[slow.0 as usize];
+.... 1983                 if slow.stmts.iter().any(|stmt| Self::crosses(stmt, &self.program.c_functions)) {
+.... 1984                     return Err(refused("a slow path with an unwind point"));
+.... 1985                 }
+.... 1986                 if !matches!(slow.term, Term::Return(_) | Term::ReturnMany(_)) {
+.... 1987                     return Err(refused("a slow path that does not return"));
+.... 1988                 }
+.... 1989                 return Ok(());
+.... 1990             }
+.... 1991             if Self::crosses(stmt, &self.program.c_functions) {
+.... 1992                 return Err(refused("an unwind point"));
+.... 1993             }
+.... 1994         }
+.... 1995         match block.term {
+.... 1996             Term::Return(_) | Term::ReturnMany(_) => Ok(()),
+.... 1997             _ => Err(refused("a terminator other than return")),
+.... 1998         }
+.... 1999     }
+.... 2000 
+.... 2001     /// Whether `callee`, entered with a yield in flight, runs no unwind point before `yield_finish` or its return,
+.... 2002     /// except on the 0 path of a switch on `yield_status` of its first parameter.
+.... 2003     fn enters_in_flight(callee: &LirFn, c: &[eml_extern::CFunction]) -> Result<(), String> {
+.... 2004         let finishes = |block: &Block| -> Result<(), String> {
+.... 2005             for stmt in &block.stmts {
+.... 2006                 if matches!(stmt, Stmt::Let { var: _, rhs: Rhs::Prim(Prim::YieldFinish, _) }) {
+.... 2007                     return Ok(());
+.... 2008                 }
+.... 2009                 if Self::crosses(stmt, c) {
+.... 2010                     return Err("an unwind point before `prim yield_finish`".to_string());
+.... 2011                 }
+.... 2012             }
+.... 2013             match block.term {
+.... 2014                 Term::Return(_) | Term::ReturnMany(_) => Ok(()),
+.... 2015                 _ => Err("a path that neither finishes the yield nor returns".to_string()),
+.... 2016             }
+.... 2017         };
+.... 2018         let entry = &callee.blocks[0];
+.... 2019         if let Some(Stmt::Let { var, rhs: Rhs::Prim(Prim::YieldStatus, args) }) = entry.stmts.last()
+.... 2020             && let Term::Switch { scrutinee, layout: None, cases, default } = &entry.term
+.... 2021             && *scrutinee == Atom::Var(*var)
+.... 2022             && entry.params.first().is_some_and(|&param| args.first() == Some(&Atom::Var(param)))
+.... 2023         {
+.... 2024             if entry.stmts.iter().any(|stmt| Self::crosses(stmt, c)) {
+.... 2025                 return Err("an unwind point before `prim yield_status`".to_string());
+.... 2026             }
+.... 2027             return cases
+.... 2028                 .iter()
+.... 2029                 .filter(|case| !matches!(case.pattern, CasePattern::Int(0)))
+.... 2030                 .map(|case| case.target)
+.... 2031                 .chain(*default)
+.... 2032                 .try_for_each(|target| finishes(&callee.blocks[target.0 as usize]));
+.... 2033         }
+.... 2034         finishes(entry)
+.... 2035     }
+.... 2036 
+.... 2037     fn crosses(stmt: &Stmt, c: &[eml_extern::CFunction]) -> bool {
+.... 2038         unwind::point(stmt, c).is_some()
+.... 2039             || matches!(
+.... 2040                 stmt,
+.... 2041                 Stmt::Let { var: _, rhs: Rhs::Prim(Prim::YieldTo | Prim::YieldFinish, _) }
+.... 2042             )
+.... 2043     }
+1946 2044 
+1947 2045     /// 着地の印`v`を持つ`apply`の後、ブロックの次の呼び出しは、最初の引数が`v`である`prompt$`の直接の呼び出しで、
+1948 2046     /// その間にexternの行も`yield_to`も`yield_abort`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを
+
+crates/eml_lir/src/verify.rs --- 3/3 --- Rust
+1982                     .is_some_and(|  2080                     .is_some_and(|
+.... callee| callee.name == EP_PROMPT)   .... callee| callee.name == EP_PROMPT)
+1983                     && args.first(  2081                     && args.first(
+.... ) == Some(&Atom::Var(marker)) =>    .... ) == Some(&Atom::Var(marker)) =>
+1984             {                       2082             {
+....                                     2083                 Self::enters_in_fl
+....                                     .... ight(
+....                                     2084                     &self.program.
+....                                     .... functions[target.0 as usize],
+....                                     2085                     &self.program.
+....                                     .... c_functions,
+....                                     2086                 )
+1985                 Ok(())              2087                 .map_err(|what| fo
+....                                     .... rmat!("YS: the function after a ma
+....                                     .... rked apply runs {what}"))
+1986             }                       2088             }
+1987             _ => Err(refused()),    2089             _ => Err(refused()),
+1988         }                           2090         }
+
+crates/eml_lir/tests/boxing.rs --- Rust
+239 fn a_clause_call_uses_the_reprs_of_  239 fn a_clause_call_uses_the_reprs_of_
+... its_operation() {                    ... its_operation() {
+240     // `put` の `int` の引数へ `tob  240     // `put` の `int` の引数へ `tob
+... j` の n.2 を `unbox` して渡す。`get  ... j` の n.2 を `unbox` して渡す。`get
+... ` の結果は末尾の位置でも操作の `int  ... ` の結果は末尾の位置でも操作の `int
+... ` で受け直し、                       ... ` で受け直し、
+241     // `box` して返す                241     // `box` して返す
+242     let text = "effect Counter { ge  242     let text = "effect Counter { ge
+... t(unit) -> int, put(int) -> unit }\  ... t(unit) -> int, put(int) -> unit }\
+... nyields fn f(n.2: tobj) -> tobj {\n  ... nfn f(n.2: tobj) -> tobj {\n  let u
+...   let u.3: unit = clause Counter.pu  ... .3: unit = clause Counter.put(n.2)\
+... t(n.2)\n  let m.5: tobj = clause Co  ... n  let m.5: tobj = clause Counter.g
+... unter.get(())\n  return m.5\n}\n";   ... et(())\n  return m.5\n}\n";
+243     insta::assert_snapshot!(functio  243     insta::assert_snapshot!(functio
+... n(&boxing_text(text), "f"), @"       ... n(&boxing_text(text), "f"), @"
+244     yields fn f(n.2: tobj) -> tobj   244     fn f(n.2: tobj) -> tobj {
+... {                                    ... 
+245       let n.6: int = unbox n.2       245       let n.6: int = unbox n.2
+246       let u.3: unit = clause Counte  246       let u.3: unit = clause Counte
+... r.put(n.6)                           ... r.put(n.6)
+247       let m.7: int = clause Counter  247       let m.7: int = clause Counter
+... .get(())                             ... .get(())
+248       let m.5: tobj = box m.7        248       let m.5: tobj = box m.7
+249       return m.5                     249       return m.5
+250     }                                250     }
+251     ");                              251     ");
+252 }                                    252 }
+253                                      253 
+254 #[test]                              254 #[test]
+
