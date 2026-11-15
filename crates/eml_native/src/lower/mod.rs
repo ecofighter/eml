@@ -158,7 +158,10 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
             &signature_of(function),
         )?);
     }
-    let unwinds = eml_lir::unwind::points(program, |_| true);
+    let unwinds = match eml_lir::unwind::verified(program) {
+        Ok(unwinds) => unwinds,
+        Err(error) => panic!("internal error: invalid LIR at the native load: {error}"),
+    };
     let mut ctx = module.make_context();
     let mut fctx = FunctionBuilderContext::new();
     let mut functions = Vec::with_capacity(ids.len());
@@ -166,10 +169,6 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     let mut closure_entries = ClosureEntries::default();
     let callees = Callees { program, ids };
     for ((function, &id), unwinds) in program.functions.iter().zip(&callees.ids).zip(unwinds) {
-        let unwinds = match unwinds.expect("every function's unwind points are asked for") {
-            Ok(unwinds) => unwinds,
-            Err(error) => panic!("`{}` has no unwind points: {error}", function.name),
-        };
         ctx.func.signature = signature_of(function);
         ctx.func.name = UserFuncName::testcase(names::function(&function.name));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);

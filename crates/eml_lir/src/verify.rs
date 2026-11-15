@@ -42,32 +42,32 @@ use crate::{
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
 pub fn verify(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Ownership)
+    verify_at(program, Level::Ownership, false).map(drop)
 }
 
 /// 開くパス (flatten) より前の LIR を確かめる。形と範囲と境界を確かめ、RC の命令がまだないことを確かめる。構造体の
 /// 変数を受け、複数の値の `let` と `return` と構造体の `unbox` を拒む。
 pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Scopes)
+    verify_at(program, Level::Scopes, false).map(drop)
 }
 
 /// 開くパスの後で Perceus より前の LIR (縮約の後も) を確かめる。範囲の段の検査に加えて、構造体がどこにも残らないことを確かめ、
 /// 複数の値の `let` と `return` と構造体の `unbox` を受ける
 /// (docs/spec/lir.md の「verifier」)。
 pub fn verify_flattened(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Flattened)
+    verify_at(program, Level::Flattened, false).map(drop)
 }
 
 /// 借用のパスの後でPerceusより前のLIRを確かめる。開いた後の段の検査に、貸された引数の規則を足す (docs/spec/lir.mdの「verifier」)。
 pub fn verify_borrowed(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Borrowed)
+    verify_at(program, Level::Borrowed, false).map(drop)
 }
 
 /// box の挿入の前の LIR を確かめる。範囲の段と同じ形と範囲を確かめ、境界は比べない。box の挿入と縮約が作るもの
 /// (`box`、`unbox`、`tail`) と、Perceus が入れるもの (`dup`、`decref`、`release`) がまだないことを確かめる。
 /// box の挿入は、末尾呼び出しと変換のない入力を前提にするためである (docs/spec/lir.md の「パスの順番」)。
 pub fn verify_lowered(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Lowered)
+    verify_at(program, Level::Lowered, false).map(drop)
 }
 
 /// 検査の段。段はパスの順に直線に並ぶ。エントリの段の LIR には、box の挿入と縮約が作るものがまだない。開くパスより前の
@@ -124,7 +124,12 @@ pub(crate) fn unwind_points(
     })
 }
 
-fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
+/// `verify` と同じ検査を走らせ、`record` なら同じ走査で関数ごとの巻き戻しの表も求める (`unwind::verified`)。
+pub(crate) fn verified(program: &Program) -> Result<Vec<Unwinds>, VerifyError> {
+    verify_at(program, Level::Ownership, true)
+}
+
+fn verify_at(program: &Program, level: Level, record: bool) -> Result<Vec<Unwinds>, VerifyError> {
     if level >= Level::Flattened {
         no_struct_layouts(program)?;
     }
@@ -173,15 +178,25 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                 message,
             })?;
         }
+        let mut unwinds = Vec::new();
         for function in &program.functions {
-            shape(&block_shapes(function))
+            let table = shape(&block_shapes(function))
                 .and_then(|dominators| {
-                    Checker::new(program, tables, &callees, function, level, dominators).run()
+                    let mut checker =
+                        Checker::new(program, tables, &callees, function, level, dominators);
+                    if record {
+                        checker.unwind = Some(Recorder {
+                            entry: Vec::new(),
+                            points: Vec::new(),
+                        });
+                    }
+                    checker.run()
                 })
                 .map_err(|message| VerifyError {
                     function: function.name.clone(),
                     message,
                 })?;
+            unwinds.extend(table);
         }
         // 値の参照の規則は、参照の形 (`closure` の引数の数など) を本体の検査が確かめた後に見る
         if level >= Level::Scopes {
@@ -200,7 +215,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                 })?;
             }
         }
-        Ok(())
+        Ok(unwinds)
     })
 }
 
@@ -211,12 +226,12 @@ fn forks(program: &Program) -> Result<(), VerifyError> {
     if !program.may_fork() {
         return Ok(());
     }
-    let find = |name: &str| {
-        program
-            .functions
-            .iter()
-            .find(|function| function.name == name)
-    };
+    let by_name: FxHashMap<&str, &LirFn> = program
+        .functions
+        .iter()
+        .map(|function| (function.name.as_str(), function))
+        .collect();
+    let find = |name: &str| by_name.get(name).copied();
     for effect in crate::fork_effects(&program.effects) {
         let info = &program.effects[effect as usize];
         for op in 0..info.operations.len() as u32 {

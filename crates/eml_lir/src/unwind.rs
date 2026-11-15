@@ -48,6 +48,13 @@ pub fn points(
     verify::unwind_points(program, wanted)
 }
 
+/// プログラム全体を所有の段で確かめ、関数ごとの巻き戻しの表を `program.functions` の順に返す。
+/// `eml_lir::verify` が拒むプログラムは、表の代わりにその誤りを返す。検査と表の記録は関数ごとに1回の走査で行う
+/// (docs/spec/lir.md の「verifier」)。
+pub fn verified(program: &Program) -> Result<Vec<Unwinds>, VerifyError> {
+    verify::verified(program)
+}
+
 /// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。複数の値を返す呼び出しは、葉をすべて束縛する
 /// (docs/spec/vm.md の「巻き戻しの表」)。
 pub(crate) fn point<'a>(stmt: &'a Stmt, c: &[CFunction]) -> Option<(&'a [VarId], Option<VarId>)> {

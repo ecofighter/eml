@@ -414,7 +414,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - 印を付けるのは EP だけで、付ける所は2つである。handle の `apply body(())` (v は handle の evidence) と、`resume$` の `apply κ(v)` (v は再開で作り直した evidence) である。どちらも直後に `prompt$` の呼び出しが続き、`prompt$` が `yield_status` の状態 2 の経路に進む ([Core IR](core-ir.md) の「handle と `prompt$`」と「再開と状態」)
 - 印の付いた呼び出しは末尾の位置にない。直後に `prompt$` の呼び出しが続くので、縮約に印のための規則は要らず、verifier が確かめるだけにする (下の「verifier」)
 - 印は `apply` にだけ付く。EP が印を付ける2か所が、どちらも `apply` だからである
-- 印の付いた呼び出しの後、ブロックの次の呼び出し (呼び出しの`let`、複数の値の`let`、`tail`の呼び出し) は、最初の引数が印の変数vである`prompt$`の直接の呼び出しで、その間にexternの行も`prim yield_to`も`prim yield_abort`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを確かめるので ([ネイティブの実行系](native.md)の「巻き戻しの地点」)、着地から`prompt$`の`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない。verifierがこの規則を確かめる。関数ごとの検査なので`eml_lir::unwind::points`もどのビルドでもこれを走らせ、ネイティブの読み込みはreleaseのビルドでも破ったプログラムでpanicする
+- 印の付いた呼び出しの後、ブロックの次の呼び出し (呼び出しの`let`、複数の値の`let`、`tail`の呼び出し) は、最初の引数が印の変数vである`prompt$`の直接の呼び出しで、その間にexternの行も`prim yield_to`も`prim yield_abort`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを確かめるので ([ネイティブの実行系](native.md)の「巻き戻しの地点」)、着地から`prompt$`の`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない。verifierがこの規則を確かめる
 
 ### エントリの関数の印
 
@@ -707,9 +707,9 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 末尾呼び出しの印は、呼び出しの検査の最初に拒む (``a tail apply has a prompt marker, but a tail call leaves no frame to land on``)。エントリの段は `tail` そのものを拒むので、この文言はエントリの段のほかで出る
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数 v が見えること、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
-  - その後に、vが同じ関数の中で`ev_new`か`ev_renew`が束縛した変数であることを確かめる。どちらもevidenceを返す (``the prompt marker `ev.1` is not an evidence made by `ev_new` or `ev_renew` in this function``)。中断が着地しないフレームを通るとき、巻き戻しはvから`ev_take_state`で状態を取り出し、速いモードではそれが物体を確かめずにevidenceの欄を書くためである。関数ごとの検査なので、`eml_lir::unwind::points`がどのビルドでも走らせ、ネイティブの読み込みはreleaseのビルドでも破ったプログラムを断る
+  - その後に、vが同じ関数の中で`ev_new`か`ev_renew`が束縛した変数であることを確かめる。どちらもevidenceを返す (``the prompt marker `ev.1` is not an evidence made by `ev_new` or `ev_renew` in this function``)。中断が着地しないフレームを通るとき、巻き戻しはvから`ev_take_state`で状態を取り出し、速いモードではそれが物体を確かめずにevidenceの欄を書くためである
   - 印のほかの検査の後に、印の付いた呼び出しに`prompt$`が続くことを確かめる (上の「着地の印」。`` the apply with the prompt marker `ev.1` is not followed by `prompt$` ``)
-- `eml_lir::unwind::points` は、所有の段の走査に、関数のエントリと巻き戻しの地点ごとの所有を書き留めさせる。VM のコード生成が、これで巻き戻しの表を作る ([VM](vm.md) の「巻き戻し」)。所有を求める走査を、verifier と巻き戻しの表で2つ持たないためである
+- `eml_lir::unwind::points`は、所有の段の走査に、関数のエントリと巻き戻しの地点ごとの所有を書き留めさせる。VMのコード生成が、これで巻き戻しの表を作る ([VM](vm.md)の「巻き戻し」)。所有を求める走査を、verifierと巻き戻しの表で2つ持たないためである。`eml_lir::unwind::verified(program)`は、プログラム全体の検査と同じ1回の走査で、すべての関数の表を`program.functions`の順に返す
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)
 - 境界の検査は、R7 と R8 の検査のうち、`jump`、`return`、`box`、`unbox` を除くものである。直接の呼び出しの引数と結果、`closure` の引数、`apply` の呼ばれる値と引数と結果 (`tobj` と比べる)、`par` の子 (`tobj` と比べる) と結果 (`obj`)、`clause` と `prim` のオペランドと結果、`clause` の印の関数の引数と `ret` が操作の表と互換であること、宣言した Repr が `tobj` のフィールドである。`tail` の結果は、呼び出し元の `rets` と Repr と印を比べる。translate と EP の出力は、box の挿入より前には境界に合わないので、Core IR の verifier と LIR のエントリの段は境界を見ない
 - 所有は、どの経路でも、関数のエントリと束縛で得た参照と、`dup` と `release` で増やした参照が、消費と `decref` と `release` でちょうど使い切られることを確かめる。経路ごとに持つのは、RC の対象の変数ごとの所有の数だけである。`return` と `tail` の時点では、所有が残らない
@@ -808,7 +808,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `ev_new[E]`が束縛するevidenceのエントリは、どれも、その`ev_new`のブロックの中で、evidenceのほかの最初の使いより前、ブロックの終わりより前に、ちょうど1回入れる。`dup`、`decref`、`release`、`drop_token`と着地の印は使いに数えない。その使いの後や別のブロックの`ev_set_clause`は拒む (``the `State.put` entry of `e.2` is not filled before `e.2` is used``、``the `State.get` entry of `e.2` is filled twice``、``an entry of `e.2` is filled after `e.2` is used``)。入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むためである
   - `clause E.op`の`callee`は、同じ関数の中の`prim ev_clause[E.op](v)`で束縛した変数で、vは同じ関数の中の`ev_lookup[E]`か`ev_new[E]`で束縛した変数である。関数の引数、呼び出しの結果、別の操作のエントリを`callee`にした呼び出しは拒む (``a clause of `Counter.get` calls `c.0` (tobj), which `ev_clause[Counter.get]` did not bind in this function``、``a clause of `Counter.get` calls `c.3`, read from `e.1` (obj), which is not an evidence of `Counter` found or made in this function``)
   - これらの規則で、節の呼び出しが呼ぶクロージャは、handleが同じ操作のエントリに入れたものになり、そのコードは操作のシグネチャを持つ。`evv`がevidenceだけを持つことと、実行系が`par`の子のために作るevidenceのエントリは、verifierが確かめない。この2つは実行の前提に残る (下の「実行の前提」)
-  - この4つは関数ごとの検査なので、`eml_lir::unwind::points`がどのビルドでも走らせ、ネイティブの読み込みはreleaseのビルドでも破ったプログラムを断る。VMは拒まれた関数を表のない関数として読む
+  - ネイティブの読み込みは、どのビルドでもプログラム全体に所有の段のverifierを走らせ、verifierが拒むプログラムを断る (`eml_lir::unwind::verified`)。VMは拒まれた関数を表のない関数として読む
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける
 - `par`の検査は次のとおりである。Core IRの2つの段と、LIRの6つの段のすべてで走る
   - `pair` は、`tobj` のフィールドをちょうど2つ持つ構築子である。VM は子の一様な結果を2つ並べて組を作るためである (``the pair of a par is `Box` #0, which does not have two tobj fields``)。表にない配置とタグの範囲は R8 と同じ文言で、主語を ``the pair of a par`` にする

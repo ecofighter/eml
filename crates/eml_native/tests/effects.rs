@@ -874,10 +874,9 @@ fn load_panic(text: &str) -> String {
     }
 }
 
-/// 末尾の節の呼び出しで、操作の結果が呼ぶ側の結果と違うものは、どのビルドでも読み込みで断る。debugのビルドでは
-/// verifierが断る。releaseのビルドでは、下ろしがどのビルドでも走らせる`eml_lir::unwind::points`の検査が、末尾の節の
-/// 結果を呼ぶ側の`rets`と比べて断る。互換のReprは同じKindを持つので、シグネチャの結果についての下ろしの`assert`が
-/// 先に働くことは今はなく、2つ目の守りとして残る。
+/// 末尾の節の呼び出しで、操作の結果が呼ぶ側の結果と違うものは、どのビルドでも読み込みで断る。読み込みはどのビルドでも
+/// verifierを走らせるので、そこで断る。互換のReprは同じKindを持つので、シグネチャの結果についての下ろしの`assert`が
+/// 先に働くことは今はなく、2つ目の守りとして残る (docs/spec/lir.md の「verifier」)。
 #[test]
 fn release_check_a_tail_clause_result_mismatch_panics() {
     let message = load_panic(&format!(
@@ -892,16 +891,12 @@ fn f() -> float {{
 }}
 "
     ));
-    let expected = if cfg!(debug_assertions) {
-        "invalid LIR at the native load"
-    } else {
-        "`f` has no unwind points: a tail clause of `Counter.get` returns tobj, but this function returns float"
-    };
+    let expected = "invalid LIR at the native load";
     assert!(message.contains(expected), "{message}");
 }
 
-/// 引数が操作のものと違う節の関数は、どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseのビルドでは
-/// クロージャのエントリを定義する繰り返しの`assert`が断る。
+/// 引数が操作のものと違う節の関数は、どのビルドでも読み込みのverifierが断る。クロージャのエントリを定義する繰り返しの
+/// `assert`は2つ目の守りとして残る。
 #[test]
 fn release_check_a_clause_entry_signature_mismatch_panics() {
     let message = load_panic(&format!(
@@ -925,17 +920,12 @@ internal clause Counter.put fn p(e.0: obj, x.1: tobj) -> unit {{
 }}
 "
     ));
-    let expected = if cfg!(debug_assertions) {
-        "invalid LIR at the native load"
-    } else {
-        "the closure entry of `g` does not have the signature of its operation"
-    };
+    let expected = "invalid LIR at the native load";
     assert!(message.contains(expected), "{message}");
 }
 
 /// 節の呼び出しは、エントリのクロージャを確かめずに操作のシグネチャで呼ぶので、読めない関数を入れる`ev_set_clause`は、
-/// どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseのビルドでは下ろしがどのビルドでも走らせる
-/// `eml_lir::unwind::points`の検査が断る (docs/spec/lir.md の「verifier」)。
+/// どのビルドでも読み込みのverifierが断る (docs/spec/lir.md の「verifier」)。
 #[test]
 fn release_check_an_unreadable_clause_entry_panics() {
     let message = load_panic(&format!(
@@ -951,17 +941,12 @@ fn f(c.0: tobj, w.1: tobj) -> unit {{
 }}
 "
     ));
-    let expected = if cfg!(debug_assertions) {
-        "invalid LIR at the native load"
-    } else {
-        "`f` has no unwind points: the `Counter.get` entry is given `c.0` (tobj), which is neither `&g` nor a closure made in this function"
-    };
+    let expected = "invalid LIR at the native load";
     assert!(message.contains(expected), "{message}");
 }
 
 /// 入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むので、ほかの最初の使いより前に
-/// エントリをすべて入れていないevidenceは、どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseの
-/// ビルドでは下ろしがどのビルドでも走らせる`eml_lir::unwind::points`の検査が断る (docs/spec/lir.mdの「verifier」)。
+/// エントリをすべて入れていないevidenceは、どのビルドでも読み込みのverifierが断る (docs/spec/lir.md の「verifier」)。
 #[test]
 fn release_check_an_unfilled_entry_panics() {
     let message = load_panic(&format!(
@@ -982,17 +967,12 @@ internal clause Counter.get fn g(e.0: obj, u.1: unit) -> tobj {{
 "
     ));
     let rule = "the `Counter.put` entry of `e.1` is not filled before `e.1` is used";
-    let expected = if cfg!(debug_assertions) {
-        format!("invalid LIR at the native load: {rule} in `f`")
-    } else {
-        format!("`f` has no unwind points: {rule}")
-    };
+    let expected = format!("invalid LIR at the native load: {rule} in `f`");
     assert!(message.contains(&expected), "{message}");
 }
 
 /// 節の呼び出しは、クロージャを確かめずに操作のシグネチャで呼ぶので、同じ操作の`ev_clause`が読んでいない`callee`は、
-/// どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseのビルドでは下ろしがどのビルドでも走らせる
-/// `eml_lir::unwind::points`の検査が断る (docs/spec/lir.mdの「verifier」)。
+/// どのビルドでも読み込みのverifierが断る (docs/spec/lir.md の「verifier」)。
 #[test]
 fn release_check_a_clause_callee_not_read_from_its_entry_panics() {
     let message = load_panic(&format!(
@@ -1008,11 +988,7 @@ fn f(c.0: tobj) -> unit {{
 "
     ));
     let rule = "a clause of `Counter.put` calls `c.0` (tobj), which `ev_clause[Counter.put]` did not bind in this function";
-    let expected = if cfg!(debug_assertions) {
-        format!("invalid LIR at the native load: {rule} in `f`")
-    } else {
-        format!("`f` has no unwind points: {rule}")
-    };
+    let expected = format!("invalid LIR at the native load: {rule} in `f`");
     assert!(message.contains(&expected), "{message}");
 }
 
@@ -1458,8 +1434,7 @@ yields fn in_tail(u.0: tobj) -> tobj {{
 }
 
 /// 着地の印を持つ`apply`の後には`prompt$`の呼び出しが続かなければならない。`abort`のバイトだけを確かめる呼び出しの
-/// 後のコードはこれに頼るので、どのビルドでも読み込みで断る。debugのビルドではverifierが、releaseのビルドでは下ろしが
-/// どのビルドでも走らせる`eml_lir::unwind::points`の検査が先に断る。下ろしの`assert`は2つ目の守りとして残る
+/// 後のコードはこれに頼るので、どのビルドでも読み込みのverifierが断る。下ろしの`assert`は2つ目の守りとして残る
 /// (docs/spec/native.md の「巻き戻しの地点」)。
 #[test]
 fn release_check_a_marked_apply_not_followed_by_prompt_panics() {
@@ -1482,10 +1457,27 @@ fn f(w.2: tobj) -> tobj {{
 {COUNTER_ENTRIES}"
     ));
     let rule = "the apply with the prompt marker `ev.0` is not followed by `prompt$`";
-    let expected = if cfg!(debug_assertions) {
-        format!("invalid LIR at the native load: {rule} in `f`")
-    } else {
-        format!("`f` has no unwind points: {rule}")
-    };
+    let expected = format!("invalid LIR at the native load: {rule} in `f`");
     assert!(message.contains(&expected), "{message}");
+}
+
+/// 読み込みは、関数ごとの検査だけでなく、プログラムの全体にかかる規則 (`clause`の印の関数のABI) もどのビルドでも
+/// 断る (docs/spec/lir.md の「verifier」)。
+#[test]
+fn release_check_a_program_level_rule_is_refused() {
+    let message = load_panic(&format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  return ()
+}}
+internal clause Counter.get fn g(e.0: obj, x.1: float) -> tobj {{
+  decref e.0
+  return ()
+}}
+"
+    ));
+    assert!(
+        message.contains("invalid LIR at the native load"),
+        "{message}"
+    );
 }
