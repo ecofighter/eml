@@ -91,12 +91,12 @@ pub enum Op {
     TailApply {
         at: u32,
     },
-    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。引数は操作の ABI の Repr である。
+    /// `operands[at..]`は[エフェクト, 操作, 引数の数, 引数のスロット…]。引数は操作のABIのReprである。
     Clause {
         dst: Slot,
         at: u32,
     },
-    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。
+    /// `operands[at..]`は`Clause`と同じである。
     TailClause {
         at: u32,
     },
@@ -419,7 +419,8 @@ pub enum Op {
         dst: Slot,
         l: Slot,
     },
-    EvvPush {
+    /// `Ctx::evv_enter`。`l`は消費し、evidence`e`は借りる。
+    EvvEnter {
         dst: Slot,
         l: Slot,
         e: Slot,
@@ -429,13 +430,9 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
-    /// `operands[at..]` は [エフェクト, 操作の数, 状態のスロット, 外側のスロット]。
-    EvNew {
-        dst: Slot,
-        at: u32,
-    },
-    /// `operands[at..]` は [evidence のスロット, 操作, エントリのスロット]。
-    EvSetClause {
+    /// `operands[at..]`は[エフェクト, 操作の数, 状態のスロット, 外側のスロット, 続いてエントリごとに関数, n,
+    /// 捕獲のスロット…]。
+    Evidence {
         dst: Slot,
         at: u32,
     },
@@ -444,14 +441,10 @@ pub enum Op {
         ev: Slot,
         state: Slot,
     },
-    EvLookup {
-        dst: Slot,
-        effect: u16,
-    },
-    EvClause {
+    /// `Ctx::ev_retire`。evidence`ev`は消費する。
+    EvRetire {
         dst: Slot,
         ev: Slot,
-        op: u16,
     },
     EvEvv {
         dst: Slot,

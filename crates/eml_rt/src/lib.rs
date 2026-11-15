@@ -41,8 +41,8 @@ pub use externs::{
 };
 pub use frozen::Frozen;
 pub use heap::{
-    CTX_FAULT, CTX_JMP, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Ctx, CtxStats, Heap, MaskItem,
-    Stats, Token,
+    CTX_FAULT, CTX_JMP, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_ABORT, CTX_YIELD_TARGET, Ctx,
+    CtxStats, Heap, MaskItem, Stats, Token,
 };
 pub use host::{
     Buffering, Host, HostRef, LaunchCause, LaunchError, Launched, NOT_REGULAR, OpenMode, Opened,

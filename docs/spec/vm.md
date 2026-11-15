@@ -32,14 +32,14 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 
 ## `CodeBase` と `FnEntry`
 
-`CodeBase::new(control)`は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Program, linked: &Linked) -> Result<u32, CompileError>`はプログラムを追記してエントリの関数の番号を返す (「追記」)。1つのプログラムだけを読むときも、空の表に`load`する。呼び出しは関数の番号で指し、VMが`FnEntry`から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError`は、スロットが`u16`に収まらない関数 (`TooManySlots`)、`Heap::freeze`の誤り (`Freeze`)、debugビルドの一致の確かめの食い違いと、すでにある名前のCの関数かハンドルの型と違う項 (`Mismatch`。「C の関数の命令」)、結果が複数の値のエントリの関数 (`MultiValueEntry`)、forkしうるプログラムで名前が引けない`fork$`の関数 (`MissingFork`。「`par` の fork と join」)、`Async`の命令を持つプログラムで名前が引けないランタイムのエントリの関数 (`MissingEntry`。「`Async` のタスク」) である。エントリの`ret`は値1つで ([Core IR](core-ir.md)の「構造体にする型」)、`Finish`は値を1つだけ受けるためである。どれも正しいプログラムでは起きないので、`execute`は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)`が`CompileError`をその内部の誤りの`RuntimeError`にし、`execute`と、REPLの`Machine::load`の失敗 (`Outcome::Broken`) がこれを使う。
+`CodeBase::new(control)`は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Program, linked: &Linked) -> Result<u32, CompileError>`はプログラムを追記してエントリの関数の番号を返す (「追記」)。1つのプログラムだけを読むときも、空の表に`load`する。呼び出しは関数の番号で指し、VMが`FnEntry`から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError`は、verifierが拒むプログラム (`Invalid`。「追記」)、スロットが`u16`に収まらない関数 (`TooManySlots`)、`Heap::freeze`の誤り (`Freeze`)、debugビルドの一致の確かめの食い違いと、すでにある名前のCの関数かハンドルの型と違う項 (`Mismatch`。「C の関数の命令」)、結果が複数の値のエントリの関数 (`MultiValueEntry`)、forkしうるプログラムで名前が引けない`fork$`の関数 (`MissingFork`。「`par` の fork と join」)、`Async`の命令を持つプログラムで名前が引けないランタイムのエントリの関数 (`MissingEntry`。「`Async` のタスク」) である。エントリの`ret`は値1つで ([Core IR](core-ir.md)の「構造体にする型」)、`Finish`は値を1つだけ受けるためである。どれも正しいプログラムでは起きないので、`execute`は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)`が`CompileError`をその内部の誤りの`RuntimeError`にし (`Invalid`は破った規則を残す`RunFault::Invalid`にし、関数を名指さない配置の規則ではエントリの関数の名前を付ける)、`execute`と、REPLの`Machine::load`の失敗 (`Outcome::Broken`) がこれを使う。
 
 | 欄 | 中身 |
 |---|---|
 | `functions` | 関数ごとの `FnEntry`。命令の位置の順に並ぶ |
 | `tables` | 命令と、命令の位置で引く表の組 (`Tables`)。下の `tables.` の5つの欄を持つ。コード生成は関数をまたいで1つの `Tables` の末尾に書き、逆アセンブラと追記の一致の確かめも同じ形を読む |
 | `tables.code` | 全関数の命令列 (`Op`)。先頭に組み込みの命令 `Finish` (位置 0)、`ApplyRest` (位置 1)、`ChildDone` (位置 2) を置く。組み込みの命令は合わせて 3 個 (`BUILTINS`) である |
-| `tables.operands` | 長さの変わるオペランド (`u32` の並び)。呼び出しの関数の番号と引数のスロット、extern の行の番号と引数、`con` のフィールド、switch の表、`release` のフィールド、`ev_new` の操作の数など |
+| `tables.operands` | 長さの変わるオペランド (`u32`の並び)。呼び出しの関数の番号と引数のスロット、externの行の番号と引数、`con`のフィールド、switchの表、`release`のフィールド、`evidence`の操作の数とエントリなど |
 | `tables.mask_lists` | `evv_mask` の項目の並び (`eml_rt::MaskItem` の並び。エフェクトの番号、n、m)。`Ctx::evv_mask` が `&[MaskItem]` を受けるので、写さずに渡せるように分けて持つ |
 | `constants` | 定数の語。文字列のリテラル、`i32` に収まらない生の `Int` と `Float` の定数 (ビット列)、`box` の定数 (`Int` は 63 ビットに収まれば即値、収まらなければ不死の `BigInt`。`Float` はいつも不死の `Float`)、`empty_mut_array` の不死の空の `MutArray` |
 | `region` | 定数を置いた凍結した塊の鎖の先頭 `Option<Arc<Frozen<M>>>`。定数の物体をまだ作っていなければ `None` |
@@ -55,7 +55,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 
 - `FnEntry` は、名前、命令列の範囲 `[start, end)`、引数の数 (`arity`)、枠の大きさ (`frame_size`、スロットの数) を公開の欄に持つ。`arity` は開いた後の引数の語の数で、構造体の引数は葉の数だけ数える。クロージャの捕まえた値も引数に数える。`apply` は引数の数だけを見て、部分適用か、ちょうどか、余るかを決める。引数と結果はどれも一様な語なので、シグネチャは要らない ([LIR](lir.md) の「関数の ABI」)
 - `FnEntry` は crate の中だけの欄を2つ持つ。引数の語の Repr の並び (`params`) は、クロージャを作るときと入るときに、捕まえた値を走査する語と生の語のどちらに置くかを引くためにある ([オブジェクトモデル](object-model.md) の「クロージャ」)。結果が RC の Repr か (`ret_rc`) は、その関数をエントリとして実行したときに `Finish` が結果を手放すかを決める (「誤り、止めること、終わり」)
-- 定数は、`load` が `Heap::with_control(control)` で作った作業用のヒープに不死の物体として作り、`freeze` で塊にする。文字列のリテラルは、`Program.strings` の順にすべて引く。塊のページは同じ `Control` の確保量に数える。実行のヒープは、塊を付け替えてから次のエントリを実行する ([オブジェクトモデル](object-model.md) の「凍結した領域」)
+- 定数は、`load`が`Heap::with_control(control)`で作った作業用のヒープに不死の物体として作り、`freeze`で塊にする。文字列のリテラルは、`Program.strings`の順にすべて引く。塊のページは同じ`Control`の確保量に数える。worker 0のヒープは、塊を付け替えてから次のエントリを実行する。ほかのworkerのヒープは、メインのworkerを含め、`Ctx`を作るときに塊を付ける (`CodeBase::worker_ctx`。[オブジェクトモデル](object-model.md)の「凍結した領域」の「付ける」)
 - 塊の物体は、検査モードでも参照を数えない。そのため、文字列の定数を読む命令は `acquire_immortal` を呼ばず、語を写すだけにする
 - `par` の子の `evv` のための fork の表と末尾も、定数の後に同じく作業用のヒープで作って凍結する。`fork$E.op` がすべて名前で引けるようになったエフェクトの表だけを、そのロードで作る (「`par` の fork と join」)
 - `CodeBase` は実行中は読むだけで、`CodeBase<M>: Sync` を型の assert で固定する。書き換えるのは入力の境目の `load` だけである。`CodeBase` は `M` ごとに作るので、検査モードと速いモードを両方動かすテストは2回変換する
@@ -65,13 +65,14 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 REPL (`eml_cli::Repl`) は入力ごとにプログラム全体を lowering し直し、同じ `CodeBase` に追記する。定義ごとに IR を保存して総称な定義の instance をキャッシュする形にしないのは、中段の各パスを純粋な関数のまま保つためである。その代わりに、名前が同じ関数はいつも同じコードになることを、全パスが守る規則にした ([Core IR](core-ir.md) の「変換の規則」)。クロージャは関数の番号を物体の中に持つので、入力をまたいで関数の番号を変えない。REPL のセッションの組み立ては [モジュールと名前解決](modules.md) の「REPL のセッション」に、入力の変換は [Core IR](core-ir.md) の「REPL の入力」にある。
 
 - `Machine<M>` は、`CodeBase<M>` と `Ctx<M>` を入力をまたいで持つ。`Machine::<Fast>::new` と `Machine::<Checked>::new` は `Control` と Host を受け取り、モードごとの確かめを決める。`Machine::with_sched(sched)` は、実行ごとに作るスケジューラの方針を選ぶ。既定は `Sched::Sequential` で、`AnyMachine::new` は `RunConfig` の `sched` を渡す (「タスクとスケジュール」)。`Machine::with_clock(clock)` は時計を選ぶ。既定は `Clock::Virtual` で、`AnyMachine::new` は `RunConfig` の `clock` を渡す (「時計と driver」)。`Machine::with_driver(driver)` は driver を直接渡す (「時計と driver」)。`AnyMachine` は、実行の前にモードを選ぶ呼び出し側のための列挙である
-- `Machine::load(program, linked)` は `CodeBase::load` を呼び、新しい塊があれば実行のヒープに付け替えて、エントリの関数の番号を `Loaded { entry }` で返す。誤りを返した後の `Machine` は使い続けない
+- `Machine::load(program, linked)`は`CodeBase::load`を呼び、新しい塊があればworker 0のヒープに付け替えて、エントリの関数の番号を`Loaded { entry }`で返す。ほかのworkerのヒープは、実行ごとに`Ctx`を作るときに付ける (`CodeBase::worker_ctx`)。誤りを返した後の`Machine`は使い続けない
+- `CodeBase::load`は、`linked`を比べた後、`CodeBase`に何も書く前に、どのビルドでもプログラムを所有の段のverifierで確かめ (`eml_lir::unwind::verified_for`)、verifierが拒むプログラムを`CompileError::Invalid`で断る。たどるのは変換する関数だけで、debugのビルドでは比べるために変換し直す関数もたどる。プログラム全体の規則は、プログラム全体に当てる。たどらない関数は、前の読み込みが同じ名前でたどったものである。そのコードが同じであることは、名前が同じ関数は同じコードであるという呼ぶ側の約束 (下の、`load`が呼ぶ側に任せる約束) による。releaseのビルドはこれを比べない ([LIR](lir.md)の「verifier」)。`CodeBase::load_unverified`、`Machine::load_unverified`、`AnyMachine::load_unverified`は、開発だけのfeature `testing`の後ろにある`unsafe fn`で、verifierを通さない。使うのは`eml_vm`のテストだけである ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)
 - `Machine::run(entry)` は、エントリの関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` と、実行ごとの登録表が数える `tasks`、`parks`、`timers`、`dropped_failures`、`cancels` だけがその実行の値である (`shared_objects` はヒープの数なので積算である)。検査モードでは、実行の後にヒープの不変条件だけを確かめる。セッションの根は手放さず、次の実行に残す。続けられる誤り (`is_broken` が偽) の後と、`exit` が run を捨てた後 (「誤り、止めること、終わり」) は `Ctx::recover` を呼び、根から届く物体を新しいヒープに写して古いヒープを捨てる ([オブジェクトモデル](object-model.md) の「回復」)。スタックと `evv` と yield の状態に残った語も、残った物体のページも、古いヒープと一緒に消える。回復が成功したら、検査モードでは新しいヒープの不変条件を確かめ、元の誤りをそのまま返す。捨てた run では、誤りの代わりに `exit` の終了コードを持つ `Finished` を返す。`eml run` (`execute`) も同じ `run` を通る。根がないので写すものはなく、古いヒープを捨てて届かない `Foreign` の物体を閉じるだけである
 - worker 1..N-1を作ったrunでは、返ってきたほかのworkerの`Ctx`を`Machine`が持つ (`Machine::others`)。成功したrunでは終わりの検査の後に落とす (「誤り、止めること、終わり」)。回復するrunでは、すべてのヒープで受けた解放を取り込んでからworker 0の`Ctx`で`recover`を呼び、その間ほかのworkerのヒープを生かしておき、回復が成功したら落とす。`recover`はほかのヒープのページからも写しうるためである ([オブジェクトモデル](object-model.md)の「回復」)。回復しなかった誤り (`is_broken`の誤りと回復の失敗) の後は、`Machine`を落とすまで持つ。落とす順は、driver、ほかのworkerの`Ctx` (panicしたworkerのものも含む)、worker 0の`Ctx`である (「タスクとスケジュール」)
 - 回復が誤りを返すか、検査モードで回復の後の不変条件の確かめが失敗したら、`run` は `RuntimeError::Unrecovered { cause, reason }` を返す。`cause` は元の誤り (捨てた run では `Stopped(Stop::Ended)`) で、`reason` は回復の誤り (`HeapError`) である。回復の誤りは、写せない物体に着いた `Unrecoverable` と、検査モードの `UnknownPage` (登録していないページを指す語) と `NotQuiescent` (取り込んだ後も積んでいる途中のスレッドがある) の3つである。`Unrecoverable` と `UnknownPage` のときは `Control` の ID の表はもう消してあり、`NotQuiescent` のときは消す前に返るので表は残る ([オブジェクトモデル](object-model.md) の「回復」)。どれでも `Unrecovered` の `is_broken` は真で、REPL は後の入力を受け付けない。表示は元の誤りの後に `\nrecovery failed: {reason}` を足す。根の値は `Unr` で、根を持つセッションは worker を作らないので、検証を通ったプログラムではどれも起きない
 - `Machine::run_shown(entry, max_chars)` は、文字列を返すエントリの関数を実行し、結果の文字列の先頭 `max_chars` 文字を写し、`Finished` と組にして返す (`Result<(Finished, Option<String>), RuntimeError>`)。`exit` で終わったときはエントリの結果がないので、文字列は `None` である (下の「`exit`」)。REPL が式の入力の値を書いた文字列を受け取るのに使う ([REPL の端末](repl.md) の「結果の表示」)。LIR はエントリが文字列を返すことを印さないので、呼ぶ側が文字列を返すエントリにだけ使う。エントリの `ret` が RC の Repr でなければ、実行せずに内部の誤りを返す。速いモードで文字列でない語を写さないためである。`Finish` は結果を手放さずに残し、`vm::run` が成功した直後、書き出しの前に `Ctx::copy_string` で写して手放す (下の「誤り、止めること、終わり」)。実行時エラーと回復は `run` と同じで、写す前に止まれば、結果は回復で古いヒープと一緒に捨てられる
 - `load`、`run`、`run_shown`は安全な関数で、次の約束を呼ぶ側に任せる。約束を破った後の速いモードの振る舞いは未定義である
-  - プログラムは実行の前提を満たす ([LIR](lir.md)の「実行の前提」)
+  - プログラムは、verifierが確かめない実行の前提を満たす ([LIR](lir.md)の「実行の前提」)
   - すでにコードを持つ`Machine`に読み込むプログラムは、前に読み込んだプログラムと同じセッションから作ったものである。releaseのビルドは、名前が同じ関数の命令列を比べない。根は、書いたときの型のまま読む
   - `run`と`run_shown`の`entry`は、同じ`Machine`の`load`が返した番号である
   - `run_shown`のエントリは文字列を返す
@@ -117,7 +118,7 @@ base + 0 .. base + frame_size: スロット
 ### 命令の形
 
 - 命令は `Copy` の `enum Op` で、大きさが 8 バイトであることをコンパイル時に assert する。命令の列を密に保ち、1回の読み込みで命令を取れるようにするためである。スロットは `u16`、命令の位置 (`Pc`) と表の添字は `u32` である。オペランドは次の3つの形のどれかに収める
-  - 固定のスロット: `Move { dst, src }`、`IntAdd { dst, a, b }` のように `u16` を3つまで持つ。`EvLookup { dst, effect }` と `EvClause { dst, ev, op }` は、エフェクトと操作の番号も `u16` で持つ
+  - 固定のスロット: `Move { dst, src }`、`IntAdd { dst, a, b }`のように`u16`を3つまで持つ
   - スロットと即値: `LoadRaw { dst, value: i32 }` (生の `int`、`float`、`enum` の値)、`LoadImm { dst, value: i32 }` (即値の語)、`LoadConst { dst, index: u32 }`、`BoxConst { dst, index: u32 }`、`Goto { target: u32 }`
   - スロットと表の添字: `Call { dst, at: u32 }` のように、長さの変わるオペランドを `operands[at..]` に置く。関数の番号、行の番号、引数のスロットの並びは表の側にある
   - スロットを2つと表の添字は 8 バイトに収まらない。そのため、token を定義する `release` (`ReleaseReuse { src, at }`) と token を受ける `con` (`ConReuse { dst, at }`) は、token のスロットを `operands[at]` に置く (「reuse」)
@@ -158,7 +159,7 @@ base + 0 .. base + frame_size: スロット
   - 数が合わない道 (`apply_other`): 足りなければ、新しいクロージャを作って `dst` に書く。余れば、`ApplyRest` のフレームを積んで残りの引数を移してから、先頭の分の引数で関数に入る。関数の見出しの戻り先は `ApplyRest` で、結果は `ApplyRest` のフレームのスロット 0 に書く。`ApplyRest` は、スロット 0 の結果に残りの引数を適用する。この適用は `ApplyRest` のフレームの見出しを引き継ぐ末尾の適用で、引数を作業用の領域に通す。部分適用はふつうのプログラムにも現れるので、この道を `#[cold]` にはしない
   - クロージャの中身を取り出すときは、先に `meta` を読んで `lin` ビットを覚えておく。そのうえで、`is_last` なら値を読んでから `free_block` し、そうでなければ参照の値を `dup` してから `decref` する
   - 新しいクロージャの `lin` ビットは元のクロージャのものを写し、元が即値なら立てない。捕まえた値と引数は、関数の引数の Repr で並べる (「データとクロージャ」)
-- **`clause`** `Clause { dst, at }`: 呼ばれる値と、evidence を先頭にした引数を `apply` と同じに並べる。引数の Repr は、evidence が `obj`、残りが操作の表の `params` で、エントリの関数の引数と同じ Repr なので比べない。引数の数はいつもエントリの関数の引数の数と等しく、違えば内部の誤りにする。部分適用で生の `int` をクロージャに入れることもない
+- **`clause`** `Clause { dst, at }`: 節の呼び出しは自分でevidenceを探す。オペランドは[エフェクト, 操作, n, 引数…]で、エフェクトはマシンの番号である。エフェクトで`Ctx::ev_lookup`を、evidenceと操作で`Ctx::ev_clause`を走らせ、読んだエントリのクロージャを、evidenceを先頭に引数を後ろに並べて`apply`と同じに呼ぶ。`ev_lookup`はevidenceを`dup`し、その参照がエントリの最初の引数になる。引数のReprは操作の表の`params`で、エントリの関数の引数と同じReprなので比べない。引数の数はいつもエントリの関数の引数の数と等しく、違えば内部の誤りにする。部分適用で生の`int`をクロージャに入れることもない
 - **末尾の位置の `apply` と `clause`** (`TailApply`、`TailClause`): 今のフレームの見出しを引き継ぎ、引数は作業用の領域を通す。足りなければ、作ったクロージャを戻りと同じに返す。余れば、`ApplyRest` のフレームが今のフレームの位置と見出しを受け継ぐ
 - **末尾呼び出しの結果**: 末尾の位置の呼び出しは、結果の Repr が関数の `rets` と互換なときだけ `tail` になる ([LIR](lir.md) の「末尾の位置の呼び出し」)。そのため、`TailCall`、`TailApply`、`TailClause` は結果を変えずに見出しを引き継ぎ、結果を変えるフレームはない
 - **安全点**: 呼び出し (末尾呼び出し、`apply`、`clause`、`ApplyRest`の適用を含む)、戻り、自己末尾呼び出しのジャンプで、フレームを移した後に`Ctx::poll(深さ)`を呼び、続けて方針に切り替えるかを尋ねる (「タスクとスケジュール」)。中断の巻き戻しでフレームを外すときは呼ばない (「巻き戻し」)
@@ -241,8 +242,9 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 基本操作と extern
 
-- `prim`は、基本操作ごとの命令で、`Ctx`の同じ名前のメソッドを呼ぶ。`dummy`は`Heap::dummy`である。`empty_mut_array`は、`lin`ビットを立てた長さ0の配列 (VMとネイティブのコードがどちらも`eml_rows::constants::empty_mut_array`で作り、これは`alloc_array_immortal(true)`を呼ぶ。ほかの配列と同じく数の語0を持つ) を凍結した領域の定数として持ち、`LoadConst`でその語を写す。長さが0なので、添字を確かめて読み書きする所はこの物体を書き換えない。`var`の取り出しは経路ごとに1回なので、`freeze`されることもなく、RCの命令は領域の物体に何もしない ([オブジェクトモデル](object-model.md)の「凍結した領域」)。即値 (エフェクトの番号、操作の番号) と`ev_new`の操作の数は、コード生成の時点で命令か`operands`に書く。`evv_mask`の項目の並びは`mask_lists`に置く。逆アセンブラは項目をCore IRのテキストと同じ書き方で、エフェクトを番号にして書く (`evv_mask s3, [0@1, 1] s2`)。結果が`unit`の基本操作は、結果のスロットに`()`を書く
-- エフェクトの番号は 65535 より小さくなければならない。evidence の tag はエフェクトの番号 + 1 だからである ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめない。コード生成は、これをコンパイラの内部の不変条件として panic で確かめ、`CompileError` にはしない
+- `prim`は、基本操作ごとの命令で、`Ctx`の同じ名前のメソッドを呼ぶ。`dummy`は`Heap::dummy`である。`ev_last_state`は`ev_take_state`の命令で、同じ操作の持ち主の行である。`ev_retire`がevidenceを断ると (状態か外側の`evv`が`()`でないとき)、どちらのモードでも基本操作の誤り (`BadEvidence`) でrunが終わる。断ってもヒープは何も変わらないので、安全である。EPの`prompt$`は先に両方を取るのでそこに届かない ([Core IR](core-ir.md)の「handle と `prompt$`」) が、verifierが受け入れる手書きのIRは、たとえば状態を持つ`evidence`の結果を`ev_retire`に渡して届きうる。`empty_mut_array`は、`lin`ビットを立てた長さ0の配列 (VMとネイティブのコードがどちらも`eml_rows::constants::empty_mut_array`で作り、これは`alloc_array_immortal(true)`を呼ぶ。ほかの配列と同じく数の語0を持つ) を凍結した領域の定数として持ち、`LoadConst`でその語を写す。長さが0なので、添字を確かめて読み書きする所はこの物体を書き換えない。`var`の取り出しは経路ごとに1回なので、`freeze`されることもなく、RCの命令は領域の物体に何もしない ([オブジェクトモデル](object-model.md)の「凍結した領域」)。即値 (根の番号) は、コード生成の時点で命令か`operands`に書く。`evv_mask`の項目の並びは`mask_lists`に置く。逆アセンブラは項目をCore IRのテキストと同じ書き方で、エフェクトを番号にして書く (`evv_mask s3, [0@1, 1] s2`)。結果が`unit`の基本操作は、結果のスロットに`()`を書く
+- `evidence`は命令`Evidence { dst, at }`である。`operands[at..]`に、エフェクトの番号、操作の数、状態のスロット、外側のリストのスロットを置き、続けてエントリごとに関数の番号、捕獲の数、捕獲のスロットを置く。命令は、各エントリのクロージャを`closure`と同じ道で作り (捕獲のないエントリは関数の値である)、`Ctx::ev_new`を呼び、操作の順にエントリごとに`Ctx::ev_set_clause`を呼ぶ。状態、外側のリスト、捕獲を消費する。逆アセンブラはエフェクトを番号で書く (`evidence s1, E0(s3, s1) [&land$entry]`)
+- エフェクトの番号は65535より小さくなければならない。evidenceのtagはエフェクトの番号 + 1だからである ([オブジェクトモデル](object-model.md)の「evidence の3つの物体」)。速いモードの`Ctx::ev_new`はこれを確かめない。コード生成は、これをコンパイラの内部の不変条件としてpanicで確かめ、`CompileError`にはしない
 - 算術と比較のexternは、それぞれ専用の命令にする。`Int`の13個 (`+ - * / % negate`、比較6つと`compare`) は`IntAdd`、`IntCompare`など、`Float`の12個 (`+ - * / % negate`と比較6つ) は`FloatAdd`、`FloatNeg`、`FloatLt`など、`Bool`の`==`と`!=`は`BoolEq`と`BoolNe`である。命令は行の`#[inline]`の関数 (下の専用の命令の項) を呼び、その関数は`eml_rt::externs`の`#[inline]`の関数を呼ぶので、どちらも命令の中に展開される。結果は生のビット列でスロットに書く。`Float`の命令は誤りを返さないので、`Panic`へ中断する道 (「`IO` と `Panic` への中断」) を通らない
 - `Char` の行には命令を足さない。今ある命令がその行の結果をそのまま計算するときだけその命令に写し、ほかの行は汎用の `Op::Extern` で動かす。規則を1つにして、VM の命令の面 (`op.rs`、`vm.rs`、逆アセンブラ、コード生成) を広げないためである。`Char` の比較の7行 (`==`、`!=`、`compare`、`<`、`<=`、`>`、`>=`) は、語が `Int` と同じ `int` なので、`Int` の同じ命令に写す。`Std.Char.to_int` と `Std.Char.of_byte` は語を変えないので、`Move` に写す。`Std.Char.of_int` と `Show Char` の2行は汎用の extern で動かす。`of_int` は `eml_rt::externs::char_of_int` を呼び、スカラー値でなければ `Panic` へ中断する
 - `Byte` の行にも同じ規則を当てる。`Byte` の比較の7行と `/`、`%` は、語が `Int` と同じ `int` で、不変条件の下で結果が `Int` の命令と一致する (`/` と `%` は 0 で失敗するだけで、桁あふれが起こらない) ので、`Int` の同じ命令 (`IntDiv`、`IntRem` を含む) に写す。`+`、`-`、`*`、`negate` は結果の範囲を確かめるので、汎用の extern で動かし、`eml_rt::externs::byte_add` などを呼んで範囲の外なら `Panic` へ中断する。`Show Byte` の `display` は汎用の extern で動かし、`IntShow` と同じ枝が `Ctx::int_show` を呼ぶ。`Std.Byte.to_int` は語を変えないので `Move` に写し、`of_int` と `wrap` は汎用の extern で動かす。`of_int` は `eml_rt::externs::byte_of_int` を呼び、範囲の外なら `Panic` へ中断する。`Bits` の12行 (`Int` と `Byte` の `&&&`、`|||`、`^^^`、`complement`、`<<<`、`>>>`) は `Pure` で、汎用の extern で動かし、`eml_rt::externs` の `int_and`、`int_or`、`int_xor`、`int_complement`、`int_shl`、`int_shr`、`byte_complement`、`byte_shl`、`byte_shr` を呼ぶ。`Byte` の `&&&`、`|||`、`^^^` は、0..=255 の語に対して `Int` の関数の結果が 0..=255 に収まるので、`Int` と同じ関数を使う。`show` は `display` の結果に `u8` を足す形で eml に書く ([宣言](declarations.md) の「Prelude のクラス」の `Show Byte`)
@@ -263,14 +265,14 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 ### 巻き戻しの表
 
 - 巻き戻しの地点は、末尾でない `call`、末尾でない `apply` と `clause`、`par`、`faults` の extern の命令 (`exit`、`panic`、`Int` の算術と配列の専用の命令を含む。std の行では `Pure` でない extern の命令と同じである)、`prim yield_abort` と `prim child_abort` である ([LIR](lir.md) の「巻き戻しの地点」)。呼ばれる側が中断するかは問わない。中断はこのどれかの命令の中か、その呼ばれる側で始まるので、中断が通るフレームはいつも地点の命令の直後で止まっている
-- 地点ごとの所有は、`eml_lir::unwind::points(program, wanted) -> Vec<Option<Result<Unwinds, VerifyError>>>` が、`wanted` の関数ごとに求める。コード生成は、追記で新しく変換する関数だけを求め、debug ビルドの一致の確かめ (「追記」) ではすでにある関数も求める。各関数の `Unwinds { entry, points }` の `points` は、`UnwindPoint { block, stmt, owned, tokens, landing }` をブロックの順、文の順に並べる。`entry` は関数のエントリの所有 ([LIR](lir.md) の「巻き戻しの地点」)
+- 地点ごとの所有は、読み込みの確かめ (`eml_lir::unwind::verified_for(program, walked) -> Result<Vec<Option<Unwinds>>, VerifyError>`) が、`walked`の関数ごとに求める。コード生成は、追記で新しく変換する関数だけを求め、debugビルドの一致の確かめ (「追記」) ではすでにある関数も求める。各関数の`Unwinds { entry, points }`の`points`は、`UnwindPoint { block, stmt, owned, tokens, landing }`をブロックの順、文の順に並べる。`entry`は関数のエントリの所有 ([LIR](lir.md)の「巻き戻しの地点」)
   - `owned` は、地点の命令の直後に所有している RC の対象の変数と、その所有の数 (1 以上) の列で、変数の番号の昇順に並ぶ。命令が束縛する変数 (呼び出しの結果、複数の値の結果、extern の行き先) は含めない。命令が戻らなければ、その変数はまだないためである
   - `tokens` は、地点の命令の直後に生きている token の変数の列で、変数の番号の昇順に並ぶ。token は RC の対象でないので `owned` には入れない。token は yield しうる呼び出しの後で生きていないので、着地の印を持つ地点の `tokens` はいつも空である
   - `landing` は、`apply` の着地の印の変数である ([LIR](lir.md) の「着地の印」)
 - 所有は、verifier の所有の段の走査そのもので求める ([LIR](lir.md) の「verifier」)。生きている変数をすべて手放すのでなく所有で決めるのは、借りたフィールドが呼び出しをまたぐことがあるためである。持ち主が呼び出しの後も生きていて所有されているとき、借りたフィールドも手放すと、持ち主の解放と合わせて2回手放すことになる ([LIR](lir.md) の「所有を取る時点」)。所有している変数は、所有の規則により後で消費されるので、どれも生きている
-- `points` は、所有の段の verifier が拒む関数について、地点の代わりにその誤りを返す。コード生成はそういう関数を、空のエントリの行だけを持ち地点の行を持たない関数として扱う。VM の見張りを確かめるテストが、verifier を通さない IR を読み込むためである。そういう関数の地点の命令の後で止まったフレームを中断が通ると、内部の誤りになる。関数の最初の命令の位置で止まったフレームは、空のエントリの行で何も手放さずに外す (下の「巻き戻しの手順」)
+- 読み込みは所有の段のverifierが拒むプログラムを断るので、読み込んだ関数はどれも表を持つ。確かめない読み込み (`load_unverified`、「追記」) だけは表を`eml_lir::unwind::points`で求め、verifierが拒む関数を、空のエントリの行だけを持ち地点の行を持たない関数として読む。そういう関数の地点の命令の後で止まったフレームを中断が通ると、内部の誤りになる。関数の最初の命令の位置で止まったフレームは、空のエントリの行で何も手放さずに外す (下の「巻き戻しの手順」)
 - 表の行 (`Unwind`) は、手放すスロットとその所有の数の列 `slots`、生きている token のスロットの列 `tokens`、着地の印があればその evidence のスロット `landing`、行の種類 `entry: UnwindEntry` を持つ。種類は、呼び出しの行の `No`、起こすエントリの行の `Raises`、起こすのを延ばすエントリの行の `Defers` の3つである。`Tables::unwinds` は、行を地点の命令の次の命令の位置で引けるように、位置の昇順に持ち、二分探索で引く。呼び出しの地点では、その位置がフレームの見出しの戻り先と一致するためである。地点の命令は文の最後に書くので、コード生成は文を書き終えた位置で行を足す
-- エントリの行は、すべての関数が持つ。位置は関数の最初の命令の位置で、`entry`が`Raises`か`Defers`、`slots`は関数のエントリで所有している引数 (`Unwinds.entry`。貸された引数は呼んだ側が持つので入らない) と所有の数、`tokens`は空、`landing`は`None`である。コード生成は、ブロック0を書く前に足す。点の命令の後にはいつも同じ関数の終端が続き、終端は地点でないので、エントリの行と呼び出しの行の位置は重ならない。表を仕上げるとき、位置が真に増えていくことと、関数の最初の命令の位置でエントリの行が引けることをdebugビルドで確かめる。引数を所有しない関数と、表を作れない関数は、`slots`が空のエントリの行を持つ。エントリの行は、フレームが最初の命令に着く前に中断が通るときのために置く行で、巻き戻しの手順は地点の行と同じに使う
+- エントリの行は、すべての関数が持つ。位置は関数の最初の命令の位置で、`entry`が`Raises`か`Defers`、`slots`は関数のエントリで所有している引数 (`Unwinds.entry`。貸された引数は呼んだ側が持つので入らない) と所有の数、`tokens`は空、`landing`は`None`である。コード生成は、ブロック0を書く前に足す。点の命令の後にはいつも同じ関数の終端が続き、終端は地点でないので、エントリの行と呼び出しの行の位置は重ならない。表を仕上げるとき、位置が真に増えていくことと、関数の最初の命令の位置でエントリの行が引けることをdebugビルドで確かめる。引数を所有しない関数と、確かめない読み込みが読んだ表を作れない関数は、`slots`が空のエントリの行を持つ。エントリの行は、フレームが最初の命令に着く前に中断が通るときのために置く行で、巻き戻しの手順は地点の行と同じに使う
 - エントリの行の種類は、関数の名前だけで決める。EP の補助の関数 (`eml_lir::ep_helper` が真になる名前。[Core IR](core-ir.md) の「EP が作る補助の関数」) なら `Defers`、ほかは `Raises` である。2つの違いは、そのエントリでタスクの上限を起こすかだけで (「タスクの上限」)、巻き戻しの手順は種類を読まない。逆アセンブラも `Raises` と `Defers` を書き分けない
 - 逆アセンブラは、手放すスロット、token のスロット、着地のスロットのどれかを持つ行を、地点の命令の後に `unwind [s3, s5*2] tokens [s6] land s4` の形で書く。所有の数が 1 なら `*` を書かない。token のスロットがなければ `tokens [..]` を書かない。どの命令が行を持つかは命令の種類で決まるので、空の行は書かない
 - エントリの行は、スロットがあれば関数の見出しの行に `fn f (arity 3, frame 4) entry unwind [s0, s2]` の形で書く。命令の行には書かない
@@ -319,7 +321,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
   - ほかの誤り (書き出しの誤り、ヒープの誤り、止めたこと) は、実行時エラー (`RunFault::Extern`) にする
 - 届けるときは、`ctx.ev_find` でそのエフェクトの evidence を探す
   - なければ、ほかの extern の誤りと同じ実行時エラー (`RunFault::Extern`) にする。文言と位置の表示は、ほかの実行時エラーと同じである
-  - あれば、引数の文字列を作り、`ev_clause[op]` で節のエントリを得て、`clause` の呼び出しと同じ形で `(ev, 引数…)` を渡して呼ぶ。見出しの結果のスロットは命令の行き先で、戻り先は命令の次の命令である。evidence がないときは引数の文字列を作らない
+  - あれば、引数の文字列を作り、`Ctx::ev_clause`で節のエントリを得て、`clause`の呼び出しと同じ形で`(ev, 引数…)`を渡して呼ぶ。見出しの結果のスロットは命令の行き先で、戻り先は命令の次の命令である。evidenceがないときは引数の文字列を作らない
 - `fail_io kind s` の `Op::Extern` は、文字列 `s` を `Ctx::copy_string` で写して手放し、`Fault::Raised { kind, message }` を返す。`kind` は `IOErrorKind` のタグそのままである。届け先は、上の `try_io` が捕まえる誤りと同じく、行の `purity` が `Effectful` のとき `IO` で、evidence がなければ実行時エラー (`RunFault::Extern`) である。宛先には何も書かない
 - `panic s` の `Op::Extern` は、`exit` と同じく VM が自分で実行する。`s` をそのまま `panicked` の引数にして、上と同じく `Panic` に届ける。evidence がなければ、`Ctx::copy_string` で `s` の中身を写して `s` を手放し、`RunFault::Panicked` の実行時エラーにする。表示は `panicked: {message}` で、位置は `panic` の呼び出しの位置である
 - エントリは `never` の節のエントリなので、`yield_abort` で巻き戻しを始め、戻らない。誤りを返した命令のフレームはエントリの呼び出し元になり、その命令の地点の表の行で片付く。巻き戻しが `try_io` か `try_panic` の `prompt$` の前の `apply` に着地する (上の「巻き戻し」)。命令の行き先には何も書かない
@@ -342,7 +344,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ## 誤り、止めること、終わり
 
-- 実行時エラー `RuntimeError` は、誤り (`RunFault`)、関数の名前、省略できる位置を持つ `Fault` と、検査モードのリークの `Leak` と、すべてのタスクが待つ `Deadlock` (「時計と driver」) と、回復の失敗の `Unrecovered` (「追記」) である。`RunFault` は、extern、基本操作、ヒープの操作の誤り (`Extern(Fault)`)、捕まえる `try_panic` のない利用者の `panic` (`Panicked(String)`)、安全点で止めたこと (`Stopped(Stop)`)、verifier を通った IR では起きないはずの誤り (`Internal`)、空きのループが見つけたデッドロック (`Deadlock`)、I/O の driver を作れなかったか driver が壊れたこと (`Driver(String)`。「時計と driver」) の6つである。`CodeBase::error` は `RunFault::Deadlock` を、関数の名前も位置も付けずに `RuntimeError::Deadlock` にする
+- 実行時エラー`RuntimeError`は、誤り (`RunFault`)、関数の名前、省略できる位置を持つ`Fault`と、検査モードのリークの`Leak`と、すべてのタスクが待つ`Deadlock` (「時計と driver」) と、回復の失敗の`Unrecovered` (「追記」) である。`RunFault`は、extern、基本操作、ヒープの操作の誤り (`Extern(Fault)`)、捕まえる`try_panic`のない利用者の`panic` (`Panicked(String)`)、安全点で止めたこと (`Stopped(Stop)`)、verifierを通ったIRでは起きないはずの誤り (`Internal`)、読み込みが断ったverifierの拒むプログラムと破った規則 (`Invalid(String)`。`internal error: invalid LIR: <rule>`。「`CodeBase` と `FnEntry`」)、空きのループが見つけたデッドロック (`Deadlock`)、I/Oのdriverを作れなかったかdriverが壊れたこと (`Driver(String)`。「時計と driver」)、メインのworkerの`Park`の誤り (`Park(String)`。「メインのworkerの待ち」) の8つである。`CodeBase::error`は`RunFault::Deadlock`を、関数の名前も位置も付けずに`RuntimeError::Deadlock`にする
 - 表示の形は次のとおりである。位置があれば `{fault}\n  at path:line:column`、なければ ``{fault} in `function` ``、リークは `memory leak: objects were not freed: {n} {name}, …`、内部の誤りの `{fault}` は `internal error: {what}`、利用者の `panic` の `{fault}` は `panicked: {message}`、デッドロックは `deadlock: every task is waiting and no timer is pending` である。`eml run` は、この表示の前に `runtime error: ` を付けて標準エラーに書く
 - 関数の名前は、命令の位置から `FnEntry` の範囲を二分探索して引く (`function_at`。位置が範囲の終わりより前であることも確かめる)。`Finish`、`ApplyRest`、`ChildDone` はどの関数にも属さないので、そこで起きた誤りには、最後に戻った関数の名前を付ける。`par` の join の完了とその後の安全点で起きた誤りと、右の子を始めるときの誤りには、`par` の命令の関数の名前と位置を付ける (「`par` の fork と join」)。VM は `Ret` のたびにその位置を `Task::last_ret` に覚える。末尾の位置の部分適用が作ったクロージャを返すときも、関数の中で起きたなら同じく覚える
 - 位置は `locations` から命令の位置で引く。表に載せるのは、位置を持つ extern の呼び出しから作った命令である。専用の算術と比較の命令も含む。`run-fail` の UI テストの多くは `/` と `+` の誤りの位置を表示している
@@ -463,7 +465,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 分かれたrun (`Seat::Separate`。`execute`か、`with_seat(Seat::Separate)`の`Machine`) は、`Limits::workers`より1つ多いworkerを持つ。増えるのはメインのworkerで、欄`N`にあり、`Machine`を持つスレッドで動く。
 
-- メインのworkerの欄はrunの始めから眠った形である。`Machine`を持つスレッドは、worker 0を作る前に自分の`Ctx` (`Ctx::for_worker(.., N)`) を作り、worker 0を作った後にメインのworkerとして動く。検査モードでは`Ctx`を作るときにページを1枚取って確保量に数えるので、worker 0の後に作ると、その課金とプログラムの確保の前後がスレッドの速さで決まる。決定的な方針ではメモリの柔らかい上限の旗の地点が確保量で決まるためである (「タスクとスケジュール」)。worker 1..N-1は今もworker 0が始めた後に自分のスレッドで`Ctx`を作るので、N > 1では柔らかい上限の旗の地点はスケジュールだけでは決まらない
+- メインのworkerの欄はrunの始めから眠った形である。`Machine`を持つスレッドは、worker 0を作る前に自分の`Ctx` (`Ctx::for_worker(.., N)`) を作り、worker 0を作った後にメインのworkerとして動く。検査モードでは`Ctx`を作るときにページを1枚取って確保量に数えるので、worker 0の後に作ると、その課金とプログラムの確保の前後がスレッドの速さで決まる。決定的な方針ではメモリの柔らかい上限の旗の地点が確保量で決まるためである (「タスクとスケジュール」)。この`Ctx`にもコードの塊を付ける。付けるのは`Arc`を1つ持つだけで何も確保しないので、課金の順は変わらない。worker 1..N-1は今もworker 0が始めた後に自分のスレッドで`Ctx`を作るので、N > 1では柔らかい上限の旗の地点はスケジュールだけでは決まらない
 - 空きの集まり`idle`には入らず、`next_owner`も`pop_idle`も選ばない。本物の時計では、worker 1..N-1と同じく最初に要るときに自分のI/Oのdriverを作る。仮想の時計ではworker 0がそのI/Oのhostである
 - runの全体の務めは持たない。時計、デッドロックの判定、`END`、監視のスレッドはworker 0に残る
 - 待つときは、`idle`を使わずにworker 1..N-1の手順で眠る。欄のlockの下で`parked`を立てて`running`から引き、最後に眠ったworkerならworker 0を起こす。眠る道は替えられる`Park`である (「メインのworkerの待ち」)
@@ -627,7 +629,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - fork の表は、エントリの表と同じ形の `Data(tag 0)` で、操作ごとに即値 `&fork$E.op` を並べる。子の中で `E` の evidence を探すと fork evidence が見つかり、その節のエントリは `fork$E.op` である。`fork$E.op` は `prim child_abort` で子を中断する (下の「子の中断」)
 - `Panic` の evidence は、子の `evv` の末尾の1つが受け持つ。extern のエフェクトは mask されないので ([エフェクトと handler](effects.md) の「組み込みの `IO`」)、深さはいつも 0 である。子の中の extern の `Panic` (`failed` と `panic`) は、子の中の `try_panic` か、末尾の `Panic` の fork evidence に届く
 - 凍結した部分: fork の表と末尾 (`Panic` の fork evidence `[Panic の表, 即値 0, ()]` を持つ節点) は、定数と同じく作業用のヒープに不死の物体として作り、凍結する。`CodeBase::load` は、読み込んだプログラムの never-only のエフェクトのうち、`fork$E.op` がすべて名前で引けるようになったものの表を作る。名前は前のロードの関数からも引く。操作のないエフェクトの表は空である。fork の関数は、プログラムが fork しうるとき (`eml_lir::Program::may_fork`) だけ作られるので、表は名前が初めてそろったロードで1回だけ作る。再開する操作を持つエフェクトは子の中で使えないので、表を持たない
-- fork ごとの部分: fork は、mask を当てた後の親の `evv` を頭からたどり、`Panic` を除く never-only のエフェクトの evidence ごとに fork evidence と節点を作って、凍結した末尾につなぐ。該当する evidence がなければ、子の `evv` は末尾そのもので、確保しない。表のない never-only のエフェクトの evidence があれば、内部の誤り (`a never-only evidence of a par parent has no fork table`) にする。親の evidence は子に渡さない。子は状態の欄を書き換える親の handler に届かないためである
+- forkごとの部分: forkは、maskを当てた後の親の`evv`を`Ctx::evv_step`で頭からたどり、`Panic`を除くnever-onlyのエフェクトのevidenceごとに`Ctx::fork_ev`でfork evidenceを作り、`Ctx::evv_push`で節点にして、凍結した末尾につなぐ。表は`Heap::alloc_fork_table`、末尾は`Heap::alloc_fork_tail`が作る。VMは物体の欄の位置を書かない ([オブジェクトモデル](object-model.md)の「evidence の3つの物体」)。該当するevidenceがなければ、子の`evv`は末尾そのもので、確保しない。表のないnever-onlyのエフェクトのevidenceがあれば、内部の誤り (`a never-only evidence of a par parent has no fork table`) にする。親のevidenceは子に渡さない。子は状態の欄を書き換える親のhandlerに届かないためである
 - fork evidence を包む `prompt$` はなく、`fork$E.op` の節は状態の欄を書かないので、fork evidence は `ev_take_state`、`ev_set_state`、`ev_take_evv` の的にならない ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)
 - `may_fork()` のプログラムで `fork$E.op` の名前が引けなければ、`load` は `CompileError::MissingFork` を返す (「`CodeBase` と `FnEntry`」)
 
@@ -667,7 +669,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 ### 子の中断
 
-- `prim child_abort(ev, c)` (`ChildAbort { ev, c }`) は、`fork$E.op` が呼ぶ。`ev` は節のエントリが持つ fork evidence で、`child_abort` は借りる。エフェクトを `meta(ev).tag() - 1` で、深さを `ev` の状態の欄の即値で読む。`c` (操作の引数を捕まえた `reperform$E.op` の閉包) は消費し、子の終わりの中断の記録に持たせる
+- `prim child_abort(ev, c)` (`ChildAbort { ev, c }`) は、`fork$E.op`が呼ぶ。`ev`は節のエントリが持つfork evidenceで、`child_abort`は借りる。エフェクトと深さを`Ctx::fork_of(ev)`で読む (エフェクトはtagから1を引いた値、深さは`ev`の状態の欄の即値である)。`c` (操作の引数を捕まえた`reperform$E.op`の閉包) は消費し、子の終わりの中断の記録に持たせる
 - `boundaries` が空なら、内部の誤り (`a child abort outside a par child`) にする
 - 不死のダミーを宛先にして巻き戻す (「巻き戻しの手順」)。宛先はどの着地の印とも合わないので、巻き戻しは子の境目の上で止まり、子の終わりを中断として `ChildDone` と同じ手順に渡す
 - 子の中の handler は子の中に着地するので、ほかの中断が子の境目に着くことはない。着けば内部の誤り (`an abort reached the boundary of a par child`) にする
@@ -1161,7 +1163,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 
 `RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の23で、`peak_objects` と `peak_stack` 以外が仕事の回数である。
 
-- `evidence_steps`: `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。今有効な handler の数で決まり、呼び出しの深さにはよらない。検査モードの `evv_mask` は、合う evidence が足りずに誤りを返したときは数えない ([オブジェクトモデル](object-model.md) の「速いモードと検査モード」)。出どころは `Ctx` の `CtxStats` である
+- `evidence_steps`: 節の呼び出しの`ev_lookup`、中断の届け先を探す`ev_find`、`evv_mask`がたどった`evv`の節点の数。今有効なhandlerの数で決まり、呼び出しの深さにはよらない。検査モードの`evv_mask`は、合うevidenceが足りずに誤りを返したときは数えない ([オブジェクトモデル](object-model.md)の「速いモードと検査モード」)。出どころは`Ctx`の`CtxStats`である
 - `yields`: `yield_to` を実行した回数。すぐに再開する操作は yield しないので数えない。中断 (`yield_abort` と `exit`) は yield でないので数えない。出どころは `CtxStats` である
 - `yield_frames`: `yield_cont_set` を実行した回数。yield が handler まで戻る間に、継続 κ に足したフレームの数である。再開する操作では、操作と handler の間のフレームの数に比例する。これは方式の性質である。中断は κ を組み立てないので、数に入らない。出どころは `CtxStats` である
 - `unwound_frames`: 中断の巻き戻しで外したフレームの数 (「巻き戻し」)。`ApplyRest` のフレームも数え、着地したフレームは数えない。中断の仕事が呼び出しの深さに比例することを、スケーリングのテストで確かめるために数える。VM が数える

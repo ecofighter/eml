@@ -20,8 +20,8 @@
 ### 記述子の表
 
 - `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`const NAME = "接頭辞";`の形では、エントリの記号は接頭辞に関数の識別子を続けたものになり、`const NAME;`の形では識別子そのものになる。`Entry`の欄は、`symbol` (記号)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
-- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`のRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`と、ハンドルの型のdtor`dtor`も受ける。どちらも`Kind`は`I64`である。`ptr`のRustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。`dtor`のRustの型は`Option<eml_rows::ffi::Dtor>`である (「エントリのABI」)。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
-- エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は6つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`closures.rs`の`CLOSURES`、`c.rs`の`C`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
+- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum`、文脈のRepr`ev`、`cev`、`fev`、`rev`、`evv` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`と文脈のReprのRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`と、ハンドルの型のdtor`dtor`も受ける。どちらも`Kind`は`I64`である。`ptr`のRustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。`dtor`のRustの型は`Option<eml_rows::ffi::Dtor>`である (「エントリのABI」)。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
+- エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は7つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`effects.rs`の`EFFECTS`、`closures.rs`の`CLOSURES`、`c.rs`の`C`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
 - 生成したコードは、エントリを記号で取り込み、呼び出しの型を行だけから作る。宣言が1つなので、関数と呼び出しの型が食い違うことはない
 - エントリに`#[no_mangle]`は付けない。JITはアドレスを記号の名前で登録する
 
@@ -41,7 +41,7 @@
 - `eml_x_*`: 失敗しうる行 (`faults`の行) は、失敗を`Ctx`に置き (`set_fault`)、仮の値を返す。生成したコードは、呼び出しのすぐ後でfaultの語 (`CTX_FAULT`) を確かめる。ほかの誤りは内部の種類のもので、捕まえたpanicと同じく`shim`の致命的な誤りの道で終わる。包みの本体は`eml_fatal`を名指さない。利用者のCの関数の呼び出しの補助`eml_x_c_*`は行ではなく、利用者のpanicを`worker::park_panic`で置き、ほかの誤りは記録して致命的な誤りの道で終わる (「externの失敗」)
 - `eml_nrt_*`: サービスは、生成したコードが分岐に使う行動の語を返すか、失敗の道が致命的な誤りだけなら値の語を返す
 
-速いモードでヒープの操作が`Err`を返すのは、次の場合だけである: `WrongKind` (`foreign*`の種類か、型の食い違い)、`StaleToken` (空のtokenへの`reuse_in_place`。生成したコードは`reuse_in_place`を呼ばず、tokenの語をそのまま箱にする。「データ」を見る)、`RootMisuse`と`Unrecoverable` (根と回復の操作)。どれも生成したコードからは回復できない。だからヒープのエントリは致命的な誤りだけで終わる。
+速いモードでヒープの操作が`Err`を返すのは、次の場合だけである: `WrongKind` (`foreign*`の種類か、型の食い違い)、`StaleToken` (空のtokenへの`reuse_in_place`。生成したコードは`reuse_in_place`を呼ばず、tokenの語をそのまま箱にする。「データ」を見る)、`RootMisuse`と`Unrecoverable` (根と回復の操作)、`ev_retire`の`BadEvidence` (状態か外側の`evv`が`()`でないevidence。EPの`prompt$`は先に両方を取るので届かないが、verifierが受け入れる手書きのIRは、たとえば状態を持つ`evidence`の結果を`ev_retire`に渡して届きうる。断ってもヒープは何も変わらない)。どれも生成したコードからは回復できない。だからヒープのエントリは致命的な誤りだけで終わる。
 
 ### ヒープのエントリ
 
@@ -113,19 +113,20 @@
 
 ネイティブの実行系は、プログラムについての事実を`Image` (`eml_nrt::image`) からだけ得る。`Image`はJITのホストが作り、その表の記憶もJITのホストが持つ。ここの型はどれも`#[repr(C)]`である。
 
-- `Image { functions: Slice<FnRow>, files: Slice<Str>, data: Slice<DatumRow>, paps: Slice<PapRow> }`。`Str { ptr, len }`はUTF-8の文字列、`Slice<T> { ptr, len }`は配列で、空の配列はnullのポインタを持ちうる
+- `Image { functions: Slice<FnRow>, files: Slice<Str>, data: Slice<DatumRow>, paps: Slice<PapRow>, panic_effect: u32, io_effect: u32 }`。`Str { ptr, len }`はUTF-8の文字列、`Slice<T> { ptr, len }`は配列で、空の配列はnullのポインタを持ちうる
+- `panic_effect`と`io_effect`は`Prelude.Panic`と`Prelude.IO`のマシンの番号で、プログラムのエフェクトの表にそのエフェクトがなければ`NO_EFFECT` (`u32::MAX`) である。JITのホストがマシンの表から名前 (`ExternEffect::{Panic, Io}`の行の名前) で引いて書く。実行系がこれを読むのは`eml_nrt_failed`だけである (「externの失敗」)
 - `FnRow { name, code, size, sites, value }`は関数1つで、名前、コードの範囲`[code, code + size)`、その関数自身のfaultの地点 (文の順)、その関数の静的なクロージャを持つ`DATUM_FN`の行のslot (なければnull。「関数の値」) を持つ。地点は、関数のコードのアドレスと、その関数の`sites`の添字の組で表す。だからプログラムのほかの部分で変わる番号はコードに現れない
 - `SiteRow { file, line, column }`は地点のソースの位置である。`file`は`files`の添字で、`NO_FILE` (`u32::MAX`) は位置のない地点を表す
 - 実行系は、コードのアドレスから関数を、`code`の順に並べた行の二分探索で探す。並べるのはrunごとに1回で、探すのは冷たい道だけである。どの行の範囲にもないアドレスは、関数`<native code>`として報告する
-- `DatumRow { kind, bits, text, code, slot }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`)、`DATUM_FN` (3。静的なクロージャで、`bits`は引数の数、`code`はエントリのコード。「関数の値」)、`DATUM_EMPTY_MUT_ARRAY` (4。空の`MutArray`で、中身はない) のどれかである。`slot`はmoduleの書ける8バイトのデータの物である。実行系は最初のエントリの前に、どの値も凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。定数は、VMが定数を作るのと同じ関数 (`eml_rows::constants`と、文字列には`alloc_string_immortal`) で作る。生成したコードは、値をそのslotからのロード1つで読む
+- `DatumRow { kind, bits, text, code, slot, items }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`)、`DATUM_FN` (3。静的なクロージャで、`bits`は引数の数、`code`はエントリのコード。「関数の値」)、`DATUM_EMPTY_MUT_ARRAY` (4。空の`MutArray`で、中身はない)、`DATUM_EFFECT` (5。エフェクトのマシンの番号で、`bits`)、`DATUM_MASK` (6。マスクの項目で、`items`。「エフェクト」) のどれかである。`items`は`Slice<MaskRow>`で、`MaskRow { effect, keep, skip }`は`eml_rt::MaskItem`の欄を持つ項目1つで、`effect`はマシンの番号である。ほかの種類の`items`は空である。`slot`はmoduleの書けるデータの物で、8バイトにそろい、`DATUM_MASK`では`mask_bytes(items.len)` (`MaskItem`の大きさの`items.len`倍) バイト、ほかの種類では8バイトである。実行系はrunごとに、最初のエントリの前に、ヒープの種類 (0から4) の値を凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。`DATUM_EFFECT`のslotには`bits`をそのまま書き、`DATUM_MASK`のslotには項目を`MaskItem`としてLIRの順に書く。定数は、VMが定数を作るのと同じ関数 (`eml_rows::constants`と、文字列には`alloc_string_immortal`) で作る。生成したコードは、値をそのslotからのロード1つで読む
 - `PapRow { rest, code }`は、`rest`個の引数を待つPAPのアダプタ1つのコードである (「関数の値」)
-- slotを書いた後、`Image`は読むだけになる。だから`Image`は`Sync`で、呼ぶ側が待っている間にworkerのスレッドがそれを読む
+- slotを書いた後、`Image`は読むだけになる。だから`Image`は`Sync`で、呼ぶ側が待っている間にworkerのスレッドがそれを読む。slotと定数を書くのは、runごとに、そのrunの最初のエントリの前である。1つの`Image`のrunは重ならない (`run`の約束で、`NativeMachine`の`run`と`call`は`&mut self`を取る) ので、書く間にslotを読むコードはない。コードはslotと、それが指す定数を同期なしに読むので、runのコードを動かすネイティブのどのworkerのヒープも、コードを動かす前にそのrunの塊を付ける。runのworkerは1つで、slotを書くときにそのヒープに付ける
 - `Start { thunk, entry, argv, result_rc }`は、runがコードに入る所である。`eml_enter`の引数と、エントリの結果がrunの手放す数える語かどうかを持つ
 - `Options { census, stack, masked }`。`census`は`Census::Skip`か`Census::Check`で、`stack`はworkerのスタックに予約するバイト数である。`masked`は、呼んだスレッドでSIGINTとSIGTERMを塞いだまま、渡したクロージャを1回動かすフックである。既定は`Skip`と`WORKER_STACK`と何も塞がないフックで、`eml_cli::execute_on`は`eml_io::Masked`で塞ぐフックを渡す ([VM](vm.md)の「上限と割り込み」)。`eml_nrt`は自分ではOSのシグナルの関数を呼ばない
 
 ## 実行の始めと終わり
 
-`eml_nrt::run::run(image, start, config, host, options) -> Result<Finished, RuntimeError>`がプログラムを走らせる。これは`unsafe fn`で、呼ぶ側は、`image`の表が呼び出しの間生きていること、どのslotもほかの誰も使わない語であること、`start`が`image`のためにコンパイルしたコードへの正しい呼び出しであることを約束する。手順は次のとおりである。
+`eml_nrt::run::run(image, start, config, host, options) -> Result<Finished, RuntimeError>`がプログラムを走らせる。これは`unsafe fn`で、呼ぶ側は、`image`の表が呼び出しの間生きていること、どのslotもほかの誰も使わない、その種類の大きさの書ける領域であること (同じ`image`のほかのrunと重ならないことを含む)、`start`が`image`のためにコンパイルしたコードへの正しい呼び出しであることを約束する。手順は次のとおりである。
 
 1. `config.control.begin_run()`で終わりの欄を開く ([VM](vm.md)の「誤り、止めること、終わり」)
 2. `options.stack`を予約したworkerのスレッド`eml-worker-0`を作る。workerは何かを動かす前に門で待つ。呼んだスレッドは`options.masked`の中で門を開けてworkerを待つので、workerは呼んだスレッドが2つのシグナルを塞ぐまでコードを動かさない。フックがクロージャを呼ばなければ、workerは何も動かさず、runは内部の誤り`the run's hook did not start the worker`で終わる
@@ -152,12 +153,13 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 コード生成器 (crate `eml_native`) は、LIRの関数1つをCraneliftの関数1つに下ろし、JITのホスト`NativeMachine`がそのコードを持つ。
 
 - LIRの関数はどれも、`lower::signature_of`を通して、`abi::tail_signature`が作る`tail`のシグネチャ`(ctx, 葉...) -> 葉...`を持つ。最初の引数は`ctx`の語で、LIRの関数の引数と結果はそれぞれ葉1つである
-- `Float`の葉の型は`F64`で、ほかのRepr (`obj`、`tobj`、`unit`、`int`、`enum`、`token`) の型は`I64`である。開いた後には構造体の値はない。LIRは変数を1回だけ束縛するので、変数1つがCLIFの値1つになり、LIRのブロックの引数はCLIFのブロックの引数になる。定数は使う所ごとに、その位置のReprで作る。`int`はその値、`float`はそのビット、`()`は語`Word::UNIT`で、タグは`enum`の位置ではその番号、`tobj`の位置ではその即値の語である ([LIR](lir.md)の「値の表現」が、タグをこの2つの位置にだけ置く)
+- `Float`の葉の型は`F64`で、ほかのRepr (`obj`、`tobj`、`unit`、`int`、`enum`、`token`と文脈のRepr) の型は`I64`である。開いた後には構造体の値はない。LIRは変数を1回だけ束縛するので、変数1つがCLIFの値1つになり、LIRのブロックの引数はCLIFのブロックの引数になる。定数は使う所ごとに、その位置のReprで作る。`int`はその値、`float`はそのビット、`()`は語`Word::UNIT`で、タグは`enum`の位置ではその番号、`tobj`の位置ではその即値の語である ([LIR](lir.md)の「値の表現」が、タグをこの2つの位置にだけ置く)
 - `return`は葉を順に返し、`jump`は引数をブロックの引数として渡す。`int`の`switch`は、値をcaseと比べる (`cranelift_frontend::Switch`)。タグと文字列の`switch`は「データ」にある。`default`のない`switch`は、合うcaseがなければtrapする。検証したプログラムでは、これは起こらない。定数の`switch`は、VMと同じくコンパイルの時点で行き先を決める
 - 直接の呼び出しは呼ぶ先の関数の記号への`call`で、直接の末尾呼び出しは`return_call`である。`ctx`に続く各引数は、呼ぶ先の引数のReprで作る。複数の値を返す呼び出しは、結果の葉を順に変数に束縛する。呼ぶ先はどれもmoduleが`Linkage::Local`で定義する関数なので、Craneliftはそれを`colocated`にする。エントリはmoduleの外から取り込む記号なので、`colocated`にならない。末尾呼び出しは呼ぶ側のフレームを呼ぶ先のフレームに置き換える。だから末尾呼び出しの連鎖 (自分への末尾呼び出しを含む) は一定のスタックで動き、呼ぶ先は呼ぶ側より多くの引数をスタックで受けてよい。末尾でない呼び出しの後には「巻き戻しの地点」の`Call`の確かめを出す。末尾呼び出しの後には何も確かめない。呼ぶ先が戻ったときに、呼ぶ側の呼び手が確かめるからである
 - どの関数とthunkもmoduleの記号を持つ。その名前はLIRの名前と種類だけで決まり、読み込みの順やアドレスにはよらない。LIRの関数は`f:<名前>`、thunkは`eml$thunk$<引数>$<結果>`で、種類はそれぞれ`i` (`I64`) か`f` (`F64`) と書く。置いた失敗を上げる関数は`eml$raise`である (「巻き戻しの地点」)。関数の値のエントリは`c<k>:<名前>`、`apply`の補助の関数は`eml$apply$<m>`、PAPのアダプタは`eml$pap$<r>`である (「関数の値」)。moduleは、`eml_nrt::entries()`のすべてのエントリ、`eml$raise`、`eml$apply$<m>`を、プログラムの関数より前に決まった順で宣言する。関数の値のエントリは、データの記号と同じく本体が初めて使うときに宣言し、すべての本体の後で定義する。PAPのアダプタはコードが名指さず`Image.paps`だけが指すので、最後に宣言して定義する。moduleが定義する記号はどれもローカルのリンケージを持つので、直接の呼び出しは領域の中のPC相対の呼び出しになる。`NativeMachine::symbols()`は、マシンが定義したすべての関数 (`eml$raise`、関数の値のエントリ、`apply`の補助の関数、PAPのアダプタを含む) とthunkの名前とコードの範囲を返す。`Image.functions[i].{code, size}`と合わせて、コードのアドレスから名前を引ける
+- `load`はverifierとほかの確かめより前に、どのビルドでも、プログラムの`Prelude.Panic`が`obj`を取って戻らない (`never`) 操作をちょうど1つ持ち、`Prelude.IO`が`enum`と`obj`を取って戻らない操作をちょうど1つ持つことを確かめる。そうでなければ何も作らずに、そのエフェクトを名指す`LoadError::Prelude { effect }`を返す。プログラムのエフェクトの表にないエフェクトは確かめない。`eml$raise`はこれらの操作の節を決まったシグネチャで呼ぶからである (「externの失敗」)
 - マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、`eml_nrt::entries()`のすべてのエントリと、`Linked`がつないだCの関数とdtorを記号として登録し (「Cの関数の呼び出し」)、どの関数を定義するよりも前にプログラムのすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。`Linked`がプログラムの表に合わなければ`LoadError::LinkMismatch`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。ただし記号の宣言は領域を使わず、名前の重なりは下ろしの誤りなので、データの記号と関数の値のエントリの宣言が失敗したら、下ろしはpanicする。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`、`call`、`entry_of`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
-- `load`はプログラムを信頼する。プログラムは実行の前提を満たさなければならない ([LIR](lir.md)の「実行の前提」)。ネイティブのコードが実行時に確かめることは、VMの速いモードが確かめることを超えない ([オブジェクトモデル](object-model.md)の「受け入れる制約」) ので、満たさないプログラムの振る舞いは未定義である。verifierはこの前提の一部しか確かめない。`load`は安全な関数で、前提を約束するのは呼ぶ側である。debugのビルドでは、`load`はプログラムに所有の段のverifierを通し、通らなければ`internal error: invalid LIR at the native load: ...`でpanicする。VMと違ってネイティブには検査モードがないので、verifierが断るプログラムを読み込むテストはない
+- `load`はプログラムを信頼する。プログラムは実行の前提を満たさなければならない ([LIR](lir.md)の「実行の前提」)。ネイティブのコードが実行時に確かめることは、VMの速いモードが確かめることを超えない ([オブジェクトモデル](object-model.md)の「受け入れる制約」) ので、満たさないプログラムの振る舞いは未定義である。verifierはこの前提の一部しか確かめない。`load`は安全な関数で、前提を約束するのは呼ぶ側である。`load`は、どのビルドでもプログラム全体に所有の段のverifierを走らせ、verifierが拒むプログラムを断る (`eml_lir::unwind::verified`)。拒むときは`internal error: invalid LIR at the native load: ...`でpanicする。VMと違ってネイティブには検査モードがない
 - マシンのworkerはそのmoduleと領域を共有し、プロセス全体のmoduleはない。マシンは、`close`でも`Drop`でも、終わるときに領域を`free_memory`で返す。どのrunもworkerのスレッドが終わってから戻るので、そのとき領域のコードを実行しているものはない
 - `NativeMachine::run`は入口を実行する。入口は引数を取らない (取れば内部の誤り`the entry function takes parameters`を返す)。`eml_native::execute`は、マシンを作り、プログラムを読み込んで実行し、マシンを閉じる。読み込みの誤りは、入口の関数を名指す内部の誤りになる。その文は、領域が尽きたときは`the native code region is full`、ほかのmoduleの誤りでは`the native code cannot be built`である。`eml_nrt::SUPPORTED`が偽の対象では、`execute`は読み込む前に、`NativeMachine::run`、`call`、`entry_of`はthunkを作る前に、内部の誤り`native code is not supported on this machine`を返す
 
@@ -167,18 +169,25 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 
 | `After` | 使う所 | 熱いコード | 冷たいコード |
 |---|---|---|---|
-| `Call` | 末尾でない直接の呼び出し | `yielding.target`の語 (`CTX_YIELD_TARGET`) をロードし、Unitの語でなければ冷たいコードへ分岐する | 後始末へ進む |
+| `Call` | 着地の印のない、末尾でない呼び出し | yieldの状態の`abort`のバイト (`CTX_YIELD_ABORT`) を8ビットでロードし、0でなければ冷たいコードへ分岐する。この確かめを出すのは`unwind::if_aborting`だけである | 後始末へ進む |
+| `Land { result }` | 着地の印を持つ、末尾でない`apply` | `Call`と同じである。熱いブロックは呼び出しの結果を引数に受け、`result`をそれに束縛し直す | 着地の確かめ (下) |
 | `Faults { site, purity }` | `faults`の行で、戻るものの呼び出し | faultの語 (`CTX_FAULT`) をロードし、0でなければ冷たいコードへ分岐する | `eml$raise(ctx, self, site, purity)`を呼び、後始末へ進む |
 | `Arith` | 失敗するインラインの行 (`IntAdd`、`IntSub`、`IntMul`、`IntDiv`、`ByteDiv`、`IntMod`、`ByteMod`、`IntNeg`) | なし。行を展開したコードが、失敗の条件で冷たいコードへ分岐する | `eml_rt_fault_arith(ctx, kind)`で算術の失敗を置き、`eml$raise(ctx, self, site, PURITY_PANICS)`を呼び、後始末へ進む。失敗の種類ごとに冷たいブロックが1つあり、後始末は1つを共有する |
 | `Never { raise }` | 戻らない行の呼び出し。`exit`は`raise`なし、`panic`は自分の位置の行と純粋さを持つ | なし。無条件に冷たいコードへ分岐する | (`raise`があれば`eml$raise(ctx, self, site, purity)`を呼び) 後始末へ進む |
 
 - `self`は関数自身のコードのアドレス (自分の記号の`func_addr`) で、冷たいコードだけがそれを作る。`site`は、関数自身の`FnRow.sites`での位置の行の添字である。この組が場所を表すので、プログラムのほかの部分で変わる番号はコードに現れない (「`Image`」)
 - 位置の行 (`FnRow.sites`の`SiteRow`) は、失敗を上げる文ごとに1つある。`Faults`、`Arith`、上げる`Never`で下ろした`extern`の文で、文の順 (ブロックの順、ブロックの中の文の順) に並ぶ。行は文の位置を持ち、位置のない文なら`file`は`NO_FILE`である。だから位置の行は巻き戻しの地点の一部にだけある。何も上げない地点、つまり`exit`と末尾でない呼び出しは、位置の行を持たない
-- 後始末は、地点ごとの冷たいブロック1つである。地点の直後に所有している変数ごとに、その数だけ`eml_rt_decref`を呼び、生きているtokenごとに`eml_rt_drop_token`を呼び、関数の結果ごとに仮の値を返す。仮の値は、`float`では0.0、`obj`、`tobj`、`unit`ではUnitの語、`int`と`enum`では0、`token`では空のtoken (0) である。呼んだ側は中断か置いた失敗を見るので、仮の値を使わない。着地の印を持つ地点は下ろさない。着地の印を持つ`apply`は断る形だからである (「断る形」)
+- 後始末は、地点ごとの冷たいブロック1つである。地点の直後に所有している変数ごとに、その数だけ`eml_rt_decref`を呼び、生きているtokenごとに`eml_rt_drop_token`を呼び、関数の結果ごとに仮の値を返す。仮の値は、`float`では0.0、`obj`、`tobj`、`unit`と文脈のReprではUnitの語、`int`と`enum`では0、`token`では空のtoken (0) である。呼んだ側は中断か置いた失敗を見るので、仮の値を使わない
+- 着地の印`v`を持つ地点の冷たいブロックは、`yielding.target`をロードして`v`と比べる。等しければ、中断はこのフレームに着地する。サービス`eml_nrt_landed(ctx) -> obj`を呼び、それが返すヒープのダミーを持って熱いブロックへ飛ぶ。熱いブロックは`apply`の変数をそれに束縛し直すので、着地したフレームはダミーを値として`prompt$`の呼び出しへ進む。`abort`のバイトは立ったままで、`prompt$`の`yield_finish`が中断を終える。等しくなければ、中断はこのhandleを外す。`eml_rt_ev_last_state(ctx, v)`でhandlerの状態を取り出して`eml_rt_decref`で手放し、その後に地点の後始末へ進む。速いモードの`ev_take_state`は`v`がevidenceであることを前提にするので、これは`v`のReprが`ev`であるという、どのビルドでも確かめるverifierの規則に頼る ([LIR](lir.md)の「verifier」)。VMの巻き戻しと同じ順である ([VM](vm.md)の「巻き戻し」)。`target`をロードするのは冷たい道だけなので、熱い道の費用は`Call`と同じである
+- `eml_nrt_landed`は`services.rs`の表`SERVICES`にあり、ヒープのダミーを返すだけである。印を持つ`apply`の結果の語として、VMの着地と同じ値を渡すためである
 - `Never`の行の後のLIRの続きはどこからも届かない。下ろしは、前のブロックのない新しいブロックで続け、行の変数をそのReprの仮の値に束縛する。だからブロックの残りもふつうに下ろせる
-- `eml$raise(ctx, function, site, purity)`は、moduleに1つある`tail`の関数で、結果を持たない。同じ引数で`eml_nrt_failed`を呼んで戻る (「externの失敗」)
-- `yielding.target`の語は、yieldも中断もしていない間だけUnitの語である。呼ばれた側で中断が始まると (`exit`)、呼ばれた側は自分の後始末で仮の値を返し、呼んだ側はこの確かめで自分の後始末へ進む。だから中断は、フレームを1つずつ、ふつうに戻って抜ける
-- 速い道の費用: `Call`は、`yielding.target`のロード1つと、定数との比較1つと、通らない分岐1つだけを足す。`Faults`は、faultの語のロード1つと、通らない分岐1つだけを足す。`Never`はロードを持たない。`Arith`は、行の展開が持つ失敗の条件の通らない分岐のほかに何も足さない
+- `never`の操作の節の呼び出しは、末尾の位置でも末尾呼び出しにせず、その後に`unwind::if_aborting`の確かめが続き、熱い側はtrapする。続きは`Never`と同じく仮の値で下ろす (「関数の値」)
+- `eml$raise(ctx, function, site, purity)`は、moduleに1つある`tail`の関数で、結果を持たない。同じ引数と4語の領域で`eml_nrt_failed`を呼び、サービスが返した節を呼んで戻る (「externの失敗」)
+- `abort`のバイトは、ちょうど中断の途中の間だけ0でない。検証した`YieldState::wf`により、`target`がUnitなら`abort`は偽で、それを立てるのは`yield_abort`と`exit_abort`だけだからである。呼ばれた側で中断が始まると (`exit`)、呼ばれた側は自分の後始末で仮の値を返し、呼んだ側はこの確かめで自分の後始末へ進む。だから中断は、フレームを1つずつ、ふつうに戻って抜ける
+- yieldは`abort`のバイトを立てないので、呼ばれた側がyieldした呼び出しは、呼ばれた側のダミーを持って熱い道で戻る。その後のLIR自身の`prim yielding()`が遅い道へ進む。yieldが戻るのは、LIRのyieldの地点、末尾呼び出し、着地の印を持つ`apply`を通るときだけだからである。この戻りと確かめの間に、巻き戻しの地点はない ([LIR](lir.md)の「yieldの確認までの間」)
+- この確かめは1つの不変条件に頼る。着地から`yield_finish`までの間に、呼び出しの巻き戻しの地点を通らないことである。着地の印を持つ`apply`のすぐ後には`prompt$`の呼び出しが続き、その間にほかの呼び出しもexternの行もほかの巻き戻しの地点も`yield_to`もない ([LIR](lir.md)の「着地の印」)。`prompt$`は、yieldと中断の道で`yield_finish`の前に、巻き戻しの地点 (呼び出し、失敗しうるexternの行、`yield_abort`など) も`yield_to`も走らせない ([Core IR](core-ir.md)の「handle と `prompt$`」)。どちらの半分も、どのビルドでも読み込みのverifierが確かめる ([LIR](lir.md)の「着地の印」)。前半は下ろしも確かめる。下ろしはブロックを下ろしながらverifierの規則をもう1度assertする。破ればverifierと同じ文でpanicする。着地と`yield_finish`の間の呼び出しは中断が立ったまま走り、そこでの`yield_to`が中断を消すので、着地したフレームはダミーを値として続けてしまう
+- `unwind::if_aborting`は確かめのただ1つの出し手のまま、呼び出しのような命令のどの後にも使える。emlのコードを走らせうる行の呼び出しの後には、`Faults`の確かめに加えて`Call`の確かめも続く。今の下ろしが下ろす行に、emlのコードを走らせるものはない
+- 速い道の費用: `Call`は、`abort`のバイトのロード1つと、通らない分岐1つだけを足し、比較を持たない。`Faults`は、faultの語のロード1つと、通らない分岐1つだけを足す。`Never`はロードを持たない。`Arith`は、行の展開が持つ失敗の条件の通らない分岐のほかに何も足さない
 - `Arith`では、行の展開が今のブロックを熱い続きへの分岐で終えてから`after_unwind_point`を呼ぶ。Craneliftは、埋めていないブロックから別のブロックへ移ることを許さないからである
 
 ## 安全点
@@ -221,13 +230,19 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - `eml_x_c_handle_new(ctx, name: obj, dtor: dtor, ptr: i64) -> obj`は、VMも呼ぶ`eml_rows::ffi::handle_new`でハンドルの物体を作る。`ptr`がnullなら何も作らず、`Raise::NullHandle`の文言を`worker::park_panic`で置いて、仮の値としてUnitの語を返す。生成したコードは、呼び出しのすぐ後でfaultの語を確かめる。`ptr`と`dtor`については`handle_new`の約束を持つ`unsafe`のエントリで、生成したコードは、宣言した結果がそのハンドルの型である関数の呼び出しの結果と、その型のdtorかnullを渡す
 - 文言はVMも呼ぶ`Raise::text`が作るので、どちらのエンジンも同じpanicを上げる。生成したコードはそれを、Cの関数の行の純粋さで上げる。ほかの`Err`は、行のエントリと同じく内部の類で、`worker::record`で記録する
 
-行が`ctx`に置いた失敗は、生成したコードがサービス`eml_nrt_failed(ctx, function, site, purity) -> action`で上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の`FnRow.sites`の中の地点の添字 (関数の入口なら`ENTRY_SITE`)、`purity`は失敗した行の純粋さである。`purity`の語は`PURITY_PURE` (0)、`PURITY_PANICS` (1)、`PURITY_EFFECTFUL` (2) で、`eml_extern::Purity`の宣言の順である。3つの定数は`ACTION_*`と同じく`eml_nrt::image`にある。debugのビルドでは、サービスは`purity`がこのどれかであることと、`site`が`ENTRY_SITE`か32ビットに収まる添字であることを確かめる。
+行が`ctx`に置いた失敗は、生成したコードが`eml$raise`を通して、サービス`eml_nrt_failed(ctx, function, site, purity, out) -> class`で上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の`FnRow.sites`の中の地点の添字 (関数の入口なら`ENTRY_SITE`)、`purity`は失敗した行の純粋さである。`out`は書ける4語を指し、`eml$raise`のスタックの領域である。種類`ptr`のRustの型は`*const Word`なので、サービスは`*mut`にキャストして書く。`purity`の語は`PURITY_PURE` (0)、`PURITY_PANICS` (1)、`PURITY_EFFECTFUL` (2) で、`eml_extern::Purity`の宣言の順である。3つの定数は`ACTION_*`と同じく`eml_nrt::image`にある。debugのビルドでは、サービスは`purity`がこのどれかであることと、`site`が`ENTRY_SITE`か32ビットに収まる添字であることと、yieldが進んでいないことを確かめる。
 
-- サービスは置いたfaultを`ctx.take_fault()`で取り出す。だからサービスの後のfaultの語は0である
-- `Fault::Engine`は、中身をworkerの構造体が持つことを表す。サービスはメッセージの語をworkerの構造体から取り出し、文字列に写す (`copy_string`。語は手放す)。誤りは`RunFault::Panicked(text)`で、`panicked: <text>`と表示する。語は`park_panic`の約束により文字列なので、速いモードでは写すことは失敗しない。workerの構造体がメッセージを持たなければ、誤りは内部の誤り`a parked panic has no message`である
-- ほかのfaultは`RunFault::Extern(fault)`になる。何も置いていなければ、誤りは内部の誤り`a failure was raised with nothing parked`である
-- サービスは誤りを`At { function, site }`で`worker::record`により記録し、`FATAL_RECORDED`でrunを終える。だから誤りは地点の位置を持ち、地点が位置を持たなければ関数を名指す
-- 失敗を捕まえるハンドラはないので、上げた失敗はどれもrunを終える。サービスは`purity`を受けるが、結果はそれによらない
+サービスは次の順で動く。VMの`failed`と`abort_to`と同じ規則である ([VM](vm.md)の「`IO` と `Panic` への中断」)。
+
+1. 置いたfaultを`ctx.take_fault()`で取り出す。だからサービスの後のfaultの語は0である。何も置いていなければ、誤りは内部の誤り`a failure was raised with nothing parked`である
+2. `Fault::Engine`は、中身 (`panic`の行とCの関数の呼び出しの補助が置くメッセージ) をworkerの構造体が持つことを表す。その類は純粋さによらず`Panic`である。VMもこの2つでは`failed`を通さずに`Panic`へ中断する。workerの構造体がメッセージを持たなければ、誤りは内部の誤り`a parked panic has no message`である
+3. ほかのfaultは、`fault.panics()`が真で純粋さが`Pure`でなければ類`Panic`、`fault.io_error_kind()`が`Some`で純粋さが`Effectful`なら類`IO`で、そうでなければ類を持たず、捕まえられない
+4. 類がないとき、類のエフェクトの`Image`の番号が`NO_EFFECT`のとき (このときevidenceを探さない)、`ctx.ev_find`がそのエフェクトのevidenceを見つけないときは、誤りを`At { function, site }`で`worker::record`により記録し、`FATAL_RECORDED`でrunを終える。だから誤りは地点の位置を持ち、地点が位置を持たなければ関数を名指す。`Fault::Engine`では、メッセージの語をworkerの構造体から取り出して文字列に写し (`copy_string`。語は手放す)、誤りは`RunFault::Panicked(text)`で、`panicked: <text>`と表示する。語は`park_panic`の約束により文字列なので、速いモードでは写すことは失敗しない。ほかのfaultは`RunFault::Extern(fault)`になる
+5. 見つけたら、`ctx.ev_clause(ev, 0)`で節を取り、`out`に`[節, ev, 文言]` (`RAISE_PANIC`) か`[節, ev, 種類, 文言]` (`RAISE_IO`) を書いて類を返す。文言は、`Fault::Engine`ではworkerの構造体から取り出したメッセージの語、ほかではfaultの文の新しい文字列である。種類は`fault.io_error_kind()`の生の整数で、`enum`の葉の値であり、VMが渡すのと同じビットである。どの語も参照を1つ持ち (`ev_find`と`ev_clause`が`dup`する)、それは節のエントリへ移る。エントリは`clo`と`ev`と引数を消費する。サービスは何も持たず、workerの構造体にも何も残さない
+
+`RAISE_PANIC` (0) と`RAISE_IO` (1) は`eml_nrt::image`にある。`eml$raise`はどのプログラムでも同じコードで、何も決めない。サービスを呼び、`RAISE_PANIC`ならクロージャ`out[0]`を`(ctx, out[0], out[1], out[2])`とシグネチャ`uniform(2)`で、`RAISE_IO`なら`(ctx, out[0], out[1], out[2], out[3])`と`uniform(3)`で呼ぶ (どの葉も`I64`)。間接の呼び出しは、節の呼び出しと同じ補助`apply::call_closure_code`を通る (「関数の値」)。ほかの類では何も呼ばない。決まったシグネチャは、サービスが返しうるどの節のエントリのシグネチャとも同じである。`load`は`Prelude`の操作が決まった形と違うプログラムを断り (`LoadError::Prelude`。「関数の形」)、節のエントリのシグネチャは操作から決まるからである。節は戻らない操作の節なので、中断を始めて戻る。呼び出しの後で`eml$raise`は、呼び出しの巻き戻しの地点と同じ確かめ (`unwind::if_aborting`) で`abort`のバイトを読み、立っていなければtrap (`user1`) する。`eml$raise`が戻ると、地点は今までどおり後始末へ進み、中断はほかの中断と同じく`try_panic`か`try_io`のhandleに着地する (「巻き戻しの地点」)。
+
+サービスに入るのは、yieldも中断も進んでいないときだけである。節のエントリの`yield_abort`は、yieldが進んでいないことを前提にするからである。これは、3つの窓に巻き戻しの地点がないので成り立つ。後始末は行を走らせず、着地から`yield_finish`までの間に巻き戻しの地点 (失敗しうる行を含む) がない (「巻き戻しの地点」)。yieldしうる呼び出しが戻ってから、そのフレームの`prim yielding()`の確認 (確認のない呼び出しでは`return`) までの間にも、巻き戻しの地点がない ([LIR](lir.md)の「yieldの確認までの間」。読み込みのverifierがどのビルドでも確かめる)。だから関数の入口 (`ENTRY_SITE`) で失敗を上げるときは、先に`ctx.yielding()`を確かめ、立っていれば上げずに続けなければならない。速いモードの`yield_abort`は、yieldの状態を手放さずに上書きするからである。
 
 ## 行の下ろし方
 
@@ -244,6 +259,24 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - `Float`の比較は`fcmp`で、結果を0か1に広げる。`!=`は`NotEqual`で順序のないときも真であり、ほかの比較はNaNが絡むと偽である
 - 失敗の分岐の先は冷たいコードで、`eml_rt_fault_arith(ctx, kind)`で`Fault::Arith`を置き、純粋さ`Panics`で上げる (「巻き戻しの地点」の`Arith`)。`kind`は`ARITH_DIVISION_BY_ZERO` (0) か`ARITH_INTEGER_OVERFLOW` (1) である。誤りは文の位置を持ち、文が位置を持たなければ関数を名指す
 - 失敗しない行は巻き戻しの地点を持たず、熱いコードに分岐を足さない
+
+## エフェクト
+
+基本操作 (`eml_lir::Prim`) のうち、生成したコードがインラインで読む`yielding`と`yield_status`、エントリを持たない`empty_mut_array`と`child_abort`を除く19個は、エントリ`eml_rt_<Prim::name()>`を持つ (`eml_nrt/src/effects.rs`の表`EFFECTS`)。節の呼び出しと`evidence`が走らせる`Ctx`の4つの操作 (`eml_lir::Step`) も、同じ表に同じ形のエントリ`eml_rt_<Step::name()>`を持つ。`eml_rt_ev_lookup`はエフェクトの番号を、`eml_rt_ev_clause`はevidenceと操作の添字を受け (「関数の値」)、`eml_rt_ev_new`はエフェクトの番号と操作の数を、`eml_rt_ev_set_clause`はevidence、操作の添字、エントリを受ける。記号は基本操作とstepの名前から導き、生成する側はエントリの名前の表を持たない。どれも`shim`で、本体は同じ名前の`Ctx`のメソッドの呼び出し1つである (`dummy`は`Heap::dummy`)。`Err`は致命的な誤りでrunを終える。ヒープのエントリと同じく、どのエントリも包むメソッドの前提をそのまま持ち、生成したコードがそれを守る。
+
+- `ctx`の後の引数は、`Ctx`のメソッドの引数を順に並べたものである。基本操作の即値のうち、メソッドの引数にあたるものがその位置に入る。即値は、`evv_mask`の項目の列 (先頭へのポインタと個数) と、`root_get`と`root_set`の根の番号である。stepの`ev_new`にはエフェクトと操作の数が、`ev_set_clause`には操作の添字が入る (エフェクトはメソッドの引数でないので渡さない)
+- 語は`obj`か`tobj`で、エフェクトの番号、操作の添字、個数、根の番号は`i64`である。結果が`unit`の基本操作のエントリは結果を持たず、生成したコードは文の変数に定数`UNIT`を束ねる
+- メソッドがより狭い型で受ける引数は、エントリが変換する。変換に失敗すれば致命的で、正しく作ったコードはこれを起こさない。エフェクトの番号は`u16::try_from`で変換し、65535も断る。速いモードの`Ctx::ev_new`と`Ctx::ev_lookup`は65535より小さい番号を前提とし、65535では`+ 1`が0の印に回り込むためである (`BadEvidence`)。負の操作の添字と個数は`BadEvidence`で、負か32ビットを超える根の番号は`RootMisuse`である。空の根や表の外の根への`root_get`と、置いてある根への`root_set`も`RootMisuse`になる
+- `evv_mask`の項目は、`eml_rt::MaskItem`と同じ並びの行を並べた領域である。エントリは`items`と`n`から`MaskItem`の列を作るので、呼ぶ側は、`items`が生きている`n`個の項目の先頭であることを守る。項目の順には要件がない
+
+生成したコードは、`empty_mut_array` (「値と定数」) と`child_abort`を除く基本操作と`evidence`を次のとおり下ろす (`lower/effects.rs`)。`child_abort`は下ろさない。
+
+- `yielding`と`yield_status`はインラインで読む。`yielding`は`target`をロードして`UNIT`と比べる。`yield_status(ev)`は`target`と`abort`のバイトをロードし、分岐でなく`select`で、`Ctx::yield_status`と同じく、`target`が`UNIT`なら0、`ev`でなければ3、`abort`のバイトが立っていれば2、ほかは1を選ぶ。生成したコードで`target`を読むのは、これらと、`eml$apply$m`の`n < m`の腕の見張り (「関数の値」) と、着地の印を持つ地点の冷たいブロック (「巻き戻しの地点」) だけである
+- `evidence`は、エントリのクロージャ (`closure`と同じく下ろす。捕獲のないエントリは関数の静的なクロージャである)、`eml_rt_ev_new`の呼び出し1つ、操作の順にエントリごとの`eml_rt_ev_set_clause`の呼び出し1つに下ろす
+- ほかの基本操作は、エントリ`eml_rt_<Prim::name()>`の呼び出し1つである。エントリの名前を綴るのは下ろしの1つの関数`lower::effects::entry`だけである。`yield_abort`はフレームに戻らないので、その後のコードは巻き戻しの地点の後始末へ進む (「巻き戻しの地点」の`Never`)
+- エフェクトの番号は、データの記号`e:<エフェクト>`からロード1つでだけエントリに届く。名前はエフェクトの名前 (`eml_lir::syntax::effect_text`) である。`evv_mask`の項目は、データの記号`m:<項目>`のアドレスとして、ロードなしでエントリに届き、個数は即値である。名前は項目のテキストの形 (`eml_lir::syntax::mask_text`) である。生成したコードはエフェクトの番号を即値として持たないので、関数のコードはプログラムのエフェクトの番号の振り方によらない。`ev_new`の操作の数、操作の添字、根の番号は即値である。エフェクトの宣言と関数のLIRがそれらを決めるためである
+- エフェクトの番号はマシンのものである。`NativeMachine`は`load`で、VMが読み込みのエフェクトに番号を振るのと同じく、`program.effects`の順に名前で番号を振る。番号は`Image` (`DATUM_EFFECT`の行の`bits`と`MaskRow.effect`) を通してだけ実行系に届く。番号は65535より小さく、それを超えれば`load`がVMと同じ文でpanicする
+- 項目のない`evv_mask`はない。LIRのverifierがそれを断り、下ろしもどのビルドでも項目の列が空でないことを確かめる。マスクのデータの物は0バイトにならない
 
 ## Cの関数の呼び出し
 
@@ -284,10 +317,10 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 - `int`の`box`は、値が63ビットに収まるとき、つまり1ビット左にずらして算術シフトで戻すと元の値になるとき、その即値の語である。収まらなければ、コードは`eml_rt_alloc_int`を呼び、`BigInt`の物体を作る。これは`Heap::alloc_int`の規則である。`enum`の`box`はいつも即値の語で、`float`の`box`は`eml_rt_alloc_float`を呼ぶ
 - `int`か`enum`への`unbox`は、即値の語なら算術シフトで値を取り、物体なら箱の値の語 (`layout::BOX_VALUE_WORD`) をロードする。`float`への`unbox`はいつも値の語をロードする。ダミーは値0の`BigInt`なので、0か0.0と読める ([オブジェクトモデル](object-model.md)の「ダミーの値」)
-- 収まる`int`の定数とタグは、コンパイルの時点で作る即値の語である。文字列の定数 (`const`)、収まらない`int`の定数、`box`する`float`の定数、`prim empty_mut_array`の空の`MutArray`は、読み込み時の値である
-- 読み込み時の値は、それぞれmoduleのデータの記号を1つ持つ。記号は8バイトの書ける物で、8バイトにそろえ、0で埋め、ローカルのリンケージを持つ。名前は中身だけで決まり、文字列は`s:<文字列>`、大きい`int`は`i:<10進数>`、`float`は`x:<ビット列の16桁の16進数>`、関数の静的なクロージャは`v:<関数の名前>`、空の`MutArray`は`a:mut`である (「関数の値」)。中身の等しい値は記号1つを共有する。下ろしは、moduleの中で値を初めて使うときに記号を1回宣言し、関数ごとに1回取り込む
-- 生成したコードは、値を記号のPC相対のアドレスとロード1つで読む。だから関数のコードは自分の使う値だけを名指し、プログラムのほかの部分で変わる番号を持たない
-- finalizeの後、JITのホストは記号ごとに`DatumRow`を1つ`Image.data`に置き、記号のアドレスをその`slot`にする (「`Image`」)。実行系はrunごとに、最初のエントリの前に、物体を凍結した領域の不死の物体として作り、その語をslotに書く。空の`MutArray`は、VMが定数にするのと同じ`eml_rows::constants::empty_mut_array`で作る。slotはマシンの領域とともに生きる
+- 収まる`int`の定数とタグは、コンパイルの時点で作る即値の語である。文字列の定数 (`const`)、収まらない`int`の定数、`box`する`float`の定数、`prim empty_mut_array`の空の`MutArray`、エフェクトの番号、`evv_mask`の項目は、読み込み時の値である
+- 読み込み時の値は、それぞれmoduleのデータの記号を1つ持つ。記号は書ける物で、8バイトにそろえ、0で埋め、ローカルのリンケージを持つ。大きさは8バイトで、マスクの項目だけは`mask_bytes(n)`バイトである。名前は中身だけで決まり、文字列は`s:<文字列>`、大きい`int`は`i:<10進数>`、`float`は`x:<ビット列の16桁の16進数>`、関数の静的なクロージャは`v:<関数の名前>`、空の`MutArray`は`a:mut`、エフェクトの番号は`e:<エフェクトの名前>`、マスクの項目は`m:<項目のテキストの形>`である (「関数の値」「エフェクト」)。中身の等しい値は記号1つを共有する。下ろしは、moduleの中で値を初めて使うときに記号を1回宣言し、関数ごとに1回取り込む
+- 生成したコードは、値を記号のPC相対のアドレスとロード1つで読む。マスクの項目は記号のアドレスだけを使い、ロードしない。だから関数のコードは自分の使う値だけを名指し、プログラムのほかの部分で変わる番号を持たない
+- finalizeの後、JITのホストは記号ごとに`DatumRow`を1つ`Image.data`に置き、記号のアドレスをその`slot`にする (「`Image`」)。実行系はrunごとに、最初のエントリの前に、物体を凍結した領域の不死の物体として作り、その語をslotに書く。エフェクトの番号とマスクの項目は物体にせず、そのままslotに書く。空の`MutArray`は、VMが定数にするのと同じ`eml_rows::constants::empty_mut_array`で作る。slotはマシンの領域とともに生きる
 - 物体は不死なので、インラインの`dup`と`decref`は0の数の枝を通り、何も呼ばない (「RC」)
 - マシンがテストのために残すCLIFの文 (`NativeMachine::clif`) は、関数もデータの記号も記号の名前で書く。だから関数の文は、moduleの中の宣言の順によらない
 
@@ -308,9 +341,9 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ネイティブのコードの関数の値は、いつも物体である。そのヘッダが記述子なので、適用に関数の表は要らない。
 
-- 物体は`Data`の物体である。タグは、まだ待っている引数の葉の数`n` (1から65535) である。0番の走査する語は、エントリのコードのアドレスを即値の語 (`(address << 1) | 1`) にしたもので、コードは右への算術シフト1つでアドレスに戻す。その後に捕まえた値が続く。だからどの走査する語も正しい語で、ヒープの操作 (`dup`、`decref`、解放、`freeze`) は関数の値をふつうの`Data`の物体として扱う。`eml_nrt`はコードの語を`Word::int`で作り、アドレスが63ビットに収まることを確かめる (`assert`)
-- 静的なクロージャは、捕まえた値のない関数の値`{ tag = n, [code] }`である。種類`DATUM_FN` (3) の読み込み時の値で、`bits`は`n`、`code`はエントリのコードである。実行系は最初のエントリの前に、ほかの読み込み時の値と一緒に、それを凍結した領域の不死の物体として作り (`alloc_immortal`)、その語をslotに書く (「`Image`」)。`lin`ビットは立てない。`FnRow.value`は、その関数の静的なクロージャを持つ`DATUM_FN`の行のslotで、なければnullである
-- 捕まえた値を`k`個持つ関数`f`の値のエントリは、moduleの関数`c<k>:<f>`である。そのシグネチャは`tail (ctx, clo, a_1..a_n) -> I64`である。値として使う関数は、捕まえた値より後ろの引数と結果がいつも一様なので ([LIR](lir.md)の「関数の ABI」)、どの関数の値も`ctx`、自分自身、待っている`n`個の引数を`I64`の語で受け、`I64`の語を1つ返す。下ろしはこれをassertするので、違反はシグネチャの食い違いでなく、コンパイルのときのpanicになる。待つ引数の数が65535を超える値も、タグに収まらないので、同じくpanicになる。静的なクロージャは捕まえた値を持たず不死なので、そのエントリ`c0:<f>`は引数で`f:<f>`を末尾で呼ぶだけで、数に触らない。値として使う関数 (`Atom::Fn`で名指す関数) は、それぞれ`c0`のエントリを1つ持つ
+- 物体は`Data`の物体である。タグは、まだ待っている引数の葉の数`n` (1から65535) で、節の関数の値では0である (下の節の関数の値)。0番の走査する語は、エントリのコードのアドレスを即値の語 (`(address << 1) | 1`) にしたもので、コードは右への算術シフト1つでアドレスに戻す。その後に捕まえた値が続く。だからどの走査する語も正しい語で、ヒープの操作 (`dup`、`decref`、解放、`freeze`) は関数の値をふつうの`Data`の物体として扱う。`eml_nrt`はコードの語を`Word::int`で作り、アドレスが63ビットに収まることを確かめる (`assert`)
+- 静的なクロージャは、捕まえた値のない関数の値`{ tag = n, [code] }`である。種類`DATUM_FN` (3) の読み込み時の値で、`bits`は`n` (節の関数では0)、`code`はエントリのコードである。実行系は最初のエントリの前に、ほかの読み込み時の値と一緒に、それを凍結した領域の不死の物体として作り (`alloc_immortal`)、その語をslotに書く (「`Image`」)。`lin`ビットは立てない。`FnRow.value`は、その関数の静的なクロージャを持つ`DATUM_FN`の行のslotで、なければnullである
+- 捕まえた値を`k`個持つ関数`f`の値のエントリは、moduleの関数`c<k>:<f>`である。そのシグネチャは`tail (ctx, clo, fのk個より後ろの引数..) -> fの結果..` (`abi::closure_entry_signature`) で、どの関数にも同じ規則である。値として使う関数は、捕まえた値より後ろの引数と結果がいつも一様なので ([LIR](lir.md)の「関数の ABI」)、そのシグネチャは`tail (ctx, clo, a_1..a_n) -> I64`で、どの関数の値も`ctx`、自分自身、待っている`n`個の引数を`I64`の語で受け、`I64`の語を1つ返す。下ろしはこれをassertするので、違反はシグネチャの食い違いでなく、コンパイルのときのpanicになる。待つ引数の数が65535を超える値も、タグに収まらないので、同じくpanicになる。静的なクロージャは捕まえた値を持たず不死なので、そのエントリ`c0:<f>`は引数で`f:<f>`を末尾で呼ぶだけで、数に触らない。値として使う関数 (`Atom::Fn`で名指す関数) は、それぞれ`c0`のエントリを1つ持つ
 - `let c = closure f(x_1..x_k)`は、`con`と同じく`eml_rt_alloc_data(ctx, n, scanned, raw, lin)`を呼び、どの欄もストア1つで書く (「データ」)。欄は`LayoutCtor { fields: [tobj] ++ fの最初のk個の引数のRepr }`のものである。0番の走査する語は`c<k>:<f>`のコードの語で、エントリのアドレスを`func_addr`で取り、即値の語にしたものである。その後に、数える捕まえた値が走査する語として引数の順に続き、ほかの捕まえた値 (`int`、`float`、`enum`、`unit`) はその後に生の語として引数の順に並ぶ。タグ`n`は捕まえた値より後ろの引数の数で、`lin`は束縛する変数の印が`lin`かどうかである。捕まえた値の参照は物体へ移る
 - `k >= 1`のエントリ`c<k>:<f>`は、捕まえた値を上の位置からReprごとにロードし、`clo`の数を読む。数が1なら、または`eml_rt_is_last`が最後の参照 (共有の数-1) だと答えたら、`eml_rt_free_block`で箱を空け、捕まえた値の参照は`f`へ移る。そうでなければ、数える捕まえた値をそれぞれインラインで`dup`し、その後に`clo`をインラインの`decref`で手放す。手放す前に`dup`するので、ほかの持ち主が同時に最後の参照を手放しても、捕まえた値は生きている。その後、`f:<f>(ctx, 捕まえた値.., a_1..a_n)`を末尾で呼ぶ。速い道は、ロード`k`個と数のロードと比較で、その後に、ただ1つの参照なら呼び出し1つ (`eml_rt_free_block`)、共有のクロージャならインラインの`dup`と`decref`が続く
 - PAP (部分適用) は、少なすぎる引数に適用した関数の値で、残りの引数を待つ。PAPは引数を1つだけ持つ。タグがまだ待つ引数の数`r`で、3つの走査する語が`[rのアダプタのコードの語, callee, a]`で、`lin`ビットが`callee`のものである`Data`の物体である。サービス`eml_nrt_pap(ctx, callee, argv, m) -> 語`がそれを作る。`n`を`callee`のタグとして、引数1つごとにPAPを1つ、`m`個作る。`i`番目のPAPはタグが`n - i`で、1つ前のPAP (最初のものでは`callee`) を自分の`callee`として名指す。サービスは最後のPAPを返す。`argv`は`m`個の引数の語を指す。サービスは`callee`と各引数の参照を受け取る。それらはPAPの欄へ移り、呼ぶ側は呼び出しの後でそれらを手放さない。走査する語が3つなら数の語は要らないので、欄は`layout::data_first(3, false)`から始まる
@@ -318,30 +351,34 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - `r`個の引数を待つPAPのアダプタは、moduleの関数`eml$pap$<r>`で、シグネチャは`tail (ctx, pap, b_1..b_r) -> I64`である。自分の欄から`callee`と`a`をロードし、`c<k>`と同じく箱を手放す。最後の参照なら`eml_rt_free_block`で箱を空けて欄の参照を受け継ぎ、そうでなければ両方をインラインで`dup`してから`pap`をインラインの`decref`で手放す。その後`callee`の`meta`の語をロードし、`mem::closure_code`で読んだそのコードを`(ctx, callee, a, b_1..b_r)`で末尾で呼ぶ。moduleは`eml$pap$<r>`を1から`A - 1`までのどの`r`についても定義する。`A`は、moduleの関数の値のエントリが待つ引数の数の最大である。PAPはその`callee`より少ない引数を待つので、それより大きい`r`を要するPAPはない。`m`個の引数から作ったPAPを呼ぶと`m`個のアダプタを通り、どれもロード3つとコードの語、数の操作、間接の飛び越し1つである
 - `eml_nrt_pap`は、`eml_nrt/src/closures.rs`の表`CLOSURES`にある。サービスと同じくworkerの構造体を使うので、`run`が入ったコードからだけ呼ぶ (「実行の始めと終わり」)
 - 適用する所`apply callee(a_1..a_m)`は、`callee`の`meta`の語をロードし、そのタグ`n`を`m`と比べる。等しければ、`callee`のエントリを`(ctx, callee, a_1..a_m)`で間接に呼ぶ。そうでなければ、補助の関数`eml$apply$m`を同じ引数で呼ぶ。2つの道は結果を持って合流し、その後に「巻き戻しの地点」の`Call`の確かめが続く。末尾の位置では、どちらの道も末尾呼び出し (`return_call_indirect`と`return_call`) で、その後に何も確かめない。`callee`と引数の参照は、呼ぶ先へ移る
-- 0番の走査する語の位置は、走査する語が数の語を要するとき (走査する語が255以上のとき) 1語ずれる (「データ」)。そうなるのは、数える捕まえた値を254以上持つクロージャだけで、PAPはならない。値の形を知るコードは、その走査する語の数の`layout::data_first`を使う。ほかの読み手 (適用する所、`eml$apply$m`、`callee`を読むPAPのアダプタ) は、値が捕まえた値をいくつ持つかを知らないので、ただ1つの読み手`mem::closure_code`を通る。これはロードした`meta`の語を受け取り、その`scan`のバイトから分岐せずにずれを選ぶ。だからコードの語のロードは`meta`の語のロードに依存する。数がちょうどの適用の速い道の費用は、ロード2つ (`meta`の語、その後にコードの語)、マスクと比較、コードの語の位置を選ぶ算術の命令いくつか、シフト、間接の呼び出しである
+- 節の関数 (`clause`の印を持つ関数) の値のタグは0で、`apply`で呼ばれることはない。`apply::arity`は、一様の確かめをせずに0を返す。そのエントリは操作のシグネチャ`tail (ctx, clo, ev, 操作の引数..) -> 操作の結果`を持つ (`abi::clause_signature`。`never`の操作のエントリは、ダミーの`I64`の語を1つ返す)。節の呼び出しはシグネチャを操作の表から、エントリは関数から取るので、クロージャのエントリを定義する`lower::program`の繰り返しは、どのビルドでも、エントリを定義する前に、節の関数のエントリのシグネチャが操作から作ったシグネチャと等しいことをassertする
+- 節の呼び出し`clause E.op(a_1..a_n)`は、`e:<エフェクト>`の記号から読んだエフェクトの番号でエントリ`eml_rt_ev_lookup`を呼んでevidence `ev`を得て、`ev`と操作の添字で`eml_rt_ev_clause`を呼んでエントリのクロージャ`c`を得る。その後`c`の`meta`の語をロードし、`c`のコードを`(ctx, c, ev, a_1..a_n)`と操作のシグネチャで間接に呼ぶ。タグも関数も確かめない。これを正しくするのはverifierの3つの規則で、読み込みがどのビルドでも走らせる。エントリに入れる値、節のクロージャの捕獲の数、どのエントリも入れてあることである。これを破るプログラムの読み込みは、releaseのビルドでもpanicする ([LIR](lir.md)の「verifier」)。LIRのとおり、2つのエントリが`dup`して返す`ev`と`c`の参照とどの引数も呼ぶ先へ移り、エントリは`clo`を消費する。関数の値のコードの間接の呼び出しは、どれも1つの補助`apply::call_closure_code`を通る
+  - 戻る操作: 呼び出しの後に「巻き戻しの地点」の`Call`の確かめが続く。末尾の位置では末尾呼び出し (`return_call_indirect`) で、下ろしはどのビルドでも、節のシグネチャの結果が呼ぶ側の結果と等しいことをassertする
+  - `never`の操作: 節は束縛のReprの値を返さず、縮約は末尾の位置のものをReprによらず`tail`にする ([LIR](lir.md)の「`never` の操作」)。そのため、どちらの位置でも`call_indirect`で呼び、結果を捨て、`unwind::if_aborting`で`abort`のバイトを確かめる。冷たい側は地点の後始末である。末尾の位置ではフレームは何も持たないので、呼ぶ側の結果の仮の値を返す。熱い側はtrapする (`user1`)。節が中断を始めずに戻ったからである。ブロックの残りは前のブロックのない新しいブロックで続け、文の変数をそれぞれのReprの仮の値に束縛する
+- 0番の走査する語の位置は、走査する語が数の語を要するとき (走査する語が255以上のとき) 1語ずれる (「データ」)。そうなるのは、数える捕まえた値を254以上持つクロージャだけで、PAPはならない。値の形を知るコードは、その走査する語の数の`layout::data_first`を使う。ほかの読み手 (適用する所、節の呼び出し、`eml$apply$m`、`callee`を読むPAPのアダプタ) は、値が捕まえた値をいくつ持つかを知らないので、ただ1つの読み手`mem::closure_code`を通る。これはロードした`meta`の語を受け取り、その`scan`のバイトから分岐せずにずれを選ぶ。だからコードの語のロードは`meta`の語のロードに依存する。数がちょうどの適用の速い道の費用は、ロード2つ (`meta`の語、その後にコードの語)、マスクと比較、コードの語の位置を選ぶ算術の命令いくつか、シフト、間接の呼び出しである
 - moduleは`eml$apply$m`を、1からプログラムの`apply`の引数の数の最大までのどの`m`についても定義し、`eml$apply$1`はいつも定義する。補助の関数はemlの関数でなく、安全点を持たない。ただし`n < m`の腕は、入れ子にする前にスタックの上限を確かめる。熱い確かめは`stack_limit`だけを読むが、その冷たい側は入口の安全点と同じサービスなので、止める語も読む。だから待っている割り込みや止める要求は、そこで`<native code>`を名指す誤りとして報告されうる (「安全点」)。`callee`と引数の参照は、trapする腕のほかのどの腕でも、それを受け取る呼び出しへ移るか、中断のときに手放される。`n`を`callee`のタグとして:
   - `n == m`: `callee`のエントリを、すべての引数で末尾で呼ぶ
   - `n > m`: `a_1..a_m`を自分のフレームに並べて`eml_nrt_pap(ctx, callee, argv, m)`を呼び、PAPを返す。サービスが`callee`と引数を受け取る。部分適用の速い道は、`eml$apply$m`への直接の呼び出し1つと、`m`個を割り当てる`eml_nrt_pap`の呼び出し1つである。引数1つから作ったPAPを呼ぶ費用は、数がちょうどの呼び出しよりアダプタ1段の分だけ多い。その段はロード3つとコードの語、PAPの数の操作、間接の飛び越し1つである
-  - `n < m` (`m >= 2`のときだけ): スタックの上限を確かめてから (「安全点」)、最初の`m - 1`個の引数で`eml$apply$(m-1)`を呼び、`yielding.target`を確かめる。中断が始まっていれば、`a_m`を1回`eml_rt_decref`で手放し、仮の値を返す。入れ子のどの段も自分の最後の引数を1回ずつ手放すので、VMの`ApplyRest`のフレームが残りの引数を捨てるのと同じになる。そうでなければ、結果と`a_m`で`eml$apply$1`を末尾で呼ぶ。1つの`apply`のうちyieldしうるのは最後の矢印だけだが ([Core IR](core-ir.md)の「`apply` の印と分け方」)、それがどの部分に来るかは実行時にしか分からないので、どの段の後も確かめる。この確かめは「巻き戻しの地点」の`Call`と同じ比べで、`yielding.target`が`UNIT`でなければ中断として扱う。最後でない部分ではyieldが起きず中断だけが起きることに頼っているので、呼び出しの地点の規則を変えるときは、この確かめも一緒に変える。補助の関数は`n`ごとの腕を持たないので、そのコードは`m`に比例する。結果が残りの引数を2つ以上取るときは、一時のPAPができる。補助の関数のフレームは`m - n`段入れ子になり、どの段も入れ子にする前にスタックの上限を確かめる (スタックポインタの読み1つ、ロード1つ、比較1つ)。引数が1つ余る適用は、直接の呼び出し、上限の確かめ、数がちょうどの腕、中断の確かめ、`eml$apply$1`への末尾呼び出しである
-  - `eml$apply$1`は`n < 1`でtrapする。関数の値のタグは1以上なので、実行の前提を満たすプログラムは、そこへ着かない
+  - `n < m` (`m >= 2`のときだけ): スタックの上限を確かめてから (「安全点」)、最初の`m - 1`個の引数で`eml$apply$(m-1)`を呼び、「巻き戻しの地点」の`Call`と同じ出し手`unwind::if_aborting`で`abort`のバイトを確かめる。中断が始まっていれば、`a_m`を1回`eml_rt_decref`で手放し、仮の値を返す。入れ子のどの段も自分の最後の引数を1回ずつ手放すので、VMの`ApplyRest`のフレームが残りの引数を捨てるのと同じになる。そうでなければ`yielding.target`をロードし、Unitでなければtrapする。1つの`apply`のうちyieldしうるのは最後の矢印だけなので ([Core IR](core-ir.md)の「`apply` の印と分け方」)、最後でない部分から戻るyieldはこの規則を破る。この見張りは、そのダミーを関数の値として先へ渡さずに、そこで止める。その後、結果と`a_m`で`eml$apply$1`を末尾で呼ぶ。最後の矢印がどの部分に来るかは実行時にしか分からないので、どの段の後も確かめる。補助の関数は`n`ごとの腕を持たないので、そのコードは`m`に比例する。結果が残りの引数を2つ以上取るときは、一時のPAPができる。補助の関数のフレームは`m - n`段入れ子になり、どの段も入れ子にする前にスタックの上限を確かめる (スタックポインタの読み1つ、ロード1つ、比較1つ)。引数が1つ余る適用は、直接の呼び出し、上限の確かめ、数がちょうどの腕、中断の確かめ、yieldの見張り、`eml$apply$1`への末尾呼び出しである
+  - `eml$apply$1`は`n < 1`でtrapする。`apply`で呼ぶ関数の値のタグは1以上で、タグが0の節の関数の値を`apply`で呼ぶことはないので、実行の前提を満たすプログラムは、そこへ着かない
 - 関数の値のタグとコードの語を読むのは、生成したコード、実行系の読み込み時の値を作る関数、`eml_nrt_pap`だけである。`eml_rt`と`eml_sched`は関数の値を読み解かず、ヒープの操作はクロージャのタグを読まない。[オブジェクトモデル](object-model.md)の「クロージャ」の即値の関数の番号はVMの形で、ネイティブのコードは使わない
 
 ## 断る形
 
-ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。
+ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。ほかの基本操作、`evidence`、節の呼び出し、着地は下ろす (「エフェクト」「関数の値」「巻き戻しの地点」)。
 
 | `Form` | 名前 (`Form::label`) | LIRの形 |
 |---|---|---|
 | `Par` | `par` | `Call::Par` |
 | `AsyncRow` | `async row` | `Extern::is_async`が真であるstdの行 (タスクの行) |
 | `BlockingC` | `blocking c` | `ExternRef::CSubmit`と`ExternRef::CTake` |
-| `Prim` | `prim` | `Prim::EmptyMutArray`のほかのすべての`Rhs::Prim` |
-| `Clause` | `clause` | `Call::Clause`と、`LirFn.clause`を持つ関数 |
-| `Prompt` | `prompt` | 着地の印 (`prompt`) を持つ`Call::Apply` |
+| `ChildAbort` | `child abort` | `Rhs::Prim(Prim::ChildAbort, _)` (`par`の子か`compute`の仕事の中断。[Core IR](core-ir.md)の「`par` の呼び出し」) |
 
 - 形は、何度現れても1度だけ報告する
 - `rows::INLINE`は、CLIFの演算としてインラインに下ろす45の行である。VMの算術と比較の専用の命令 ([VM](vm.md)の「基本操作と extern」) の行から`FloatMod`を除いたものである。Craneliftの`LibCall`には`fmod`がないので、`FloatMod`は呼ぶ行にする
 - タスクの行でも`Par`でもなく、`rows::INLINE`にない行は、エントリ`eml_x_<Variant>`の呼び出しとして下ろす。`rows::lowering(ext)`は、行がこの2つのどちらであるかを返し、タスクの行と`Par`には`None`を返す (「行の下ろし方」)
+- 預かる引数を持つ行はどれもタスクの行なので、ネイティブのコードは預かる引数を扱わない。テストがこれを`Extern::ALL`の全体で確かめる
+- ネイティブのコードには、Rustからemlの閉包を呼ぶ行もない。関数を引数に取るstdのexternは、タスクの行と`Std.Par.par`だけで、どれも断るからである
 - `prim empty_mut_array`は、読み込み時の値`a:mut`を読むので断らない (「値と定数」)
 - `blocking`でない利用者のCの関数の行 (`ExternRef::C`) は断らず、`eml_c$<名前>`の直接の呼び出しに下ろす (「Cの関数の呼び出し」)
 

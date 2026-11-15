@@ -161,6 +161,16 @@ pub enum Repr {
     /// 引数のないコンストラクタだけの data のタグ。
     Enum,
     Unit,
+    /// 実行中のevidenceへの持ち主の参照。印はいつも`lin`である (docs/spec/lir.mdの「値の表現」)。
+    Ev,
+    /// 節のエントリが呼ばれるときに受けるevidence。
+    Cev,
+    /// forkのエントリが呼ばれるときに受けるevidence。
+    Fev,
+    /// 退いたevidence。状態と外側のリストが`()`のevidenceで、表とtagを持つ。
+    Rev,
+    /// リスト`evv`。`()`か、節点のリストである。
+    Evv,
     /// reuse の token。解放した箱を指すか、空を表す1語で、RC の対象ではない。LIR の reuse のパスだけが作り、extern の
     /// 行、配置、操作の表、Core IR には現れない (docs/spec/object-model.md の「reuse」)。
     Token,
@@ -178,11 +188,27 @@ pub struct StructId(pub u32);
 impl Repr {
     pub fn is_rc(self) -> bool {
         match self {
-            Repr::Obj | Repr::TObj => true,
+            Repr::Obj | Repr::TObj | Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv => {
+                true
+            }
             Repr::Int | Repr::Float | Repr::Enum | Repr::Unit | Repr::Token | Repr::Struct(_) => {
                 false
             }
         }
+    }
+
+    /// 値の参照 (`obj`か`tobj`)。文脈のReprはRCの対象だが値ではないので、自分とだけ互換である (docs/spec/lir.mdの
+    /// 「値の表現」)。
+    pub fn is_value_ref(self) -> bool {
+        matches!(self, Repr::Obj | Repr::TObj)
+    }
+
+    /// 文脈のRepr (`ev`、`cev`、`fev`、`rev`、`evv`)。ランタイムが持つ物体の役である (docs/spec/lir.mdの「値の表現」)。
+    pub fn is_context(self) -> bool {
+        matches!(
+            self,
+            Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv
+        )
     }
 
     /// 箱を要する Repr。一様な位置との間で `box` と `unbox` を要する。`unit` は命令なしで `tobj` と行き来するので
@@ -197,13 +223,13 @@ impl Repr {
         matches!(self, Repr::Obj | Repr::TObj | Repr::Unit)
     }
 
-    /// 互換の位置で、命令なしで値を渡せる2つの Repr。同じ Repr、参照どうし、`unit` と `tobj` である。推移的でない
+    /// 互換の位置で、命令なしで値を渡せる2つのRepr。同じRepr、値の参照どうし、`unit`と`tobj`である。推移的でない
     /// (`unit` と `obj` は互換でない) ので、どの検査も実際の2つの位置を比べる (docs/spec/lir.md の「値の表現」)。
     /// 構造体どうしは番号が等しいときだけ互換とする。形を見ないので、印だけが違う形は互換にならない。形の表を
     /// 持つ所は `eml_lir::Structs::compatible` で比べる。
     pub fn compatible(self, other: Repr) -> bool {
         self == other
-            || (self.is_rc() && other.is_rc())
+            || (self.is_value_ref() && other.is_value_ref())
             || matches!(
                 (self, other),
                 (Repr::Unit, Repr::TObj) | (Repr::TObj, Repr::Unit)
@@ -220,6 +246,11 @@ impl Repr {
             Repr::Float => "float",
             Repr::Enum => "enum",
             Repr::Unit => "unit",
+            Repr::Ev => "ev",
+            Repr::Cev => "cev",
+            Repr::Fev => "fev",
+            Repr::Rev => "rev",
+            Repr::Evv => "evv",
             Repr::Token => "token",
             Repr::Struct(_) => "struct",
         }

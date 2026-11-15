@@ -1,0 +1,758 @@
+crates/eml_core_ir/src/evidence/forks.rs --- 1/2 --- Rust
+ 56 fn fork(program: &Program, effect:    56 fn fork(program: &Program, effect: 
+ .. u32, op: u32, reperform: FnIdx) ->    .. u32, op: u32, reperform: FnIdx) -> 
+ .. crate::CoreFn {                       .. crate::CoreFn {
+ 57     let operation = eml_lir::operat   57     let operation = eml_lir::operat
+ .. ion(&program.effects, effect, op).c   .. ion(&program.effects, effect, op).c
+ .. lone();                               .. lone();
+ 58     let mut b = FnBuilder::new();     58     let mut b = FnBuilder::new();
+ 59     let ev = b.param(VarInfo::new("   59     let ev = b.param(VarInfo::new("
+ .. ev", Repr::Obj, Mark::Unr));          .. ev", Repr::Fev, Mark::Unr));
+ 60     let args: Vec<Atom> = operation   60     let args: Vec<Atom> = operation
+ 61         .params                       61         .params
+ 62         .iter()                       62         .iter()
+
+crates/eml_core_ir/src/evidence/forks.rs --- 2/2 --- Rust
+141 141 }
+142 142 
+143 143 fn prim(b: &mut FnBuilder, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) -> VarId {
+... 144     let repr = match prim.row().ret {
+... 145         typed @ (Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv) => typed,
+... 146         _ => repr,
+... 147     };
+144 148     let mark = prim.row().ret_mark;
+145 149     b.bind(VarInfo::new(name, repr, mark), Rhs::Prim(prim, args))
+146 150 }
+
+crates/eml_core_ir/src/evidence/handlers.rs --- 1/4 --- Rust
+126 126                     mask: _,
+127 127                 } => {
+128 128                     let prompt = prompt.expect("`prompt$` is made for a function with a handle");
+... 129                     for value in &clauses {
+... 130                         if let Atom::Var(c) = value {
+... 131                             let made = out.stmts.iter().any(|s| matches!(s, Stmt::Let { var, rhs: Rhs::MakeClosure(..) } if var == c));
+... 132                             assert!(made, "PROBE2: a clause closure is not made in the block of its handle");
+... 133                         }
+... 134                     }
+129 135                     let entries = clauses.iter().map(|&value| match value {
+130 136                         Atom::Fn(clause) => Atom::Fn(entries[&clause]),
+131 137                         value => value,
+
+crates/eml_core_ir/src/evidence/handlers.rs --- 2/4 --- Rust
+343     let params = function.params().  349     let params = function.params().
+... to_vec();                            ... to_vec();
+344     let captures = params.len() - o  350     let captures = params.len() - o
+... peration_params - 2;                 ... peration_params - 2;
+345     let state = params[params.len()  351     let state = params[params.len()
+...  - 1];                               ...  - 1];
+346     let evidence = fresh(&mut funct  352     let evidence = fresh(&mut funct
+... ion.vars, "e", Repr::Obj, Mark::Unr  ... ion.vars, "e", Repr::Cev, Mark::Unr
+... );                                   ... );
+347     let outer_evv = under.then(|| {  353     let outer_evv = under.then(|| {
+348         let w = fresh(               354         let w = fresh(
+349             &mut function.vars,      355             &mut function.vars,
+350             "w",                     356             "w",
+351             Repr::TObj,              357             Repr::Evv,
+352             Prim::EvvGet.row().ret_  358             Prim::EvvGet.row().ret_
+... mark,                                ... mark,
+353         );                           359         );
+354         let o = fresh(               360         let o = fresh(
+355             &mut function.vars,      361             &mut function.vars,
+356             "o",                     362             "o",
+357             Repr::TObj,              363             Repr::Evv,
+358             Prim::EvEvv.row().ret_m  364             Prim::EvEvv.row().ret_m
+... ark,                                 ... ark,
+359         );                           365         );
+360         (w, o)                       366         (w, o)
+
+crates/eml_core_ir/src/evidence/handlers.rs --- 3/4 --- Rust
+517     for &param in &params[..capture  523     for &param in &params[..capture
+... s] {                                 ... s] {
+518         args.push(Atom::Var(b.param  524         args.push(Atom::Var(b.param
+... (function.vars[param.0 as usize].cl  ... (function.vars[param.0 as usize].cl
+... one())));                            ... one())));
+519     }                                525     }
+520     let evidence = b.param(VarInfo:  526     let evidence = b.param(VarInfo:
+... :new("e", Repr::Obj, Mark::Unr));    ... :new("e", Repr::Cev, Mark::Unr));
+521     for (&param, &repr) in params[c  527     for (&param, &repr) in params[c
+... aptures..].iter().zip(&operation.pa  ... aptures..].iter().zip(&operation.pa
+... rams) {                              ... rams) {
+522         let VarInfo { name, mark, .  528         let VarInfo { name, mark, .
+... . } = &function.vars[param.0 as usi  ... . } = &function.vars[param.0 as usi
+... ze];                                 ... ze];
+523         args.push(Atom::Var(b.param  529         args.push(Atom::Var(b.param
+... (VarInfo::new(name, repr, *mark))))  ... (VarInfo::new(name, repr, *mark))))
+... ;                                    ... ;
+
+crates/eml_core_ir/src/evidence/handlers.rs --- 4/4 --- Rust
+593 599 
+594 600     /// 結果の印は基本操作の表の印である。evidence、`evv`、エントリのクロージャは `unr` になる。
+595 601     fn prim(&mut self, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) -> VarId {
+... 602         let repr = match prim.row().ret {
+... 603             typed @ (Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv) => typed,
+... 604             _ => repr,
+... 605         };
+596 606         let mark = prim.row().ret_mark;
+597 607         self.bind(name, repr, mark, Rhs::Prim(prim, args))
+598 608     }
+
+crates/eml_core_ir/src/evidence/helpers.rs --- 1/9 --- Rust
+ 50 /// (docs/spec/core-ir.md の「EP の   50 /// (docs/spec/core-ir.md の「EP の
+ .. 明示の `drop`」)。                    .. 明示の `drop`」)。
+ 51 pub(super) fn prompt(resume: FnIdx,   51 pub(super) fn prompt(resume: FnIdx,
+ ..  rewind: FnIdx) -> CoreFn {           ..  rewind: FnIdx) -> CoreFn {
+ 52     let mut b = FnBuilder::new();     52     let mut b = FnBuilder::new();
+ 53     let ev = b.param(VarInfo::new("   53     let ev = b.param(VarInfo::new("
+ .. ev", Repr::Obj, Mark::Unr));          .. ev", Repr::Ev, Mark::Lin));
+ 54     let ret = b.param(VarInfo::new(   54     let ret = b.param(VarInfo::new(
+ .. "ret", Repr::TObj, Mark::Poly));      .. "ret", Repr::TObj, Mark::Poly));
+ 55     let x = b.param(VarInfo::new("x   55     let x = b.param(VarInfo::new("x
+ .. ", Repr::TObj, Mark::Poly));          .. ", Repr::TObj, Mark::Poly));
+ 56     let w = prim(                     56     let w = prim(
+
+crates/eml_core_ir/src/evidence/helpers.rs --- 2/9 --- Rust
+ 85  85     // yield していない
+ 86  86     b.reopen(targets[0]);
+ 87  87     let state = take_state(&mut b, ev);
+ ..  88     drop(&mut b, ev);
+ 88  89     let r = apply(&mut b, "r", ret, vec![Atom::Var(x), Atom::Var(state)]);
+ 89  90     b.terminate(Term::Return(Atom::Var(r)));
+ 90  91 
+
+crates/eml_core_ir/src/evidence/helpers.rs --- 3/9 --- Rust
+ 94     let k = take(&mut b);             95     let k = take(&mut b);
+ 95     let clause = prim(&mut b, "c",    96     let clause = prim(&mut b, "c", 
+ .. Repr::TObj, Prim::YieldFinish, Vec:   .. Repr::TObj, Prim::YieldFinish, Vec:
+ .. :new());                              .. :new());
+ 96     let state = take_state(&mut b,    97     let state = take_state(&mut b, 
+ .. ev);                                  .. ev);
+ ..                                       98     let retired = prim(&mut b, "h",
+ ..                                       ..  Repr::Obj, Prim::EvRetire, vec![At
+ ..                                       .. om::Var(ev)]);
+ 97     let resumption = closure(         99     let resumption = closure(
+ 98         &mut b,                      100         &mut b,
+ 99         resume,                      101         resume,
+100         vec![Atom::Var(ev), Atom::V  102         vec![Atom::Var(retired), At
+... ar(ret), Atom::Var(k)],              ... om::Var(ret), Atom::Var(k)],
+101     );                               103     );
+102     let r = apply(                   104     let r = apply(
+103         &mut b,                      105         &mut b,
+
+crates/eml_core_ir/src/evidence/helpers.rs --- 4/9 --- Rust
+114 116     drop(&mut b, x);
+115 117     let clause = prim(&mut b, "c", Repr::TObj, Prim::YieldFinish, Vec::new());
+116 118     let state = take_state(&mut b, ev);
+... 119     drop(&mut b, ev);
+117 120     let r = apply(&mut b, "r", clause, vec![Atom::Var(state)]);
+118 121     b.terminate(Term::Return(Atom::Var(r)));
+119 122 
+
+crates/eml_core_ir/src/evidence/helpers.rs --- 5/9 --- Rust
+122     drop(&mut b, x);                 125     drop(&mut b, x);
+123     let state = take_state(&mut b,   126     let state = take_state(&mut b, 
+... ev);                                 ... ev);
+124     let k = take(&mut b);            127     let k = take(&mut b);
+...                                      128     let retired = prim(&mut b, "h",
+...                                      ...  Repr::Obj, Prim::EvRetire, vec![At
+...                                      ... om::Var(ev)]);
+125     let rebuilt = closure(           129     let rebuilt = closure(
+126         &mut b,                      130         &mut b,
+127         rewind,                      131         rewind,
+128         vec![                        132         vec![
+129             Atom::Var(ev),           133             Atom::Var(retired),
+130             Atom::Var(ret),          134             Atom::Var(ret),
+131             Atom::Var(state),        135             Atom::Var(state),
+132             Atom::Var(k),            136             Atom::Var(k),
+
+crates/eml_core_ir/src/evidence/helpers.rs --- 6/9 --- Rust
+140 /// `prompt$` に渡す (docs/spec/cor  144 /// `prompt$` に渡す (docs/spec/cor
+... e-ir.md の「再開と状態」)。          ... e-ir.md の「再開と状態」)。
+141 pub(super) fn resume(prompt: FnIdx)  145 pub(super) fn resume(prompt: FnIdx)
+...  -> CoreFn {                         ...  -> CoreFn {
+142     let mut b = FnBuilder::new();    146     let mut b = FnBuilder::new();
+143     let ev = b.param(VarInfo::new("  147     let ev = b.param(VarInfo::new("
+... ev", Repr::Obj, Mark::Unr));         ... ev", Repr::Rev, Mark::Unr));
+144     let ret = b.param(VarInfo::new(  148     let ret = b.param(VarInfo::new(
+... "ret", Repr::TObj, Mark::Poly));     ... "ret", Repr::TObj, Mark::Poly));
+145     let k = b.param(VarInfo::new("k  149     let k = b.param(VarInfo::new("k
+... ", Repr::TObj, Mark::Poly));         ... ", Repr::TObj, Mark::Poly));
+146     let v = b.param(VarInfo::new("v  150     let v = b.param(VarInfo::new("v
+... ", Repr::TObj, Mark::Poly));         ... ", Repr::TObj, Mark::Poly));
+
+crates/eml_core_ir/src/evidence/helpers.rs --- 7/9 --- Rust
+186 /// `resume$` を呼ぶ。               190 /// `resume$` を呼ぶ。
+187 pub(super) fn rewind(resume: FnIdx)  191 pub(super) fn rewind(resume: FnIdx)
+...  -> CoreFn {                         ...  -> CoreFn {
+188     let mut b = FnBuilder::new();    192     let mut b = FnBuilder::new();
+189     let ev = b.param(VarInfo::new("  193     let ev = b.param(VarInfo::new("
+... ev", Repr::Obj, Mark::Unr));         ... ev", Repr::Rev, Mark::Unr));
+190     let ret = b.param(VarInfo::new(  194     let ret = b.param(VarInfo::new(
+... "ret", Repr::TObj, Mark::Poly));     ... "ret", Repr::TObj, Mark::Poly));
+191     let s = b.param(VarInfo::new("s  195     let s = b.param(VarInfo::new("s
+... ", Repr::TObj, Mark::Poly));         ... ", Repr::TObj, Mark::Poly));
+192     let k = b.param(VarInfo::new("k  196     let k = b.param(VarInfo::new("k
+... ", Repr::TObj, Mark::Poly));         ... ", Repr::TObj, Mark::Poly));
+
+crates/eml_core_ir/src/evidence/helpers.rs --- 8/9 --- Rust
+251 255 
+252 256 /// 結果の印は基本操作の表の印である。表は EP が自分の変数に付ける印と同じに作ってある。
+253 257 fn prim(b: &mut FnBuilder, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) -> VarId {
+... 258     let repr = match prim.row().ret {
+... 259         typed @ (Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv) => typed,
+... 260         _ => repr,
+... 261     };
+254 262     let mark = prim.row().ret_mark;
+255 263     bind(b, name, repr, mark, Rhs::Prim(prim, args))
+256 264 }
+
+crates/eml_core_ir/src/evidence/helpers.rs --- 9/9 --- Rust
+292 }                                    300 }
+293                                      301 
+294 fn take_state(b: &mut FnBuilder, ev  302 fn take_state(b: &mut FnBuilder, ev
+... : VarId) -> VarId {                  ... : VarId) -> VarId {
+295     prim(b, "st", Repr::TObj, Prim:  303     prim(b, "st", Repr::TObj, Prim:
+... :EvTakeState, vec![Atom::Var(ev)])   ... :EvLastState, vec![Atom::Var(ev)])
+296 }                                    304 }
+297                                      305 
+298 /// 直前の呼び出しが yield したかで  306 /// 直前の呼び出しが yield したかで
+... 分ける。遅い道と速い道のブロックを   ... 分ける。遅い道と速い道のブロックを
+... 、この順に作って返す。               ... 、この順に作って返す。
+
+crates/eml_core_ir/src/evidence/mod.rs --- Rust
+202         Repr::Float => Atom::Float(FloatBits(0)),
+203         Repr::Enum => Atom::Tag(0),
+204         Repr::Unit => Atom::Unit,
+205         Repr::Token => unreachable!("only the LIR reuse pass makes tokens"), Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv => unreachable!("no function returns an evidence"),
+206     }
+207 }
+208 
+
+crates/eml_core_ir/src/evidence/split.rs --- Rust
+481 481         prim: Prim,
+482 482         args: Vec<Atom>,
+483 483     ) -> VarId {
+... 484         let repr = match prim.row().ret {
+... 485             typed @ (Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv) => typed,
+... 486             _ => repr,
+... 487         };
+484 488         let mark = prim.row().ret_mark;
+485 489         self.bind(stmts, name, repr, mark, Rhs::Prim(prim, args))
+486 490     }
+
+crates/eml_core_ir/src/verify.rs --- 1/2 --- Rust
+336 336     }
+337 337 
+338 338     fn check_rhs(&self, var: VarId, rhs: &Rhs) -> Result<(), String> {
+... 339         self.cx.context_value(
+... 340             var,
+... 341             match rhs {
+... 342                 Rhs::Prim(prim, _) => Some(prim.row().ret),
+... 343                 _ => None,
+... 344             },
+... 345         )?;
+... 346         if let Rhs::MakeClosure(index, args) = rhs {
+... 347             self.cx.captures_probe(*index, args)?;
+... 348         }
+339 349         match rhs {
+340 350             Rhs::Call { call, mask } => {
+341 351                 self.check_mask(call, mask)?;
+
+crates/eml_core_ir/src/verify.rs --- 2/2 --- Rust
+505             ));                      515             ));
+506         }                            516         }
+507         let repr = self.function.re  517         let repr = self.function.re
+... pr(marker);                          ... pr(marker);
+508         if repr != Repr::Obj {       518         if repr != Repr::Ev {
+509             return Err(format!(      519             return Err(format!(
+510                 "`{}` is the prompt  520                 "`{}` is the prompt
+...  marker of an apply, but it is {},   ...  marker of an apply, but it is {}, 
+... not obj",                            ... not obj",
+511                 self.cx.name(marker  521                 self.cx.name(marker
+... ),                                   ... ),
+
+crates/eml_extern/src/lib.rs --- 1/4 --- Rust
+161 161     /// 引数のないコンストラクタだけの data のタグ。
+162 162     Enum,
+163 163     Unit,
+... 164     /// evidence。`obj` と同じ機械の形だが、ほかの Repr と互換でない。
+... 165     Ev,
+... 166     Cev,
+... 167     Fev,
+... 168     Rev,
+... 169     /// `evv` のリスト。`tobj` と同じ機械の形だが、ほかの Repr と互換でない。
+... 170     Evv,
+164 171     /// reuse の token。解放した箱を指すか、空を表す1語で、RC の対象ではない。LIR の reuse のパスだけが作り、extern の
+165 172     /// 行、配置、操作の表、Core IR には現れない (docs/spec/object-model.md の「reuse」)。
+166 173     Token,
+
+crates/eml_extern/src/lib.rs --- 2/4 --- Rust
+178 185 impl Repr {
+179 186     pub fn is_rc(self) -> bool {
+180 187         match self {
+181 188             Repr::Obj | Repr::TObj | Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv => true,
+182 189             Repr::Int | Repr::Float | Repr::Enum | Repr::Unit | Repr::Token | Repr::Struct(_) => {
+183 190                 false
+184 191             }
+185 192         }
+186 193     }
+... 194 
+... 195     /// 値の参照 (`obj` か `tobj`)。evidence と `evv` は RC の対象だが、値ではない。
+... 196     pub fn is_value_ref(self) -> bool {
+... 197         matches!(self, Repr::Obj | Repr::TObj)
+... 198     }
+187 199 
+188 200     /// 箱を要する Repr。一様な位置との間で `box` と `unbox` を要する。`unit` は命令なしで `tobj` と行き来するので
+189 201     /// 入らない。box の挿入の規則と verifier はこの述語から作る (docs/spec/lir.md の「値の表現」、
+
+crates/eml_extern/src/lib.rs --- 3/4 --- Rust
+203     /// 持つ所は `eml_lir::Structs:  215     /// 持つ所は `eml_lir::Structs:
+... :compatible` で比べる。              ... :compatible` で比べる。
+204     pub fn compatible(self, other:   216     pub fn compatible(self, other: 
+... Repr) -> bool {                      ... Repr) -> bool {
+205         self == other                217         self == other
+206             || (self.is_rc() && oth  218             || (self.is_value_ref()
+... er.is_rc())                          ...  && other.is_value_ref())
+207             || matches!(             219             || matches!(
+208                 (self, other),       220                 (self, other),
+209                 (Repr::Unit, Repr::  221                 (Repr::Unit, Repr::
+... TObj) | (Repr::TObj, Repr::Unit)     ... TObj) | (Repr::TObj, Repr::Unit)
+
+crates/eml_extern/src/lib.rs --- 4/4 --- Rust
+220 232             Repr::Float => "float",
+221 233             Repr::Enum => "enum",
+222 234             Repr::Unit => "unit",
+... 235             Repr::Ev => "ev",
+... 236             Repr::Cev => "cev",
+... 237             Repr::Fev => "fev",
+... 238             Repr::Rev => "rev",
+... 239             Repr::Evv => "evv",
+223 240             Repr::Token => "token",
+224 241             Repr::Struct(_) => "struct",
+225 242         }
+
+crates/eml_lir/src/boxing.rs --- 1/2 --- Rust
+191     let expected: Vec<Repr> = param  191     let expected: Vec<Repr> = param
+... s[..captures]                        ... s[..captures]
+192         .iter()                      192         .iter()
+193         .map(|&param| uniform_repr(  193         .map(|&param| uniform_repr(
+... function.repr(param)))               ... function.repr(param)))
+194         .chain([Repr::Obj])          194         .chain([match function.repr
+...                                      ... (params[captures]) {
+...                                      195             Repr::Fev => Repr::Fev,
+...                                      196             _ => Repr::Cev,
+...                                      197         }])
+195         .chain(operation.params.ite  198         .chain(operation.params.ite
+... r().copied())                        ... r().copied())
+196         .collect();                  199         .collect();
+197     let ret = match operation.ret {  200     let ret = match operation.ret {
+
+crates/eml_lir/src/boxing.rs --- 2/2 --- Rust
+611             } => {                   614             } => {
+612                 let operation = ope  615                 let operation = ope
+... ration(self.effects, *effect, *op);  ... ration(self.effects, *effect, *op);
+613                 *callee = self.conv  616                 *callee = self.conv
+... ert(*callee, Repr::TObj, out);       ... ert(*callee, Repr::TObj, out);
+614                 let expected = std:  617                 let expected = std:
+... :iter::once(Repr::Obj).chain(operat  ... :iter::once(Repr::Cev).chain(operat
+... ion.params.iter().copied());         ... ion.params.iter().copied());
+615                 for (arg, param) in  618                 for (arg, param) in
+...  args.iter_mut().zip(expected) {     ...  args.iter_mut().zip(expected) {
+616                     *arg = self.con  619                     *arg = self.con
+... vert(*arg, param, out);              ... vert(*arg, param, out);
+617                 }                    620                 }
+
+crates/eml_lir/src/check.rs --- 1/4 --- Rust
+ 66     }                                 66     }
+ 67     let params: Vec<(VarId, &VarInf   67     let params: Vec<(VarId, &VarInf
+ .. o)> = params.collect();               .. o)> = params.collect();
+ 68     let expected = std::iter::repea   68     let expected = std::iter::repea
+ .. t_n(Repr::TObj, captures)             .. t_n(Repr::TObj, captures)
+ 69         .chain([Repr::Obj])           69         .chain([Repr::Ev])
+ 70         .chain(operation.params.ite   70         .chain(operation.params.ite
+ .. r().copied());                        .. r().copied());
+ 71     for (index, ((_, param), expect   71     for (index, ((_, param), expect
+ .. ed)) in params.iter().zip(expected)   .. ed)) in params.iter().zip(expected)
+ .. .enumerate() {                        .. .enumerate() {
+ ..                                       72         if index == captures && mat
+ ..                                       .. ches!(param.repr, Repr::Cev | Repr:
+ ..                                       .. :Fev) {
+ ..                                       73             continue;
+ ..                                       74         }
+ 72         if !param.repr.compatible(e   75         if !param.repr.compatible(e
+ .. xpected) {                            .. xpected) {
+ 73             return Err(format!(       76             return Err(format!(
+ 74                 "`{name}` is a clau   77                 "`{name}` is a clau
+ .. se of `{clause}`, but its parameter   .. se of `{clause}`, but its parameter
+ ..  {index} is {}",                      ..  {index} is {}",
+
+crates/eml_lir/src/check.rs --- 2/4 --- Rust
+844     /// フレームを通るとき、巻き戻   847     /// フレームを通るとき、巻き戻
+... しは印から`ev_take_state`で状態を取  ... しは印から`ev_take_state`で状態を取
+... り出し、速いモードではそれがevidenc  ... り出し、速いモードではそれがevidenc
+... eの欄を確かめずに                    ... eの欄を確かめずに
+845     /// 書くためである (docs/spec/l  848     /// 書くためである (docs/spec/l
+... ir.mdの「着地の印」)。               ... ir.mdの「着地の印」)。
+846     pub fn prompt_marker(&self, mar  849     pub fn prompt_marker(&self, mar
+... ker: VarId) -> Result<(), String> {  ... ker: VarId) -> Result<(), String> {
+847         if self.evidences.contains_  850         if self.repr(marker) == Rep
+... key(&marker) || self.renewed.contai  ... r::Ev {
+... ns(&marker) {                        ... 
+848             return Ok(());           851             return Ok(());
+849         }                            852         }
+850         Err(format!(                 853         Err(format!(
+
+crates/eml_lir/src/check.rs --- 3/4 --- Rust
+899 902         ))
+900 903     }
+... 904 
+... 905     /// evidence と `evv` の変数を束縛するのは、その Repr を返す基本操作だけである。
+... 906     pub fn context_value(&self, var: VarId, made: Option<Repr>) -> Result<(), String> {
+... 907         let repr = self.repr(var);
+... 908         if matches!(repr, Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv) && made != Some(repr) {
+... 909             return Err(format!(
+... 910                 "`{}` is {}, but it is not bound by a primitive that returns {}",
+... 911                 self.name(var),
+... 912                 repr.name(),
+... 913                 repr.name()
+... 914             ));
+... 915         }
+... 916         Ok(())
+... 917     }
+... 918 
+... 919     /// 試作の探り: evidence と `evv` を捕獲するのは `resume$` と `rewind$` のクロージャだけか。
+... 920     pub fn captures_probe(&self, target: FnIdx, args: &[Atom]) -> Result<(), String> {
+... 921         let Some(function) = self.tables.functions.get(target.0 as usize) else {
+... 922             return Ok(());
+... 923         };
+... 924         for &arg in args {
+... 925             if let Atom::Var(var) = arg
+... 926                 && matches!(self.repr(var), Repr::Ev | Repr::Cev | Repr::Fev | Repr::Evv)
+... 927             {
+... 928                 return Err(format!(
+... 929                     "PROBE: a closure of `{}` captures `{}` ({})",
+... 930                     function.name,
+... 931                     self.name(var),
+... 932                     self.repr(var).name()
+... 933                 ));
+... 934             }
+... 935         }
+... 936         Ok(())
+... 937     }
+901 938 
+902 939     /// `closure` で束縛した変数の関数と、捕獲した値の数。
+903 940     pub fn closure(&self, var: VarId) -> Option<(FnIdx, usize)> {
+
+crates/eml_lir/src/check.rs --- 4/4 --- Rust
+915     /// あることは、ここでなく veri  952     /// あることは、ここでなく veri
+... fier の値の参照の規則が確かめる (do  ... fier の値の参照の規則が確かめる (do
+... cs/spec/lir.md の「verifier」)。     ... cs/spec/lir.md の「verifier」)。
+916     pub fn passes(&self, atom: Atom  953     pub fn passes(&self, atom: Atom
+... , expected: Repr) -> bool {          ... , expected: Repr) -> bool {
+917         match atom {                 954         match atom {
+918             Atom::Var(var) if self.  955             Atom::Var(var)
+... never[var.0 as usize] => true,       ... 
+...                                      956                 if self.never[var.0
+...                                      ...  as usize] && !matches!(expected, R
+...                                      ... epr::Ev | Repr::Cev | Repr::Fev | R
+...                                      ... epr::Rev | Repr::Evv) =>
+...                                      957             {
+...                                      958                 true
+...                                      959             }
+919             _ => atom.fits_compatib  960             _ => atom.fits_compatib
+... le(self.vars, self.tables.structs,   ... le(self.vars, self.tables.structs, 
+... expected),                           ... expected),
+920         }                            961         }
+921     }                                962     }
+
+crates/eml_lir/src/flatten.rs --- Rust
+419                     });
+420                     Atom::Var(dummy)
+421                 }
+422                 Repr::Token | Repr::Struct(_) | Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv => unreachable!("a leaf is a value word"),
+423             })
+424             .collect();
+425         self.leaves.insert(var, leaves);
+
+crates/eml_lir/src/prim.rs --- 1/7 --- Rust
+ 19  19         op: u32,
+ 20  20     },
+ 21  21     EvRenew,
+ ..  22     EvRetire,
+ 22  23     EvLookup(u32),
+ 23  24     EvClause {
+ 24  25         effect: u32,
+
+crates/eml_lir/src/prim.rs --- 2/7 --- Rust
+ 27  28     EvEvv,
+ 28  29     EvTakeEvv,
+ 29  30     EvTakeState,
+ ..  31     EvLastState,
+ 30  32     EvSetState,
+ 31  33     Yielding,
+ 32  34     YieldStatus,
+
+crates/eml_lir/src/prim.rs --- 3/7 --- Rust
+ 97  99     Prim::EvNew(_) => "ev_new", Prim::EvNew(0);
+ 98 100     Prim::EvSetClause { .. } => "ev_set_clause", Prim::EvSetClause { effect: 0, op: 0 };
+ 99 101     Prim::EvRenew => "ev_renew", Prim::EvRenew;
+ .. 102     Prim::EvRetire => "ev_retire", Prim::EvRetire;
+100 103     Prim::EvLookup(_) => "ev_lookup", Prim::EvLookup(0);
+101 104     Prim::EvClause { .. } => "ev_clause", Prim::EvClause { effect: 0, op: 0 };
+102 105     Prim::EvEvv => "ev_evv", Prim::EvEvv;
+103 106     Prim::EvTakeEvv => "ev_take_evv", Prim::EvTakeEvv;
+104 107     Prim::EvTakeState => "ev_take_state", Prim::EvTakeState;
+... 108     Prim::EvLastState => "ev_last_state", Prim::EvLastState;
+105 109     Prim::EvSetState => "ev_set_state", Prim::EvSetState;
+106 110     Prim::Yielding => "yielding", Prim::Yielding;
+107 111     Prim::YieldStatus => "yield_status", Prim::YieldStatus;
+
+crates/eml_lir/src/prim.rs --- 4/7 --- Rust
+138             | Prim::EvvSet           142             | Prim::EvvSet
+139             | Prim::EvvPush          143             | Prim::EvvPush
+140             | Prim::EvRenew          144             | Prim::EvRenew
+...                                      145             | Prim::EvRetire
+141             | Prim::EvEvv            146             | Prim::EvEvv
+142             | Prim::EvTakeEvv        147             | Prim::EvTakeEvv
+...                                      148             | Prim::EvTakeState
+143             | Prim::EvTakeState      149             | Prim::EvLastState
+144             | Prim::EvSetState       150             | Prim::EvSetState
+145             | Prim::Yielding         151             | Prim::Yielding
+146             | Prim::YieldStatus      152             | Prim::YieldStatus
+
+crates/eml_lir/src/prim.rs --- 5/7 --- Rust
+157 163 
+158 164     pub fn row(&self) -> PrimRow {
+159 165         use Mark::{Lin, Poly, Unr};
+160 166         use Repr::{Cev, Ev, Evv, Fev, Int, Obj, Rev, TObj, Unit};
+161 167         const NONE: &[bool] = &[];
+162 168         const NO_MARKS: &[Mark] = &[];
+163 169         let (params, borrowed, ret, param_marks, ret_mark): (
+
+crates/eml_lir/src/prim.rs --- 6/7 --- Rust
+167             &'static [Mark],         173             &'static [Mark],
+168             Mark,                    174             Mark,
+169         ) = match self {             175         ) = match self {
+170             Prim::EvvGet => (&[], N  176             Prim::EvvGet => (&[], N
+... ONE, TObj, NO_MARKS, Unr),           ... ONE, Evv, NO_MARKS, Unr),
+171             Prim::EvvSet => (&[TObj  177             Prim::EvvSet => (&[Evv]
+... ], &[false], Unit, &[Unr], Unr),     ... , &[false], Unit, &[Unr], Unr),
+172             Prim::EvvPush => (&[TOb  178             Prim::EvvPush => (&[Evv
+... j, Obj], &[false, false], TObj, &[U  ... , Ev], &[false, true], Evv, &[Unr, 
+... nr, Unr], Unr),                      ... Lin], Unr),
+173             Prim::EvvMask(_) => (&[  179             Prim::EvvMask(_) => (&[
+... TObj], &[true], TObj, &[Unr], Unr),  ... Evv], &[true], Evv, &[Unr], Unr),
+174             Prim::EvNew(_) => (&[TO  180             Prim::EvNew(_) => (&[TO
+... bj, TObj], &[false, false], Obj, &[  ... bj, Evv], &[false, false], Ev, &[Po
+... Poly, Unr], Unr),                    ... ly, Unr], Lin),
+175             Prim::EvSetClause { ..   181             Prim::EvSetClause { .. 
+... } => (&[Obj, TObj], &[true, false],  ... } => (&[Ev, TObj], &[true, false], 
+...  Unit, &[Unr, Unr], Unr),            ... Unit, &[Lin, Unr], Unr),
+176             Prim::EvRenew => (&[Obj  182             Prim::EvRenew => (&[Rev
+... , TObj], &[true, false], Obj, &[Unr  ... , TObj], &[true, false], Ev, &[Unr,
+... , Poly], Unr),                       ...  Poly], Lin),
+...                                      183             Prim::EvRetire => (&[Ev
+...                                      ... ], &[false], Rev, &[Lin], Unr),
+177             Prim::EvLookup(_) => (&  184             Prim::EvLookup(_) => (&
+... [], NONE, Obj, NO_MARKS, Unr),       ... [], NONE, Cev, NO_MARKS, Unr),
+178             Prim::EvClause { .. } =  185             Prim::EvClause { .. } =
+... > (&[Obj], &[true], TObj, &[Unr], U  ... > (&[Cev], &[true], TObj, &[Unr], U
+... nr),                                 ... nr),
+179             Prim::EvEvv => (&[Obj],  186             Prim::EvEvv => (&[Cev],
+...  &[true], TObj, &[Unr], Unr),        ...  &[true], Evv, &[Unr], Unr),
+180             Prim::EvTakeEvv => (&[O  187             Prim::EvTakeEvv => (&[E
+... bj], &[true], TObj, &[Unr], Unr),    ... v], &[true], Evv, &[Lin], Unr),
+181             Prim::EvTakeState => (&  188             Prim::EvTakeState => (&
+... [Obj], &[true], TObj, &[Unr], Poly)  ... [Cev], &[true], TObj, &[Unr], Poly)
+... ,                                    ... ,
+...                                      189             Prim::EvLastState => (&
+...                                      ... [Ev], &[true], TObj, &[Lin], Poly),
+182             Prim::EvSetState => (&[  190             Prim::EvSetState => (&[
+... Obj, TObj], &[true, false], Unit, &  ... Cev, TObj], &[true, false], Unit, &
+... [Unr, Poly], Unr),                   ... [Unr, Poly], Unr),
+183             Prim::Yielding => (&[],  191             Prim::Yielding => (&[],
+...  NONE, Int, NO_MARKS, Unr),          ...  NONE, Int, NO_MARKS, Unr),
+184             Prim::YieldStatus => (&  192             Prim::YieldStatus => (&
+... [Obj], &[true], Int, &[Unr], Unr),   ... [Ev], &[true], Int, &[Lin], Unr),
+185             Prim::YieldTo => (       193             Prim::YieldTo => (
+186                 &[Obj, TObj, TObj],  194                 &[Cev, TObj, TObj],
+187                 &[false, false, fal  195                 &[false, false, fal
+... se],                                 ... se],
+188                 Unit,                196                 Unit,
+189                 &[Unr, Poly, Poly],  197                 &[Unr, Poly, Poly],
+190                 Unr,                 198                 Unr,
+191             ),                       199             ),
+192             Prim::YieldAbort => (&[  200             Prim::YieldAbort => (&[
+... Obj, TObj], &[false, false], Unit,   ... Cev, TObj], &[false, false], Unit, 
+... &[Unr, Poly], Unr),                  ... &[Unr, Poly], Unr),
+193             Prim::YieldContTake =>   201             Prim::YieldContTake => 
+... (&[], NONE, TObj, NO_MARKS, Poly),   ... (&[], NONE, TObj, NO_MARKS, Poly),
+194             Prim::YieldContSet => (  202             Prim::YieldContSet => (
+... &[TObj], &[false], Unit, &[Poly], U  ... &[TObj], &[false], Unit, &[Poly], U
+... nr),                                 ... nr),
+195             Prim::YieldFinish => (&  203             Prim::YieldFinish => (&
+... [], NONE, TObj, NO_MARKS, Poly),     ... [], NONE, TObj, NO_MARKS, Poly),
+
+crates/eml_lir/src/prim.rs --- 7/7 --- Rust
+200             // 結果は `MutArray` の  208             // 結果は `MutArray` の
+... 値なので `lin` である                ... 値なので `lin` である
+201             Prim::EmptyMutArray =>   209             Prim::EmptyMutArray => 
+... (&[], NONE, Obj, NO_MARKS, Lin),     ... (&[], NONE, Obj, NO_MARKS, Lin),
+202             // evidence は節のエン   210             // evidence は節のエン
+... トリが持ち続けるので借りる。操作の   ... トリが持ち続けるので借りる。操作の
+... 引数を捕まえた起こし直しの閉包は親   ... 引数を捕まえた起こし直しの閉包は親
+... に渡る                               ... に渡る
+203             Prim::ChildAbort => (&[  211             Prim::ChildAbort => (&[
+... Obj, TObj], &[true, false], Unit, &  ... Fev, TObj], &[true, false], Unit, &
+... [Unr, Poly], Unr),                   ... [Unr, Poly], Unr),
+204         };                           212         };
+205         PrimRow {                    213         PrimRow {
+206             params,                  214             params,
+
+crates/eml_lir/src/syntax.rs --- Rust
+151 const PUNCTS: &[char] = &['(', ')',  151 const PUNCTS: &[char] = &['(', ')',
+...  '{', '}', '[', ']', ','];           ...  '{', '}', '[', ']', ','];
+152                                      152 
+153 /// テキストの形で名前を書く、値の   153 /// テキストの形で名前を書く、値の 
+... Repr。構造体は形の中身を書き、token  ... Repr。構造体は形の中身を書き、token
+...  は reuse のパスだけが作るので別に   ...  は reuse のパスだけが作るので別に
+... 扱う。                               ... 扱う。
+154 pub(crate) const REPRS: [Repr; 6] =  154 pub(crate) const REPRS: [Repr; 11] 
+...  [                                   ... = [
+155     Repr::Obj,                       155     Repr::Obj,
+156     Repr::TObj,                      156     Repr::TObj,
+...                                      157     Repr::Ev,
+...                                      158     Repr::Cev,
+...                                      159     Repr::Fev,
+...                                      160     Repr::Rev,
+...                                      161     Repr::Evv,
+157     Repr::Int,                       162     Repr::Int,
+158     Repr::Float,                     163     Repr::Float,
+159     Repr::Enum,                      164     Repr::Enum,
+
+crates/eml_lir/src/verify.rs --- 1/3 --- Rust
+1555 1555     }
+1556 1556 
+1557 1557     fn check_rhs(&self, owned: &mut Owned, var: VarId, rhs: &Rhs) -> Result<(), String> {
+.... 1558         self.cx.context_value(
+.... 1559             var,
+.... 1560             match rhs {
+.... 1561                 Rhs::Prim(prim, _) => Some(prim.row().ret),
+.... 1562                 _ => None,
+.... 1563             },
+.... 1564         )?;
+.... 1565         if let Rhs::MakeClosure(index, args) = rhs {
+.... 1566             self.cx.captures_probe(*index, args)?;
+.... 1567         }
+1558 1568         match rhs {
+1559 1569             Rhs::Call(call) => {
+1560 1570                 return self.check_call(owned, call, Receiver::Bound(var));
+
+crates/eml_lir/src/verify.rs --- 2/3 --- Rust
+1839     fn check_prompt(&self, owned:   1849     fn check_prompt(&self, owned: 
+.... &Owned, call: &Call, marker: VarId  .... &Owned, call: &Call, marker: VarId
+.... ) -> Result<(), String> {           .... ) -> Result<(), String> {
+1840         let what = self.call_text(  1850         let what = self.call_text(
+.... call, false);                       .... call, false);
+1841         self.cx.visible(marker)?;   1851         self.cx.visible(marker)?;
+1842         if self.function.repr(mark  1852         if self.function.repr(mark
+.... er) != Repr::Obj {                  .... er) != Repr::Ev {
+1843             return Err(format!(     1853             return Err(format!(
+1844                 "`{}` is the promp  1854                 "`{}` is the promp
+.... t marker of {what}, but it is {},   .... t marker of {what}, but it is {}, 
+.... not obj",                           .... not ev",
+1845                 self.cx.name(marke  1855                 self.cx.name(marke
+.... r),                                 .... r),
+1846                 self.function.repr  1856                 self.function.repr
+.... (marker).name()                     .... (marker).name()
+1847             ));                     1857             ));
+
+crates/eml_lir/src/verify.rs --- 3/3 --- Rust
+1969                         self.cx.ma  1979                         self.cx.ma
+.... rked_atom_text(*callee)             .... rked_atom_text(*callee)
+1970                     ));             1980                     ));
+1971                 }                   1981                 }
+1972                 let expected = std  1982                 let expected = std
+.... ::iter::once((Repr::Obj, Mark::Unr  .... ::iter::once((Repr::Cev, Mark::Unr
+.... )).chain(                           .... )).chain(
+1973                     operation       1983                     operation
+1974                         .params     1984                         .params
+1975                         .iter()     1985                         .iter()
+
+crates/eml_native/src/lower/mod.rs --- Rust
+ 94 pub fn kind(repr: Repr) -> Kind {
+ 95     match repr {
+ 96         Repr::Float => Kind::F64,
+ 97         Repr::Obj | Repr::TObj | Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv | Repr::Int | Repr::Enum | Repr::Unit | Repr::Token => Kind::I64,
+ 98         Repr::Struct(_) => unreachable!("flattening leaves no struct value"),
+ 99     }
+100 }
+
+crates/eml_native/src/lower/unwind.rs --- Rust
+296 pub(super) fn placeholder(b: &mut FunctionBuilder, repr: Repr) -> Value {
+297     match repr {
+298         Repr::Float => b.ins().f64const(0.0),
+299         Repr::Obj | Repr::TObj | Repr::Unit | Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv => b.ins().iconst(types::I64, mem::UNIT),
+300         Repr::Int | Repr::Enum => b.ins().iconst(types::I64, 0),
+301         Repr::Token => b.ins().iconst(types::I64, mem::EMPTY_TOKEN),
+302         Repr::Struct(_) => unreachable!("flattening leaves no struct value"),
+
+crates/eml_vm/src/compile/emit.rs --- Rust
+758 758                 op: op_index(*op),
+759 759             },
+760 760             Prim::EvEvv => Op::EvEvv { dst, ev: a[0] },
+... 761             Prim::EvRetire => Op::EvRetire { dst, ev: a[0] },
+761 762             Prim::EvTakeEvv => Op::EvTakeEvv { dst, ev: a[0] },
+762 763             Prim::EvTakeState | Prim::EvLastState => Op::EvTakeState { dst, ev: a[0] },
+763 764             Prim::EvSetState => Op::EvSetState {
+764 765                 dst,
+765 766                 ev: a[0],
+
+crates/eml_vm/src/disasm.rs --- Rust
+356 356             Op::EvLookup { dst, effect } => format!("ev_lookup s{dst}, E{effect}"),
+357 357             Op::EvClause { dst, ev, op } => format!("ev_clause s{dst}, s{ev}, op{op}"),
+358 358             Op::EvEvv { dst, ev } => format!("ev_evv s{dst}, s{ev}"),
+... 359             Op::EvRetire { dst, ev } => format!("ev_retire s{dst}, s{ev}"),
+359 360             Op::EvTakeEvv { dst, ev } => format!("ev_take_evv s{dst}, s{ev}"),
+360 361             Op::EvTakeState { dst, ev } => format!("ev_take_state s{dst}, s{ev}"),
+361 362             Op::EvSetState { dst, ev, s } => bin("ev_set_state", dst, ev, s),
+
+crates/eml_vm/src/op.rs --- Rust
+444 444         ev: Slot,
+445 445         state: Slot,
+446 446     },
+... 447     EvRetire {
+... 448         dst: Slot,
+... 449         ev: Slot,
+... 450     },
+447 451     EvLookup {
+448 452         dst: Slot,
+449 453         effect: u16,
+
+crates/eml_vm/src/vm.rs --- 1/2 --- Rust
+1414 1414             task.set(dst, Word::UNIT);
+1415 1415         }
+1416 1416         Op::EvvPush { dst, l, e } => {
+.... 1417             // 持ち主は evidence を貸すだけなので、節点の分をここで増やす
+.... 1418             unsafe { ctx.heap_mut().dup(task.get(e)) }?;
+1417 1419             let w = unsafe { ctx.evv_push(task.get(l), task.get(e)) }?;
+1418 1420             task.set(dst, w);
+1419 1421         }
+
+crates/eml_vm/src/vm.rs --- 2/2 --- Rust
+1447 1449             let w = unsafe { ctx.ev_clause(task.get(ev), op.into()) }?;
+1448 1450             task.set(dst, w);
+1449 1451         }
+.... 1452         Op::EvRetire { dst, ev } => {
+.... 1453             let e = task.get(ev);
+.... 1454             let unique = unsafe { ctx.heap_mut().is_unique(e) }?;
+.... 1455             assert!(unique, "PROBE3: a retired evidence is shared");
+.... 1456             let outer = unsafe { ctx.ev_take_evv(e) }?;
+.... 1457             unsafe { ctx.heap_mut().decref(outer) }?;
+.... 1458             let state = unsafe { ctx.ev_take_state(e) }?;
+.... 1459             unsafe { ctx.heap_mut().decref(state) }?;
+.... 1460             task.set(dst, e);
+.... 1461         }
+1450 1462         Op::EvEvv { dst, ev } => {
+1451 1463             let w = unsafe { ctx.ev_evv(task.get(ev)) }?;
+1452 1464             task.set(dst, w);
+

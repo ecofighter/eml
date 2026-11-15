@@ -7,6 +7,7 @@ mod c;
 mod census;
 mod closures;
 mod constants;
+mod effects;
 mod enter;
 mod entries;
 mod heap;
@@ -40,6 +41,7 @@ const TABLES: &[&[Entry]] = &[
     services::SERVICES,
     heap::HEAP,
     rows::ROWS,
+    effects::EFFECTS,
     closures::CLOSURES,
     c::C,
 ];

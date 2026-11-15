@@ -4,8 +4,8 @@ use std::any::Any;
 use std::sync::atomic::Ordering;
 
 use super::raw;
-use super::{LONG, cons, list, mortal, probe};
-use crate::{Checked, Heap, HeapError, Kind, Meta, Mode, Word};
+use super::{LONG, cons, frozen_immortal, list, mortal, probe};
+use crate::{Checked, Heap, HeapError, Mode, Word};
 
 type H = Heap<Checked>;
 
@@ -51,7 +51,7 @@ fn shared_counts_above_one_and_immortal_objects_stop<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let child = heap.fork_worker();
     let x = list(&mut heap, 1);
-    let immortal = unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false)) };
+    let immortal = frozen_immortal(&mut heap, false);
     let p = heap.alloc_data(0, 2, 0, false);
     unsafe {
         heap.acquire_immortal(immortal).unwrap();
@@ -63,8 +63,9 @@ fn shared_counts_above_one_and_immortal_objects_stop<M: Mode>() {
         assert_eq!((raw::rc(p), raw::rc(x), raw::rc(immortal)), (1, -2, 0));
         heap.decref(x).unwrap();
         heap.decref(p).unwrap();
+        assert_eq!(raw::rc(immortal), 0);
     }
-    assert_eq!(mortal(&mut heap), 1);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// 子が確保した値は、速いモードでは何もせずに局所の値で、検査モードでは所有者を今の worker に書き換える。
@@ -270,6 +271,55 @@ fn a_value_shared_to_the_current_id_is_received_by_another_id<M: Mode>() {
     }
 }
 
+/// 子の値から届く数える不死の物体を、検査モードの`transfer_back`は断る (docs/spec/object-model.mdの
+/// 「不死の物体の数え方」)。速いモードは確かめない。
+fn a_counted_immortal_under_a_cell_of_the_child_is_refused<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let child = heap.fork_worker();
+    let s = heap.alloc_string_immortal("constant");
+    unsafe {
+        heap.acquire_immortal(s).unwrap();
+        heap.set_worker(child);
+        let c = cons(&mut heap, s, Word::UNIT);
+        heap.set_worker(0);
+        let r = heap.transfer_back(c, child);
+        if M::CHECKED {
+            assert_eq!(r, Err(HeapError::CountedImmortal));
+        } else {
+            r.unwrap();
+            heap.decref(c).unwrap();
+        }
+    }
+    // 検査モードの`Err`はたどりがヒープを変えた後なので、ヒープは落とすだけにする (docs/spec/object-model.mdの
+    // 「検査モードの約束」)
+    drop(heap);
+}
+
+/// 検査モードの`transfer_back`は、裏返すrc -1のセルの下の数える不死の物体も断る。`share`はそうしたセルを作るのを
+/// 断るので、共有の後で欄を書く。
+fn a_counted_immortal_under_a_flipped_cell_is_refused<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let child = heap.fork_worker();
+    let s = heap.alloc_string_immortal("constant");
+    let c = cons(&mut heap, Word::UNIT, Word::UNIT);
+    unsafe {
+        heap.acquire_immortal(s).unwrap();
+        heap.share(c, child).unwrap();
+        raw::set_slot(c, 0, s);
+        assert_eq!(raw::rc(c), -1);
+        let r = heap.transfer_back(c, child);
+        if M::CHECKED {
+            assert_eq!(r, Err(HeapError::CountedImmortal));
+        } else {
+            r.unwrap();
+            heap.decref(c).unwrap();
+        }
+    }
+    // 検査モードの`Err`はたどりがヒープを変えた後なので、ヒープは落とすだけにする (docs/spec/object-model.mdの
+    // 「検査モードの約束」)
+    drop(heap);
+}
+
 both_modes!(
     a_shared_list_becomes_local_again,
     shared_counts_above_one_and_immortal_objects_stop,
@@ -282,6 +332,8 @@ both_modes!(
     a_deep_list_of_the_child_comes_back_without_recursion,
     skipping_transfer_back_leaks_the_list_of_the_child,
     a_value_shared_to_the_current_id_is_received_by_another_id,
+    a_counted_immortal_under_a_cell_of_the_child_is_refused,
+    a_counted_immortal_under_a_flipped_cell_is_refused,
 );
 
 #[test]

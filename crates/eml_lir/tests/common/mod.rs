@@ -2,6 +2,10 @@ use eml_lir::{
     Pass, parse, passes_until, pretty, verify, verify_borrowed, verify_flattened, verify_scopes,
 };
 
+/// ランタイムが入る関数。テキストは`entry$main`をエントリにするので、ほかの関数は文脈のReprの引数を受けられる
+/// (docs/spec/lir.mdの「verifier」)。
+pub const ENTRY: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
+
 /// 名前で選んだ関数の表示。ほかの関数 (`entry$main` など) を期待値から外すため。内部の関数は `internal fn` の行から
 /// 始まる。
 pub fn function(shown: &str, name: &str) -> String {

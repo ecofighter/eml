@@ -457,16 +457,14 @@ fn a_parameter_live_across_a_yield_point_is_owned_and_moved_into_the_continuatio
     }
     insta::assert_snapshot!(pause, @r#"
     yields fn pause_then_read(s.0: obj) -> int {
-      let ev.6: obj = prim ev_lookup[Std.Async.Async]()
-      let c.7: tobj = prim ev_clause[Std.Async.Async.reschedule](ev.6)
-      let t.3: enum = clause Std.Async.Async.reschedule c.7(ev.6, ())
-      let y.8: int = prim yielding()
-      switch y.8 { 0 -> b2, _ -> b1 }
+      let t.3: enum = clause Std.Async.Async.reschedule(())
+      let y.6: int = prim yielding()
+      switch y.6 { 0 -> b2, _ -> b1 }
     b1:
-      let k.9: tobj poly = prim yield_cont_take()
-      let c.10: tobj = closure pause_then_read$k0(s.0)
-      let k.11: tobj poly = closure compose$(k.9, c.10)
-      let u.12: unit = prim yield_cont_set(k.11)
+      let k.7: tobj poly = prim yield_cont_take()
+      let c.8: tobj = closure pause_then_read$k0(s.0)
+      let k.9: tobj poly = closure compose$(k.7, c.8)
+      let u.10: unit = prim yield_cont_set(k.9)
       return 0
     b2:
       switch t.3 Std.Async.Wake { #0 -> b3, #1 -> b4 }

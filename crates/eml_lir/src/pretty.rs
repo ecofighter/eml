@@ -165,6 +165,12 @@ impl<'p> Printer<'p> {
         match rhs {
             Rhs::Call(call) => self.call(function, call),
             Rhs::MakeClosure(target, args) => w.closure(vars, *target, args),
+            Rhs::Evidence {
+                effect,
+                state,
+                outer,
+                entries,
+            } => w.evidence(vars, *effect, *state, *outer, entries),
             Rhs::Extern { ext, args, at } => w.extern_call(vars, *ext, args, *at),
             Rhs::ConstString(index) => format!("const {}", w.string(*index)),
             Rhs::Con {
@@ -215,15 +221,9 @@ impl<'p> Printer<'p> {
                 yields,
                 prompt,
             } => w.apply(vars, (callee, args), *yields, *prompt),
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => format!(
-                "clause {} {}({})",
+            Call::Clause { effect, op, args } => format!(
+                "clause {}({})",
                 operation_text(&self.program.effects, *effect, *op),
-                w.atom(vars, callee),
                 w.atoms(vars, args)
             ),
             Call::Par {

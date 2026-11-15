@@ -237,6 +237,21 @@ impl<M: Mode> Heap<M> {
         }
     }
 
+    /// rc 0の物体`h`が、ほかのヒープのページにある数える不死の物体か。そうした物体はworkerをまたいではならない
+    /// (docs/spec/object-model.mdの「不死の物体の数え方」)。ほかのヒープのブロックはモデルの外なので、証明の上では
+    /// 偽を返す。実行時にそうした語が来るのは、信頼の一覧のT14の読み方による。
+    pub(super) fn foreign_counted(&self, h: *mut Header) -> (r: bool)
+        requires
+            self.core.sound(),
+            self.core.checked(),
+            self.core.has(h@.addr),
+            h == self.core.block(h@.addr),
+        ensures
+            !r,
+    {
+        self.core.foreign_block(h) && self.core.prefix_first_get(h) != UNCOUNTED
+    }
+
     /// 生きている不死の物体の参照を数えるか。数えるなら、あと1つ数えられることも確かめる。
     #[inline]
     pub(super) fn immortal_counted(&self, h: *mut Header) -> (r: bool)
@@ -368,6 +383,9 @@ impl<M: Mode> Heap<M> {
         }
         let rc = self.core.rc_get(h);
         if rc == 0 {
+            if self.foreign_counted(h) {
+                return Err(HeapError::CountedImmortal);
+            }
             return Ok(self.immortal_counted(h));
         }
         self.checked_owner(h, rc)?;
@@ -407,6 +425,9 @@ impl<M: Mode> Heap<M> {
         self.checked_live(h)?;
         let rc = self.core.rc_get(h);
         if rc == 0 {
+            if self.foreign_counted(h) {
+                return Err(HeapError::CountedImmortal);
+            }
             let n = self.core.prefix_first_get(h);
             if n == 0 {
                 return Err(HeapError::ImmortalOverRelease);

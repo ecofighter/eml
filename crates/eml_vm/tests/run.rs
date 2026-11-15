@@ -3,10 +3,10 @@
 
 use eml_rt::{ArithFault, Fault, HeapError};
 use eml_sched::error::{RunFault, SourceLocation};
-use eml_test_support::{execute, run_stats};
+use eml_test_support::run_stats;
 use eml_vm::RuntimeError;
 
-use crate::common::{parse, run_lir, run_unverified};
+use crate::common::{execute_unverified, parse, run_lir, run_unverified};
 
 #[test]
 fn hello_prints_a_line() {
@@ -140,7 +140,7 @@ fn main() -> unit {
         "memory leak: objects were not freed: 1 String"
     );
     // 速いモードはリークを確かめないので、同じ IR が成功で終わる
-    let (_, fast) = execute(
+    let (_, fast) = execute_unverified(
         &parse(text),
         &eml_vm::RunConfig::default().with_debug_heap(false),
     );

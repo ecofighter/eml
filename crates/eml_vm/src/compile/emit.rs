@@ -687,6 +687,36 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     self.out.locations.push((pc, Loc { file, ..*loc }));
                 }
             }
+            // エントリは`closure`と同じく関数の引数のReprで捕獲を読む。捕獲のないエントリは関数の値である
+            Rhs::Evidence {
+                effect,
+                state,
+                outer,
+                entries,
+            } => {
+                let program = self.program;
+                let state = self.atom(*state, Repr::TObj);
+                let outer = self.atom(*outer, Repr::Evv);
+                let mut items = vec![
+                    self.effect(*effect).into(),
+                    entries.len() as u32,
+                    u32::from(state),
+                    u32::from(outer),
+                ];
+                for (f, captures) in entries {
+                    let callee = program.function(*f);
+                    let slots: Vec<Slot> = captures
+                        .iter()
+                        .zip(callee.params())
+                        .map(|(&capture, &param)| self.atom(capture, callee.repr(param)))
+                        .collect();
+                    items.push(self.links.functions[f.0 as usize]);
+                    items.push(slots.len() as u32);
+                    items.extend(slots.iter().map(|&slot| u32::from(slot)));
+                }
+                let at = self.out.operands(items);
+                self.out.push(Op::Evidence { dst, at });
+            }
             Rhs::Prim(prim, args) => {
                 let row = prim.row();
                 let slots: Vec<Slot> = args
@@ -702,11 +732,10 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
 
     fn prim(&mut self, prim: &eml_lir::Prim, dst: Slot, a: &[Slot]) -> Op {
         use eml_lir::Prim;
-        let op_index = |o: u32| u16::try_from(o).expect("operations fit in 16 bits");
         match prim {
             Prim::EvvGet => Op::EvvGet { dst },
             Prim::EvvSet => Op::EvvSet { dst, l: a[0] },
-            Prim::EvvPush => Op::EvvPush {
+            Prim::EvvEnter => Op::EvvEnter {
                 dst,
                 l: a[0],
                 e: a[1],
@@ -729,37 +758,16 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.out.operands([start, len, u32::from(a[0])]);
                 Op::EvvMask { dst, at }
             }
-            Prim::EvNew(e) => {
-                let n_ops = self.program.effects[*e as usize].operations.len() as u32;
-                let at = self.out.operands([
-                    self.effect(*e).into(),
-                    n_ops,
-                    u32::from(a[0]),
-                    u32::from(a[1]),
-                ]);
-                Op::EvNew { dst, at }
-            }
-            Prim::EvSetClause { effect: _, op } => {
-                let at = self.out.operands([u32::from(a[0]), *op, u32::from(a[1])]);
-                Op::EvSetClause { dst, at }
-            }
             Prim::EvRenew => Op::EvRenew {
                 dst,
                 ev: a[0],
                 state: a[1],
             },
-            Prim::EvLookup(e) => Op::EvLookup {
-                dst,
-                effect: self.effect(*e),
-            },
-            Prim::EvClause { effect: _, op } => Op::EvClause {
-                dst,
-                ev: a[0],
-                op: op_index(*op),
-            },
+            Prim::EvRetire => Op::EvRetire { dst, ev: a[0] },
             Prim::EvEvv => Op::EvEvv { dst, ev: a[0] },
             Prim::EvTakeEvv => Op::EvTakeEvv { dst, ev: a[0] },
-            Prim::EvTakeState => Op::EvTakeState { dst, ev: a[0] },
+            // `ev_last_state`は`Ctx::ev_take_state`の持ち主の行なので、2つの行は同じ命令を走らせる
+            Prim::EvTakeState | Prim::EvLastState => Op::EvTakeState { dst, ev: a[0] },
             Prim::EvSetState => Op::EvSetState {
                 dst,
                 ev: a[0],
@@ -796,27 +804,20 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         }
     }
 
-    /// `clause` のオペランド [呼ばれる値, n, 引数…]。引数は操作の表の Repr で、先頭の evidence は `obj` である
-    /// (docs/spec/lir.md の「節の呼び出し」)。
+    /// `clause`のオペランド[エフェクト, 操作, n, 引数…]。エフェクトはマシンの番号で、引数は操作の表のReprである
+    /// (docs/spec/lir.mdの「節の呼び出し」)。
     fn clause_operands(&mut self, call: &Call) -> u32 {
-        let Call::Clause {
-            effect,
-            op,
-            callee,
-            args,
-        } = call
-        else {
+        let Call::Clause { effect, op, args } = call else {
             unreachable!("clause operands are made for a clause")
         };
         let operation = eml_lir::operation(&self.program.effects, *effect, *op);
-        let reprs = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
-        let callee = self.atom(*callee, Repr::TObj);
         let slots: Vec<Slot> = args
             .iter()
-            .zip(reprs)
-            .map(|(&arg, repr)| self.atom(arg, repr))
+            .zip(&operation.params)
+            .map(|(&arg, &repr)| self.atom(arg, repr))
             .collect();
-        self.out.slot_list([u32::from(callee)], &slots)
+        let number = self.effect(*effect).into();
+        self.out.slot_list([number, *op], &slots)
     }
 
     /// `apply` のオペランド [呼ばれる値, n, 引数…]。verifier を通った IR では引数はどれも一様な語である

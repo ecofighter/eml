@@ -128,6 +128,12 @@ impl<'p> Printer<'p> {
             }
             Rhs::Drop(a) => format!("drop {}", w.atom(vars, a)),
             Rhs::Prim(prim, args) => w.prim_call(vars, prim, args),
+            Rhs::Evidence {
+                effect,
+                state,
+                outer,
+                entries,
+            } => w.evidence(vars, *effect, *state, *outer, entries),
         }
     }
 
@@ -194,15 +200,9 @@ impl<'p> Printer<'p> {
                 w.atom(vars, k),
                 w.atoms(vars, &[*arg, *state])
             ),
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => format!(
-                "clause {} {}({})",
+            Call::Clause { effect, op, args } => format!(
+                "clause {}({})",
                 operation_text(&self.program.effects, *effect, *op),
-                w.atom(vars, callee),
                 w.atoms(vars, args)
             ),
             Call::Par {

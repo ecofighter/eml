@@ -1,11 +1,12 @@
 //! 実行するコードの表 `CodeBase` と関数表 `FnEntry` (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
 
+use std::fmt;
 use std::sync::Arc;
 
 use eml_cabi::{CCall, Dtor};
 use eml_extern::{CFunction, CHandleType};
-use eml_lir::{FloatBits, Loc, Repr};
-use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
+use eml_lir::{FloatBits, Loc, Repr, VerifyError};
+use eml_rt::{Control, Ctx, Frozen, HeapError, HostRef, MaskItem, Mode, Word};
 use rustc_hash::FxHashMap;
 
 use crate::error::{RunFault, RuntimeError, SourceLocation};
@@ -247,6 +248,9 @@ pub(crate) struct Index {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CompileError {
+    /// 所有の段のverifierが拒むプログラム。読み込みはどのビルドでも、`CodeBase`に何も書く前に断る。コンパイラの
+    /// 作るプログラムは断られない (docs/spec/vm.mdの「追記」)。
+    Invalid(VerifyError),
     /// 同時に要るスロットが `u16` に収まらない関数。
     TooManySlots { function: String },
     /// 定数を凍結できなかった。
@@ -266,7 +270,54 @@ pub enum CompileError {
     MissingEntry { function: String },
 }
 
+impl CompileError {
+    /// 誤りが報告する内部の誤り。関数の名前は含まない。
+    pub(crate) fn what(&self) -> &'static str {
+        match self {
+            CompileError::Invalid(_) => "invalid LIR",
+            CompileError::TooManySlots { .. } => "a function needs more than 65535 slots",
+            CompileError::Freeze(_) => "the constants cannot be frozen",
+            CompileError::Mismatch { .. } => "a function with a known name has other code",
+            CompileError::MultiValueEntry { .. } => "an entry function returns more than one value",
+            CompileError::MissingFork { .. } => "a program that may fork lacks a fork function",
+            CompileError::MissingEntry { .. } => {
+                "a program that runs Async tasks lacks a runtime entry"
+            }
+        }
+    }
+}
+
+impl fmt::Display for CompileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompileError::Invalid(error) => write!(f, "{}: {error}", self.what()),
+            CompileError::Freeze(error) => write!(f, "{}: {error}", self.what()),
+            CompileError::TooManySlots { function }
+            | CompileError::Mismatch { function }
+            | CompileError::MultiValueEntry { function }
+            | CompileError::MissingFork { function }
+            | CompileError::MissingEntry { function } => {
+                write!(f, "{} in `{function}`", self.what())
+            }
+        }
+    }
+}
+
+impl std::error::Error for CompileError {}
+
 impl<M: Mode> CodeBase<M> {
+    /// worker `k`の`Ctx`。コードの領域は作るときに付ける。forkの表、末尾、定数はどのworkerのヒープでも付けた塊と
+    /// して届くので、`fork_ev`などの前提がどのworkerでも成り立つ (docs/spec/object-model.mdの「凍結した領域」)。
+    /// 付けるのは`Arc`を1つ持つだけで何も確保しないので、検査モードで作るときに取るページの課金の順は変わらない。
+    pub(crate) fn worker_ctx(&self, control: Arc<Control>, host: HostRef, k: usize) -> Ctx<M> {
+        let mut ctx = Ctx::for_worker(control, host, k);
+        if let Some(region) = &self.region {
+            // SAFETY: 付けるのは`Arc`を1つ持つだけで、`Ctx`の持つ語には触れないので、`heap_mut`の前提を崩さない
+            unsafe { ctx.heap_mut() }.attach(Arc::clone(region));
+        }
+        ctx
+    }
+
     pub fn functions(&self) -> &[FnEntry] {
         &self.functions
     }

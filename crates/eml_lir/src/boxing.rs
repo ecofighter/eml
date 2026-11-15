@@ -181,9 +181,9 @@ fn conform_split(function: &mut LirFn, structs: &Structs) {
     conform(function, structs, &expected, ret);
 }
 
-/// `clause` の印の関数を操作の ABI に合わせる。捕獲は一様な Repr、evidence は `obj`、残りの引数は操作の表の Repr で
-/// 受け、`ret` は操作の `ret` にする。`never` の操作の節のエントリはダミーの物体を返すので `obj` である
-/// (docs/spec/lir.md の「box の挿入」)。操作の表は構造体の型の位置を `obj` にするので、構造体の引数はエントリで
+/// `clause`の印の関数を操作のABIに合わせる。捕獲は一様なRepr、evidenceは自分のRepr (`cev`か`fev`)、残りの引数は
+/// 操作の表のReprで受け、`ret`は操作の`ret`にする。`never`の操作の節のエントリはダミーの物体を返すので`obj`である
+/// (docs/spec/lir.mdの「box の挿入」)。操作の表は構造体の型の位置を`obj`にするので、構造体の引数はエントリで
 /// `unbox` して受け直す。
 fn conform_clause(function: &mut LirFn, structs: &Structs, operation: &OperationInfo) {
     let params = function.params();
@@ -191,7 +191,7 @@ fn conform_clause(function: &mut LirFn, structs: &Structs, operation: &Operation
     let expected: Vec<Repr> = params[..captures]
         .iter()
         .map(|&param| uniform_repr(function.repr(param)))
-        .chain([Repr::Obj])
+        .chain([function.repr(params[captures])])
         .chain(operation.params.iter().copied())
         .collect();
     let ret = match operation.ret {
@@ -513,6 +513,23 @@ impl Converter<'_> {
                         }
                         Some(row.ret)
                     }
+                    // 状態は`tobj`の位置で、捕獲は`closure`と同じくエントリの関数の引数の位置である
+                    Rhs::Evidence {
+                        effect: _,
+                        state,
+                        outer: _,
+                        entries,
+                    } => {
+                        *state = self.convert(*state, Repr::TObj, out);
+                        for (target, captures) in entries.iter_mut() {
+                            let target = target.0 as usize;
+                            for (index, capture) in captures.iter_mut().enumerate() {
+                                let param = self.signatures[target].params[index];
+                                *capture = self.convert(*capture, param, out);
+                            }
+                        }
+                        Some(Repr::Ev)
+                    }
                     // 入力にある `unbox` と `box` は、`split` と `clause` の印の関数のエントリで引数を合わせたものだけである
                     Rhs::Unbox(Atom::Var(from)) => {
                         self.unboxed_from.insert(var, *from);
@@ -583,7 +600,7 @@ impl Converter<'_> {
     }
 
     /// 呼び出しのアトムを変換し、結果を受ける Repr を返す。直接の呼び出しは呼ばれる関数の引数と `ret`、節の呼び出しは
-    /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。`apply` の引数と結果はいつも `tobj` で
+    /// 引数と結果が操作の表のReprである。`apply`の引数と結果はいつも`tobj`で
     /// ある。`never` の操作の節の呼び出しは戻らないので、結果を受け直さず `None` を返す
     /// (docs/spec/lir.md の「box の挿入」と「関数の ABI」)。
     fn call(&mut self, call: &mut Call, out: &mut Vec<Stmt>) -> Option<Repr> {
@@ -603,16 +620,9 @@ impl Converter<'_> {
                 }
                 Some(Repr::TObj)
             }
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => {
+            Call::Clause { effect, op, args } => {
                 let operation = operation(self.effects, *effect, *op);
-                *callee = self.convert(*callee, Repr::TObj, out);
-                let expected = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
-                for (arg, param) in args.iter_mut().zip(expected) {
+                for (arg, &param) in args.iter_mut().zip(&operation.params) {
                     *arg = self.convert(*arg, param, out);
                 }
                 match operation.ret {

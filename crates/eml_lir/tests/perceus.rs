@@ -6,7 +6,7 @@ use eml_lir::liveness::live_in;
 use eml_lir::verify_borrowed;
 use eml_lir::{Pass, VarId, parse, perceus, pretty, verify, verify_scopes};
 
-use crate::common::{function, passes_text};
+use crate::common::{ENTRY, function, passes_text};
 
 fn perceus_text(text: &str) -> String {
     let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
@@ -551,22 +551,27 @@ fn a_tag_switch_without_a_layout_stops_perceus() {
 
 #[test]
 fn prims_read_borrowed_arguments_and_consume_the_rest() {
-    // `ev_clause` は evidence を借りるだけなので、`e.0` の所有は節の呼び出しまで残り、`dup e.0` は入らない。節の
-    // 呼び出しは引数を消費する (docs/spec/lir.md の「基本操作」)
-    let text = "\
-effect Counter { get(unit) -> int, put(int) -> unit }
-yields fn f(e.0: obj) -> int {
-  let c.1: tobj = prim ev_clause[Counter.get](e.0)
-  let m.2: int = clause Counter.get c.1(e.0, ())
-  return m.2
-}
-";
-    insta::assert_snapshot!(perceus_text(text), @"
-    effect Counter { get(unit) -> int, put(int) -> unit }
-    yields fn f(e.0: obj) -> int {
-      let c.1: tobj = prim ev_clause[Counter.get](e.0)
-      let m.2: int = clause Counter.get c.1(e.0, ())
-      return m.2
+    // `ev_take_evv`と`ev_last_state`はevidenceを借りるだけなので、`e.0`の所有は`ev_retire`まで残り、`dup e.0`は
+    // 入らない。`ev_retire`は引数を消費する (docs/spec/lir.mdの「基本操作」)
+    let text = format!(
+        "\
+fn f(e.0: ev lin) -> tobj poly {{
+  let w.1: evv = prim ev_take_evv(e.0)
+  let u.2: unit = prim evv_set(w.1)
+  let s.3: tobj poly = prim ev_last_state(e.0)
+  let h.4: rev = prim ev_retire(e.0)
+  return s.3
+}}
+{ENTRY}"
+    );
+    insta::assert_snapshot!(function(&perceus_text(&text), "f"), @"
+    fn f(e.0: ev lin) -> tobj poly {
+      let w.1: evv = prim ev_take_evv(e.0)
+      let u.2: unit = prim evv_set(w.1)
+      let s.3: tobj poly = prim ev_last_state(e.0)
+      let h.4: rev = prim ev_retire(e.0)
+      decref h.4
+      return s.3
     }
     ");
 }
@@ -574,38 +579,24 @@ yields fn f(e.0: obj) -> int {
 #[test]
 fn a_borrowed_prim_argument_is_read() {
     // `ev_take_state` と `ev_set_state` は evidence を借りるので、2回使っても `dup` しない。evidence は最後に使った
-    // 文の直後で `decref` する。借りたフィールドもそのまま渡す
-    let shown = perceus_text(
+    // 文の直後で`decref`する。evidenceはフィールドにならないので (docs/spec/lir.mdの「verifier」)、借りたフィールドを
+    // 渡す基本操作はない
+    let shown = perceus_text(&format!(
         "\
-layout W { W(obj) }
-fn f(e.0: obj) -> unit {
-  let s.1: tobj = prim ev_take_state(e.0)
+fn f(e.0: cev) -> unit {{
+  let s.1: tobj poly = prim ev_take_state(e.0)
   let u.2: unit = prim ev_set_state(e.0, s.1)
   return u.2
-}
-fn g(w.0: obj) -> tobj {
-  unpack w.0 W #0(e.1: obj)
-  let v.2: tobj = prim ev_evv(e.1)
-  return v.2
-}
-",
-    );
+}}
+{ENTRY}"
+    ));
     assert!(!shown.contains("dup e.0"), "{shown}");
-    assert!(!shown.contains("dup e.1"), "{shown}");
-    assert!(!shown.contains("release"), "{shown}");
-    insta::assert_snapshot!(shown, @"
-    layout W { W(obj) }
-    fn f(e.0: obj) -> unit {
-      let s.1: tobj = prim ev_take_state(e.0)
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    fn f(e.0: cev) -> unit {
+      let s.1: tobj poly = prim ev_take_state(e.0)
       let u.2: unit = prim ev_set_state(e.0, s.1)
       decref e.0
       return u.2
-    }
-    fn g(w.0: obj) -> tobj {
-      unpack w.0 W #0(e.1: obj)
-      let v.2: tobj = prim ev_evv(e.1)
-      decref w.0
-      return v.2
     }
     ");
 }
@@ -1227,35 +1218,35 @@ fn h(p.0: obj) -> obj {
 
 #[test]
 fn a_variable_lent_and_consumed_by_one_statement_is_dupped() {
-    // `ev_renew` は第1引数を借りて第2引数を消費する。同じ変数を両方に渡すと、借用が文の間じゅう続くので、消費に渡す
-    // 参照とは別に1つ要る。`dup` を置き、文の後の `decref` が借用の分を手放す (docs/spec/lir.md の「extern の借用」)
+    // `Std.Bytes.append_slice`は`src`を借りて`dst`を消費する。同じ変数を両方に渡すと、借用が文の間じゅう続くので、
+    // 消費に渡す参照とは別に1つ要る。`dup`を置き、文の後の`decref`が借用の分を手放す
+    // (docs/spec/lir.mdの「extern の借用」)。基本操作は、借りる引数と消費する引数が同じReprを持たない
     let shown = perceus_text(
         "\
-fn f(e.0: obj) -> obj {
-  let r.1: obj = prim ev_renew(e.0, e.0)
+fn f(b.0: obj) -> obj {
+  let r.1: obj = extern \"Std.Bytes.append_slice\"(0, 1, b.0, b.0)
   return r.1
 }
-fn g(e.0: obj) -> obj {
-  let r.1: obj = prim ev_renew(e.0, e.0)
-  let u.2: unit = prim ev_set_state(e.0, r.1)
-  return r.1
+fn g(b.0: obj) -> obj {
+  let r.1: obj = extern \"Std.Bytes.append_slice\"(0, 1, b.0, b.0)
+  let s.2: obj = extern \"Std.Bytes.append_slice\"(0, 1, b.0, r.1)
+  return s.2
 }
 ",
     );
     insta::assert_snapshot!(shown, @"
-    fn f(e.0: obj) -> obj {
-      dup e.0
-      let r.1: obj = prim ev_renew(e.0, e.0)
-      decref e.0
+    fn f(b.0: obj) -> obj {
+      dup b.0
+      let r.1: obj = extern Std.Bytes.append_slice(0, 1, b.0, b.0)
+      decref b.0
       return r.1
     }
-    fn g(e.0: obj) -> obj {
-      dup e.0
-      let r.1: obj = prim ev_renew(e.0, e.0)
-      dup r.1
-      let u.2: unit = prim ev_set_state(e.0, r.1)
-      decref e.0
-      return r.1
+    fn g(b.0: obj) -> obj {
+      dup b.0
+      let r.1: obj = extern Std.Bytes.append_slice(0, 1, b.0, b.0)
+      let s.2: obj = extern Std.Bytes.append_slice(0, 1, b.0, r.1)
+      decref b.0
+      return s.2
     }
     ");
 }

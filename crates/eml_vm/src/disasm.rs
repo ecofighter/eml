@@ -228,10 +228,12 @@ impl<'a> View<'a> {
             Op::Apply { dst, at } => format!("apply s{dst} = {}", self.apply(ops(at))),
             Op::TailApply { at } => format!("tail_apply {}", self.apply(ops(at))),
             Op::Clause { dst, at } => {
-                format!("clause s{dst} = s{}({})", ops(at)[0], args(at, 2))
+                let o = ops(at);
+                format!("clause s{dst} = E{}.op{}({})", o[0], o[1], args(at, 3))
             }
             Op::TailClause { at } => {
-                format!("tail_clause s{}({})", ops(at)[0], args(at, 2))
+                let o = ops(at);
+                format!("tail_clause E{}.op{}({})", o[0], o[1], args(at, 3))
             }
             Op::TailSelf { at } => {
                 format!("tail_self {}({})", ops(at)[0] - origin, args(at, 2))
@@ -331,7 +333,7 @@ impl<'a> View<'a> {
             Op::UnboxFloat { dst, src } => format!("unbox_float s{dst}, s{src}"),
             Op::EvvGet { dst } => format!("evv_get s{dst}"),
             Op::EvvSet { dst, l } => format!("evv_set s{dst}, s{l}"),
-            Op::EvvPush { dst, l, e } => bin("evv_push", dst, l, e),
+            Op::EvvEnter { dst, l, e } => bin("evv_enter", dst, l, e),
             Op::EvvMask { dst, at } => {
                 let o = ops(at);
                 let items: Vec<String> = self.tables.mask_lists
@@ -341,20 +343,34 @@ impl<'a> View<'a> {
                     .collect();
                 format!("evv_mask s{dst}, [{}] s{}", items.join(", "), o[2])
             }
-            Op::EvNew { dst, at } => {
+            Op::Evidence { dst, at } => {
                 let o = ops(at);
+                let mut next = 4;
+                let entries: Vec<String> = (0..o[1])
+                    .map(|_| {
+                        let (f, n) = (o[next], o[next + 1] as usize);
+                        let captures: Vec<String> = o[next + 2..next + 2 + n]
+                            .iter()
+                            .map(|slot| format!("s{slot}"))
+                            .collect();
+                        next += 2 + n;
+                        if n == 0 {
+                            format!("&{}", name(f))
+                        } else {
+                            format!("{}({})", name(f), captures.join(", "))
+                        }
+                    })
+                    .collect();
                 format!(
-                    "ev_new s{dst}, E{} ({} ops), s{}, s{}",
-                    o[0], o[1], o[2], o[3]
+                    "evidence s{dst}, E{}(s{}, s{}) [{}]",
+                    o[0],
+                    o[2],
+                    o[3],
+                    entries.join(", ")
                 )
             }
-            Op::EvSetClause { dst, at } => {
-                let o = ops(at);
-                format!("ev_set_clause s{dst}, s{}, op{}, s{}", o[0], o[1], o[2])
-            }
             Op::EvRenew { dst, ev, state } => bin("ev_renew", dst, ev, state),
-            Op::EvLookup { dst, effect } => format!("ev_lookup s{dst}, E{effect}"),
-            Op::EvClause { dst, ev, op } => format!("ev_clause s{dst}, s{ev}, op{op}"),
+            Op::EvRetire { dst, ev } => format!("ev_retire s{dst}, s{ev}"),
             Op::EvEvv { dst, ev } => format!("ev_evv s{dst}, s{ev}"),
             Op::EvTakeEvv { dst, ev } => format!("ev_take_evv s{dst}, s{ev}"),
             Op::EvTakeState { dst, ev } => format!("ev_take_state s{dst}, s{ev}"),

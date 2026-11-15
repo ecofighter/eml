@@ -86,7 +86,7 @@ fn apply_other<R: Exec>(
         take_captures::<R>(ctx, closure, &entry.params[..k], &mut task.scratch[..k])?;
     }
     if n < missing {
-        let closure = make_closure::<R>(code, ctx, f as u32, lin, &task.scratch)?;
+        let closure = make_closure::<R>(code, ctx, f as u32, lin, task.scratch.iter().copied())?;
         task.scratch.clear();
         deliver::<R>(code, task, target, closure);
         return Ok(());
@@ -281,7 +281,7 @@ pub(crate) fn make_closure<R: Exec>(
     ctx: &mut Ctx<R::M>,
     f: u32,
     lin: bool,
-    args: &[Word],
+    args: impl ExactSizeIterator<Item = Word>,
 ) -> Result<Word, RunFault> {
     let k = args.len();
     let params = code.functions[f as usize]
@@ -295,11 +295,11 @@ pub(crate) fn make_closure<R: Exec>(
     let first = data_first(scanned, false);
     // 作る物体だけに書き、`Ctx` の持つ語には触れない
     let heap = unsafe { ctx.heap_mut() };
-    let w = heap.alloc_data(0, scanned, args.len() - refs, lin);
+    let w = heap.alloc_data(0, scanned, k - refs, lin);
     let (mut next_scanned, mut next_raw) = (first + 1, data_raw_first(scanned, false));
     unsafe {
         heap.set_field(w, first, Word::imm(i64::from(f) | (k as i64) << 32))?;
-        for (&arg, &repr) in args.iter().zip(params) {
+        for (arg, &repr) in args.zip(params) {
             if repr.is_rc() {
                 heap.set_field(w, next_scanned, arg)?;
                 next_scanned += 1;

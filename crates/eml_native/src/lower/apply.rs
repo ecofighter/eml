@@ -7,22 +7,50 @@ use cranelift_codegen::ir::{Block, InstBuilder, Signature, TrapCode, Value, type
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{FuncId, Linkage, Module};
 use eml_lir::{
-    Atom, BlockId, Call, FnIdx, LayoutCtor, LirFn, Mark, Program, Repr, Rhs, Stmt, Term, VarId,
+    Atom, BlockId, Call, FnIdx, LayoutCtor, LirFn, Mark, OpRet, Program, Repr, Rhs, Stmt, Term,
+    VarId,
 };
 use eml_nrt::Kind;
 use eml_nrt::image::ACTION_CONTINUE;
 
+use super::consts::Datum;
+use super::effects::step_entry;
 use super::function::FnLower;
 use super::rc::{self, Step};
-use super::unwind::{After, Point};
+use super::unwind::{self, After, Point};
 use super::{Callees, Imports, kind, names};
-use crate::abi::{clif, tail_signature};
+use crate::abi::{clause_signature, clif, closure_entry_signature, tail_signature};
 use crate::mem;
 
 /// 引数`args`個の一様な関数の値のシグネチャ`tail (ctx, clo, args x I64) -> I64`。関数の値への呼び出しとエントリは、
 /// どれもこのシグネチャを持つ。
 pub(super) fn uniform(args: usize) -> Signature {
     tail_signature(&vec![Kind::I64; 1 + args], &[Kind::I64])
+}
+
+/// `meta`の語が`meta`のクロージャ`callee`のコードを、`(ctx, callee, args..)`とシグネチャ`sig`で間接に呼ぶ。末尾呼び出し
+/// は何も返さず、ほかの呼び出しは結果を返す。関数の値のコードの呼び出しは、どれもここを通る。
+pub(super) fn call_closure_code(
+    b: &mut FunctionBuilder,
+    ctx: Value,
+    callee: Value,
+    meta: Value,
+    sig: Signature,
+    args: &[Value],
+    tail: bool,
+) -> Vec<Value> {
+    let code = mem::closure_code(b, callee, meta);
+    let sig = b.import_signature(sig);
+    let mut values = Vec::with_capacity(args.len() + 2);
+    values.extend([ctx, callee]);
+    values.extend_from_slice(args);
+    if tail {
+        b.ins().return_call_indirect(sig, code, &values);
+        Vec::new()
+    } else {
+        let call = b.ins().call_indirect(sig, code, &values);
+        b.inst_results(call).to_vec()
+    }
 }
 
 /// プログラムの`apply`の引数の数の最大と1の大きい方。`eml$apply$1`は、プログラムに`apply`がなくても定義する
@@ -60,14 +88,13 @@ fn is_uniform(repr: Repr) -> bool {
 }
 
 /// 捕まえた値を`captures`個持つ関数`function`の値が、まだ待つ引数の数で、関数の値のタグである。値として使う関数は、
-/// 捕まえた値より後ろの引数と結果の葉がどれも一様である (docs/spec/lir.md の「関数の ABI」)。そうでなければ、シグネチャの
-/// 食い違いでなく、ここでpanicする。タグは16ビットなので、65535を超える数でもpanicする (docs/spec/native.md の「関数の値」)。
+/// 捕まえた値より後ろの引数と結果の葉がどれも一様である (docs/spec/lir.mdの「関数の ABI」)。そうでなければ、シグネチャの
+/// 食い違いでなく、ここでpanicする。タグは16ビットなので、65535を超える数でもpanicする。節の関数の値のタグは0で、
+/// `apply`で呼ばれることはなく、そのエントリは操作のシグネチャを持つ (docs/spec/native.mdの「関数の値」)。
 pub(super) fn arity(function: &LirFn, captures: usize) -> u16 {
-    assert!(
-        function.clause.is_none(),
-        "`{}` is a clause function used as a value",
-        function.name
-    );
+    if function.clause.is_some() {
+        return 0;
+    }
     let params = function.params();
     assert!(
         captures < params.len()
@@ -130,14 +157,15 @@ impl ClosureEntries {
             return id;
         }
         let function = program.function(closure.function);
-        let args = usize::from(arity(function, closure.captures as usize));
+        // 形の正しくない関数を値として使えば、関数の残りを下ろす前に、ここで宣言のときにpanicする
+        arity(function, closure.captures as usize);
         // 宣言は領域を使わず、名前は関数の名前と捕まえた値の数で決まり、ほかの種類の記号の接頭辞とも重ならないので、
         // 宣言が失敗するのは下ろしの誤りだけである
         let id = module
             .declare_function(
                 &names::closure_entry(closure.captures, &function.name),
                 Linkage::Local,
-                &uniform(args),
+                &closure_entry_signature(function, closure.captures as usize),
             )
             .unwrap_or_else(|error| panic!("a closure entry cannot be declared: {error}"));
         self.ids.insert(closure, id);
@@ -272,12 +300,10 @@ pub(super) fn define_pap_adapter<M: Module>(
     release_box(&mut b, module, imports, ctx, pap, &loaded);
     let callee = loaded[0].0;
     let meta = mem::load_meta(&mut b, callee);
-    let code = mem::closure_code(&mut b, callee, meta);
-    let mut values = vec![ctx];
-    values.extend(loaded.iter().map(|&(value, _)| value));
-    values.extend_from_slice(&params[2..]);
-    let sig = b.import_signature(uniform(rest as usize + 1));
-    b.ins().return_call_indirect(sig, code, &values);
+    let mut args = vec![loaded[1].0];
+    args.extend_from_slice(&params[2..]);
+    let sig = uniform(rest as usize + 1);
+    call_closure_code(&mut b, ctx, callee, meta, sig, &args, true);
     b.seal_all_blocks();
     b.finalize(module.target_config());
 }
@@ -307,9 +333,7 @@ pub(super) fn define_apply<M: Module>(
     b.ins().brif(is_exact, exact, &[], inexact, &[]);
 
     b.switch_to_block(exact);
-    let code = mem::closure_code(&mut b, clo, meta);
-    let sig = b.import_signature(uniform(args));
-    b.ins().return_call_indirect(sig, code, &params);
+    call_closure_code(&mut b, ctx, clo, meta, uniform(args), values, true);
 
     b.switch_to_block(inexact);
     let pap = b.create_block();
@@ -369,19 +393,25 @@ pub(super) fn define_apply<M: Module>(
         // 内の適用の中で中断が始まったら、最後の引数を1回手放し、仮の値を返す。中断しうるのは1つの`apply`の最後の
         // 矢印だけだが、その矢印がどの部分に来るかは実行時に決まる。残りの引数は、内の段がそれぞれ1回ずつ手放す
         // (docs/spec/native.md の「関数の値」)
-        let target = mem::yield_target(&mut b, ctx);
-        let unit = b.ins().iconst(types::I64, mem::UNIT);
-        let aborting = b.ins().icmp(IntCC::NotEqual, target, unit);
-        let cleanup = b.create_block();
-        b.set_cold_block(cleanup);
-        let hot = b.create_block();
-        b.ins().brif(aborting, cleanup, &[], hot, &[]);
+        let (cleanup, hot) = unwind::if_aborting(&mut b, ctx, &[]);
         b.switch_to_block(cleanup);
         let decref = module.declare_func_in_func(imports.entry("eml_rt_decref"), b.func);
         b.ins().call(decref, &[ctx, last]);
         let placeholder = b.ins().iconst(types::I64, mem::UNIT);
         b.ins().return_(&[placeholder]);
         b.switch_to_block(hot);
+        // 1つの`apply`のうちyieldしうるのは最後の矢印だけなので、最後でない部分からyieldが戻ることはない。ここで
+        // `target`がUnitでなければそういうyieldなので、そのダミーを関数の値として渡す代わりにtrapする
+        // (docs/spec/native.mdの「関数の値」)
+        let target = mem::yield_target(&mut b, ctx);
+        let yielding = b.ins().icmp_imm_u(IntCC::NotEqual, target, mem::UNIT);
+        let misplaced = b.create_block();
+        b.set_cold_block(misplaced);
+        let apply = b.create_block();
+        b.ins().brif(yielding, misplaced, &[], apply, &[]);
+        b.switch_to_block(misplaced);
+        b.ins().trap(TrapCode::unwrap_user(1));
+        b.switch_to_block(apply);
         let next = module.declare_func_in_func(imports.apply(1), b.func);
         b.ins().return_call(next, &[ctx, result, last]);
     }
@@ -399,9 +429,16 @@ struct Dispatch {
 }
 
 impl<M: Module> FnLower<'_, '_, M> {
-    /// `let var = closure function(args)`。`eml_rt_alloc_data`で物体を作り、コードの語と捕まえた値を欄に書く。タグは
-    /// まだ待つ引数の数で、`args`の所有は物体へ移る (docs/spec/native.md の「関数の値」)。
+    /// `let var = closure function(args)`。
     pub(super) fn make_closure(&mut self, var: VarId, function: FnIdx, args: &[Atom]) {
+        let lin = self.function.mark(var) == Mark::Lin;
+        let w = self.closure_value(function, args, lin);
+        self.bind(var, w);
+    }
+
+    /// `closure function(args)`の値。`eml_rt_alloc_data`で物体を作り、コードの語と捕まえた値を欄に書く。タグは
+    /// まだ待つ引数の数で、`args`の所有は物体へ移る (docs/spec/native.mdの「関数の値」)。
+    pub(super) fn closure_value(&mut self, function: FnIdx, args: &[Atom], lin: bool) -> Value {
         let program = self.callees.program;
         let target = program.function(function);
         let fields = closure_fields(target, args.len());
@@ -420,7 +457,6 @@ impl<M: Module> FnLower<'_, '_, M> {
                 .zip(&fields.fields[1..])
                 .map(|(&arg, &repr)| self.atom(arg, repr)),
         );
-        let lin = self.function.mark(var) == Mark::Lin;
         let head = [
             i64::from(arity(target, args.len())),
             i64::from(shape.scanned),
@@ -428,12 +464,12 @@ impl<M: Module> FnLower<'_, '_, M> {
             i64::from(lin),
         ]
         .map(|n| self.b.ins().iconst(types::I64, n));
-        let w = self.alloc_con(&head, &shape, &values);
-        self.bind(var, w);
+        self.alloc_con(&head, &shape, &values)
     }
 
     /// 末尾でない`var = apply callee(args)`。呼ぶ値が引数の数だけを待てば、そのエントリを直接呼び、そうでなければ
-    /// `eml$apply$<m>`を呼ぶ。その後に中断を確かめる。
+    /// `eml$apply$<m>`を呼ぶ。その後に中断を確かめる。着地の印を持つ地点では、その確かめが、印を宛先とする中断を
+    /// ここに着地させる。
     pub(super) fn apply(
         &mut self,
         block: BlockId,
@@ -447,11 +483,15 @@ impl<M: Module> FnLower<'_, '_, M> {
         let result = self.b.append_block_param(join, types::I64);
 
         self.b.switch_to_block(dispatch.exact);
-        let clo = dispatch.values[1];
-        let code = mem::closure_code(&mut self.b, clo, dispatch.meta);
-        let sig = self.b.import_signature(uniform(args.len()));
-        let call = self.b.ins().call_indirect(sig, code, &dispatch.values);
-        let r = self.b.inst_results(call)[0];
+        let r = call_closure_code(
+            &mut self.b,
+            self.ctx,
+            dispatch.values[1],
+            dispatch.meta,
+            uniform(args.len()),
+            &dispatch.values[2..],
+            false,
+        )[0];
         self.b.ins().jump(join, &[r.into()]);
 
         self.b.switch_to_block(dispatch.slow);
@@ -463,7 +503,11 @@ impl<M: Module> FnLower<'_, '_, M> {
         self.b.switch_to_block(join);
         self.bind(var, result);
         let point = self.point(block, position);
-        self.after_unwind_point(&Point::from(point), After::Call);
+        let after = match point.landing {
+            Some(_) => After::Land { result: var },
+            None => After::Call,
+        };
+        self.after_unwind_point(&Point::from(point), after);
     }
 
     /// 末尾の`apply callee(args)`。`apply`と同じに分け、どちらの道も末尾で呼ぶ。
@@ -471,16 +515,111 @@ impl<M: Module> FnLower<'_, '_, M> {
         let dispatch = self.dispatch(callee, args);
 
         self.b.switch_to_block(dispatch.exact);
-        let clo = dispatch.values[1];
-        let code = mem::closure_code(&mut self.b, clo, dispatch.meta);
-        let sig = self.b.import_signature(uniform(args.len()));
-        self.b
-            .ins()
-            .return_call_indirect(sig, code, &dispatch.values);
+        call_closure_code(
+            &mut self.b,
+            self.ctx,
+            dispatch.values[1],
+            dispatch.meta,
+            uniform(args.len()),
+            &dispatch.values[2..],
+            true,
+        );
 
         self.b.switch_to_block(dispatch.slow);
         let helper = self.func_ref(self.imports.apply(args.len()));
         self.b.ins().return_call(helper, &dispatch.values);
+    }
+
+    /// 節の呼び出し`call`。`bound`は、`block`の`position`番目の文で束縛する変数で、`None`なら末尾の位置である。
+    /// `ev_lookup`と`ev_clause`のエントリでevidenceと節のクロージャを読み、クロージャのコードを操作のシグネチャで呼ぶ。
+    /// 戻る操作の呼び出しの後には`Call`の確かめが続き、末尾の位置では末尾呼び出しで、その結果は呼ぶ側の結果と等しく
+    /// なければならない。`never`の操作の節は束縛のReprの値を返さないので、どちらの位置でも末尾でなく呼び、その後に
+    /// `abort`のバイトを確かめる。冷たい側は地点の後始末で、熱い側はtrapする。節が中断を始めずに戻ったからである。
+    /// ブロックの残りは前のブロックのないブロックで続け、変数を仮の値に束縛する (docs/spec/native.mdの「関数の値」)。
+    pub(super) fn clause(&mut self, call: &Call, bound: Option<(BlockId, usize, &[VarId])>) {
+        let Call::Clause { effect, op, args } = call else {
+            unreachable!("`{call:?}` is not a clause call")
+        };
+        let program = self.callees.program;
+        let operation = &program.effects[*effect as usize].operations[*op as usize];
+        let sig = clause_signature(program, *effect, *op);
+        // `ev_lookup`は`dup`したevidenceを返し、その参照は節の先頭の引数になる。`ev_clause`はevidenceを借り、エントリを
+        // `dup`して返す
+        let number = self.datum_word(Datum::Effect(*effect), types::I64);
+        let ev = self
+            .step(eml_lir::Step::EvLookup, &[number])
+            .expect("`ev_lookup` returns the evidence");
+        let index = self.b.ins().iconst(types::I64, i64::from(*op));
+        let clo = self
+            .step(eml_lir::Step::EvClause, &[ev, index])
+            .expect("`ev_clause` returns the entry");
+        let mut values = vec![ev];
+        values.extend(self.atoms(args, operation.params.iter().copied()));
+        let meta = mem::load_meta(&mut self.b, clo);
+        if operation.ret == OpRet::Never {
+            call_closure_code(&mut self.b, self.ctx, clo, meta, sig, &values, false);
+            let (cleanup, hot) = unwind::if_aborting(&mut self.b, self.ctx, &[]);
+            match bound {
+                Some((block, position, _)) => {
+                    let point = self.point(block, position);
+                    self.fill_cleanup(cleanup, &Point::from(point));
+                }
+                // 末尾の位置ではフレームは何も持たない
+                None => self.fill_cleanup(
+                    cleanup,
+                    &Point {
+                        owned: &[],
+                        tokens: &[],
+                        landing: None,
+                    },
+                ),
+            }
+            self.b.switch_to_block(hot);
+            self.b.ins().trap(TrapCode::unwrap_user(1));
+            if let Some((_, _, vars)) = bound {
+                let dead = self.b.create_block();
+                self.b.switch_to_block(dead);
+                for &var in vars {
+                    let value = unwind::placeholder(&mut self.b, self.function.repr(var));
+                    self.bind(var, value);
+                }
+            }
+            return;
+        }
+        match bound {
+            Some((block, position, vars)) => {
+                let results =
+                    call_closure_code(&mut self.b, self.ctx, clo, meta, sig, &values, false);
+                assert_eq!(
+                    results.len(),
+                    vars.len(),
+                    "`{}` binds as many values as the clause returns",
+                    self.function.name
+                );
+                for (&var, value) in vars.iter().zip(results) {
+                    self.bind(var, value);
+                }
+                let point = self.point(block, position);
+                self.after_unwind_point(&Point::from(point), After::Call);
+            }
+            None => {
+                // Craneliftのverifierも結果の違う末尾呼び出しを断るが、そのフラグには頼らず、どのビルドでも確かめる
+                assert_eq!(
+                    sig.returns, self.b.func.signature.returns,
+                    "a tail clause call of `{}.{}` returns other values than `{}`",
+                    program.effects[*effect as usize].name, operation.name, self.function.name
+                );
+                call_closure_code(&mut self.b, self.ctx, clo, meta, sig, &values, true);
+            }
+        }
+    }
+
+    /// 命令が走らせる`Ctx`の操作`step`のエントリの呼び出し。語を返すのは、`Step::returns`が真のstepだけである。
+    pub(super) fn step(&mut self, step: eml_lir::Step, operands: &[Value]) -> Option<Value> {
+        debug_assert_eq!(operands.len(), step.operands());
+        let result = self.call_entry(&step_entry(step), operands);
+        debug_assert_eq!(result.is_some(), step.returns());
+        result
     }
 
     /// 呼ぶ値のタグを読み、引数の数と比べて分ける。

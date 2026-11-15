@@ -209,14 +209,15 @@ fn f() -> int {
 
 #[test]
 fn prim_operands_are_converted_like_call_arguments() {
-    // `ev_new` は状態を `tobj` で受けるので、`int` の状態は `box` して渡す
-    let text = "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(n.0: int) -> obj {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[State](n.0, w.1)\n  return e.2\n}\n";
+    // `evidence`は状態を`tobj`で受けるので、`int`の状態は`box`して渡す
+    let text = "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(n.0: int) -> unit {\n  let w.1: evv = prim evv_get()\n  let e.2: ev lin = evidence State(n.0, w.1) [&g, &p]\n  let u.5: unit = drop e.2\n  return ()\n}\ninternal clause State.get fn g(e.0: cev, u.1: unit) -> tobj {\n  return ()\n}\ninternal clause State.put fn p(e.0: cev, x.1: tobj) -> unit {\n  return ()\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
-    fn f(n.0: int) -> obj {
-      let w.1: tobj = prim evv_get()
-      let n.3: tobj = box n.0
-      let e.2: obj = prim ev_new[State](n.3, w.1)
-      return e.2
+    fn f(n.0: int) -> unit {
+      let w.1: evv = prim evv_get()
+      let n.6: tobj = box n.0
+      let e.2: ev lin = evidence State(n.6, w.1) [&g, &p]
+      let u.5: unit = drop e.2
+      return ()
     }
     ");
 }
@@ -238,13 +239,12 @@ fn a_prim_result_is_rebound_to_its_row_repr() {
 fn a_clause_call_uses_the_reprs_of_its_operation() {
     // `put` の `int` の引数へ `tobj` の n.2 を `unbox` して渡す。`get` の結果は末尾の位置でも操作の `int` で受け直し、
     // `box` して返す
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nyields fn f(c.0: tobj, e.1: obj, n.2: tobj) -> tobj {\n  let u.3: unit = clause Counter.put c.0(e.1, n.2)\n  let c.4: tobj = prim ev_clause[Counter.get](e.1)\n  let m.5: tobj = clause Counter.get c.4(e.1, ())\n  return m.5\n}\n";
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn f(n.2: tobj) -> tobj {\n  let u.3: unit = clause Counter.put(n.2)\n  let m.5: tobj = clause Counter.get(())\n  return m.5\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
-    yields fn f(c.0: tobj, e.1: obj, n.2: tobj) -> tobj {
+    fn f(n.2: tobj) -> tobj {
       let n.6: int = unbox n.2
-      let u.3: unit = clause Counter.put c.0(e.1, n.6)
-      let c.4: tobj = prim ev_clause[Counter.get](e.1)
-      let m.7: int = clause Counter.get c.4(e.1, ())
+      let u.3: unit = clause Counter.put(n.6)
+      let m.7: int = clause Counter.get(())
       let m.5: tobj = box m.7
       return m.5
     }
@@ -254,20 +254,19 @@ fn a_clause_call_uses_the_reprs_of_its_operation() {
 #[test]
 fn a_clause_function_takes_the_reprs_of_its_operation() {
     // 引数 n は `put` の `int` になり、エントリで元の `tobj` の変数を `box` で定義する。`ret` は `unit` になる
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\ninternal yields clause Counter.put fn g(e.0: obj, n.1: tobj) -> tobj {\n  return ()\n}\nfn main() -> unit {\n  let w.0: tobj = prim evv_get()\n  let e.1: obj = prim ev_new[Counter](0, w.0)\n  let u.2: unit = prim ev_set_clause[Counter.put](e.1, &g)\n  return ()\n}\n";
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn main() -> unit {\n  let w.0: evv = prim evv_get()\n  let e.1: ev lin = evidence Counter(0, w.0) [&h, &g]\n  return ()\n}\ninternal yields clause Counter.put fn g(e.0: cev, n.1: tobj) -> tobj {\n  return ()\n}\ninternal clause Counter.get fn h(e.0: cev, u.1: unit) -> int {\n  return 0\n}\n";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "g"), @"
-    internal yields clause Counter.put fn g(e.0: obj, n.2: int) -> unit {
+    internal yields clause Counter.put fn g(e.0: cev, n.2: int) -> unit {
       let n.1: tobj = box n.2
       return ()
     }
     ");
     insta::assert_snapshot!(function(&shown, "main"), @"
     fn main() -> unit {
-      let w.0: tobj = prim evv_get()
-      let b.3: tobj = box 0
-      let e.1: obj = prim ev_new[Counter](b.3, w.0)
-      let u.2: unit = prim ev_set_clause[Counter.put](e.1, &g)
+      let w.0: evv = prim evv_get()
+      let b.2: tobj = box 0
+      let e.1: ev lin = evidence Counter(b.2, w.0) [&h, &g]
       return ()
     }
     ");
@@ -277,21 +276,19 @@ fn a_clause_function_takes_the_reprs_of_its_operation() {
 fn a_clause_function_keeps_its_captures_uniform() {
     // `int` の捕獲は `tobj` で受けてエントリで `unbox` し、`closure` は捕獲を `box` して渡す。evidence と `get` の引数と
     // `ret` はすでに操作の表と合っている
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\ninternal yields clause Counter.get fn g(k.0: int, e.1: obj, u.2: unit) -> int {\n  return k.0\n}\nfn main(k.0: int) -> unit {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(k.0)\n  let u.4: unit = prim ev_set_clause[Counter.get](e.2, g.3)\n  return ()\n}\n";
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn main(k.0: int) -> unit {\n  let w.1: evv = prim evv_get()\n  let e.2: ev lin = evidence Counter((), w.1) [closure g(k.0), &p]\n  return ()\n}\ninternal yields clause Counter.get fn g(k.0: int, e.1: cev, u.2: unit) -> int {\n  return k.0\n}\ninternal clause Counter.put fn p(e.0: cev, n.1: int) -> unit {\n  return ()\n}\n";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "g"), @"
-    internal yields clause Counter.get fn g(k.3: tobj, e.1: obj, u.2: unit) -> int {
+    internal yields clause Counter.get fn g(k.3: tobj, e.1: cev, u.2: unit) -> int {
       let k.0: int = unbox k.3
       return k.0
     }
     ");
     insta::assert_snapshot!(function(&shown, "main"), @"
     fn main(k.0: int) -> unit {
-      let w.1: tobj = prim evv_get()
-      let e.2: obj = prim ev_new[Counter]((), w.1)
-      let k.5: tobj = box k.0
-      let g.3: tobj = closure g(k.5)
-      let u.4: unit = prim ev_set_clause[Counter.get](e.2, g.3)
+      let w.1: evv = prim evv_get()
+      let k.3: tobj = box k.0
+      let e.2: ev lin = evidence Counter((), w.1) [closure g(k.3), &p]
       return ()
     }
     ");
@@ -300,10 +297,10 @@ fn a_clause_function_keeps_its_captures_uniform() {
 #[test]
 fn a_never_clause_call_is_not_rebound() {
     // `never` の操作の節の呼び出しは戻らないので、`int` の束縛を受け直さず、`return` にも変換を入れない
-    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
+    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(s.2: obj) -> int {\n  let r.3: int = clause Fail.fail(s.2)\n  return r.3\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
-    yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
-      let r.3: int = clause Fail.fail c.0(e.1, s.2)
+    yields fn f(s.2: obj) -> int {
+      let r.3: int = clause Fail.fail(s.2)
       return r.3
     }
     ");
@@ -313,18 +310,18 @@ fn a_never_clause_call_is_not_rebound() {
 fn the_uses_of_a_never_clause_binder_are_not_converted() {
     // `int` の束縛を `tobj` の位置 (一様な `apply` の引数と `tobj` の `ret` の `return`) へ渡しても `box` しない。使いには制御が
     // 届かないからである
-    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {\n  let r.4: int = clause Fail.fail c.0(e.1, s.2)\n  let t.5: tobj = apply k.3(r.4)\n  return t.5\n}\nyields fn g(c.0: tobj, e.1: obj, s.2: obj) -> tobj {\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
+    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(s.2: obj, k.3: tobj) -> tobj {\n  let r.4: int = clause Fail.fail(s.2)\n  let t.5: tobj = apply k.3(r.4)\n  return t.5\n}\nyields fn g(s.2: obj) -> tobj {\n  let r.3: int = clause Fail.fail(s.2)\n  return r.3\n}\n";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "f"), @"
-    yields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {
-      let r.4: int = clause Fail.fail c.0(e.1, s.2)
+    yields fn f(s.2: obj, k.3: tobj) -> tobj {
+      let r.4: int = clause Fail.fail(s.2)
       let t.5: tobj = apply k.3(r.4)
       return t.5
     }
     ");
     insta::assert_snapshot!(function(&shown, "g"), @"
-    yields fn g(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
-      let r.3: int = clause Fail.fail c.0(e.1, s.2)
+    yields fn g(s.2: obj) -> tobj {
+      let r.3: int = clause Fail.fail(s.2)
       return r.3
     }
     ");
@@ -346,9 +343,9 @@ fn the_result_of_exit_is_not_converted() {
 #[test]
 fn a_clause_function_unboxes_its_return_to_a_scalar_operation_result() {
     // `Counter.get` の結果は `int` なので、節の関数の `ret` を `int` にし、`tobj` の値を返す `return` の前で `unbox` する
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\ninternal yields clause Counter.get fn g(e.0: obj, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\nfn main() -> unit {\n  let w.0: tobj = prim evv_get()\n  let e.1: obj = prim ev_new[Counter]((), w.0)\n  let u.2: unit = prim ev_set_clause[Counter.get](e.1, &g)\n  return ()\n}\n";
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nfn main() -> unit {\n  let w.0: evv = prim evv_get()\n  let e.1: ev lin = evidence Counter((), w.0) [&g, &p]\n  return ()\n}\ninternal yields clause Counter.get fn g(e.0: cev, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\ninternal clause Counter.put fn p(e.0: cev, n.1: int) -> unit {\n  return ()\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "g"), @"
-    internal yields clause Counter.get fn g(e.0: obj, u.1: unit) -> int {
+    internal yields clause Counter.get fn g(e.0: cev, u.1: unit) -> int {
       let s.2: tobj = prim ev_take_state(e.0)
       let s.3: int = unbox s.2
       return s.3
@@ -359,9 +356,9 @@ fn a_clause_function_unboxes_its_return_to_a_scalar_operation_result() {
 #[test]
 fn a_never_clause_function_returns_obj() {
     // `never` の操作の節のエントリはダミーの物体を返すので、`ret` は `obj` になる
-    let text = "effect Fail { never fail(tobj) -> never }\ninternal yields clause Fail.fail fn g(e.0: obj, s.1: tobj) -> tobj {\n  let d.2: obj = prim dummy()\n  return d.2\n}\nfn main() -> unit {\n  let w.0: tobj = prim evv_get()\n  let e.1: obj = prim ev_new[Fail]((), w.0)\n  let u.2: unit = prim ev_set_clause[Fail.fail](e.1, &g)\n  return ()\n}\n";
+    let text = "effect Fail { never fail(tobj) -> never }\nfn main() -> unit {\n  let w.0: evv = prim evv_get()\n  let e.1: ev lin = evidence Fail((), w.0) [&g]\n  return ()\n}\ninternal yields clause Fail.fail fn g(e.0: cev, s.1: tobj) -> tobj {\n  let d.2: obj = prim dummy()\n  return d.2\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "g"), @"
-    internal yields clause Fail.fail fn g(e.0: obj, s.1: tobj) -> obj {
+    internal yields clause Fail.fail fn g(e.0: cev, s.1: tobj) -> obj {
       let d.2: obj = prim dummy()
       return d.2
     }
@@ -634,14 +631,13 @@ internal uniform from 1 fn g(c.0: P{int, float}, k.1: tobj, s.2: P{int, float}) 
   let q.8: P{int, float} = con P #0(n.7, y.6)
   return q.8
 }
-internal yields clause Put.put fn h(e.0: obj, p.1: P{int, float}) -> unit {
+internal yields clause Put.put fn h(e.0: cev, p.1: P{int, float}) -> unit {
   unpack p.1 P #0(x.2: int, y.3: float)
   return ()
 }
 fn main() -> unit {
-  let w.0: tobj = prim evv_get()
-  let e.1: obj = prim ev_new[Put]((), w.0)
-  let u.2: unit = prim ev_set_clause[Put.put](e.1, &h)
+  let w.0: evv = prim evv_get()
+  let e.1: ev lin = evidence Put((), w.0) [&h]
   return ()
 }
 ";
@@ -658,7 +654,7 @@ fn main() -> unit {
     }
     "#);
     insta::assert_snapshot!(function(&shown, "h"), @"
-    internal yields clause Put.put fn h(e.0: obj, p.4: obj) -> unit {
+    internal yields clause Put.put fn h(e.0: cev, p.4: obj) -> unit {
       let p.1: P{int, float} = unbox p.4
       unpack p.1 P #0(x.2: int, y.3: float)
       return ()

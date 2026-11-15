@@ -66,50 +66,138 @@ pub fn clif_linked(text: &str, function: &str, linked: &Linked) -> String {
     text.replace(&format!(" {}", isa.default_call_conv()), " c")
 }
 
-/// 代役のthunkが`Start.entry`として受け取る記録。`thunk`と`code`は、`entry_of`で取った試す関数のものである。
+/// 代役が受け取る記録。`thunk`と`code`は、`entry_of`で取った試す関数のものである。
 pub struct Visit<R> {
     pub thunk: Thunk,
     pub code: *const u8,
     pub record: R,
 }
 
-/// `text`のプログラムを読み込み、関数`name`の`entry_of`を記録に入れて、代役のthunk`stand_in`をrunの入口として走らせる。
-/// 代役はrunのworkerの上でrunの`Ctx`を使って動くので、runのヒープに物体を作って関数に渡せる。代役は見たものを記録に書き、
-/// テストはrunが戻った後に自分のスレッドで確かめる。代役の中のpanicは`extern "C"`から巻き戻れず、テストのプロセスを
-/// 止めるためである。runはcensusで終わる。
-pub fn visit<R: Send>(
-    text: &str,
-    name: &str,
-    stand_in: Thunk,
-    record: R,
-) -> (Result<Finished, RuntimeError>, R) {
-    let config = RunConfig::default();
-    let program = program(text);
-    let mut machine = NativeMachine::new(&config, host());
-    machine
-        .load(&program, &eml_test_support::link(&program))
-        .unwrap_or_else(|error| panic!("{error:?}"));
-    let (thunk, code) = machine
-        .entry_of(name)
-        .unwrap_or_else(|error| panic!("{error}"));
-    let mut visit = Visit {
-        thunk,
-        code,
-        record,
-    };
+/// `visit_each`の代役が受け取る記録。`entries`は、`entry_of`で取った試す関数のものを名前の順に持つ。
+pub struct Visits<R> {
+    pub entries: Vec<(Thunk, *const u8)>,
+    pub record: R,
+}
+
+/// 代役。runの入口のthunkの中で、runの`Ctx`と記録`V`を受け取って動く。
+///
+/// # Safety
+/// 呼ぶのは`visit`か`visit_each`の入口のthunkだけである。代役は`run`が入口のthunkに課す規則を守り、内側のthunkに
+/// `entry_of`の約束を守る引数を渡す。
+pub type StandIn<V> = unsafe fn(*mut Ctx<Fast>, &mut V);
+
+/// runの入口のthunkが`Start.entry`として受け取るもの。
+struct Stand<V> {
+    visit: V,
+    body: StandIn<V>,
+}
+
+/// どの代役にも共通の入口のthunk。`Start.entry`を`Stand<V>`に戻すのはここだけで、`V`は`run_stand_in`が置いたものと
+/// 型引数で同じになる。
+unsafe extern "C" fn trampoline<V>(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
+    // SAFETY: `run_stand_in`が`entry`に`Stand<V>`を置き、runの間それを使うのはこのthunkだけである
+    let stand = unsafe { &mut *entry.cast_mut().cast::<Stand<V>>() };
+    // SAFETY: 代役の約束は、それを`visit`か`visit_each`に渡した呼び手が守る
+    unsafe { (stand.body)(ctx, &mut stand.visit) }
+}
+
+/// 読み込んだ`machine`のrunで、`stand`の代役を入口として走らせる。runはcensusで終わる。
+fn run_stand_in<V>(
+    machine: &NativeMachine,
+    config: &RunConfig,
+    stand: &mut Stand<V>,
+) -> Result<Finished, RuntimeError> {
     let mut argv = [0u64; 1];
     let start = Start {
-        thunk: stand_in,
-        entry: (&raw mut visit).cast(),
+        thunk: trampoline::<V>,
+        entry: (&raw mut *stand).cast(),
         argv: argv.as_mut_ptr(),
         result_rc: false,
     };
     let image = machine.image().expect("a program is loaded");
-    // SAFETY: 代役は`run`が入口のthunkに課す規則を守り、内側のthunkに`entry_of`の約束を守る引数を渡す。`visit`は
-    // runの間生きていて、代役だけがそれを使う
-    let finished = unsafe { eml_nrt::run::run(image, &start, &config, host(), native_options()) };
+    // SAFETY: `trampoline`は代役を呼ぶだけで、代役は`StandIn`の約束を守る。`stand`はrunの間生きていて、`trampoline`
+    // だけがそれを使う
+    unsafe { eml_nrt::run::run(image, &start, config, host(), native_options()) }
+}
+
+/// `text`のプログラムを読み込んだマシン。
+fn loaded(text: &str, config: &RunConfig) -> NativeMachine {
+    let program = program(text);
+    let mut machine = NativeMachine::new(config, host());
+    machine
+        .load(&program, &eml_test_support::link(&program))
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    machine
+}
+
+/// `text`のプログラムを読み込み、関数`name`の`entry_of`を記録に入れて、代役`stand_in`をrunの入口として走らせる。
+/// 代役はrunのworkerの上でrunの`Ctx`を使って動くので、runのヒープに物体を作って関数に渡せる。代役は見たものを記録に書き、
+/// テストはrunが戻った後に自分のスレッドで確かめる。代役の中のpanicは`extern "C"`の入口から巻き戻れず、テストの
+/// プロセスを止めるためである。runはcensusで終わる。記録の型は代役の型で決まるので、入口が記録を別の型として読むことはない。
+pub fn visit<R: Send>(
+    text: &str,
+    name: &str,
+    stand_in: StandIn<Visit<R>>,
+    record: R,
+) -> (Result<Finished, RuntimeError>, R) {
+    let config = RunConfig::default();
+    let mut machine = loaded(text, &config);
+    let (thunk, code) = machine
+        .entry_of(name)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut stand = Stand {
+        visit: Visit {
+            thunk,
+            code,
+            record,
+        },
+        body: stand_in,
+    };
+    let finished = run_stand_in(&machine, &config, &mut stand);
     machine.close();
-    (finished, visit.record)
+    (finished, stand.visit.record)
+}
+
+/// `visit`と同じだが、記録の`entries`に`names`の関数の`entry_of`を順に入れる。代役は`call_visited_at`で、それらを
+/// 好きな順に呼べる。
+pub fn visit_each<R: Send>(
+    text: &str,
+    names: &[&str],
+    stand_in: StandIn<Visits<R>>,
+    record: R,
+) -> (Result<Finished, RuntimeError>, R) {
+    let config = RunConfig::default();
+    let mut machine = loaded(text, &config);
+    let entries = names
+        .iter()
+        .map(|name| {
+            machine
+                .entry_of(name)
+                .unwrap_or_else(|error| panic!("{error}"))
+        })
+        .collect();
+    let mut stand = Stand {
+        visit: Visits { entries, record },
+        body: stand_in,
+    };
+    let finished = run_stand_in(&machine, &config, &mut stand);
+    machine.close();
+    (finished, stand.visit.record)
+}
+
+/// 代役から`visit_each`の`index`番目の関数を呼ぶ。
+///
+/// # Safety
+/// `call_visited`と同じ。
+pub unsafe fn call_visited_at<R>(
+    ctx: *mut Ctx<Fast>,
+    visit: &Visits<R>,
+    index: usize,
+    argv: &mut [u64],
+) {
+    let (thunk, code) = visit.entries[index];
+    // SAFETY: 呼ぶ側の約束
+    unsafe { thunk(ctx, code, argv.as_mut_ptr()) }
 }
 
 /// 代役から試す関数を呼ぶ。`argv`はその引数と結果のslotである。
@@ -203,9 +291,7 @@ pub struct Lin {
 }
 
 /// 代役。試す関数を`int`の5で呼んで物体を1つ作り、その`lin`ビットを記録して手放す。
-pub unsafe extern "C" fn lin_bit(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
-    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
-    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Lin>>() };
+pub unsafe fn lin_bit(ctx: *mut Ctx<Fast>, visit: &mut Visit<Lin>) {
     // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない
     let seen = unsafe {
         let mut argv = [5u64];

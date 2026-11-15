@@ -324,20 +324,41 @@ spec fn table_ok<M: Mode>(h: Heap<M>, t: Word) -> bool {
     &&& forall|i: int| 0 <= i < h.count_of(t) ==> dupable(h, #[trigger] h.scanned_word(t, i))
 }
 
+/// evidenceの物体で、エントリの表を持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const EV_TABLE: usize = 0;
+
+/// evidenceの物体で、状態を持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const EV_STATE: usize = 1;
+
+/// evidenceの物体で、外側の`evv`を持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const EV_OUTER: usize = 2;
+
+/// evidenceの物体の走査する語の数。割り当てと形の確かめが同じ数を使うように、1か所で決める (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const EV_WORDS: usize = 3;
+
+/// `evv`の節点で、evidenceを持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const NODE_EV: usize = 0;
+
+/// `evv`の節点で、次の節点 (`evv`の残り) を持つ欄の番号 (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const NODE_NEXT: usize = 1;
+
+/// `evv`の節点の走査する語の数。割り当てと形の確かめが同じ数を使うように、1か所で決める (docs/spec/object-model.mdの「evidence の3つの物体」)。
+pub(crate) const NODE_WORDS: usize = 2;
+
 /// evidence の浅い形 (docs/spec/object-model.md の「evidence の3つの物体」)。[エントリの表, 状態, 外側の evv] を持つ。
 /// 外側の evv がリストとして正しいことは入れない。入れると節点の述語と互いに再帰し、検査モードで確かめる費用が
 /// handler の入れ子の深さについて指数になるためである。
 spec fn ev_ok<M: Mode>(h: Heap<M>, e: Word) -> bool {
-    &&& data_obj(h, e, 3)
+    &&& data_obj(h, e, EV_WORDS as u8)
     &&& h.tag_of(e) != 0
-    &&& table_ok(h, h.scanned_word(e, 0))
-    &&& droppable(h, h.scanned_word(e, 1))
-    &&& dupable(h, h.scanned_word(e, 2))
+    &&& table_ok(h, h.scanned_word(e, EV_TABLE as int))
+    &&& droppable(h, h.scanned_word(e, EV_STATE as int))
+    &&& dupable(h, h.scanned_word(e, EV_OUTER as int))
 }
 
 /// `evv` の節点の形。[evidence, 次の節点] を持つ。
 spec fn node_ok<M: Mode>(h: Heap<M>, n: Word) -> bool {
-    data_obj(h, n, 2) && h.tag_of(n) != 0
+    data_obj(h, n, NODE_WORDS as u8) && h.tag_of(n) != 0
 }
 
 /// `w` から節点をたどり、`fuel` 歩以内に `()` に着くなら、(tag, evidence) の組の列。輪になったリストや形の違う
@@ -350,9 +371,9 @@ spec fn path<M: Mode>(h: Heap<M>, w: Word, fuel: nat) -> Option<Seq<(u16, Word)>
     } else if fuel == 0 {
         None
     } else {
-        let e = h.scanned_word(w, 0);
+        let e = h.scanned_word(w, NODE_EV as int);
         if node_ok(h, w) && ev_ok(h, e) && h.tag_of(e) == h.tag_of(w) {
-            match path(h, h.scanned_word(w, 1), (fuel - 1) as nat) {
+            match path(h, h.scanned_word(w, NODE_NEXT as int), (fuel - 1) as nat) {
                 Some(s) => Some(seq![(h.tag_of(w), e)] + s),
                 None => None,
             }
@@ -394,6 +415,282 @@ fn tag_of_effect(effect: u16) -> (t: u16)
         0
     } else {
         effect + 1
+    }
+}
+
+// evidenceと節点の欄の役割と`table_ok`はこのモジュールでだけ名前を持つので、forkの表と末尾はここで作る
+// (docs/spec/object-model.mdの「evidence の3つの物体」)
+impl<M: Mode> Heap<M> {
+    /// forkの表。不死のエントリの表で、エントリはどれも即値か不死の物体である。このヒープの物体でも、付けた塊の物体でも
+    /// よい。
+    pub closed spec fn fork_table(&self, t: Word) -> bool {
+        &&& table_ok(*self, t)
+        &&& self.rc_value(t) == 0
+        &&& forall|i: int|
+            0 <= i < self.count_of(t) ==> self.immortal_word(#[trigger] self.scanned_word(t, i))
+    }
+
+    /// `Panic`の末尾。不死の節点`n`が、forkの表`table`を持つtagが`panic + 1`の不死のfork evidenceを持ち、次の節点はない。
+    pub closed spec fn fork_tail(&self, n: Word, panic: u16, table: Word) -> bool {
+        let ev = self.scanned_word(n, NODE_EV as int);
+        &&& node_ok(*self, n)
+        &&& self.rc_value(n) == 0
+        &&& self.tag_of(n) == panic + 1
+        &&& self.scanned_word(n, NODE_NEXT as int).bits_spec() == 1
+        &&& ev_ok(*self, ev)
+        &&& self.rc_value(ev) == 0
+        &&& self.tag_of(ev) == panic + 1
+        &&& self.scanned_word(ev, EV_TABLE as int) == table
+        &&& self.fork_table(table)
+    }
+
+    /// エフェクトのforkの表を作る。走査する語に`entries`を操作の順に並べたtag 0の不死の`Data`で、evidenceのエントリの表と
+    /// 同じ形である (docs/spec/object-model.mdの「evidence の3つの物体」)。エントリはどれも即値か不死の物体でなければならない。
+    /// 表は凍結されてどのworkerからも読まれ、不死でないエントリは表が指したまま空きうるので、どちらのモードでも確保の前に
+    /// 確かめ、違えば`NotImmortal`を返す。表はロードで1回だけ作るので、この確かめは速い道にない。
+    ///
+    /// # Safety
+    /// エントリはどれも即値か、このヒープの生きている物体で、`lin`ビットを持たない。エントリは255個より少ない。どちらの
+    /// モードもこれらを確かめない。
+    pub unsafe fn alloc_fork_table(&mut self, entries: &[Word]) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+            !crate::layout::data_extended_spec(entries@.len() as nat, false),
+            forall|i: int|
+                0 <= i < entries@.len() ==> old(self).of_this_heap(#[trigger] entries@[i]),
+            forall|i: int|
+                0 <= i < entries@.len() && (#[trigger] entries@[i]).is_ptr_spec() ==> !old(
+                    self,
+                ).lin_of(entries@[i]),
+        ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == *old(self) && r == Err::<Word, HeapError>(
+                HeapError::NotImmortal,
+            ),
+            r is Ok <==> forall|i: int|
+                0 <= i < entries@.len() ==> old(self).immortal_word(#[trigger] entries@[i]),
+            r matches Ok(t) ==> final(self).settled() && final(self).immortal_data(t, 0, entries@),
+            old(self).consistent() && old(self).settleable() ==> (r matches Ok(t)
+                ==> final(self).fork_table(t)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let mut i: usize = 0;
+        while i < entries.len()
+            invariant
+                self.wf(),
+                0 <= i <= entries@.len(),
+                forall|j: int|
+                    0 <= j < entries@.len() ==> self.of_this_heap(#[trigger] entries@[j]),
+                forall|j: int| 0 <= j < i ==> self.immortal_word(#[trigger] entries@[j]),
+            decreases entries.len() - i,
+        {
+            let e = entries[i];
+            proof {
+                assert(self.of_this_heap(entries@[i as int]));
+            }
+            if e.is_ptr() && !unsafe { self.is_immortal(e) } {
+                return Err(HeapError::NotImmortal);
+            }
+            i += 1;
+        }
+        let t = self.alloc_immortal_data(0, entries)?;
+        proof {
+            if old(self).consistent() && old(self).settleable() {
+                assert forall|i: int| 0 <= i < self.count_of(t) implies dupable(
+                    *self,
+                    #[trigger] self.scanned_word(t, i),
+                ) && self.immortal_word(self.scanned_word(t, i)) by {
+                    let e = entries@[i];
+                    assert(self.scanned_word(t, i) == e);
+                    assert(old(self).of_this_heap(e));
+                    self.lemma_grown(*old(self), t, e);
+                }
+            }
+        }
+        Ok(t)
+    }
+
+    /// `par`の子の`evv`の`Panic`の末尾を作る。tagが`panic + 1`の不死のfork evidence `[table, 即値 0, ()]`と、同じtagの
+    /// 不死の節点`[ev, ()]`を作り、節点を返す。`Panic`はmaskされないので深さはいつも0で、1つの末尾をどのforkでも使える
+    /// (docs/spec/vm.mdの「`par` の fork と join」)。どちらのモードでも、何も確保する前に、tagのない`panic == 65535`には
+    /// `BadEvidence`を、不死でない`table`には`NotImmortal`を返す。
+    ///
+    /// # Safety
+    /// `table`はこのヒープの生きている物体を指す。その物体が不死なら、forkの表である。つまり、`lin`ビットを持たないtag 0の
+    /// `Data`で、エントリはどれも即値か、`lin`ビットを持たない不死の物体である。どちらのモードも、不死かのほかはこれを
+    /// 確かめない。
+    pub unsafe fn alloc_fork_tail(&mut self, panic: u16, table: Word) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+            table.is_ptr_spec(),
+            old(self).of_this_heap(table),
+            old(self).immortal_word(table) ==> old(self).fork_table(table),
+        ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
+            panic == u16::MAX ==> r == Err::<Word, HeapError>(HeapError::BadEvidence),
+            panic < u16::MAX && !old(self).immortal_word(table) ==> r == Err::<Word, HeapError>(
+                HeapError::NotImmortal,
+            ),
+            panic < u16::MAX && old(self).immortal_word(table) ==> r is Ok,
+            r matches Ok(n) ==> {
+                &&& final(self).settled()
+                &&& n.is_ptr_spec()
+                &&& final(self).word_in(n)
+                &&& final(self).rc_value(n) == 0
+                &&& final(self).kind_of(n) == Kind::Data
+                &&& final(self).tag_of(n) == panic + 1
+            },
+            old(self).consistent() && old(self).settleable() ==> (r matches Ok(n)
+                ==> final(self).fork_tail(n, panic, table)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        if panic == u16::MAX {
+            return Err(HeapError::BadEvidence);
+        }
+        if !unsafe { self.is_immortal(table) } {
+            return Err(HeapError::NotImmortal);
+        }
+        let ghost c = old(self).consistent() && old(self).settleable();
+        let tag = panic + 1;
+        let depth = Word::imm(0);
+        let fields: [Word; EV_WORDS] = [table, depth, Word::UNIT];
+        proof {
+            assert(((0i64 << 1) | 1) as usize == 1) by (bit_vector);
+            lemma_unit_bits();
+            assert(fields@[EV_TABLE as int] == table);
+            assert(fields@[EV_STATE as int] == depth);
+            assert(fields@[EV_OUTER as int].bits_spec() == 1);
+            assert(forall|i: int|
+                0 <= i < EV_WORDS ==> self.of_this_heap(#[trigger] fields@[i])
+                    && self.immortal_word(fields@[i]));
+            assert(forall|i: int| 0 <= i < EV_WORDS ==> self.readable(#[trigger] fields@[i]));
+        }
+        let ev = self.alloc_immortal_data(tag, &fields)?;
+        let ghost h1 = *self;
+        let next: [Word; NODE_WORDS] = [ev, Word::UNIT];
+        proof {
+            assert(next@[NODE_EV as int] == ev);
+            assert(next@[NODE_NEXT as int].bits_spec() == 1);
+            assert(forall|i: int|
+                0 <= i < NODE_WORDS ==> self.of_this_heap(#[trigger] next@[i])
+                    && self.immortal_word(next@[i]));
+            assert(forall|i: int| 0 <= i < NODE_WORDS ==> self.readable(#[trigger] next@[i]));
+        }
+        let node = self.alloc_immortal_data(tag, &next)?;
+        proof {
+            if M::CHECKED {
+                assert forall|w: Word| #[trigger] old(self).word_in(w) implies self.word_in(w) by {
+                    assert(h1.word_in(w));
+                }
+            }
+            if c {
+                h1.lemma_fork_table_grown(*old(self), ev, table);
+                self.lemma_fork_table_grown(h1, node, table);
+                self.lemma_grown(h1, node, ev);
+                assert(self.scanned_word(node, NODE_EV as int) == ev);
+                assert(self.scanned_word(ev, EV_TABLE as int) == table);
+                assert(self.scanned_word(ev, EV_STATE as int) == depth);
+                assert(self.scanned_word(ev, EV_OUTER as int).bits_spec() == 1);
+                assert(table_ok(*self, table));
+                assert(data_obj(*self, ev, EV_WORDS as u8));
+                assert(ev_ok(*self, ev));
+                assert(node_ok(*self, node));
+            }
+        }
+        Ok(node)
+    }
+
+    /// 検査モードで、生きている物体`w`が不死 (rc 0) かを読む。`is_immortal`と違い、付けた塊の物体も受け付ける。
+    fn checked_immortal(&self, w: Word) -> (r: Result<bool, HeapError>)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+        ensures
+            r matches Ok(z) ==> z == (self.rc_value(w) == 0),
+            self.consistent() && self.settleable() && self.readable(w) ==> r is Ok,
+    {
+        let h = self.header_of(w);
+        proof {
+            self.lemma_checks_pass(w);
+        }
+        self.checked_live(h)?;
+        Ok(self.core.rc_get(h) == 0)
+    }
+
+    /// forkの表は、別の物体を確保した後もforkの表である。
+    proof fn lemma_fork_table_grown(&self, old: Heap<M>, w: Word, t: Word)
+        requires
+            self.wf(),
+            old.wf(),
+            self.grown(old, w),
+            self.settled(),
+            old.consistent(),
+            old.settleable(),
+            old.fork_table(t),
+        ensures
+            self.fork_table(t),
+    {
+        self.lemma_grown_readable(old, w, t);
+        assert forall|i: int| 0 <= i < self.count_of(t) implies dupable(
+            *self,
+            #[trigger] self.scanned_word(t, i),
+        ) && self.immortal_word(self.scanned_word(t, i)) by {
+            let e = old.scanned_word(t, i);
+            assert(self.scanned_word(t, i) == e);
+            assert(dupable(old, e));
+            assert(old.immortal_word(e));
+            old.lemma_readable_scanned(t, i);
+            self.lemma_grown_readable(old, w, e);
+        }
+    }
+
+    /// ほかの物体だけを変える変化 (`moved`) の後も、forkの表はforkの表のままである。
+    proof fn lemma_fork_table_moved(
+        &self,
+        old: Heap<M>,
+        d: spec_fn(usize) -> int,
+        x: Set<usize>,
+        t: Word,
+    )
+        requires
+            moved(*self, old, d, x),
+            !x.contains(t.bits_spec()),
+            old.consistent(),
+            old.settleable(),
+            self.consistent(),
+            self.settleable(),
+            old.fork_table(t),
+            self.readable(t),
+        ensures
+            self.fork_table(t),
+    {
+        lemma_table_kept(*self, old, d, x, t);
+        let b = t.bits_spec();
+        assert(live(old, b) && live(*self, b));
+        assert(same_head(*self, old, b));
+        assert forall|i: int| 0 <= i < self.count_of(t) implies self.immortal_word(
+            #[trigger] self.scanned_word(t, i),
+        ) by {
+            let e = old.scanned_word(t, i);
+            assert(self.scanned_word(t, i) == e);
+            assert(old.immortal_word(e));
+            old.lemma_readable_scanned(t, i);
+            if e.is_ptr_spec() {
+                let c = e.bits_spec();
+                assert(live(old, c));
+                assert(live(*self, c));
+                assert(same_head(*self, old, c));
+            }
+        }
     }
 }
 
@@ -505,7 +802,7 @@ spec fn nth<M: Mode>(h: Heap<M>, w: Word, j: nat) -> Word
 spec fn walk_node<M: Mode>(h: Heap<M>, n: Word) -> bool {
     &&& n.is_ptr_spec()
     &&& h.readable(n)
-    &&& h.scan_of(n) == 2
+    &&& h.scan_of(n) == NODE_WORDS
 }
 
 /// `w` から `k` 個の節点を読める。
@@ -581,8 +878,8 @@ spec fn copies_ok<M: Mode>(h: Heap<M>, cs: Seq<Word>, out: Seq<(u16, Word)>) -> 
             &&& node_ok(h, #[trigger] cs[k])
             &&& h.rc_value(cs[k]) > 0
             &&& h.tag_of(cs[k]) == out[k].0
-            &&& h.scanned_word(cs[k], 0) == out[k].1
-            &&& k + 1 < cs.len() ==> h.scanned_word(cs[k], 1) == cs[k + 1]
+            &&& h.scanned_word(cs[k], NODE_EV as int) == out[k].1
+            &&& k + 1 < cs.len() ==> h.scanned_word(cs[k], NODE_NEXT as int) == cs[k + 1]
         }
 }
 
@@ -811,7 +1108,7 @@ fn seen_at_least<M: Mode>(
         if m.tag() == t {
             count += 1;
         }
-        n = (unsafe { h.field(n, 1) })?;
+        n = (unsafe { h.field(n, NODE_NEXT) })?;
         j += 1;
     }
     Ok(count as u64 >= occ)
@@ -980,15 +1277,15 @@ impl<M: Mode> Ctx<M> {
     }
 
     pub closed spec fn ev_table(&self, e: Word) -> Word {
-        self.heap.scanned_word(e, 0)
+        self.heap.scanned_word(e, EV_TABLE as int)
     }
 
     pub closed spec fn ev_state(&self, e: Word) -> Word {
-        self.heap.scanned_word(e, 1)
+        self.heap.scanned_word(e, EV_STATE as int)
     }
 
     pub closed spec fn ev_outer(&self, e: Word) -> Word {
-        self.heap.scanned_word(e, 2)
+        self.heap.scanned_word(e, EV_OUTER as int)
     }
 
     pub closed spec fn ev_ops(&self, e: Word) -> int {
@@ -2042,13 +2339,13 @@ impl<M: Mode> Ctx<M> {
         let ghost none = Set::<usize>::empty();
         let table = self.heap.alloc_data(0, n_ops, 0, false);
         let ghost h1 = self.heap;
-        let ev = self.heap.alloc_data(effect + 1, 3, 0, false);
+        let ev = self.heap.alloc_data(effect + 1, EV_WORDS, 0, false);
         let ghost h2 = self.heap;
         let ghost x = none.insert(ev.bits_spec());
         proof {
             lemma_words_trans(h2, h1, h0);
             lemma_unextended(h2, ev);
-            assert(h2.scanned_at(ev, 0));
+            assert(h2.scanned_at(ev, EV_TABLE as int));
             if c {
                 lemma_alloc_moved(h1, h0, table);
                 lemma_alloc_moved(h2, h1, ev);
@@ -2056,19 +2353,19 @@ impl<M: Mode> Ctx<M> {
                 // 先に作ったエントリの表は、外の参照を1つ持ったまま生き残る
                 assert(live(h1, table.bits_spec()));
                 lemma_arg_moved(h2, h1, z, none, table);
-                assert(h2.scanned_word(ev, 0).bits_spec() == 1);
+                assert(h2.scanned_word(ev, EV_TABLE as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(ev, 0, table) })?;
+        (unsafe { self.heap.set_field(ev, EV_TABLE, table) })?;
         let ghost h3 = self.heap;
         proof {
             if M::CHECKED {
-                assert(h2.scanned_at(ev, 1) && h2.scanned_at(ev, 2));
+                assert(h2.scanned_at(ev, EV_STATE as int) && h2.scanned_at(ev, EV_OUTER as int));
                 lemma_set_passes_kept(h3, h2, ev, 0, table, 1);
                 lemma_set_passes_kept(h3, h2, ev, 0, table, 2);
             }
             if c {
-                lemma_set_unit_moved(h3, h2, ev, 0, table);
+                lemma_set_unit_moved(h3, h2, ev, EV_TABLE as int, table);
                 let d = |b: usize| -points(table, b);
                 lemma_moved_chain(h3, h2, h0, z, d, z, none, x, none);
                 s0.lemma_arg_counted(seq![state, outer], 0);
@@ -2076,7 +2373,7 @@ impl<M: Mode> Ctx<M> {
                 lemma_arg_moved(h3, h0, z, none, state);
             }
         }
-        (unsafe { self.heap.set_field(ev, 1, state) })?;
+        (unsafe { self.heap.set_field(ev, EV_STATE, state) })?;
         let ghost h4 = self.heap;
         let ghost d4 = |b: usize| -points(state, b);
         proof {
@@ -2085,16 +2382,16 @@ impl<M: Mode> Ctx<M> {
             }
             if c {
                 lemma_unextended(h3, ev);
-                assert(h3.word_at(ev, 1) == h2.word_at(ev, 1));
-                assert(h2.scanned_word(ev, 1).bits_spec() == 1);
-                lemma_set_unit_moved(h4, h3, ev, 1, state);
+                assert(h3.word_at(ev, EV_STATE as int) == h2.word_at(ev, EV_STATE as int));
+                assert(h2.scanned_word(ev, EV_STATE as int).bits_spec() == 1);
+                lemma_set_unit_moved(h4, h3, ev, EV_STATE as int, state);
                 lemma_moved_chain(h4, h3, h0, z, d4, d4, none, x, none);
                 s0.lemma_arg_counted(seq![state, outer], 1);
                 lemma_points_in(seq![state, outer], outer.bits_spec());
                 lemma_arg_moved(h4, h0, d4, none, outer);
             }
         }
-        (unsafe { self.heap.set_field(ev, 2, outer) })?;
+        (unsafe { self.heap.set_field(ev, EV_OUTER, outer) })?;
         proof {
             lemma_words_trans(h3, h2, h0);
             lemma_words_trans(self.heap, h4, h3);
@@ -2105,6 +2402,225 @@ impl<M: Mode> Ctx<M> {
             }
         }
         Ok(ev)
+    }
+
+    /// エフェクト`effect`のfork evidence `[table, 即値 depth, ()]`を作る。tagは`effect + 1`である
+    /// (docs/spec/object-model.mdの「evidence の3つの物体」)。`table`は借りる。evidenceは表の参照を1つ持つので、検査モードは
+    /// 「不死の物体の数え方」のとおりに表を`dup`する。速いモードは`dup`を省く。不死の物体の`dup`は何もしないためである。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`table`は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`effect`は
+    /// 65535より小さく、`table`はforkの表である (検査モードは確保の前に、65535の`effect`と、`lin`ビットのない不死のtag 0の
+    /// `Data`でない`table`に`BadEvidence`を返す)。evidenceをほかのworkerに渡す (`par`のforkは共有の印を付けて渡す) なら、
+    /// `table`は数える不死の物体でなく、凍結した領域の物体である (docs/spec/object-model.mdの「核の操作」)。
+    pub unsafe fn fork_ev(&mut self, effect: u16, table: Word, depth: u32) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(table),
+            !M::CHECKED ==> effect < u16::MAX && old(self).heap_spec().fork_table(table),
+        ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> r is Ok,
+            M::CHECKED && effect == u16::MAX ==> r == Err::<Word, HeapError>(
+                HeapError::BadEvidence,
+            ),
+            old(self).held_ok() && effect < u16::MAX && old(self).heap_spec().fork_table(table)
+                ==> (r matches Ok(e) && {
+                &&& final(self).held_ok()
+                &&& final(self).holds(e)
+                &&& final(self).ev_shape(e)
+                &&& final(self).ev_tag(e) == effect + 1
+                &&& final(self).ev_table(e) == table
+                &&& final(self).ev_state(e).bits_spec() == crate::word::imm_spec(depth as i64)
+                &&& final(self).ev_outer(e).bits_spec() == 1
+                &&& final(self).evolved_by(*old(self), |b: usize| 0int, Set::empty())
+                &&& final(self).heap_spec().fork_table(table)
+            }),
+    {
+        if M::CHECKED {
+            if effect == u16::MAX {
+                return Err(HeapError::BadEvidence);
+            }
+            self.checked_fork_table(table)?;
+            self.heap.dup_check(table)?;
+        }
+        let ghost s0 = *self;
+        let ghost h0 = self.heap;
+        let ghost c = s0.held_ok() && effect < u16::MAX && h0.fork_table(table);
+        let ghost z = |b: usize| 0int;
+        let ghost none = Set::<usize>::empty();
+        proof {
+            if c {
+                assert(table_ok(h0, table));
+                assert(h0.dup_ok(table));
+                assert(h0.core.settled_view().rc_of(table.bits_spec()) == 0);
+            }
+        }
+        if M::CHECKED {
+            (unsafe { self.heap.dup(table) })?;
+        }
+        let ghost h1 = self.heap;
+        proof {
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_fork_table_dupped(s0, table);
+            }
+        }
+        let ev = self.heap.alloc_data(effect + 1, EV_WORDS, 0, false);
+        let ghost h2 = self.heap;
+        proof {
+            lemma_words_trans(h2, h1, h0);
+            lemma_unextended(h2, ev);
+            assert(h2.scanned_at(ev, EV_TABLE as int));
+            if c {
+                lemma_alloc_moved(h2, h1, ev);
+                lemma_arg_moved(h2, h1, z, none, table);
+            }
+        }
+        (unsafe { self.heap.set_field(ev, EV_TABLE, table) })?;
+        let ghost h3 = self.heap;
+        let state = Word::imm(depth as i64);
+        proof {
+            crate::word::lemma_imm_round_trip(depth as i64);
+            if M::CHECKED {
+                assert(h2.scanned_at(ev, EV_STATE as int));
+                lemma_set_passes_kept(h3, h2, ev, 0, table, 1);
+            }
+            if c {
+                lemma_unextended(h3, ev);
+                assert(h3.word_at(ev, EV_STATE as int) == h2.word_at(ev, EV_STATE as int));
+            }
+        }
+        (unsafe { self.heap.set_field(ev, EV_STATE, state) })?;
+        proof {
+            lemma_words_trans(self.heap, h3, h2);
+            lemma_words_trans(self.heap, h2, h0);
+            self.lemma_words_kept(s0);
+            if c {
+                self.lemma_fork_ev_ok(s0, h1, h2, h3, ev, effect, table, state);
+                self.heap.lemma_fork_table_moved(h0, z, none, table);
+            }
+        }
+        Ok(ev)
+    }
+
+    /// fork evidence `ev`のエフェクトの番号 (tagから1を引いた値) と深さを返す。`ev`は借りる
+    /// (docs/spec/object-model.mdの「evidence の3つの物体」)。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`ev`は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`ev`は状態が
+    /// 即値のevidenceである (検査モードは確かめ、違えば`BadEvidence`を返す。状態が`u32`に入る自然数でないときも
+    /// `BadEvidence`を返す)。
+    pub unsafe fn fork_of(&self, ev: Word) -> (r: Result<(u16, u32), HeapError>)
+        requires
+            self.wf(),
+            self.heap_spec().word_in(ev),
+            !M::CHECKED ==> self.ev_shape(ev) && self.ev_state(ev).is_imm_spec(),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            self.held_ok() && self.ev_shape(ev) && self.ev_state(ev).is_imm_spec() && 0
+                <= crate::word::imm_value_spec(self.ev_state(ev).bits_spec()) <= u32::MAX ==> r
+                == Ok::<(u16, u32), HeapError>(
+                (
+                    (self.ev_tag(ev) - 1) as u16,
+                    crate::word::imm_value_spec(self.ev_state(ev).bits_spec()) as u32,
+                ),
+            ),
+            M::CHECKED && self.held_ok() && self.ev_shape(ev) && !self.ev_state(ev).is_imm_spec()
+                ==> r == Err::<(u16, u32), HeapError>(HeapError::BadEvidence),
+    {
+        let ghost c = self.held_ok() && self.ev_shape(ev);
+        if M::CHECKED {
+            self.checked_ev(ev)?;
+        }
+        proof {
+            if c {
+                lemma_unextended(self.heap, ev);
+            }
+        }
+        let m = (unsafe { self.heap.meta(ev) })?;
+        proof {
+            m.lemma_fields();
+        }
+        let s = (unsafe { self.heap.field(ev, EV_STATE) })?;
+        if M::CHECKED {
+            if !s.is_imm() {
+                return Err(HeapError::BadEvidence);
+            }
+            let v = s.imm_value();
+            if v < 0 || v > u32::MAX as i64 {
+                return Err(HeapError::BadEvidence);
+            }
+        }
+        Ok((m.tag() - 1, s.imm_value() as u32))
+    }
+
+    /// `evv`のリストを1歩たどる。`()`なら`None`を、そうでなければ先頭の節点のエフェクトの番号 (tagから1を引いた値) と
+    /// 次の節点を返す。`w`は借り、RCに触れない (docs/spec/object-model.mdの「evidence の3つの物体」)。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`w`は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`w`は正しい
+    /// `evv`のリストである (検査モードは、形の違う節点に`BadEvidence`を返す)。
+    pub unsafe fn evv_step(&self, w: Word) -> (r: Result<Option<(u16, Word)>, HeapError>)
+        requires
+            self.wf(),
+            self.heap_spec().word_in(w),
+            !M::CHECKED ==> self.evv_wf(w),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(Some(s)) ==> self.heap_spec().word_in(s.1),
+            self.held_ok() && self.evv_wf(w) ==> (r matches Ok(o) && {
+                &&& (o is None <==> self.evv_seq(w).len() == 0)
+                &&& o matches Some(s) ==> {
+                    &&& self.evv_seq(w).len() > 0
+                    &&& s.0 + 1 == self.evv_seq(w)[0].0
+                    &&& self.evv_wf(s.1)
+                    &&& self.evv_seq(s.1) == self.evv_seq(w).drop_first()
+                }
+            }),
+    {
+        let ghost c = self.held_ok() && self.evv_wf(w);
+        let ghost f = choose|f: nat| #[trigger] path(self.heap, w, f) is Some;
+        let ghost s = seq_of(self.heap, w);
+        proof {
+            lemma_unit_bits();
+            if c {
+                lemma_seq_of(self.heap, w, f);
+                lemma_path_step(self.heap, w, f, s);
+            }
+        }
+        if w.bits() == 1 {
+            return Ok(None);
+        }
+        if M::CHECKED && !w.is_ptr() {
+            return Err(HeapError::BadEvidence);
+        }
+        let m = (unsafe { self.heap.meta(w) })?;
+        proof {
+            m.lemma_fields();
+        }
+        if M::CHECKED && (!Self::data_meta(m, NODE_WORDS as u8) || m.tag() == 0) {
+            return Err(HeapError::BadEvidence);
+        }
+        proof {
+            lemma_unextended(self.heap, w);
+        }
+        let next = (unsafe { self.heap.field(w, NODE_NEXT) })?;
+        proof {
+            if c {
+                let g = (f - 1) as nat;
+                lemma_seq_of(self.heap, next, g);
+            }
+        }
+        Ok(Some((m.tag() - 1, next)))
     }
 
     /// `l` の先頭に evidence `e` の節点を足したリストを返す。節点の tag は `e` の tag と同じにする
@@ -2160,7 +2676,58 @@ impl<M: Mode> Ctx<M> {
         proof {
             m.lemma_fields();
         }
-        let node = self.heap.alloc_data(m.tag(), 2, 0, false);
+        unsafe { self.evv_link(l, e, m.tag(), Ghost(c)) }
+    }
+
+    /// `l`の先頭に`e`の節点を足したリストを返す。`l`と`e`の参照を1つずつ消費する。`evv_push`と`evv_enter`が、
+    /// それぞれの確かめと`e`の参照の用意の後に呼ぶ。`tag`は`e`のtagである。確保したばかりの節点に書くだけなので、
+    /// 失敗しない (docs/spec/object-model.mdの「基本操作の契約」)。
+    unsafe fn evv_link(&mut self, l: Word, e: Word, tag: u16, Ghost(c): Ghost<bool>) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(l),
+            old(self).heap_spec().word_in(e),
+            !M::CHECKED ==> c,
+            c ==> {
+                &&& old(self).held_ok()
+                &&& old(self).evv_wf(l)
+                &&& old(self).evv_seq(l).len() < old(self).evv_limit()
+                &&& old(self).ev_shape(e)
+                &&& old(self).holds_args(seq![l, e])
+                &&& tag == old(self).heap_spec().tag_of(e)
+            },
+        ensures
+            final(self).wf(),
+            r is Ok,
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            c ==> (r matches Ok(n) && {
+                &&& final(self).held_ok()
+                &&& final(self).holds(n)
+                &&& final(self).evv_wf(n)
+                &&& final(self).evv_seq(n) == seq![(old(self).ev_tag(e), e)] + old(self).evv_seq(l)
+                &&& final(self).evolved_by(
+                    *old(self),
+                    |b: usize| -points(l, b) - points(e, b),
+                    Set::empty(),
+                )
+                &&& !live(old(self).heap, n.bits_spec())
+                &&& final(self).ev_shape(e)
+                &&& final(self).heap_spec().tag_of(e) == old(self).heap_spec().tag_of(e)
+                &&& forall|i: int| #[trigger]
+                    final(self).heap_spec().scanned_word(e, i) == old(
+                        self,
+                    ).heap_spec().scanned_word(e, i)
+                &&& (final(self).heap_spec().rc_value(e) > 0) == (old(self).heap_spec().rc_value(e)
+                    > 0)
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost h0 = self.heap;
+        let node = self.heap.alloc_data(tag, NODE_WORDS, 0, false);
         let ghost h1 = self.heap;
         let ghost z = |b: usize| 0int;
         let ghost none = Set::<usize>::empty();
@@ -2169,35 +2736,35 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_words_trans(h1, h0, h0);
             lemma_unextended(h1, node);
-            assert(h1.scanned_at(node, 0));
+            assert(h1.scanned_at(node, NODE_EV as int));
             if c {
                 lemma_alloc_moved(h1, h0, node);
                 s0.lemma_arg_counted(ws, 1);
                 lemma_points_in(ws, e.bits_spec());
                 lemma_arg_moved(h1, h0, z, none, e);
-                assert(h1.scanned_word(node, 0).bits_spec() == 1);
-                assert(h1.scanned_word(node, 1).bits_spec() == 1);
+                assert(h1.scanned_word(node, NODE_EV as int).bits_spec() == 1);
+                assert(h1.scanned_word(node, NODE_NEXT as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(node, 0, e) })?;
+        (unsafe { self.heap.set_field(node, NODE_EV, e) })?;
         let ghost h2 = self.heap;
         let ghost d2 = |b: usize| -points(e, b);
         proof {
             if M::CHECKED {
-                assert(h1.scanned_at(node, 1));
+                assert(h1.scanned_at(node, NODE_NEXT as int));
                 lemma_set_passes_kept(h2, h1, node, 0, e, 1);
             }
             if c {
-                lemma_set_unit_moved(h2, h1, node, 0, e);
+                lemma_set_unit_moved(h2, h1, node, NODE_EV as int, e);
                 lemma_moved_chain(h2, h1, h0, z, d2, d2, none, x, none);
                 s0.lemma_arg_counted(ws, 0);
                 lemma_points_in(ws, l.bits_spec());
                 lemma_arg_moved(h2, h0, d2, none, l);
                 lemma_unextended(h2, node);
-                assert(h2.word_at(node, 1) == h1.word_at(node, 1));
+                assert(h2.word_at(node, NODE_NEXT as int) == h1.word_at(node, NODE_NEXT as int));
             }
         }
-        (unsafe { self.heap.set_field(node, 1, l) })?;
+        (unsafe { self.heap.set_field(node, NODE_NEXT, l) })?;
         proof {
             lemma_words_trans(h2, h1, h0);
             lemma_words_trans(self.heap, h2, h0);
@@ -2207,6 +2774,96 @@ impl<M: Mode> Ctx<M> {
             }
         }
         Ok(node)
+    }
+
+    /// `l`の先頭にevidence `e`の節点を足したリストを返す。節点のtagは`e`のtagと同じにする。`l`は消費し、`e`は借りる。
+    /// 節点は`e`の新しい参照を持ち、呼ぶ側は自分の参照を持ったままである。`e`の形と欄は変わらない
+    /// (docs/spec/object-model.mdの「基本操作の契約」)。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`l`と`e`は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
+    /// 1つずつ持つ。速いモードでは、`l`は長さが上限より短い`evv`のリストで、`e`はevidenceである。検査モードは、何も変える
+    /// 前に`e`の形と`l`の長さと`e`の`dup`を確かめ、`e`の形か`l`の長さが違えば`BadEvidence`を返す。
+    pub unsafe fn evv_enter(&mut self, l: Word, e: Word) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(l),
+            old(self).heap_spec().word_in(e),
+            !M::CHECKED ==> old(self).evv_wf(l) && old(self).evv_seq(l).len() < old(
+                self,
+            ).evv_limit() && old(self).ev_shape(e) && old(self).holds_args(seq![l, e]),
+        ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).evv_wf(l) && old(self).evv_seq(l).len() < old(
+                self,
+            ).evv_limit() && old(self).ev_shape(e) && old(self).holds_args(seq![l, e]) ==> (
+            r matches Ok(n) && {
+                &&& final(self).held_ok()
+                &&& final(self).holds_args(seq![n, e])
+                &&& final(self).evv_wf(n)
+                &&& final(self).evv_seq(n) == seq![(old(self).ev_tag(e), e)] + old(self).evv_seq(l)
+                &&& final(self).evolved_by(*old(self), |b: usize| -points(l, b), Set::empty())
+                &&& final(self).ev_shape(e)
+                &&& final(self).ev_tag(e) == old(self).ev_tag(e)
+                &&& final(self).ev_table(e) == old(self).ev_table(e)
+                &&& final(self).ev_state(e) == old(self).ev_state(e)
+                &&& final(self).ev_outer(e) == old(self).ev_outer(e)
+                &&& (final(self).heap_spec().rc_value(e) > 0) == (old(self).heap_spec().rc_value(e)
+                    > 0)
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost h0 = self.heap;
+        let ghost c = s0.held_ok() && s0.evv_wf(l) && s0.evv_seq(l).len() < s0.max_evv
+            && s0.ev_shape(e) && s0.holds_args(seq![l, e]);
+        if M::CHECKED {
+            self.checked_ev(e)?;
+            self.checked_room(l)?;
+            self.heap.dup_check(e)?;
+        }
+        proof {
+            if c {
+                lemma_unextended(h0, e);
+            }
+        }
+        let m = (unsafe { self.heap.meta(e) })?;
+        proof {
+            m.lemma_fields();
+        }
+        (unsafe { self.heap.dup(e) })?;
+        let ghost s1 = *self;
+        proof {
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_entered_dup(s0, l, e);
+            }
+        }
+        let r = unsafe { self.evv_link(l, e, m.tag(), Ghost(c)) };
+        proof {
+            if c {
+                let n = r->Ok_0;
+                self.lemma_entered_ok(s0, s1, n, l, e);
+                assert(self.heap.scanned_word(e, EV_TABLE as int) == s1.heap.scanned_word(
+                    e,
+                    EV_TABLE as int,
+                ));
+                assert(self.heap.scanned_word(e, EV_STATE as int) == s1.heap.scanned_word(
+                    e,
+                    EV_STATE as int,
+                ));
+                assert(self.heap.scanned_word(e, EV_OUTER as int) == s1.heap.scanned_word(
+                    e,
+                    EV_OUTER as int,
+                ));
+            }
+        }
+        r
     }
 
     /// evidence の外側の `evv` を `dup` して返す。外側の `evv` がリストとして正しいことは EP の不変条件で、この操作は
@@ -2245,10 +2902,10 @@ impl<M: Mode> Ctx<M> {
                 lemma_unextended(s0.heap, ev);
             }
         }
-        let w = (unsafe { self.heap.field(ev, 2) })?;
+        let w = (unsafe { self.heap.field(ev, EV_OUTER) })?;
         proof {
             if s0.held_ok() && s0.ev_shape(ev) {
-                s0.heap.lemma_readable_scanned(ev, 2);
+                s0.heap.lemma_readable_scanned(ev, EV_OUTER as int);
             }
         }
         (unsafe { self.heap.dup(w) })?;
@@ -2298,7 +2955,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             if c {
                 lemma_unextended(s0.heap, ev);
-                s0.heap.lemma_readable_scanned(ev, 0);
+                s0.heap.lemma_readable_scanned(ev, EV_TABLE as int);
             }
         }
         let t = if M::CHECKED {
@@ -2309,7 +2966,7 @@ impl<M: Mode> Ctx<M> {
             }
             t
         } else {
-            (unsafe { self.heap.field(ev, 0) })?
+            (unsafe { self.heap.field(ev, EV_TABLE) })?
         };
         let w = (unsafe { self.heap.scanned(t, op) })?;
         proof {
@@ -2374,7 +3031,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_unextended(h1, ev);
         }
-        let s = (unsafe { self.heap.field(ev, 1) })?;
+        let s = (unsafe { self.heap.field(ev, EV_STATE) })?;
         let unit = Word::UNIT;
         proof {
             lemma_unit_bits();
@@ -2382,7 +3039,7 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_settled_ev(s0, ev);
             }
         }
-        (unsafe { self.heap.set_field(ev, 1, unit) })?;
+        (unsafe { self.heap.set_field(ev, EV_STATE, unit) })?;
         proof {
             lemma_words_trans(self.heap, h1, s0.heap);
             self.lemma_words_kept(s0);
@@ -2441,7 +3098,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_unextended(h1, ev);
         }
-        let w = (unsafe { self.heap.field(ev, 2) })?;
+        let w = (unsafe { self.heap.field(ev, EV_OUTER) })?;
         let unit = Word::UNIT;
         proof {
             lemma_unit_bits();
@@ -2449,7 +3106,7 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_settled_ev(s0, ev);
             }
         }
-        (unsafe { self.heap.set_field(ev, 2, unit) })?;
+        (unsafe { self.heap.set_field(ev, EV_OUTER, unit) })?;
         proof {
             lemma_words_trans(self.heap, h1, s0.heap);
             self.lemma_words_kept(s0);
@@ -2521,7 +3178,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_unextended(h1, ev);
         }
-        let old_state = (unsafe { self.heap.field(ev, 1) })?;
+        let old_state = (unsafe { self.heap.field(ev, EV_STATE) })?;
         proof {
             if c {
                 self.lemma_settled_ev(s0, ev);
@@ -2531,7 +3188,7 @@ impl<M: Mode> Ctx<M> {
                 lemma_arg_moved(h1, s0.heap, |b: usize| 0int, Set::empty(), s);
             }
         }
-        (unsafe { self.heap.set_field(ev, 1, s) })?;
+        (unsafe { self.heap.set_field(ev, EV_STATE, s) })?;
         let ghost h2 = self.heap;
         proof {
             if c {
@@ -2623,7 +3280,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             if s0.held_ok() && s0.ev_shape(ev) {
                 lemma_unextended(s0.heap, ev);
-                s0.heap.lemma_readable_scanned(ev, 0);
+                s0.heap.lemma_readable_scanned(ev, EV_TABLE as int);
             }
         }
         let t = if M::CHECKED {
@@ -2649,7 +3306,7 @@ impl<M: Mode> Ctx<M> {
             }
             t
         } else {
-            (unsafe { self.heap.field(ev, 0) })?
+            (unsafe { self.heap.field(ev, EV_TABLE) })?
         };
         let tm = (unsafe { self.heap.meta(t) })?;
         proof {
@@ -2719,13 +3376,13 @@ impl<M: Mode> Ctx<M> {
         proof {
             if c {
                 lemma_unextended(h0, ev);
-                h0.lemma_readable_scanned(ev, 0);
+                h0.lemma_readable_scanned(ev, EV_TABLE as int);
             }
         }
         let t = if M::CHECKED {
             self.checked_ev(ev)?
         } else {
-            (unsafe { self.heap.field(ev, 0) })?
+            (unsafe { self.heap.field(ev, EV_TABLE) })?
         };
         let m = (unsafe { self.heap.meta(ev) })?;
         proof {
@@ -2757,12 +3414,12 @@ impl<M: Mode> Ctx<M> {
         (unsafe { self.heap.dup(l) })?;
         let ghost h2 = self.heap;
         let ghost d2 = |b: usize| points(t, b) + points(l, b);
-        let e = self.heap.alloc_data(m.tag(), 3, 0, false);
+        let e = self.heap.alloc_data(m.tag(), EV_WORDS, 0, false);
         let ghost h3 = self.heap;
         let ghost x = none.insert(e.bits_spec());
         proof {
             lemma_unextended(h3, e);
-            assert(h3.scanned_at(e, 0));
+            assert(h3.scanned_at(e, EV_TABLE as int));
             if c {
                 lemma_dup_moved(h2, h1, l);
                 lemma_moved_chain(h2, h1, h0, d1, |b: usize| points(l, b), d2, none, none, none);
@@ -2770,30 +3427,30 @@ impl<M: Mode> Ctx<M> {
                 lemma_moved_chain(h3, h2, h0, d2, z, d2, none, none, none);
                 lemma_ext_nonneg_word(h0, t);
                 lemma_arg_moved(h3, h0, d2, none, t);
-                assert(h3.scanned_word(e, 0).bits_spec() == 1);
+                assert(h3.scanned_word(e, EV_TABLE as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(e, 0, t) })?;
+        (unsafe { self.heap.set_field(e, EV_TABLE, t) })?;
         let ghost h4 = self.heap;
         let ghost d4 = |b: usize| points(l, b);
         proof {
             if M::CHECKED {
-                assert(h3.scanned_at(e, 1) && h3.scanned_at(e, 2));
+                assert(h3.scanned_at(e, EV_STATE as int) && h3.scanned_at(e, EV_OUTER as int));
                 lemma_set_passes_kept(h4, h3, e, 0, t, 1);
                 lemma_set_passes_kept(h4, h3, e, 0, t, 2);
             }
             if c {
-                lemma_set_unit_moved(h4, h3, e, 0, t);
+                lemma_set_unit_moved(h4, h3, e, EV_TABLE as int, t);
                 lemma_moved_chain(h4, h3, h0, d2, |b: usize| -points(t, b), d4, none, x, none);
                 s0.lemma_arg_counted(seq![state], 0);
                 lemma_points_in(seq![state], state.bits_spec());
                 lemma_arg_moved(h4, h0, d4, none, state);
                 lemma_unextended(h4, e);
-                assert(h4.word_at(e, 1) == h3.word_at(e, 1));
-                assert(h3.scanned_word(e, 1).bits_spec() == 1);
+                assert(h4.word_at(e, EV_STATE as int) == h3.word_at(e, EV_STATE as int));
+                assert(h3.scanned_word(e, EV_STATE as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(e, 1, state) })?;
+        (unsafe { self.heap.set_field(e, EV_STATE, state) })?;
         let ghost h5 = self.heap;
         let ghost d5 = |b: usize| points(l, b) - points(state, b);
         proof {
@@ -2801,17 +3458,17 @@ impl<M: Mode> Ctx<M> {
                 lemma_set_passes_kept(h5, h4, e, 1, state, 2);
             }
             if c {
-                lemma_set_unit_moved(h5, h4, e, 1, state);
+                lemma_set_unit_moved(h5, h4, e, EV_STATE as int, state);
                 lemma_moved_chain(h5, h4, h0, d4, |b: usize| -points(state, b), d5, none, x, none);
                 s0.lemma_evv_counted(seq![state]);
                 lemma_points_in(seq![state], l.bits_spec());
                 lemma_arg_moved(h5, h0, d5, none, l);
                 lemma_unextended(h5, e);
-                assert(h5.word_at(e, 2) == h3.word_at(e, 2));
-                assert(h3.scanned_word(e, 2).bits_spec() == 1);
+                assert(h5.word_at(e, EV_OUTER as int) == h3.word_at(e, EV_OUTER as int));
+                assert(h3.scanned_word(e, EV_OUTER as int).bits_spec() == 1);
             }
         }
-        (unsafe { self.heap.set_field(e, 2, l) })?;
+        (unsafe { self.heap.set_field(e, EV_OUTER, l) })?;
         proof {
             if M::CHECKED {
                 lemma_words_trans(h2, h1, h0);
@@ -2823,6 +3480,154 @@ impl<M: Mode> Ctx<M> {
             }
             if c {
                 self.lemma_ev_renew_ok(s0, h1, h2, h3, h4, h5, ev, t, l, e, state);
+            }
+        }
+        Ok(e)
+    }
+
+    /// evidence `ev`を退かせ、`ev`のtagとエントリの表を持ち、状態と外側の`evv`が`()`の局所のevidenceを返す。`ev`は
+    /// 消費する。一意な`ev`は、RCに触れずにそのまま返す。そうでなければ、表の参照を1つ多く持つ新しいevidenceを作り、
+    /// `ev`を手放す。どちらのモードも、初めに`ev`の状態と外側の`evv`が`()`かを確かめ、そうでなければ何も変えずに
+    /// `BadEvidence`を返す。確かめる前には何も手放さないので、この操作で`Lin`の値の後始末は起きない
+    /// (docs/spec/object-model.mdの「基本操作の契約」)。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`ev`は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ
+    /// 持つ。速いモードでは、`ev`はevidenceである (検査モードは形を確かめ、違えば`BadEvidence`を返す)。写す道の検査
+    /// モードでは、`ev`の`decref`が誤り (`UnknownPage`、`UseAfterFree`、`WrongOwner`、`CountedImmortal`、
+    /// `ImmortalOverRelease`、`LinShared`、手放す連鎖の誤り) を返すと、表の`dup`と新しいevidenceの確保の後で`Err`を返す。
+    /// その後は`Ctx`を落とすことしかできない (docs/spec/object-model.mdの「検査モードの約束」)。
+    pub unsafe fn ev_retire(&mut self, ev: Word) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(ev),
+            !M::CHECKED ==> old(self).ev_shape(ev) && old(self).holds(ev),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> (r is Ok <==> old(self).ev_state(ev).bits_spec() == 1 && old(
+                self,
+            ).ev_outer(ev).bits_spec() == 1),
+            old(self).held_ok() && old(self).ev_shape(ev) && !(old(self).ev_state(ev).bits_spec()
+                == 1 && old(self).ev_outer(ev).bits_spec() == 1) ==> r == Err::<Word, HeapError>(
+                HeapError::BadEvidence,
+            ) && *final(self) == *old(self),
+            ({
+                &&& old(self).held_ok()
+                &&& old(self).ev_shape(ev)
+                &&& old(self).holds(ev)
+                &&& old(self).ev_state(ev).bits_spec() == 1
+                &&& old(self).ev_outer(ev).bits_spec() == 1
+            }) ==> {
+                &&& r is Ok || chain_err(r)
+                &&& r matches Ok(e) ==> {
+                    &&& final(self).held_ok()
+                    &&& final(self).holds(e)
+                    &&& final(self).ev_shape(e)
+                    &&& final(self).heap_spec().rc_value(e) > 0
+                    &&& final(self).ev_tag(e) == old(self).ev_tag(ev)
+                    &&& final(self).ev_table(e) == old(self).ev_table(ev)
+                    &&& final(self).ev_state(e).bits_spec() == 1
+                    &&& final(self).ev_outer(e).bits_spec() == 1
+                    &&& old(self).heap_spec().rc_value(ev) == 1 ==> e == ev && *final(self) == *old(
+                        self,
+                    )
+                    &&& final(self).evolved_by(
+                        *old(self),
+                        |b: usize| points(e, b) - points(ev, b),
+                        Set::empty(),
+                    )
+                }
+            },
+    {
+        let ghost s0 = *self;
+        let ghost h0 = self.heap;
+        let ghost c = s0.held_ok() && s0.ev_shape(ev);
+        let ghost k = c && s0.holds(ev) && s0.ev_state(ev).bits_spec() == 1 && s0.ev_outer(
+            ev,
+        ).bits_spec() == 1;
+        proof {
+            if c {
+                lemma_unextended(h0, ev);
+                h0.lemma_readable_scanned(ev, EV_TABLE as int);
+            }
+        }
+        let t = if M::CHECKED {
+            self.checked_ev(ev)?
+        } else {
+            (unsafe { self.heap.field(ev, EV_TABLE) })?
+        };
+        proof {
+            lemma_unextended(h0, ev);
+        }
+        let s = (unsafe { self.heap.field(ev, EV_STATE) })?;
+        let o = (unsafe { self.heap.field(ev, EV_OUTER) })?;
+        if s.bits() != 1 || o.bits() != 1 {
+            return Err(HeapError::BadEvidence);
+        }
+        let unique = (unsafe { self.heap.is_unique(ev) })?;
+        if unique {
+            proof {
+                if k {
+                    lemma_moved_refl(h0);
+                    lemma_moved_weaken(
+                        h0,
+                        h0,
+                        |b: usize| 0int,
+                        |b: usize| points(ev, b) - points(ev, b),
+                        Set::empty(),
+                        Set::empty(),
+                    );
+                }
+            }
+            return Ok(ev);
+        }
+        let m = (unsafe { self.heap.meta(ev) })?;
+        proof {
+            m.lemma_fields();
+        }
+        if M::CHECKED {
+            self.heap.dup_check(t)?;
+        }
+        (unsafe { self.heap.dup(t) })?;
+        let ghost h1 = self.heap;
+        let e = self.heap.alloc_data(m.tag(), EV_WORDS, 0, false);
+        let ghost h2 = self.heap;
+        proof {
+            lemma_words_trans(h2, h1, h0);
+            lemma_unextended(h2, e);
+            assert(h2.scanned_at(e, EV_TABLE as int));
+            if k {
+                Self::lemma_retire_copied(s0, h1, self.heap, ev, t, e);
+            }
+        }
+        let r = unsafe { self.heap.decref(ev) };
+        let ghost h3 = self.heap;
+        proof {
+            if M::CHECKED {
+                lemma_words_trans(h3, h2, h0);
+            }
+        }
+        if let Err(err) = r {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(err);
+        }
+        proof {
+            if k {
+                Self::lemma_retire_released(s0, h1, h2, self.heap, ev, t, e);
+            }
+        }
+        (unsafe { self.heap.set_field(e, EV_TABLE, t) })?;
+        proof {
+            if M::CHECKED {
+                lemma_words_trans(self.heap, h3, h0);
+                self.lemma_words_kept(s0);
+            }
+            if k {
+                self.lemma_ev_retire_ok(s0, h1, h2, h3, ev, t, e);
             }
         }
         Ok(e)
@@ -2862,7 +3667,7 @@ impl<M: Mode> Ctx<M> {
         let ghost s0 = *self;
         let ghost c = s0.held_ok();
         let tag = tag_of_effect(effect);
-        let want = Meta::new(tag, 2, Kind::Data, false);
+        let want = Meta::new(tag, NODE_WORDS as u8, Kind::Data, false);
         proof {
             want.lemma_fields();
         }
@@ -2894,7 +3699,7 @@ impl<M: Mode> Ctx<M> {
                 wanted == want.bits_spec(),
                 bits_wf(wanted),
                 bits_tag(wanted) == tag,
-                bits_scan(wanted) == 2,
+                bits_scan(wanted) == NODE_WORDS,
                 bits_kind(wanted) == Kind::Data,
                 !bits_lin(wanted),
                 c ==> {
@@ -2916,9 +3721,9 @@ impl<M: Mode> Ctx<M> {
                 node.is_ptr_spec(),
                 c ==> {
                     &&& node_ok(self.heap, node)
-                    &&& ev_ok(self.heap, self.heap.scanned_word(node, 0))
-                    &&& find(s, tag) == Some(self.heap.scanned_word(node, 0))
-                    &&& self.heap.tag_of(self.heap.scanned_word(node, 0)) == tag
+                    &&& ev_ok(self.heap, self.heap.scanned_word(node, NODE_EV as int))
+                    &&& find(s, tag) == Some(self.heap.scanned_word(node, NODE_EV as int))
+                    &&& self.heap.tag_of(self.heap.scanned_word(node, NODE_EV as int)) == tag
                 },
             decreases
                     if M::CHECKED {
@@ -2932,9 +3737,13 @@ impl<M: Mode> Ctx<M> {
                 if c && node.bits_spec() != 1 {
                     let k = (f - i) as nat;
                     assert(k > 0);
-                    let next = path(self.heap, self.heap.scanned_word(node, 1), (k - 1) as nat);
+                    let next = path(
+                        self.heap,
+                        self.heap.scanned_word(node, NODE_NEXT as int),
+                        (k - 1) as nat,
+                    );
                     assert(next is Some);
-                    let x = (self.heap.tag_of(node), self.heap.scanned_word(node, 0));
+                    let x = (self.heap.tag_of(node), self.heap.scanned_word(node, NODE_EV as int));
                     assert(rest =~= seq![x] + next->0);
                     assert(rest.drop_first() =~= s.subrange(i + 1, s.len() as int));
                     assert((seq![x] + next->0).drop_first() =~= next->0);
@@ -2979,7 +3788,7 @@ impl<M: Mode> Ctx<M> {
             proof {
                 lemma_unextended(self.heap, node);
             }
-            node = (unsafe { self.heap.field(node, 1) })?;
+            node = (unsafe { self.heap.field(node, NODE_NEXT) })?;
             if M::CHECKED {
                 steps += 1;
             }
@@ -2990,10 +3799,10 @@ impl<M: Mode> Ctx<M> {
         proof {
             if c {
                 lemma_unextended(self.heap, node);
-                s0.heap.lemma_readable_scanned(node, 0);
+                s0.heap.lemma_readable_scanned(node, NODE_EV as int);
             }
         }
-        let e = (unsafe { self.heap.field(node, 0) })?;
+        let e = (unsafe { self.heap.field(node, NODE_EV) })?;
         (unsafe { self.heap.dup(e) })?;
         proof {
             if M::CHECKED {
@@ -3039,7 +3848,7 @@ impl<M: Mode> Ctx<M> {
         let ghost s0 = *self;
         let ghost c = s0.held_ok();
         let tag = tag_of_effect(effect);
-        let want = Meta::new(tag, 2, Kind::Data, false);
+        let want = Meta::new(tag, NODE_WORDS as u8, Kind::Data, false);
         proof {
             want.lemma_fields();
         }
@@ -3071,7 +3880,7 @@ impl<M: Mode> Ctx<M> {
                 wanted == want.bits_spec(),
                 bits_wf(wanted),
                 bits_tag(wanted) == tag,
-                bits_scan(wanted) == 2,
+                bits_scan(wanted) == NODE_WORDS,
                 bits_kind(wanted) == Kind::Data,
                 !bits_lin(wanted),
                 c ==> {
@@ -3093,9 +3902,9 @@ impl<M: Mode> Ctx<M> {
                 node.is_ptr_spec(),
                 c ==> {
                     &&& node_ok(self.heap, node)
-                    &&& ev_ok(self.heap, self.heap.scanned_word(node, 0))
-                    &&& find(s, tag) == Some(self.heap.scanned_word(node, 0))
-                    &&& self.heap.tag_of(self.heap.scanned_word(node, 0)) == tag
+                    &&& ev_ok(self.heap, self.heap.scanned_word(node, NODE_EV as int))
+                    &&& find(s, tag) == Some(self.heap.scanned_word(node, NODE_EV as int))
+                    &&& self.heap.tag_of(self.heap.scanned_word(node, NODE_EV as int)) == tag
                 },
             decreases
                     if M::CHECKED {
@@ -3109,9 +3918,13 @@ impl<M: Mode> Ctx<M> {
                 if c && node.bits_spec() != 1 {
                     let k = (f - i) as nat;
                     assert(k > 0);
-                    let next = path(self.heap, self.heap.scanned_word(node, 1), (k - 1) as nat);
+                    let next = path(
+                        self.heap,
+                        self.heap.scanned_word(node, NODE_NEXT as int),
+                        (k - 1) as nat,
+                    );
                     assert(next is Some);
-                    let x = (self.heap.tag_of(node), self.heap.scanned_word(node, 0));
+                    let x = (self.heap.tag_of(node), self.heap.scanned_word(node, NODE_EV as int));
                     assert(rest =~= seq![x] + next->0);
                     assert(rest.drop_first() =~= s.subrange(i + 1, s.len() as int));
                     assert((seq![x] + next->0).drop_first() =~= next->0);
@@ -3160,7 +3973,7 @@ impl<M: Mode> Ctx<M> {
             proof {
                 lemma_unextended(self.heap, node);
             }
-            node = (unsafe { self.heap.field(node, 1) })?;
+            node = (unsafe { self.heap.field(node, NODE_NEXT) })?;
             if M::CHECKED {
                 steps += 1;
             }
@@ -3171,10 +3984,10 @@ impl<M: Mode> Ctx<M> {
         proof {
             if c {
                 lemma_unextended(self.heap, node);
-                s0.heap.lemma_readable_scanned(node, 0);
+                s0.heap.lemma_readable_scanned(node, NODE_EV as int);
             }
         }
-        let e = (unsafe { self.heap.field(node, 0) })?;
+        let e = (unsafe { self.heap.field(node, NODE_EV) })?;
         (unsafe { self.heap.dup(e) })?;
         proof {
             if M::CHECKED {
@@ -3323,7 +4136,7 @@ impl<M: Mode> Ctx<M> {
                     &&& self.heap.settled()
                     &&& self.heap.word_in(last)
                 },
-                cs.len() > 0 && M::CHECKED ==> self.heap.set_passes(last, 1)
+                cs.len() > 0 && M::CHECKED ==> self.heap.set_passes(last, NODE_NEXT as int)
                     && self.heap.dup_passes(last),
                 c ==> {
                     &&& mask_path(hs, w, f, s)
@@ -3366,12 +4179,12 @@ impl<M: Mode> Ctx<M> {
                     lemma_copy_seq_step(items@, s, out, js, i as int, removed as int);
                 }
             }
-            let next = (unsafe { self.heap.field(node, 1) })?;
+            let next = (unsafe { self.heap.field(node, NODE_NEXT) })?;
             proof {
                 assert(next == nth(hs, w, (i + 1) as nat));
             }
             if keep {
-                let ev = (unsafe { self.heap.field(node, 0) })?;
+                let ev = (unsafe { self.heap.field(node, NODE_EV) })?;
                 proof {
                     lemma_mask_ev(items@, hs, h0, w, f, s, bound, i as nat, ev, c);
                 }
@@ -3383,14 +4196,17 @@ impl<M: Mode> Ctx<M> {
                         lemma_copy_dup(hs, h0, h1, cs, out, ev);
                     }
                 }
-                let cp = self.heap.alloc_data(t, 2, 0, false);
+                let cp = self.heap.alloc_data(t, NODE_WORDS, 0, false);
                 let ghost h2 = self.heap;
                 proof {
                     lemma_kept_alloc(h2, h1, cp);
                     lemma_unextended(h2, cp);
-                    assert(h2.scanned_at(cp, 0) && h2.scanned_at(cp, 1));
-                    assert(h2.scanned_word(cp, 0).bits_spec() == 1);
-                    assert(h2.scanned_word(cp, 1).bits_spec() == 1);
+                    assert(h2.scanned_at(cp, NODE_EV as int) && h2.scanned_at(
+                        cp,
+                        NODE_NEXT as int,
+                    ));
+                    assert(h2.scanned_word(cp, NODE_EV as int).bits_spec() == 1);
+                    assert(h2.scanned_word(cp, NODE_NEXT as int).bits_spec() == 1);
                     lemma_kept_trans(h1, h0, hs, none, none, none);
                     lemma_kept_trans(h2, h1, hs, none, none, none);
                     if M::CHECKED {
@@ -3402,11 +4218,11 @@ impl<M: Mode> Ctx<M> {
                         lemma_arg_moved(h2, hs, |b: usize| points(ev, b), none, ev);
                     }
                 }
-                (unsafe { self.heap.set_field(cp, 0, ev) })?;
+                (unsafe { self.heap.set_field(cp, NODE_EV, ev) })?;
                 let ghost h3 = self.heap;
                 let ghost x3 = none.insert(cp.bits_spec());
                 proof {
-                    lemma_kept_set(h3, h2, cp, 0, ev);
+                    lemma_kept_set(h3, h2, cp, NODE_EV as int, ev);
                     lemma_kept_trans(h3, h2, hs, none, x3, none);
                     lemma_unextended(h3, cp);
                     if M::CHECKED {
@@ -3438,13 +4254,13 @@ impl<M: Mode> Ctx<M> {
                 if last.bits() == 1 {
                     head = cp;
                 } else {
-                    (unsafe { self.heap.set_field(last, 1, cp) })?;
+                    (unsafe { self.heap.set_field(last, NODE_NEXT, cp) })?;
                 }
                 let ghost h4 = self.heap;
                 proof {
                     if cs.len() > 0 {
                         let x4 = none.insert(last.bits_spec());
-                        lemma_kept_set(h4, h3, last, 1, cp);
+                        lemma_kept_set(h4, h3, last, NODE_NEXT as int, cp);
                         lemma_kept_trans(h4, h3, hs, none, x4, none);
                         if M::CHECKED {
                             lemma_words_trans(h4, h3, h0);
@@ -3518,7 +4334,7 @@ impl<M: Mode> Ctx<M> {
             }
             Ok(node)
         } else {
-            (unsafe { self.heap.set_field(last, 1, node) })?;
+            (unsafe { self.heap.set_field(last, NODE_NEXT, node) })?;
             proof {
                 if M::CHECKED {
                     lemma_words_trans(self.heap, h6, hs);
@@ -3557,13 +4373,14 @@ impl<M: Mode> Ctx<M> {
         ensures
             r matches Ok(t) ==> {
                 &&& ev.is_ptr_spec()
-                &&& self.heap.scan_of(ev) == 3
-                &&& t == self.heap.scanned_word(ev, 0)
+                &&& self.heap.tag_of(ev) != 0
+                &&& self.heap.scan_of(ev) == EV_WORDS
+                &&& t == self.heap.scanned_word(ev, EV_TABLE as int)
                 &&& t.is_ptr_spec()
                 &&& self.heap.word_in(t)
             },
             self.held_ok() && self.ev_shape(ev) ==> r == Ok::<Word, HeapError>(
-                self.heap.scanned_word(ev, 0),
+                self.heap.scanned_word(ev, EV_TABLE as int),
             ),
     {
         if !ev.is_ptr() {
@@ -3579,7 +4396,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_unextended(self.heap, ev);
         }
-        let t = (unsafe { self.heap.field(ev, 0) })?;
+        let t = (unsafe { self.heap.field(ev, EV_TABLE) })?;
         if !t.is_ptr() {
             return Err(HeapError::BadEvidence);
         }
@@ -3591,6 +4408,32 @@ impl<M: Mode> Ctx<M> {
             return Err(HeapError::BadEvidence);
         }
         Ok(t)
+    }
+
+    /// `table`が`lin`ビットのない不死のtag 0の`Data`かを確かめる。エントリはここで確かめない。表を作るときに
+    /// `alloc_fork_table`が確かめている。
+    fn checked_fork_table(&self, table: Word) -> (r: Result<(), HeapError>)
+        requires
+            M::CHECKED,
+            self.wf(),
+            self.heap.word_in(table),
+        ensures
+            self.held_ok() && self.heap.fork_table(table) ==> r is Ok,
+    {
+        if !table.is_ptr() {
+            return Err(HeapError::BadEvidence);
+        }
+        let m = (unsafe { self.heap.meta(table) })?;
+        proof {
+            m.lemma_fields();
+        }
+        if !matches!(m.kind(), Kind::Data) || m.lin() || m.tag() != 0 {
+            return Err(HeapError::BadEvidence);
+        }
+        if !self.heap.checked_immortal(table)? {
+            return Err(HeapError::BadEvidence);
+        }
+        Ok(())
     }
 
     /// mask が除く組を、写す前に `m` 個 (`skip_total`) まで数える。節点ごとに形を確かめ、上限の歩数で止まり、除く組が
@@ -3699,12 +4542,12 @@ impl<M: Mode> Ctx<M> {
                 }
             }
             if keep {
-                let ev = (unsafe { self.heap.field(node, 0) })?;
+                let ev = (unsafe { self.heap.field(node, NODE_EV) })?;
                 self.heap.dup_check(ev)?;
             } else {
                 removed += 1;
             }
-            node = (unsafe { self.heap.field(node, 1) })?;
+            node = (unsafe { self.heap.field(node, NODE_NEXT) })?;
             k += 1;
             proof {
                 assert(nth(h, w, k as nat) == h.scanned_word(nth(h, w, (k - 1) as nat), 1));
@@ -3765,10 +4608,15 @@ impl<M: Mode> Ctx<M> {
                     let rest = s.subrange(count as int, s.len() as int);
                     assert(k > 0);
                     assert(node_ok(self.heap, n));
-                    let next = path(self.heap, self.heap.scanned_word(n, 1), (k - 1) as nat);
+                    let next = path(
+                        self.heap,
+                        self.heap.scanned_word(n, NODE_NEXT as int),
+                        (k - 1) as nat,
+                    );
                     assert(next is Some);
-                    assert(rest =~= seq![(self.heap.tag_of(n), self.heap.scanned_word(n, 0))]
-                        + next->0);
+                    assert(rest =~= seq![
+                        (self.heap.tag_of(n), self.heap.scanned_word(n, NODE_EV as int)),
+                    ] + next->0);
                     assert(rest.len() >= 1);
                 }
             }
@@ -3787,14 +4635,18 @@ impl<M: Mode> Ctx<M> {
                 if c {
                     let k = (f - count) as nat;
                     let rest = s.subrange(count as int, s.len() as int);
-                    let next = path(self.heap, self.heap.scanned_word(n, 1), (k - 1) as nat);
-                    let x = (self.heap.tag_of(n), self.heap.scanned_word(n, 0));
+                    let next = path(
+                        self.heap,
+                        self.heap.scanned_word(n, NODE_NEXT as int),
+                        (k - 1) as nat,
+                    );
+                    let x = (self.heap.tag_of(n), self.heap.scanned_word(n, NODE_EV as int));
                     assert(rest =~= seq![x] + next->0);
                     assert(rest.drop_first() =~= s.subrange(count + 1, s.len() as int));
                     assert((seq![x] + next->0).drop_first() =~= next->0);
                 }
             }
-            n = (unsafe { self.heap.field(n, 1) })?;
+            n = (unsafe { self.heap.field(n, NODE_NEXT) })?;
             count += 1;
         }
         // 足す節点の分も上限に入る。空のリストに足すときはループに入らないので、ここで確かめる
@@ -3816,6 +4668,9 @@ unsafe impl Send for RtPtr {}
 pub const CTX_YIELD_TARGET: usize = core::mem::offset_of!(Ctx<Fast>, native)
     + core::mem::offset_of!(Native, yielding)
     + core::mem::offset_of!(YieldState, target);
+pub const CTX_YIELD_ABORT: usize = core::mem::offset_of!(Ctx<Fast>, native)
+    + core::mem::offset_of!(Native, yielding)
+    + core::mem::offset_of!(YieldState, abort);
 pub const CTX_FAULT: usize =
     core::mem::offset_of!(Ctx<Fast>, native) + core::mem::offset_of!(Native, fault);
 pub const CTX_STOP: usize =
@@ -3837,6 +4692,7 @@ const _: () = {
     assert!(core::mem::size_of::<Native>() == 72);
     let consts = [
         CTX_YIELD_TARGET,
+        CTX_YIELD_ABORT,
         CTX_FAULT,
         CTX_STOP,
         CTX_STACK_LIMIT,

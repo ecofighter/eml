@@ -150,7 +150,7 @@ mod fatal {
     use eml_sched::error::{RunFault, RuntimeError};
 
     use crate::enter::{FATAL_RECORDED, Fatal, enter};
-    use crate::image::{Image, Slice};
+    use crate::image::{Image, NO_EFFECT, Slice};
     use crate::worker::{NATIVE_CODE, Worker};
 
     /// テストだけの行の関数。内部の類の誤りを返す。
@@ -190,6 +190,8 @@ mod fatal {
             files: Slice::new(&[]),
             data: Slice::new(&[]),
             paps: Slice::new(&[]),
+            panic_effect: NO_EFFECT,
+            io_effect: NO_EFFECT,
         };
         // SAFETY: `image`の表は空で、workerより長く生きる
         let mut worker = unsafe { Worker::new(&image) };

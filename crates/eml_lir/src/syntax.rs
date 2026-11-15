@@ -61,16 +61,12 @@ pub fn operation_text(effects: &[EffectInfo], effect: u32, op: u32) -> String {
     )
 }
 
-/// 基本操作の名前と、`[…]` に書いた即値 (`ev_clause[State.get]`)。
+/// 基本操作の名前と、`[…]`に書いた即値 (`evv_mask[State*2]`)。
 pub fn prim_text(effects: &[EffectInfo], prim: &Prim) -> String {
     let name = prim.name();
     match prim.immediates() {
         Immediates::None => name.to_string(),
         Immediates::Mask(items) => format!("{name}[{}]", mask_text(effects, items)),
-        Immediates::Effect(effect) => format!("{name}[{}]", effect_text(effects, effect)),
-        Immediates::Operation { effect, op } => {
-            format!("{name}[{}]", operation_text(effects, effect, op))
-        }
         Immediates::Root(root) => format!("{name}[{root}]"),
     }
 }
@@ -150,10 +146,16 @@ pub struct Token {
 
 const PUNCTS: &[char] = &['(', ')', '{', '}', '[', ']', ','];
 
-/// テキストの形で名前を書く、値の Repr。構造体は形の中身を書き、token は reuse のパスだけが作るので別に扱う。
-pub(crate) const REPRS: [Repr; 6] = [
+/// テキストの形で名前を書くRepr。値のReprと文脈のReprである。構造体は形の中身を書き、tokenはreuseのパスだけが作るので
+/// 別に扱う。
+pub(crate) const REPRS: [Repr; 11] = [
     Repr::Obj,
     Repr::TObj,
+    Repr::Ev,
+    Repr::Cev,
+    Repr::Fev,
+    Repr::Rev,
+    Repr::Evv,
     Repr::Int,
     Repr::Float,
     Repr::Enum,
@@ -379,6 +381,14 @@ pub struct ApplyParts {
     pub callee: Atom,
     pub args: Vec<Atom>,
     pub prompt: Option<VarId>,
+}
+
+/// `Reader::evidence`が読んだ`evidence`の部品。
+pub struct EvidenceParts {
+    pub effect: u32,
+    pub state: Atom,
+    pub outer: Atom,
+    pub entries: Vec<(FnIdx, Vec<Atom>)>,
 }
 
 /// 関数の並びのほかに、読み終えたプログラムが持つ表。
@@ -968,6 +978,36 @@ impl<'t> Reader<'t> {
         Ok((ext, args, at))
     }
 
+    /// `evidence`の後の、エフェクト、状態と外側のリスト、エントリの並び。エントリは`&g`か`closure g(..)`である。
+    /// エントリの数と関数は、誤りを含むIRも読み戻すためにverifierが確かめる。
+    pub fn evidence(&mut self, state: &mut FnState) -> Result<EvidenceParts, ParseError> {
+        let line = self.line();
+        let word = self.word()?;
+        let effect = self.effect_ref(&word, line)?;
+        self.expect_punct('(')?;
+        let initial = self.atom(state)?;
+        self.expect_punct(',')?;
+        let outer = self.atom(state)?;
+        self.expect_punct(')')?;
+        let entries = self.list('[', ']', |p| {
+            if p.at_word("closure") {
+                p.bump();
+                return p.closure(state);
+            }
+            let line = p.line();
+            match p.atom(state)? {
+                Atom::Fn(target) => Ok((target, Vec::new())),
+                _ => Err(error(line, "an entry is `&g` or `closure g(..)`")),
+            }
+        })?;
+        Ok(EvidenceParts {
+            effect,
+            state: initial,
+            outer,
+            entries,
+        })
+    }
+
     /// `prim` の後の、基本操作と引数。引数の数は extern と同じく verifier が確かめる。
     pub fn prim_call(&mut self, state: &mut FnState) -> Result<(Prim, Vec<Atom>), ParseError> {
         let prim = self.prim()?;
@@ -1285,24 +1325,6 @@ impl<'t> Reader<'t> {
                     .collect::<Result<_, _>>()?;
                 Ok(Prim::EvvMask(items))
             }
-            Immediates::Effect(_) => {
-                let (line, word) = one(immediates, "Effect", "effect")?;
-                let effect = self.effect_ref(&word, line)?;
-                Ok(if matches!(kind, Prim::EvNew(_)) {
-                    Prim::EvNew(effect)
-                } else {
-                    Prim::EvLookup(effect)
-                })
-            }
-            Immediates::Operation { .. } => {
-                let (line, word) = one(immediates, "Effect.operation", "operation")?;
-                let (effect, op) = self.operation_word(&word, line)?;
-                Ok(if matches!(kind, Prim::EvSetClause { .. }) {
-                    Prim::EvSetClause { effect, op }
-                } else {
-                    Prim::EvClause { effect, op }
-                })
-            }
             Immediates::Root(_) => {
                 let (line, word) = one(immediates, "Root", "root")?;
                 let root = number(&word).ok_or_else(|| {
@@ -1447,7 +1469,8 @@ impl<'t> Reader<'t> {
                 error(
                     line,
                     format!(
-                        "expected a repr (obj, tobj, int, float, enum or unit), found `{word}`"
+                        "expected a repr ({}), found `{word}`",
+                        crate::check::repr_names(|_| true, "or")
                     ),
                 )
             })
@@ -2009,6 +2032,34 @@ impl<'p> Writer<'p> {
             function_name(ext.row(self.c_functions).name),
             self.atoms(vars, args),
             self.position(at)
+        )
+    }
+
+    /// `evidence E(state, outer) [entries]`。捕獲のないエントリは`&g`、ほかは`closure g(..)`と書く。
+    pub fn evidence(
+        &self,
+        vars: &[VarInfo],
+        effect: u32,
+        state: Atom,
+        outer: Atom,
+        entries: &[(FnIdx, Vec<Atom>)],
+    ) -> String {
+        let entries: Vec<String> = entries
+            .iter()
+            .map(|(target, captures)| {
+                if captures.is_empty() {
+                    format!("&{}", self.callee(*target))
+                } else {
+                    self.closure(vars, *target, captures)
+                }
+            })
+            .collect();
+        format!(
+            "evidence {}({}, {}) [{}]",
+            effect_text(self.effects, effect),
+            self.atom(vars, &state),
+            self.atom(vars, &outer),
+            entries.join(", ")
         )
     }
 

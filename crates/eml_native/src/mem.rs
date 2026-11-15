@@ -2,12 +2,16 @@
 //! 生成したコードが頼る配置の事実を1か所で`eml_rt`に結び付ける。
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
-    GlobalValue, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, Type, Value, types,
+    GlobalValue, InstBuilder, MemFlagsData, StackSlot, StackSlotData, StackSlotKind, Type, Value,
+    types,
 };
 use cranelift_frontend::FunctionBuilder;
 use eml_lir::Shape;
 use eml_rt::rc::{DECREF_FAST_BIAS, DECREF_FAST_SPAN, DUP_FAST_BIAS, DUP_FAST_SPAN};
-use eml_rt::{CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Kind, Meta, Word, layout};
+use eml_rt::{
+    CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_ABORT, CTX_YIELD_TARGET, Kind, Meta, Word,
+    layout,
+};
 
 // reuseは走査する語が`REUSE_SCANNED_LIMIT`個未満の形だけを組にし、ネイティブのコードはそれを数の語なしで`eml_rt`の上に
 // 下ろすので、上限は`eml_rt`の上限以下でなければならない (docs/spec/object-model.md の「ペイロード」)
@@ -112,6 +116,25 @@ pub fn spill(b: &mut FunctionBuilder, values: &[Value]) -> Value {
     b.ins().stack_addr(types::I64, slot, 0)
 }
 
+/// 書ける`words`語のスタックの領域と、そのアドレス。領域は今の関数のフレームにあり、関数が戻るまで生きる。サービスが
+/// 結果の語を書く先である。
+pub fn out_words(b: &mut FunctionBuilder, words: usize) -> (StackSlot, Value) {
+    let bytes = u32::try_from(words * layout::WORD_BYTES).expect("an out area fits in 4 GiB");
+    let slot = b.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        bytes,
+        layout::WORD_BYTES.trailing_zeros() as u8,
+    ));
+    let address = b.ins().stack_addr(types::I64, slot, 0);
+    (slot, address)
+}
+
+/// `out_words`の領域の`index`番目の語。
+pub fn load_out(b: &mut FunctionBuilder, slot: StackSlot, index: usize) -> Value {
+    let offset = i32::try_from(index * layout::WORD_BYTES).expect("an out area fits in 2 GiB");
+    b.ins().stack_load(types::I64, types::I64, slot, offset)
+}
+
 /// 物体`obj`が`BigInt`なら0でない。ダミーは`BigInt`で、構造体の箱はいつも`Data`なので、構造体の箱を受ける所ではこれで
 /// ダミーを見分ける (docs/spec/object-model.md の「ダミーの値」)。
 pub fn is_big_int(b: &mut FunctionBuilder, obj: Value) -> Value {
@@ -187,8 +210,13 @@ pub fn load_box(b: &mut FunctionBuilder, obj: Value, ty: Type) -> Value {
 /// 読み込み時の値のデータの記号`slot`が持つ語を型`ty`で読む。記号のアドレスはPC相対で、ロードは1つである
 /// (docs/spec/native.md の「値と定数」)。
 pub fn data_word(b: &mut FunctionBuilder, slot: GlobalValue, ty: Type) -> Value {
-    let address = b.ins().symbol_value(types::I64, slot);
+    let address = data_address(b, slot);
     b.ins().load(ty, MemFlagsData::trusted(), address, 0)
+}
+
+/// 読み込み時の値のデータの記号`slot`のPC相対のアドレス。ロードはない (docs/spec/native.mdの「値と定数」)。
+pub fn data_address(b: &mut FunctionBuilder, slot: GlobalValue) -> Value {
+    b.ins().symbol_value(types::I64, slot)
 }
 
 /// 物体`obj`の数。ヘッダの先頭の`I32`である。
@@ -233,13 +261,26 @@ fn in_span(b: &mut FunctionBuilder, rc: Value, bias: u32, span: u32) -> Value {
         .icmp_imm_u(IntCC::UnsignedLessThan, biased, i64::from(span))
 }
 
-/// `ctx`の`yielding.target`の語。yieldも中断もしていない間だけ`UNIT`である (docs/spec/native.md の「巻き戻しの地点」)。
+/// `ctx`の`yielding.target`の語。yieldも中断もしていない間は`UNIT`である。読むのは、インラインの`yielding`と
+/// `yield_status`と、最後でない部分から戻るyieldを見つける`eml$apply$m`の`n < m`の腕の見張りと、着地の印を持つ
+/// 地点の冷たいブロックである (docs/spec/native.mdの「エフェクト」「関数の値」「巻き戻しの地点」)。
 pub fn yield_target(b: &mut FunctionBuilder, ctx: Value) -> Value {
     b.ins().load(
         types::I64,
         MemFlagsData::trusted(),
         ctx,
         CTX_YIELD_TARGET as i32,
+    )
+}
+
+/// `ctx`のyieldの状態の`abort`のバイト。中断の途中の間だけ0でなく、yieldはそれを立てない。読むのは、呼び出しの後の
+/// 巻き戻しの確かめとインラインの`yield_status`である (docs/spec/native.mdの「巻き戻しの地点」「エフェクト」)。
+pub fn yield_abort(b: &mut FunctionBuilder, ctx: Value) -> Value {
+    b.ins().load(
+        types::I8,
+        MemFlagsData::trusted(),
+        ctx,
+        CTX_YIELD_ABORT as i32,
     )
 }
 

@@ -619,7 +619,7 @@ const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
 const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";
 
 /// handle の場所の形 (docs/spec/core-ir.md の「handle と `prompt$`」)。
-/// in-place のエントリを `ev_set_clause` で入れてから `evv` を替え、本体の結果を `prompt$` に渡す。
+/// in-placeのエントリを持つevidenceを1つの命令で作ってから`evv`を替え、本体の結果を`prompt$`に渡す。
 #[test]
 fn a_handle_installs_evidence_and_calls_prompt() {
     let text = format!(
@@ -631,16 +631,43 @@ fn a_handle_installs_evidence_and_calls_prompt() {
       let t.1: Box{tobj} = call "hide@[Unit -> <Ask, Panic> Int]{1=main$lambda0}"(0)
       unpack t.1 Box #0(b.2: tobj)
       let c.3: tobj = closure main$handle0(b.2)
-      let w.7: tobj = prim evv_get()
-      let ev.8: obj = prim ev_new[Ask]((), w.7)
-      let u.9: unit = prim ev_set_clause[Ask.ask](ev.8, &main$handle0$ask$entry)
-      let w.10: tobj = prim evv_push(w.7, ev.8)
-      let u.11: unit = prim evv_set(w.10)
-      let x.12: tobj poly = yields apply c.3(()) prompt ev.8
-      let t.4: int = call prompt$(ev.8, &main$handle0$return, x.12)
+      let w.7: evv = prim evv_get()
+      let ev.8: ev lin = evidence Ask((), w.7) [&main$handle0$ask$entry]
+      let w.9: evv = prim evv_enter(w.7, ev.8)
+      let u.10: unit = prim evv_set(w.9)
+      let x.11: tobj poly = yields apply c.3(()) prompt ev.8
+      let t.4: int = call prompt$(ev.8, &main$handle0$return, x.11)
       let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
+    }
+    "#);
+}
+
+/// handleの節のクロージャは、evidenceのエントリになって消える。捕獲のある節は`closure`のエントリで、その捕獲は
+/// evidenceの命令が受け取る (docs/spec/core-ir.mdの「handle と `prompt$`」)。
+#[test]
+fn a_handle_becomes_one_evidence_instruction() {
+    let text = format!(
+        "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let Box m = hide 0 41\n  let r =\n    handle b () with\n      | ctl ask () k -> k m\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let t.1: Box{tobj} = call "hide@[Unit -> <Ask, Panic> Int]{1=main$lambda0}"(0)
+      unpack t.1 Box #0(b.2: tobj)
+      let t.3: Box{int} = call "hide@[Int]"(0, 41)
+      unpack t.3 Box #0(m.4: int)
+      let c.5: tobj = closure main$handle0(b.2)
+      let w.10: evv = prim evv_get()
+      let ev.11: ev lin = evidence Ask((), w.10) [closure main$handle0$ask$entry(m.4)]
+      let w.12: evv = prim evv_enter(w.10, ev.11)
+      let u.13: unit = prim evv_set(w.12)
+      let x.14: tobj poly = yields apply c.5(()) prompt ev.11
+      let t.7: int = call prompt$(ev.11, &main$handle0$return, x.14)
+      let t.8: obj = extern "Prelude.Show Int.show"(t.7)
+      let t.9: unit = extern Prelude.println(t.8)
+      return t.9
     }
     "#);
 }
@@ -655,7 +682,7 @@ fn an_immediate_clause_becomes_its_entry() {
     let shown = core_text(&text, Pass::Evidence);
     assert!(!shown.contains("fn main$handle0$ask("), "{shown}");
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
-    internal clause Ask.ask fn main$handle0$ask$entry(e.4: obj, p.0: unit) -> int {
+    internal clause Ask.ask fn main$handle0$ask$entry(e.4: cev, p.0: unit) -> int {
       let p.2: unit = prim ev_take_state(e.4)
       let u.5: unit = prim ev_set_state(e.4, ())
       return 41
@@ -671,7 +698,7 @@ fn a_clause_that_does_not_resume_at_once_yields_to_its_handler() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
-    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
+    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: cev, p.1: unit) -> int {
       let c.2: tobj = closure main$handle0$ask(p.1)
       let u.3: unit = prim yield_to(e.0, c.2, &id$)
       return 0
@@ -704,14 +731,14 @@ fn a_clause_that_performs_another_effect_is_not_run_in_place() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
-    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
+    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: cev, p.1: unit) -> int {
       let c.2: tobj = closure main$handle0$ask(p.1)
       let u.3: unit = prim yield_to(e.0, c.2, &id$)
       return 0
     }
     ");
     insta::assert_snapshot!(function(&shown, "main$handle1$log$entry"), @"
-    internal clause Log.log fn main$handle1$log$entry(e.4: obj, n.0: int) -> unit {
+    internal clause Log.log fn main$handle1$log$entry(e.4: cev, n.0: int) -> unit {
       let p.2: unit = prim ev_take_state(e.4)
       let u.5: unit = prim ev_set_state(e.4, ())
       return ()
@@ -725,7 +752,7 @@ fn a_never_clause_aborts() {
     let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | ctl fail _ -> 0\n  println (show r)";
     let shown = core_text(text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$fail$entry"), @"
-    internal clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj poly {
+    internal clause Fail.fail fn main$handle0$fail$entry(e.0: cev, p.1: obj) -> obj poly {
       let c.2: tobj = closure main$handle0$fail(p.1)
       let u.3: unit = prim yield_abort(e.0, c.2)
       let d.4: obj poly = prim dummy()
@@ -743,15 +770,13 @@ fn a_perform_looks_up_evidence_and_calls_its_clause() {
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$lambda0"), @r#"
     internal yields fn main$lambda0(p.0: unit) -> int {
-      let ev.3: obj = prim ev_lookup[Ask]()
-      let c.4: tobj = prim ev_clause[Ask.ask](ev.3)
-      let t.1: int = clause Ask.ask c.4(ev.3, ())
-      let y.5: int = prim yielding()
-      switch y.5 { 0 -> b2, _ -> b1 }
+      let t.1: int = clause Ask.ask(())
+      let y.3: int = prim yielding()
+      switch y.3 { 0 -> b2, _ -> b1 }
     b1:
-      let k.6: tobj poly = prim yield_cont_take()
-      let k.7: tobj poly = closure compose$(k.6, &main$lambda0$k0)
-      let u.8: unit = prim yield_cont_set(k.7)
+      let k.4: tobj poly = prim yield_cont_take()
+      let k.5: tobj poly = closure compose$(k.4, &main$lambda0$k0)
+      let u.6: unit = prim yield_cont_set(k.5)
       return 0
     b2:
       let t.2: int = extern "Prelude.Num Int.+"(t.1, 1)
@@ -791,35 +816,33 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &run), @r#"
     yields fn "run<e>"(cb.0: tobj poly) -> obj {
-      let ev.5: obj = prim ev_lookup[State]()
-      let c.6: tobj = prim ev_clause[State.get](ev.5)
-      let t.1: int = clause State.get c.6(ev.5, ())
-      let y.11: int = prim yielding()
-      switch y.11 { 0 -> b2, _ -> b1 }
+      let t.1: int = clause State.get(())
+      let y.9: int = prim yielding()
+      switch y.9 { 0 -> b2, _ -> b1 }
     b1:
-      let k.12: tobj poly = prim yield_cont_take()
-      let c.13: tobj poly = closure "run<e>$k0"(cb.0)
-      let k.14: tobj poly = closure compose$(k.12, c.13)
-      let u.15: unit = prim yield_cont_set(k.14)
-      let d.16: obj poly = prim dummy()
-      return d.16
+      let k.10: tobj poly = prim yield_cont_take()
+      let c.11: tobj poly = closure "run<e>$k0"(cb.0)
+      let k.12: tobj poly = closure compose$(k.10, c.11)
+      let u.13: unit = prim yield_cont_set(k.12)
+      let d.14: obj poly = prim dummy()
+      return d.14
     b2:
-      let w.7: tobj = prim evv_get()
-      let w.8: tobj = prim evv_mask[State](w.7)
-      let u.9: unit = prim evv_set(w.8)
+      let w.5: evv = prim evv_get()
+      let w.6: evv = prim evv_mask[State](w.5)
+      let u.7: unit = prim evv_set(w.6)
       let t.2: obj = yields apply cb.0(())
-      let y.17: int = prim yielding()
-      switch y.17 { 0 -> b4, _ -> b3 }
+      let y.15: int = prim yielding()
+      switch y.15 { 0 -> b4, _ -> b3 }
     b3:
-      let k.18: tobj poly = prim yield_cont_take()
-      let k.19: tobj poly = closure "mask$[State]"(k.18)
-      let c.20: tobj = closure "run<e>$k1"(t.1)
-      let k.21: tobj poly = closure compose$(k.19, c.20)
-      let u.22: unit = prim yield_cont_set(k.21)
-      let d.23: obj poly = prim dummy()
-      return d.23
+      let k.16: tobj poly = prim yield_cont_take()
+      let k.17: tobj poly = closure "mask$[State]"(k.16)
+      let c.18: tobj = closure "run<e>$k1"(t.1)
+      let k.19: tobj poly = closure compose$(k.17, c.18)
+      let u.20: unit = prim yield_cont_set(k.19)
+      let d.21: obj poly = prim dummy()
+      return d.21
     b4:
-      let u.10: unit = prim evv_set(w.7)
+      let u.8: unit = prim evv_set(w.5)
       let t.3: obj = extern "Prelude.Show Int.show"(t.1)
       let t.4: obj = extern Prelude.++(t.2, t.3)
       return t.4
@@ -845,8 +868,8 @@ fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continue
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &format!("{run}$k0")), @r#"
     internal yields uniform from 1 fn "run<e>$k0"(cb.0: tobj, t.1: obj) -> obj {
-      let w.3: tobj = prim evv_get()
-      let w.4: tobj = prim evv_mask[State](w.3)
+      let w.3: evv = prim evv_get()
+      let w.4: evv = prim evv_mask[State](w.3)
       let u.5: unit = prim evv_set(w.4)
       let t.2: obj = yields apply cb.0(())
       let y.7: int = prim yielding()
@@ -992,8 +1015,8 @@ fn closures_ep_builds_take_the_join_of_their_captures() {
 }
 
 #[test]
-fn evidence_and_evv_are_unr_and_state_is_poly() {
-    // EP が基本操作の結果を束縛する変数は、基本操作の表の結果の印を持つ。evidence、`evv`、エントリのクロージャは `unr`、
+fn evidence_is_lin_evv_is_unr_and_state_is_poly() {
+    // EPが基本操作の結果を束縛する変数は、基本操作の表の結果のReprと印を持つ。evidenceは`lin`の`ev`、`evv`は`unr`、
     // 状態、κ、節の本体、ダミーは `poly` である。ただし in-place のエントリが取り出す状態は、translate が節の状態の引数に
     // 付けた印のままである。handle の本体の結果は `FileIn` でありうるので `poly` である
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
@@ -1021,6 +1044,20 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
                         info.name,
                         function.name
                     );
+                    if prim.row().ret.is_context() {
+                        assert_eq!(
+                            info.repr,
+                            prim.row().ret,
+                            "`{}` in `{}`",
+                            info.name,
+                            function.name
+                        );
+                    }
+                }
+                eml_core_ir::Rhs::Evidence { .. } => {
+                    seen.insert("evidence");
+                    assert_eq!(info.mark, eml_lir::Mark::Lin, "`{}`", info.name);
+                    assert_eq!(info.repr, eml_lir::Repr::Ev, "`{}`", info.name);
                 }
                 eml_core_ir::Rhs::Call {
                     call: eml_core_ir::Call::Apply { .. },
@@ -1034,11 +1071,11 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
     }
     for prim in [
         "evv_get",
-        "ev_new",
-        "evv_push",
-        "ev_lookup",
-        "ev_clause",
+        "evidence",
+        "evv_enter",
         "ev_take_evv",
+        "ev_last_state",
+        "ev_retire",
         "ev_renew",
         "evv_mask",
         "ev_take_state",
@@ -1062,15 +1099,13 @@ fn an_io_extern_is_not_a_yield_point() {
     yields fn f(p.0: unit) -> int {
       let s.1: obj = const "a"
       let t.2: unit = extern Prelude.println(s.1)
-      let ev.5: obj = prim ev_lookup[Ask]()
-      let c.6: tobj = prim ev_clause[Ask.ask](ev.5)
-      let t.3: int = clause Ask.ask c.6(ev.5, ())
-      let y.7: int = prim yielding()
-      switch y.7 { 0 -> b2, _ -> b1 }
+      let t.3: int = clause Ask.ask(())
+      let y.5: int = prim yielding()
+      switch y.5 { 0 -> b2, _ -> b1 }
     b1:
-      let k.8: tobj poly = prim yield_cont_take()
-      let k.9: tobj poly = closure compose$(k.8, &f$k0)
-      let u.10: unit = prim yield_cont_set(k.9)
+      let k.6: tobj poly = prim yield_cont_take()
+      let k.7: tobj poly = closure compose$(k.6, &f$k0)
+      let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
       let t.4: int = extern "Prelude.Num Int.+"(t.3, 1)
@@ -1090,19 +1125,15 @@ fn a_never_clause_call_is_not_a_yield_point() {
     insta::assert_snapshot!(function(&shown, "f"), @r#"
     yields fn f(p.0: unit) -> int {
       let s.1: obj = const "x"
-      let ev.5: obj = prim ev_lookup[Fail]()
-      let c.6: tobj = prim ev_clause[Fail.fail](ev.5)
-      let t.2: int = clause Fail.fail c.6(ev.5, s.1)
-      let ev.7: obj = prim ev_lookup[Ask]()
-      let c.8: tobj = prim ev_clause[Ask.ask](ev.7)
-      let t.3: int = clause Ask.ask c.8(ev.7, ())
-      let y.9: int = prim yielding()
-      switch y.9 { 0 -> b2, _ -> b1 }
+      let t.2: int = clause Fail.fail(s.1)
+      let t.3: int = clause Ask.ask(())
+      let y.5: int = prim yielding()
+      switch y.5 { 0 -> b2, _ -> b1 }
     b1:
-      let k.10: tobj poly = prim yield_cont_take()
-      let c.11: tobj = closure f$k0(t.2)
-      let k.12: tobj poly = closure compose$(k.10, c.11)
-      let u.13: unit = prim yield_cont_set(k.12)
+      let k.6: tobj poly = prim yield_cont_take()
+      let c.7: tobj = closure f$k0(t.2)
+      let k.8: tobj poly = closure compose$(k.6, c.7)
+      let u.9: unit = prim yield_cont_set(k.8)
       return 0
     b2:
       let t.4: int = extern "Prelude.Num Int.+"(t.2, t.3)
@@ -1151,17 +1182,17 @@ fn a_masked_call_in_a_non_yielding_function_has_no_slow_path() {
         "effect Fail where\n  never fail : String -> a\n\n{HIDE}run : (Unit -> <e> Int) -> <Fail, Panic | e> Int\nrun cb =\n  let x = cb ()\n  x + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box cb = hide 0 (fn () -> fail \"outer\")\n  let r = handle (handle run cb with\n                    | ctl fail _ -> 1) with\n            | ctl fail _ -> 2\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
-    insta::assert_snapshot!(function(&shown, "run"), @"
+    insta::assert_snapshot!(function(&shown, "run"), @r#"
     fn run(cb.0: tobj poly) -> int {
-      let w.3: tobj = prim evv_get()
-      let w.4: tobj = prim evv_mask[Fail](w.3)
+      let w.3: evv = prim evv_get()
+      let w.4: evv = prim evv_mask[Fail](w.3)
       let u.5: unit = prim evv_set(w.4)
       let t.1: int = apply cb.0(())
       let u.6: unit = prim evv_set(w.3)
-      let t.2: int = extern \"Prelude.Num Int.+\"(t.1, 1)
+      let t.2: int = extern "Prelude.Num Int.+"(t.1, 1)
       return t.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -1192,7 +1223,7 @@ fn clause_local_function_resumes_once() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
-    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
+    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: cev, p.1: unit) -> int {
       let c.2: tobj = closure main$handle0$ask(p.1)
       let u.3: unit = prim yield_to(e.0, c.2, &id$)
       return 0
@@ -1216,7 +1247,7 @@ fn a_fn_clause_runs_in_place() {
         function(&ctl_clause, "run$handle0$ask$entry")
     );
     insta::assert_snapshot!(function(&fn_clause, "run$handle0$ask$entry"), @"
-    internal clause Ask.ask fn run$handle0$ask$entry(n.0: int, e.5: obj, p.1: unit) -> int {
+    internal clause Ask.ask fn run$handle0$ask$entry(n.0: int, e.5: cev, p.1: unit) -> int {
       let p.3: unit = prim ev_take_state(e.5)
       let u.6: unit = prim ev_set_state(e.5, ())
       return n.0
@@ -1232,7 +1263,7 @@ fn a_fn_clause_that_performs_yields() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
-    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
+    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: cev, p.1: unit) -> int {
       let c.2: tobj = closure main$handle0$ask(p.1)
       let u.3: unit = prim yield_to(e.0, c.2, &id$)
       return 0
@@ -1252,9 +1283,9 @@ fn a_fn_clause_that_prints_runs_in_place_under_the_outer_evv() {
     let entry = function(&shown, "run$handle0$ask$entry");
     assert!(!entry.contains("yield_to"), "{entry}");
     insta::assert_snapshot!(entry, @r#"
-    internal clause Ask.ask fn run$handle0$ask$entry(e.6: obj, p.0: unit) -> int {
-      let w.7: tobj = prim evv_get()
-      let o.8: tobj = prim ev_evv(e.6)
+    internal clause Ask.ask fn run$handle0$ask$entry(e.6: cev, p.0: unit) -> int {
+      let w.7: evv = prim evv_get()
+      let o.8: evv = prim ev_evv(e.6)
       let u.11: unit = prim evv_set(o.8)
       let p.2: unit = prim ev_take_state(e.6)
       let s.3: obj = const "x"
@@ -1276,7 +1307,7 @@ fn a_fn_clause_that_calls_nothing_has_no_under() {
     let entry = function(&shown, "run$handle0$get$entry");
     assert!(!entry.contains("evv_get"), "{entry}");
     insta::assert_snapshot!(entry, @"
-    internal clause Get.get fn run$handle0$get$entry(e.4: obj, p.0: unit) -> int {
+    internal clause Get.get fn run$handle0$get$entry(e.4: cev, p.0: unit) -> int {
       let st.2: int = prim ev_take_state(e.4)
       let u.5: unit = prim ev_set_state(e.4, st.2)
       return st.2
@@ -1295,9 +1326,9 @@ fn a_fn_clause_that_fails_runs_in_place() {
     let entry = function(&shown, "run$handle0$ask$entry");
     assert!(!entry.contains("yield_to"), "{entry}");
     insta::assert_snapshot!(entry, @r#"
-    internal clause Ask.ask fn run$handle0$ask$entry(n.0: int, e.9: obj, p.1: unit) -> int {
-      let w.10: tobj = prim evv_get()
-      let o.11: tobj = prim ev_evv(e.9)
+    internal clause Ask.ask fn run$handle0$ask$entry(n.0: int, e.9: cev, p.1: unit) -> int {
+      let w.10: evv = prim evv_get()
+      let o.11: evv = prim ev_evv(e.9)
       let u.14: unit = prim evv_set(o.11)
       let p.3: unit = prim ev_take_state(e.9)
       let t.4: enum = extern "Prelude.Eq Int.=="(n.0, 0)
@@ -1306,9 +1337,7 @@ fn a_fn_clause_that_fails_runs_in_place() {
       jump b3(n.0)
     b2:
       let s.5: obj = const "zero"
-      let ev.15: obj = prim ev_lookup[Fail]()
-      let c.16: tobj = prim ev_clause[Fail.fail](ev.15)
-      let t.6: int = clause Fail.fail c.16(ev.15, s.5)
+      let t.6: int = clause Fail.fail(s.5)
       jump b3(t.6)
     b3(t.7: int):
       let u.12: unit = prim ev_set_state(e.9, ())
@@ -1409,8 +1438,8 @@ fn g(a.0: tobj, b.1: tobj) -> obj {
     let shown = evidence_text(text);
     insta::assert_snapshot!(function(&shown, "f"), @"
     yields fn f(a.0: tobj, b.1: tobj) -> obj {
-      let w.3: tobj = prim evv_get()
-      let w.4: tobj = prim evv_mask[Ask](w.3)
+      let w.3: evv = prim evv_get()
+      let w.4: evv = prim evv_mask[Ask](w.3)
       let u.5: unit = prim evv_set(w.4)
       let t.2: obj = par (,) #0(a.0, b.1)
       let u.6: unit = prim evv_set(w.3)
@@ -1419,8 +1448,8 @@ fn g(a.0: tobj, b.1: tobj) -> obj {
     ");
     insta::assert_snapshot!(function(&shown, "g"), @"
     fn g(a.0: tobj, b.1: tobj) -> obj {
-      let w.3: tobj = prim evv_get()
-      let w.4: tobj = prim evv_mask[Ask](w.3)
+      let w.3: evv = prim evv_get()
+      let w.4: evv = prim evv_mask[Ask](w.3)
       let u.5: unit = prim evv_set(w.4)
       let t.2: obj = par (,) #0(a.0, b.1)
       let u.6: unit = prim evv_set(w.3)
@@ -1460,9 +1489,9 @@ internal uniform from 0 fn h$return($r.0: obj, p.1: unit) -> obj {
 ";
     let shown = evidence_text(text);
     insta::assert_snapshot!(function(&shown, "h$ask$entry"), @"
-    internal clause Ask.ask fn h$ask$entry(l.0: tobj, r.1: tobj, e.7: obj, p.2: unit) -> obj {
-      let w.8: tobj = prim evv_get()
-      let o.9: tobj = prim ev_evv(e.7)
+    internal clause Ask.ask fn h$ask$entry(l.0: tobj, r.1: tobj, e.7: cev, p.2: unit) -> obj {
+      let w.8: evv = prim evv_get()
+      let o.9: evv = prim ev_evv(e.7)
       let u.12: unit = prim evv_set(o.9)
       let p.4: unit = prim ev_take_state(e.7)
       let t.5: obj = par (,) #0(l.0, r.1)
@@ -1552,7 +1581,7 @@ fn a_program_with_par_gets_a_fork_and_a_reperform_per_operation() {
     );
     let shown = pretty(&program);
     insta::assert_snapshot!(function(&shown, "fork$Prelude.Panic.panicked"), @"
-    clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
+    clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: fev, a.1: obj) -> obj poly {
       let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
       let u.3: unit = prim child_abort(ev.0, c.2)
       let d.4: obj poly = prim dummy()
@@ -1566,7 +1595,7 @@ fn a_program_with_par_gets_a_fork_and_a_reperform_per_operation() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "fork$One.one"), @"
-    clause One.one fn fork$One.one(ev.0: obj, a.1: tobj poly) -> obj poly {
+    clause One.one fn fork$One.one(ev.0: fev, a.1: tobj poly) -> obj poly {
       let c.2: tobj poly = closure reperform$One.one(a.1)
       let u.3: unit = prim child_abort(ev.0, c.2)
       let d.4: obj poly = prim dummy()
@@ -1575,14 +1604,12 @@ fn a_program_with_par_gets_a_fork_and_a_reperform_per_operation() {
     ");
     insta::assert_snapshot!(function(&shown, "reperform$One.one"), @"
     uniform from 1 fn reperform$One.one(a.0: tobj poly, u.1: unit) -> tobj poly {
-      let ev.2: obj = prim ev_lookup[One]()
-      let c.3: tobj = prim ev_clause[One.one](ev.2)
-      let r.4: tobj poly = clause One.one c.3(ev.2, a.0)
-      return r.4
+      let r.2: tobj poly = clause One.one(a.0)
+      return r.2
     }
     ");
     insta::assert_snapshot!(function(&shown, "fork$Two.two"), @"
-    clause Two.two fn fork$Two.two(ev.0: obj, a.1: int, a.2: obj lin) -> obj poly {
+    clause Two.two fn fork$Two.two(ev.0: fev, a.1: int, a.2: obj lin) -> obj poly {
       let c.3: tobj lin = closure reperform$Two.two(a.1, a.2)
       let u.4: unit = prim child_abort(ev.0, c.3)
       let d.5: obj poly = prim dummy()
@@ -1591,10 +1618,8 @@ fn a_program_with_par_gets_a_fork_and_a_reperform_per_operation() {
     ");
     insta::assert_snapshot!(function(&shown, "reperform$Two.two"), @"
     uniform from 2 fn reperform$Two.two(a.0: int, a.1: obj lin, u.2: unit) -> tobj poly {
-      let ev.3: obj = prim ev_lookup[Two]()
-      let c.4: tobj = prim ev_clause[Two.two](ev.3)
-      let r.5: tobj poly = clause Two.two c.4(ev.3, a.0, a.1)
-      return r.5
+      let r.3: tobj poly = clause Two.two(a.0, a.1)
+      return r.3
     }
     ");
 }
@@ -1646,7 +1671,7 @@ fn a_fork_entry_owns_its_evidence_and_child_abort_borrows_it() {
     eml_lir::verify(&lir).unwrap_or_else(|error| panic!("{error}"));
     let shown = eml_lir::pretty(&lir);
     insta::assert_snapshot!(function(&shown, "fork$Two.two"), @"
-    clause Two.two fn fork$Two.two(ev.0: obj, a.1: int, a.2: obj lin) -> obj poly {
+    clause Two.two fn fork$Two.two(ev.0: fev, a.1: int, a.2: obj lin) -> obj poly {
       let c.3: tobj lin = closure reperform$Two.two(a.1, a.2)
       let u.4: unit = prim child_abort(ev.0, c.3)
       decref ev.0
@@ -1656,9 +1681,7 @@ fn a_fork_entry_owns_its_evidence_and_child_abort_borrows_it() {
     ");
     insta::assert_snapshot!(function(&shown, "reperform$Two.two"), @"
     uniform from 2 fn reperform$Two.two(a.0: int, a.1: obj lin, u.2: unit) -> tobj poly {
-      let ev.3: obj = prim ev_lookup[Two]()
-      let c.4: tobj = prim ev_clause[Two.two](ev.3)
-      tail clause Two.two c.4(ev.3, a.0, a.1)
+      tail clause Two.two(a.0, a.1)
     }
     ");
     let index = lir
@@ -1698,7 +1721,7 @@ fn main(a.0: tobj, b.1: tobj) -> obj {
     eml_lir::verify(&lir).unwrap_or_else(|error| panic!("{error}"));
     let shown = eml_lir::pretty(&lir);
     insta::assert_snapshot!(function(&shown, "fork$Stop.stop"), @"
-    clause Stop.stop fn fork$Stop.stop(ev.0: obj, a.1: unit) -> obj poly {
+    clause Stop.stop fn fork$Stop.stop(ev.0: fev, a.1: unit) -> obj poly {
       let c.2: tobj = closure reperform$Stop.stop(a.1)
       let u.3: unit = prim child_abort(ev.0, c.2)
       decref ev.0
@@ -1708,13 +1731,11 @@ fn main(a.0: tobj, b.1: tobj) -> obj {
     ");
     insta::assert_snapshot!(function(&shown, "reperform$Stop.stop"), @"
     uniform from 1 fn reperform$Stop.stop(a.0: unit, u.1: unit) -> tobj poly {
-      let ev.2: obj = prim ev_lookup[Stop]()
-      let c.3: tobj = prim ev_clause[Stop.stop](ev.2)
-      tail clause Stop.stop c.3(ev.2, a.0)
+      tail clause Stop.stop(a.0)
     }
     ");
     insta::assert_snapshot!(function(&shown, "fork$Code.code"), @"
-    clause Code.code fn fork$Code.code(ev.0: obj, a.1: int) -> obj poly {
+    clause Code.code fn fork$Code.code(ev.0: fev, a.1: int) -> obj poly {
       let c.2: tobj = closure reperform$Code.code(a.1)
       let u.3: unit = prim child_abort(ev.0, c.2)
       decref ev.0
@@ -1724,9 +1745,7 @@ fn main(a.0: tobj, b.1: tobj) -> obj {
     ");
     insta::assert_snapshot!(function(&shown, "reperform$Code.code"), @"
     uniform from 1 fn reperform$Code.code(a.0: int, u.1: unit) -> tobj poly {
-      let ev.2: obj = prim ev_lookup[Code]()
-      let c.3: tobj = prim ev_clause[Code.code](ev.2)
-      tail clause Code.code c.3(ev.2, a.0)
+      tail clause Code.code(a.0)
     }
     ");
 }

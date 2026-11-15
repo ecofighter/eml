@@ -175,8 +175,8 @@ fn by_apply(f.0: tobj) -> tobj {
   let r.1: tobj = apply f.0(())
   return r.1
 }
-yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
-  let r.3: tobj = clause Ask.ask c.0(e.1, s.2)
+yields fn by_clause(s.2: obj) -> tobj {
+  let r.3: tobj = clause Ask.ask(s.2)
   return r.3
 }
 fn not_returned(x.0: int) -> int {
@@ -192,8 +192,8 @@ fn not_returned(x.0: int) -> int {
     fn by_apply(f.0: tobj) -> tobj {
       tail apply f.0(())
     }
-    yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
-      tail clause Ask.ask c.0(e.1, s.2)
+    yields fn by_clause(s.2: obj) -> tobj {
+      tail clause Ask.ask(s.2)
     }
     fn not_returned(x.0: int) -> int {
       let r.1: int = call by_call(x.0)
@@ -231,22 +231,22 @@ fn a_clause_call_returned_at_the_end_becomes_a_tail_call() {
     // `obj` の `ret` と互換でないので、末尾呼び出しにしない
     let text = "\
 effect Counter { get(unit) -> int, put(int) -> unit }
-yields fn f(c.0: tobj, e.1: obj) -> int {
-  let m.2: int = clause Counter.get c.0(e.1, ())
+yields fn f() -> int {
+  let m.2: int = clause Counter.get(())
   return m.2
 }
-yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
-  let u.3: tobj = clause Counter.put c.0(e.1, n.2)
+yields fn g(n.2: int) -> obj {
+  let u.3: tobj = clause Counter.put(n.2)
   return u.3
 }
 ";
     insta::assert_snapshot!(contract_text(text), @"
     effect Counter { get(unit) -> int, put(int) -> unit }
-    yields fn f(c.0: tobj, e.1: obj) -> int {
-      tail clause Counter.get c.0(e.1, ())
+    yields fn f() -> int {
+      tail clause Counter.get(())
     }
-    yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
-      let u.3: tobj = clause Counter.put c.0(e.1, n.2)
+    yields fn g(n.2: int) -> obj {
+      let u.3: tobj = clause Counter.put(n.2)
       return u.3
     }
     ");
@@ -257,15 +257,15 @@ fn a_never_clause_returned_at_the_end_becomes_a_tail_call_in_any_function() {
     // `never` の操作の節の呼び出しは戻らないので、結果はどの `ret` とも互換である
     let text = "\
 effect Fail { never fail(tobj) -> never }
-yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
-  let r.3: int = clause Fail.fail c.0(e.1, s.2)
+yields fn f(s.2: obj) -> int {
+  let r.3: int = clause Fail.fail(s.2)
   return r.3
 }
 ";
     insta::assert_snapshot!(contract_text(text), @"
     effect Fail { never fail(tobj) -> never }
-    yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
-      tail clause Fail.fail c.0(e.1, s.2)
+    yields fn f(s.2: obj) -> int {
+      tail clause Fail.fail(s.2)
     }
     ");
 }
@@ -281,8 +281,8 @@ fn f(s.0: obj) -> obj {
   let r.1: obj poly = call h(s.0)
   return r.1
 }
-yields fn g(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {
-  let r.3: tobj poly = clause L.take c.0(e.1, x.2)
+yields fn g(x.2: tobj lin) -> tobj {
+  let r.3: tobj poly = clause L.take(x.2)
   return r.3
 }
 fn h(s.0: obj) -> obj lin {
@@ -300,8 +300,8 @@ fn k(c.0: tobj) -> tobj lin {
       let r.1: obj poly = call h(s.0)
       return r.1
     }
-    yields fn g(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {
-      let r.3: tobj poly = clause L.take c.0(e.1, x.2)
+    yields fn g(x.2: tobj lin) -> tobj {
+      let r.3: tobj poly = clause L.take(x.2)
       return r.3
     }
     fn h(s.0: obj) -> obj lin {

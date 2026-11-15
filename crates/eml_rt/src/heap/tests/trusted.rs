@@ -398,6 +398,10 @@ fn every_core_operation_once<M: Mode>() {
     }
     // 生きているのは、ダミーと不死の物体だけである
     assert_eq!(heap.live_objects().len(), 2);
+    unsafe {
+        let table = heap.alloc_fork_table(&[Word::imm(1), imm]).unwrap();
+        heap.alloc_fork_tail(0, table).unwrap();
+    }
     every_primitive_once::<M>();
 }
 
@@ -447,6 +451,19 @@ fn every_primitive_once<M: Mode>() {
         assert_eq!(ctx.yield_status(e1), 2);
         assert_eq!(ctx.yield_finish(), Ok(UNIT));
         assert_eq!(ctx.poll(0), Ok(()));
+        // fork evidenceの1往復。VMと同じく、表と`Panic`の末尾は付けた塊にあり、子の`evv`は末尾に足す
+        let mut builder = Heap::<M>::new();
+        let table = builder.alloc_fork_table(&[Word::imm(1)]).unwrap();
+        let tail = builder.alloc_fork_tail(5, table).unwrap();
+        ctx.heap_mut().attach(Arc::new(builder.freeze().unwrap()));
+        let fork = ctx.fork_ev(0, table, 1).unwrap();
+        assert_eq!(ctx.fork_of(fork), Ok((0, 1)));
+        let top = ctx.evv_step(ctx.evv_word()).unwrap().map(|(e, _)| e);
+        assert_eq!(top, Some(1));
+        let child = ctx.evv_push(tail, fork).unwrap();
+        assert_eq!(ctx.evv_step(child), Ok(Some((0, tail))));
+        assert_eq!(ctx.evv_step(tail), Ok(Some((5, UNIT))));
+        ctx.heap_mut().decref(child).unwrap();
         for e in [e0, e1] {
             ctx.heap_mut().decref(e).unwrap();
         }
@@ -1004,6 +1021,85 @@ fn cells<M: Mode>(heap: &Heap<M>, xs: Word) -> Vec<usize> {
         w = unsafe { heap.field(w, 1) }.unwrap();
     }
     out
+}
+
+// ほかのヒープの数える不死の物体の`dup`、`decref`、`acquire_immortal`を、検査モードは数を書かずに断る。
+// ダミーは数えないので通る (docs/spec/object-model.mdの「不死の物体の数え方」)
+fn a_counted_immortal_of_another_heap_is_refused<M: Mode>() {
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let s = a.alloc_string_immortal("constant");
+    unsafe { a.acquire_immortal(s) }.unwrap();
+    let dummy = a.dummy();
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        let results = unsafe { [b.dup(s), b.decref(s), b.acquire_immortal(s)] };
+        for r in results {
+            if M::CHECKED {
+                assert_eq!(r, Err(HeapError::CountedImmortal));
+            } else {
+                r.unwrap();
+            }
+        }
+        unsafe {
+            b.dup(dummy).unwrap();
+            b.decref(dummy).unwrap();
+        }
+        b
+    })
+    .join()
+    .unwrap();
+    // Bは数を書いていないので、持ち主が唯一の参照を手放した後のもう1つの手放しは、手放しすぎになる
+    if M::CHECKED {
+        unsafe { a.decref(s) }.unwrap();
+        assert_eq!(unsafe { a.decref(s) }, Err(HeapError::ImmortalOverRelease));
+    }
+    drop(b);
+    drop(a);
+}
+
+// 持ち主が数を書いている最中にも、ほかのヒープの`dup`、`decref`、`acquire_immortal`は数を読むだけで断られる
+fn a_counted_immortal_is_refused_while_its_owner_counts<M: Mode>() {
+    const ROUNDS: usize = 200;
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let s = a.alloc_string_immortal("constant");
+    unsafe { a.acquire_immortal(s) }.unwrap();
+    let start = std::sync::Barrier::new(2);
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let b = std::thread::scope(|scope| {
+        let other = scope.spawn(|| {
+            let mut b = b;
+            start.wait();
+            for _ in 0..ROUNDS {
+                let results = unsafe { [b.dup(s), b.decref(s), b.acquire_immortal(s)] };
+                for r in results {
+                    if M::CHECKED {
+                        assert_eq!(r, Err(HeapError::CountedImmortal));
+                    } else {
+                        r.unwrap();
+                    }
+                }
+            }
+            done.store(true, std::sync::atomic::Ordering::Release);
+            b
+        });
+        start.wait();
+        // 持ち主は、ほかのスレッドが断られ終わるまで数え続ける。両方の繰り返しが必ず重なるようにするためである
+        let mut rounds = 0;
+        while rounds < ROUNDS || !done.load(std::sync::atomic::Ordering::Acquire) {
+            unsafe {
+                a.dup(s).unwrap();
+                a.decref(s).unwrap();
+            }
+            rounds += 1;
+        }
+        other.join().unwrap()
+    });
+    if M::CHECKED {
+        unsafe { a.decref(s) }.unwrap();
+        assert_eq!(unsafe { a.decref(s) }, Err(HeapError::ImmortalOverRelease));
+    }
+    drop(b);
+    drop(a);
 }
 
 // 別のスレッドが空けた小さいブロックは、持ち主の取り込みで空きリストに戻り、速いモードでは次の確保に使われる。
@@ -2916,6 +3012,8 @@ both_modes!(
     recovery_tells_own_blocks_from_region_blocks,
     two_threads_share_one_control,
     a_remote_small_free_is_reclaimed_and_reused,
+    a_counted_immortal_of_another_heap_is_refused,
+    a_counted_immortal_is_refused_while_its_owner_counts,
     a_foreign_value_freed_remotely_is_finalized_once,
     a_remote_large_free_refunds_at_once,
     two_threads_free_into_one_page,

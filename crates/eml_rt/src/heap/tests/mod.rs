@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{Checked, Ctx, Heap, HeapError, Mode, Word};
+use crate::{Checked, Ctx, Heap, HeapError, Kind, Meta, Mode, Word};
 
 /// モードを型の引数に取るテストの関数を、速いモードと検査モードの2つのテストにする。
 macro_rules! both_modes {
@@ -68,6 +68,15 @@ pub(super) fn list<M: Mode>(heap: &mut Heap<M>, n: usize) -> Word {
     (0..n).fold(Word::imm(0), |tail, i| {
         cons(heap, Word::imm(i as i64), tail)
     })
+}
+
+/// 別のヒープで作って凍結し、`heap`に付けた不死の物体 (走査する語のない1語の`Data`)。凍結した物体は参照を
+/// 数えないので、どのworkerから届いてもよい (docs/spec/object-model.mdの「不死の物体の数え方」)。
+pub(super) fn frozen_immortal<M: Mode>(heap: &mut Heap<M>, lin: bool) -> Word {
+    let mut b = Heap::<M>::new();
+    let w = unsafe { b.alloc_immortal(1, Meta::new(0, 0, Kind::Data, lin)) };
+    heap.attach(Arc::new(b.freeze().unwrap()));
+    w
 }
 
 /// ダミーのほかに生きている箱の数を数えられるもの。生存の列挙は先に取り込むので、ヒープを書き換える。

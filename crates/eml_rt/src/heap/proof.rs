@@ -3,7 +3,6 @@
 
 use vstd::prelude::*;
 
-use super::Core;
 #[cfg(verus_only)]
 use super::inv::{p_code, p_init, p_owner, p_scanned, p_word, prefix_kept};
 use super::model::BlockState;
@@ -12,9 +11,13 @@ use super::model::{
     Model, Pos, indeg, lemma_indeg_pos, lemma_indeg_remove, lemma_indeg_union, lemma_indeg_witness,
     lemma_indeg_zero,
 };
+use super::{Core, Heap};
 #[cfg(verus_only)]
 use crate::layout::HEADER_WORDS;
 use crate::meta::{BlockPerm, Header};
+#[cfg(verus_only)]
+use crate::meta::{Kind, Meta, bits_kind, bits_scan};
+use crate::mode::Mode;
 #[cfg(verus_only)]
 use crate::rc::{magnitude, pinned};
 #[cfg(verus_only)]
@@ -1063,6 +1066,101 @@ impl Core {
         }
         assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.counted_wf(b) by {
             assert(s0.counted_wf(b));
+        }
+    }
+}
+
+impl<M: Mode> Heap<M> {
+    /// 速いモードで、`alloc_immortal`の前に読めたこのヒープの語は、後も読めて、rcも変わらない。
+    pub(super) proof fn lemma_built_keeps(
+        &self,
+        old: Heap<M>,
+        w: Word,
+        meta: Meta,
+        payload: usize,
+        u: Word,
+    )
+        requires
+            old.wf(),
+            old.consistent(),
+            old.settleable(),
+            self.built(old, w, meta, 0, payload),
+            old.of_this_heap(u),
+            old.readable(u),
+        ensures
+            self.word_in(u),
+            self.readable(u),
+            u.is_ptr_spec() ==> self.rc_value(u) == old.rc_value(u),
+    {
+        old.core.lemma_settled_view();
+        if u.is_ptr_spec() {
+            let b = u.bits_spec();
+            old.lemma_live_block(b);
+            assert(old.core.dom().contains(b));
+            assert(self.core.dom().contains(b));
+        }
+    }
+
+    /// `set_field`は、どの語の`word_in`、`readable`、rcも、どのブロックの状態と`meta`も変えない。
+    pub(super) proof fn lemma_field_set_keeps(&self, old: Heap<M>, w: Word, i: int, v: Word)
+        requires
+            self.field_set(old, w, i, v),
+        ensures
+            forall|u: Word| #[trigger] self.word_in(u) == old.word_in(u),
+            forall|u: Word| #[trigger] self.readable(u) == old.readable(u),
+            forall|u: Word| #[trigger] self.rc_value(u) == old.rc_value(u),
+            self.core.dom() == old.core.dom(),
+            self.core.model@.building == old.core.model@.building,
+            forall|b: usize| #[trigger] self.core.state(b) == old.core.state(b),
+            forall|b: usize| #[trigger] self.core.meta_bits(b) == old.core.meta_bits(b),
+            forall|b: usize| #[trigger] self.core.rc_of(b) == old.core.rc_of(b),
+    {
+        assert forall|b: usize| #[trigger]
+            self.core.perm(b).rc == old.core.perm(b).rc && self.core.perm(b).meta == old.core.perm(
+                b,
+            ).meta by {
+            if b != w.bits_spec() && old.core.dom().contains(b) {
+                assert(self.core.perms@[b] == old.core.perms@[b]);
+            }
+        }
+    }
+
+    /// 走査する語をみな書いた構築中の物体は、書き終えている。残した語はないので、生きている物体にできる。
+    pub(super) proof fn lemma_built_settleable(&self, w: Word, n: usize)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.core.dom().contains(w.bits_spec()),
+            self.core.model@.building == Some(w.bits_spec()),
+            bits_kind(self.core.meta_bits(w.bits_spec())) == Kind::Data,
+            bits_scan(self.core.meta_bits(w.bits_spec())) == n,
+            n < crate::layout::INLINE_SCAN_LIMIT,
+            forall|j: int|
+                0 <= j < n ==> #[trigger] self.core.model@.written[w.bits_spec()].contains(j),
+        ensures
+            self.safe_settleable(),
+            !M::CHECKED || self.consistent() ==> self.settleable(),
+    {
+        let h = w.bits_spec();
+        assert forall|i: int| #[trigger] self.core.scanned(h, i) implies 0 <= i < n by {}
+        if !M::CHECKED || self.consistent() {
+            reveal(Core::blocks_wf);
+            reveal(Core::building_wf);
+            assert(self.core.block_wf(h));
+            assert(self.core.state(h) == BlockState::Building);
+            assert forall|e: Pos| #[trigger] self.core.model@.kept.contains(e) implies e.0 != h by {
+                assert(self.core.kept_wf(e));
+                if e.0 == h {
+                    assert(self.core.scanned(h, e.1));
+                    assert(self.core.model@.written[h].contains(e.1));
+                }
+            }
+            assert(self.core.kept_edges(h).dom() =~= Set::empty());
+            assert forall|t: usize| #[trigger] indeg(self.core.kept_edges(h), t) == 0 by {
+                if indeg(self.core.kept_edges(h), t) > 0 {
+                    lemma_indeg_witness(self.core.kept_edges(h), t);
+                }
+            }
         }
     }
 }

@@ -129,37 +129,32 @@ fn an_immediate_clause_reads_and_writes_the_state_of_its_evidence() {
     let text = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }
 \
 fn main() -> unit {
-  let w.0: tobj = prim evv_get()
+  let w.0: evv = prim evv_get()
   dup w.0
   dup w.0
   let s.1: tobj = box 3
-  let e.2: obj = prim ev_new[Counter](s.1, w.0)
-  let u.3: unit = prim ev_set_clause[Counter.get](e.2, &get)
-  let u.4: unit = prim ev_set_clause[Counter.put](e.2, &put)
-  let w.5: tobj = prim evv_push(w.0, e.2)
+  let e.2: ev lin = evidence Counter(s.1, w.0) [&get, &put]
+  let w.5: evv = prim evv_enter(w.0, e.2)
   let u.6: unit = prim evv_set(w.5)
-  let e.7: obj = prim ev_lookup[Counter]()
-  let c.8: tobj = prim ev_clause[Counter.put](e.7)
   let f.9: tobj = box 5
-  let u.10: unit = clause Counter.put c.8(e.7, f.9)
-  let e.11: obj = prim ev_lookup[Counter]()
-  let c.12: tobj = prim ev_clause[Counter.get](e.11)
-  let r.13: tobj = clause Counter.get c.12(e.11, ())
+  let u.10: unit = clause Counter.put(f.9)
+  let r.13: tobj = clause Counter.get(())
   let u.14: unit = prim evv_set(w.0)
+  let u.18: unit = drop e.2
   let n.15: int = unbox r.13
   decref r.13
   let t.16: obj = extern \"Prelude.Show Int.show\"(n.15)
   let v.17: unit = extern Prelude.println(t.16)
   return v.17
 }
-internal yields clause Counter.get fn get(e.0: obj, u.1: unit) -> tobj {
+internal yields clause Counter.get fn get(e.0: cev, u.1: unit) -> tobj {
   let s.2: tobj = prim ev_take_state(e.0)
   dup s.2
   let v.3: unit = prim ev_set_state(e.0, s.2)
   decref e.0
   return s.2
 }
-internal yields clause Counter.put fn put(e.0: obj, n.1: tobj) -> unit {
+internal yields clause Counter.put fn put(e.0: cev, n.1: tobj) -> unit {
   let u.2: unit = prim ev_set_state(e.0, n.1)
   decref e.0
   return u.2
@@ -427,19 +422,18 @@ layout (,) { (,)(tobj, tobj) }
 effect Prelude.Panic { never panicked(obj) -> never }
 effect Fail { never fail(int) -> never }
 fn main() -> unit {
-  let w.0: tobj = prim evv_get()
+  let w.0: evv = prim evv_get()
   dup w.0
-  let ev.1: obj = prim ev_new[Fail]((), w.0)
-  dup ev.1
-  let w.2: tobj = prim evv_push(w.0, ev.1)
+  let ev.1: ev lin = evidence Fail((), w.0) [&fail$entry]
+  let w.2: evv = prim evv_enter(w.0, ev.1)
   let u.3: unit = prim evv_set(w.2)
   let a.4: obj = con (,) #0(#5, #6)
   dup a.4
   let g.5: tobj = closure swap(a.4)
   let t.6: obj = par (,) #0(&spin_one, g.5)
-  let w.7: tobj = prim ev_take_evv(ev.1)
+  let w.7: evv = prim ev_take_evv(ev.1)
   let u.8: unit = prim evv_set(w.7)
-  decref ev.1
+  let u.19: unit = drop ev.1
   let (x.9: tobj, p.10: tobj) = unbox t.6 (,)
   dup x.9
   dup p.10
@@ -471,7 +465,7 @@ fn show(t.0: tobj) -> unit {
   let u.3: unit = extern Prelude.println(s.2)
   return u.3
 }
-clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
+clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: fev, a.1: obj) -> obj poly {
   let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
   let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
@@ -482,17 +476,20 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
   let r.2: tobj poly = extern Prelude.panic(a.0)
   return r.2
 }
-clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: int) -> obj poly {
+clause Fail.fail fn fork$Fail.fail(ev.0: fev, a.1: int) -> obj poly {
   let c.2: tobj = closure reperform$Fail.fail(a.1)
   let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
   let d.4: obj poly = prim dummy()
   return d.4
 }
+internal clause Fail.fail fn fail$entry(ev.0: cev, a.1: int) -> obj poly {
+  decref ev.0
+  let d.2: obj poly = prim dummy()
+  return d.2
+}
 uniform from 1 fn reperform$Fail.fail(a.0: int, u.1: unit) -> tobj poly {
-  let ev.2: obj = prim ev_lookup[Fail]()
-  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
-  tail clause Fail.fail c.3(ev.2, a.0)
+  tail clause Fail.fail(a.0)
 }
 fn spin(n.0: int) -> unit {
   switch n.0 { 0 -> b1, _ -> b2 }
@@ -540,7 +537,7 @@ fn boom(p.0: unit) -> tobj {
   let r.2: tobj = extern Prelude.panic(m.1)
   return r.2
 }
-clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
+clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: fev, a.1: obj) -> obj poly {
   let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
   let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0

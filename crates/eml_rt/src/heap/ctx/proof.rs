@@ -267,8 +267,8 @@ impl<M: Mode> Ctx<M> {
                 0 <= i < n_ops ==> (#[trigger] h1.scanned_word(table, i)).bits_spec() == 1,
             h2.made(h1, ev),
             h2.kind_of(ev) == Kind::Data,
-            h2.count_of(ev) == 3,
-            h2.scan_of(ev) == 3,
+            h2.count_of(ev) == EV_WORDS,
+            h2.scan_of(ev) == EV_WORDS,
             h2.tag_of(ev) == effect + 1,
             h2.lin_of(ev) == false,
             h2.owned(ev),
@@ -302,19 +302,19 @@ impl<M: Mode> Ctx<M> {
         lemma_alloc_moved(h2, h1, ev);
         lemma_moved_chain(h2, h1, h0, z, z, z, none, none, none);
         lemma_unextended(h2, ev);
-        assert(h2.scanned_word(ev, 0).bits_spec() == 1);
-        assert(h2.scanned_word(ev, 1).bits_spec() == 1);
-        assert(h2.scanned_word(ev, 2).bits_spec() == 1);
-        lemma_set_unit_moved(h3, h2, ev, 0, table);
+        assert(h2.scanned_word(ev, EV_TABLE as int).bits_spec() == 1);
+        assert(h2.scanned_word(ev, EV_STATE as int).bits_spec() == 1);
+        assert(h2.scanned_word(ev, EV_OUTER as int).bits_spec() == 1);
+        lemma_set_unit_moved(h3, h2, ev, EV_TABLE as int, table);
         lemma_moved_chain(h3, h2, h0, z, |b: usize| -points(table, b), z, none, x, none);
         lemma_unextended(h3, ev);
-        assert(h3.word_at(ev, 1) == h2.word_at(ev, 1));
-        assert(h3.word_at(ev, 2) == h2.word_at(ev, 2));
-        lemma_set_unit_moved(h4, h3, ev, 1, state);
+        assert(h3.word_at(ev, EV_STATE as int) == h2.word_at(ev, EV_STATE as int));
+        assert(h3.word_at(ev, EV_OUTER as int) == h2.word_at(ev, EV_OUTER as int));
+        lemma_set_unit_moved(h4, h3, ev, EV_STATE as int, state);
         lemma_moved_chain(h4, h3, h0, z, d4, d4, none, x, none);
         lemma_unextended(h4, ev);
-        assert(h4.word_at(ev, 2) == h3.word_at(ev, 2));
-        lemma_set_unit_moved(h5, h4, ev, 2, outer);
+        assert(h4.word_at(ev, EV_OUTER as int) == h3.word_at(ev, EV_OUTER as int));
+        lemma_set_unit_moved(h5, h4, ev, EV_OUTER as int, outer);
         lemma_moved_chain(h5, h4, h0, d4, |b: usize| -points(outer, b), d, none, x, none);
         // 新しい evidence についての変化
         let e3 = |b: usize| -points(table, b);
@@ -329,9 +329,9 @@ impl<M: Mode> Ctx<M> {
         assert(e5(eb) == 0);
         assert(live(h5, eb));
         lemma_unextended(h5, ev);
-        assert(h5.scanned_word(ev, 0) == table);
-        assert(h5.scanned_word(ev, 1) == state);
-        assert(h5.scanned_word(ev, 2) == outer);
+        assert(h5.scanned_word(ev, EV_TABLE as int) == table);
+        assert(h5.scanned_word(ev, EV_STATE as int) == state);
+        assert(h5.scanned_word(ev, EV_OUTER as int) == outer);
         // Ctx の語と引数
         let ws = seq![state, outer];
         assert(held_word(h0, ws[0]) && held_word(h0, ws[1]));
@@ -343,9 +343,9 @@ impl<M: Mode> Ctx<M> {
         self.lemma_holds_moved(s0, ws, seq![], d, none);
         self.lemma_evv_kept(s0, d, none);
         // 新しい evidence の形
-        h5.lemma_readable_scanned(ev, 0);
-        h5.lemma_readable_scanned(ev, 1);
-        h5.lemma_readable_scanned(ev, 2);
+        h5.lemma_readable_scanned(ev, EV_TABLE as int);
+        h5.lemma_readable_scanned(ev, EV_STATE as int);
+        h5.lemma_readable_scanned(ev, EV_OUTER as int);
         assert(live(h2, table.bits_spec()));
         assert(live(h5, table.bits_spec()));
         assert(same_head(h5, h2, table.bits_spec()));
@@ -364,6 +364,156 @@ impl<M: Mode> Ctx<M> {
         lemma_word_kept(h5, h0, d, none, outer);
         assert(ev_ok(h5, ev));
         // 呼ぶ側が新しい evidence の参照を1つ持つ
+        self.lemma_fresh_holds(s0, ev);
+    }
+
+    /// `fork_ev`が表の参照を取った後 (検査モードは`dup`し、速いモードは何も変えない) も、モデルは合っていて、表はエントリの
+    /// 表のままである。
+    pub(super) proof fn lemma_fork_table_dupped(&self, s0: Ctx<M>, table: Word)
+        requires
+            s0.held_ok(),
+            table_ok(s0.heap, table),
+            s0.heap.core.settled_view().rc_of(table.bits_spec()) == 0,
+            self.evv == s0.evv,
+            self.native.yielding == s0.native.yielding,
+            self.max_evv == s0.max_evv,
+            M::CHECKED ==> self.heap.bumped(s0.heap, table) && self.heap.settled()
+                && self.heap.consistent(),
+            !M::CHECKED ==> self.heap == s0.heap,
+        ensures
+            self.held_ok(),
+            moved(self.heap, s0.heap, |b: usize| 0int, Set::empty()),
+            no_free(self.heap, s0.heap),
+            table_ok(self.heap, table),
+            held_word(self.heap, table),
+            self.heap.core.settled_view().rc_of(table.bits_spec()) == 0,
+    {
+        let h0 = s0.heap;
+        let h1 = self.heap;
+        let z = |b: usize| 0int;
+        let none = Set::<usize>::empty();
+        if M::CHECKED {
+            lemma_dup_moved(h1, h0, table);
+            lemma_moved_immortal(h1, h0, |b: usize| points(table, b), z, none, table);
+        } else {
+            lemma_moved_refl(h0);
+        }
+        assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + z(
+            b,
+        ) >= self.need(seq![], b) by {
+            lemma_points_in(seq![], b);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], z, none);
+        self.lemma_evv_kept(s0, z, none);
+        lemma_readable_kept(h1, h0, table);
+        lemma_table_kept(h1, h0, z, none, table);
+        lemma_word_kept(h1, h0, z, none, table);
+    }
+
+    /// `fork_ev`の、モデルが合っている道。
+    pub(super) proof fn lemma_fork_ev_ok(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        h2: Heap<M>,
+        h3: Heap<M>,
+        ev: Word,
+        effect: u16,
+        table: Word,
+        state: Word,
+    )
+        requires
+            s0.held_ok(),
+            table_ok(s0.heap, table),
+            s0.heap.core.settled_view().rc_of(table.bits_spec()) == 0,
+            effect < u16::MAX,
+            !state.is_ptr_spec(),
+            self.evv == s0.evv,
+            self.native.yielding == s0.native.yielding,
+            self.max_evv == s0.max_evv,
+            moved(h1, s0.heap, |b: usize| 0int, Set::empty()),
+            no_free(h1, s0.heap),
+            h1.consistent(),
+            h1.settleable(),
+            table_ok(h1, table),
+            held_word(h1, table),
+            h1.core.settled_view().rc_of(table.bits_spec()) == 0,
+            h2.made(h1, ev),
+            h2.kind_of(ev) == Kind::Data,
+            h2.count_of(ev) == EV_WORDS,
+            h2.scan_of(ev) == EV_WORDS,
+            h2.tag_of(ev) == effect + 1,
+            h2.lin_of(ev) == false,
+            h2.owned(ev),
+            forall|i: int| 0 <= i < 3 ==> (#[trigger] h2.scanned_word(ev, i)).bits_spec() == 1,
+            h3.field_set(h2, ev, 0, table),
+            self.heap.field_set(h3, ev, 1, state),
+            h3.consistent(),
+            self.heap.consistent(),
+        ensures
+            self.held_ok(),
+            self.holds(ev),
+            self.ev_shape(ev),
+            self.ev_tag(ev) == effect + 1,
+            self.ev_table(ev) == table,
+            self.ev_state(ev) == state,
+            self.ev_outer(ev).bits_spec() == 1,
+            self.evolved_by(s0, |b: usize| 0int, Set::empty()),
+    {
+        let h0 = s0.heap;
+        let h4 = self.heap;
+        let z = |b: usize| 0int;
+        let none = Set::<usize>::empty();
+        let x = none.insert(ev.bits_spec());
+        let dt = |b: usize| -points(table, b);
+        let ds = |b: usize| -points(state, b);
+        let tb = table.bits_spec();
+        let eb = ev.bits_spec();
+        // 古い物体についての変化
+        lemma_alloc_moved(h2, h1, ev);
+        lemma_moved_chain(h2, h1, h0, z, z, z, none, none, none);
+        lemma_unextended(h2, ev);
+        assert(h2.scanned_word(ev, EV_TABLE as int).bits_spec() == 1);
+        assert(h2.scanned_word(ev, EV_STATE as int).bits_spec() == 1);
+        assert(h2.scanned_word(ev, EV_OUTER as int).bits_spec() == 1);
+        lemma_set_unit_moved(h3, h2, ev, EV_TABLE as int, table);
+        lemma_moved_chain(h3, h2, h0, z, dt, dt, none, x, none);
+        lemma_unextended(h3, ev);
+        assert(h3.word_at(ev, EV_STATE as int) == h2.word_at(ev, EV_STATE as int));
+        assert(h3.word_at(ev, EV_OUTER as int) == h2.word_at(ev, EV_OUTER as int));
+        lemma_set_unit_moved(h4, h3, ev, EV_STATE as int, state);
+        lemma_moved_chain(h4, h3, h0, dt, ds, dt, none, x, none);
+        assert(live(h1, tb));
+        assert(live(h0, tb));
+        lemma_moved_immortal(h4, h0, dt, z, none, table);
+        // 新しいevidenceについての変化
+        let e4 = |b: usize| -points(table, b) - points(state, b);
+        lemma_moved_chain(h4, h3, h2, dt, ds, e4, x, x, x);
+        assert(live(h2, eb));
+        assert(!live(h1, eb));
+        assert(e4(eb) == 0);
+        assert(live(h4, eb));
+        lemma_unextended(h4, ev);
+        assert(h4.scanned_word(ev, EV_TABLE as int) == table);
+        assert(h4.scanned_word(ev, EV_STATE as int) == state);
+        assert(h4.scanned_word(ev, EV_OUTER as int).bits_spec() == 1);
+        // `Ctx`の語
+        assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + z(
+            b,
+        ) >= self.need(seq![], b) by {
+            lemma_points_in(seq![], b);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], z, none);
+        self.lemma_evv_kept(s0, z, none);
+        // 新しいevidenceの形
+        h4.lemma_readable_scanned(ev, EV_TABLE as int);
+        h4.lemma_readable_scanned(ev, EV_STATE as int);
+        h4.lemma_readable_scanned(ev, EV_OUTER as int);
+        lemma_readable_kept(h4, h0, table);
+        lemma_table_kept(h4, h0, z, none, table);
+        lemma_unit_bits();
+        assert(ev_ok(h4, ev));
+        // 呼ぶ側が新しいevidenceの参照を1つ持つ
         self.lemma_fresh_holds(s0, ev);
     }
 }
@@ -390,7 +540,7 @@ impl<M: Mode> Ctx<M> {
             self.max_evv == s0.max_evv,
             h1.made(s0.heap, node),
             h1.kind_of(node) == Kind::Data,
-            h1.scan_of(node) == 2,
+            h1.scan_of(node) == NODE_WORDS,
             h1.tag_of(node) == s0.heap.tag_of(e),
             h1.lin_of(node) == false,
             h1.owned(node),
@@ -405,6 +555,11 @@ impl<M: Mode> Ctx<M> {
             self.evv_wf(node),
             self.evv_seq(node) == seq![(s0.ev_tag(e), e)] + s0.evv_seq(l),
             self.evolved_by(s0, |b: usize| -points(l, b) - points(e, b), Set::empty()),
+            !live(s0.heap, node.bits_spec()),
+            self.ev_shape(e),
+            self.heap.tag_of(e) == s0.heap.tag_of(e),
+            forall|i: int| #[trigger] self.heap.scanned_word(e, i) == s0.heap.scanned_word(e, i),
+            (self.heap.rc_value(e) > 0) == (s0.heap.rc_value(e) > 0),
     {
         let h0 = s0.heap;
         let h3 = self.heap;
@@ -415,13 +570,13 @@ impl<M: Mode> Ctx<M> {
         let d = |b: usize| -points(l, b) - points(e, b);
         lemma_alloc_moved(h1, h0, node);
         lemma_unextended(h1, node);
-        assert(h1.scanned_word(node, 0).bits_spec() == 1);
-        assert(h1.scanned_word(node, 1).bits_spec() == 1);
-        lemma_set_unit_moved(h2, h1, node, 0, e);
+        assert(h1.scanned_word(node, NODE_EV as int).bits_spec() == 1);
+        assert(h1.scanned_word(node, NODE_NEXT as int).bits_spec() == 1);
+        lemma_set_unit_moved(h2, h1, node, NODE_EV as int, e);
         lemma_moved_chain(h2, h1, h0, z, d2, d2, none, x, none);
         lemma_unextended(h2, node);
-        assert(h2.word_at(node, 1) == h1.word_at(node, 1));
-        lemma_set_unit_moved(h3, h2, node, 1, l);
+        assert(h2.word_at(node, NODE_NEXT as int) == h1.word_at(node, NODE_NEXT as int));
+        lemma_set_unit_moved(h3, h2, node, NODE_NEXT as int, l);
         lemma_moved_chain(h3, h2, h0, d2, |b: usize| -points(l, b), d, none, x, none);
         // 新しい節点についての変化
         let e3 = |b: usize| -points(e, b) - points(l, b);
@@ -432,8 +587,8 @@ impl<M: Mode> Ctx<M> {
         assert(e3(nb) == 0);
         assert(live(h3, nb));
         lemma_unextended(h3, node);
-        assert(h3.scanned_word(node, 0) == e);
-        assert(h3.scanned_word(node, 1) == l);
+        assert(h3.scanned_word(node, NODE_EV as int) == e);
+        assert(h3.scanned_word(node, NODE_NEXT as int) == l);
         // Ctx の語と引数
         let ws = seq![l, e];
         assert(held_word(h0, ws[0]) && held_word(h0, ws[1]));
@@ -445,8 +600,8 @@ impl<M: Mode> Ctx<M> {
         self.lemma_holds_moved(s0, ws, seq![], d, none);
         self.lemma_evv_kept(s0, d, none);
         // 新しいリスト
-        h3.lemma_readable_scanned(node, 0);
-        h3.lemma_readable_scanned(node, 1);
+        h3.lemma_readable_scanned(node, NODE_EV as int);
+        h3.lemma_readable_scanned(node, NODE_NEXT as int);
         lemma_ev_kept(h3, h0, d, none, e);
         assert(node_ok(h3, node));
         let f = choose|f: nat| #[trigger] path(h0, l, f) is Some;
@@ -462,6 +617,185 @@ impl<M: Mode> Ctx<M> {
         lemma_seq_of(h3, node, f + 1);
         // 呼ぶ側が新しい節点の参照を1つ持つ
         self.lemma_fresh_holds(s0, node);
+        // 節点に入れたevidenceは、欄もrcの符号も変わらない
+        Self::lemma_word_unmoved(h3, h0, d, none, e);
+    }
+
+    /// `evv_enter`で`e`を`dup`した後の文脈。呼ぶ側は`l`と`e`の参照に加えて`e`の参照をもう1つ持ち、`evv_push`の
+    /// 前提が成り立つ。
+    pub(super) proof fn lemma_entered_dup(&self, s0: Ctx<M>, l: Word, e: Word)
+        requires
+            s0.held_ok(),
+            s0.evv_wf(l),
+            s0.ev_shape(e),
+            s0.holds_args(seq![l, e]),
+            self.evv == s0.evv,
+            self.native.yielding == s0.native.yielding,
+            self.max_evv == s0.max_evv,
+            self.heap.bumped(s0.heap, e),
+            self.heap.settled(),
+            self.heap.consistent(),
+        ensures
+            self.held_ok(),
+            self.evv_wf(l),
+            self.evv_seq(l) == s0.evv_seq(l),
+            self.ev_shape(e),
+            self.heap.tag_of(e) == s0.heap.tag_of(e),
+            self.holds_args(seq![l, e]),
+            self.holds_args(seq![l, e, e]),
+            moved(self.heap, s0.heap, |b: usize| points(e, b), Set::empty()),
+            no_free(self.heap, s0.heap),
+            forall|i: int| #[trigger] self.heap.scanned_word(e, i) == s0.heap.scanned_word(e, i),
+            (self.heap.rc_value(e) > 0) == (s0.heap.rc_value(e) > 0),
+    {
+        let h0 = s0.heap;
+        let h1 = self.heap;
+        let none = Set::<usize>::empty();
+        let d = |b: usize| points(e, b);
+        lemma_dup_moved(h1, h0, e);
+        let ws = seq![l, e];
+        let ws3 = seq![l, e, e];
+        assert(held_word(h0, ws[0]) && held_word(h0, ws[1]));
+        assert forall|i: int| 0 <= i < ws3.len() implies held_word(h0, #[trigger] ws3[i]) by {}
+        assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + d(
+            b,
+        ) >= self.need(seq![], b) by {
+            lemma_points_in(seq![], b);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], d, none);
+        assert forall|b: usize| #[trigger] self.need(ws, b) > 0 implies s0.need(ws, b) + d(b)
+            >= self.need(ws, b) by {
+            lemma_points_in(ws, b);
+        }
+        self.lemma_holds_moved(s0, ws, ws, d, none);
+        assert forall|b: usize| #[trigger] self.need(ws3, b) > 0 implies s0.need(ws, b) + d(b)
+            >= self.need(ws3, b) by {
+            lemma_points_in(ws, b);
+            lemma_points_in(ws3, b);
+        }
+        self.lemma_holds_moved(s0, ws, ws3, d, none);
+        self.lemma_evv_kept(s0, d, none);
+        lemma_listed_head(h0, l, s0.max_evv);
+        lemma_readable_kept(h1, h0, l);
+        lemma_listed_kept(h1, h0, d, none, l, s0.max_evv);
+        lemma_readable_kept(h1, h0, e);
+        lemma_ev_kept(h1, h0, d, none, e);
+        Self::lemma_word_unmoved(h1, h0, d, none, e);
+    }
+
+    /// `evv_enter`の、モデルが合っている道。`evv_push`の後も、呼ぶ側は`e`の自分の参照を持ったままである。
+    pub(super) proof fn lemma_entered_ok(
+        &self,
+        s0: Ctx<M>,
+        s1: Ctx<M>,
+        node: Word,
+        l: Word,
+        e: Word,
+    )
+        requires
+            s0.held_ok(),
+            s0.ev_shape(e),
+            s1.held_ok(),
+            s1.holds_args(seq![l, e, e]),
+            s1.evv == s0.evv,
+            s1.native.yielding == s0.native.yielding,
+            moved(s1.heap, s0.heap, |b: usize| points(e, b), Set::empty()),
+            no_free(s1.heap, s0.heap),
+            !live(s1.heap, node.bits_spec()),
+            self.evv == s1.evv,
+            self.native.yielding == s1.native.yielding,
+            self.holds(node),
+            self.evolved_by(s1, |b: usize| -points(l, b) - points(e, b), Set::empty()),
+        ensures
+            self.holds_args(seq![node, e]),
+            self.evolved_by(s0, |b: usize| -points(l, b), Set::empty()),
+    {
+        let h0 = s0.heap;
+        let h1 = s1.heap;
+        let h2 = self.heap;
+        let none = Set::<usize>::empty();
+        let d2 = |b: usize| -points(l, b) - points(e, b);
+        lemma_moved_chain(
+            h2,
+            h1,
+            h0,
+            |b: usize| points(e, b),
+            d2,
+            |b: usize| -points(l, b),
+            none,
+            none,
+            none,
+        );
+        // 呼ぶ側の`e`の参照
+        let ws3 = seq![l, e, e];
+        let we = seq![e];
+        assert(held_word(h1, ws3[1]));
+        assert forall|i: int| 0 <= i < we.len() implies held_word(h1, #[trigger] we[i]) by {}
+        assert forall|b: usize| #[trigger] self.need(we, b) > 0 implies s1.need(ws3, b) + d2(b)
+            >= self.need(we, b) by {
+            lemma_points_in(ws3, b);
+            lemma_points_in(we, b);
+        }
+        self.lemma_holds_moved(s1, ws3, we, d2, none);
+        // 新しい節点は`e`の物体でない
+        lemma_moved_refl(h1);
+        lemma_readable_kept(h1, h1, e);
+        self.lemma_holds_pair(node, e);
+    }
+
+    /// 呼ぶ側が`a`と`b`の参照を1つずつ`Ctx`と別に持ち、2つが同じ物体でなければ、2つを合わせて持つ。
+    pub(super) proof fn lemma_holds_pair(&self, a: Word, b: Word)
+        requires
+            self.holds(a),
+            self.holds(b),
+            !(a.is_ptr_spec() && b.is_ptr_spec() && a.bits_spec() == b.bits_spec()),
+        ensures
+            self.holds_args(seq![a, b]),
+    {
+        let ws = seq![a, b];
+        let v = self.heap.core.settled_view();
+        assert(held_word(self.heap, seq![a][0]) && held_word(self.heap, seq![b][0]));
+        assert forall|i: int| 0 <= i < ws.len() implies held_word(self.heap, #[trigger] ws[i]) by {}
+        assert forall|c: usize| #[trigger] self.need(ws, c) > 0 && v.rc_of(c) != 0 implies v.ext(c)
+            >= self.need(ws, c) by {
+            lemma_points_in(ws, c);
+            lemma_points_in(seq![a], c);
+            lemma_points_in(seq![b], c);
+            if points(a, c) > 0 {
+                assert(points(b, c) == 0);
+                assert(self.need(seq![a], c) > 0);
+            } else {
+                assert(self.need(ws, c) == self.need(seq![b], c));
+            }
+        }
+    }
+
+    /// `moved`の変化の前後で読める物体`w`が`x`の外なら、`meta`、走査する語、rcの符号は変わらない。
+    pub(super) proof fn lemma_word_unmoved(
+        h1: Heap<M>,
+        h0: Heap<M>,
+        d: spec_fn(usize) -> int,
+        x: Set<usize>,
+        w: Word,
+    )
+        requires
+            moved(h1, h0, d, x),
+            w.is_ptr_spec(),
+            h0.readable(w),
+            h1.readable(w),
+            !x.contains(w.bits_spec()),
+        ensures
+            h1.tag_of(w) == h0.tag_of(w),
+            forall|i: int| #[trigger] h1.scanned_word(w, i) == h0.scanned_word(w, i),
+            (h1.rc_value(w) > 0) == (h0.rc_value(w) > 0),
+    {
+        let b = w.bits_spec();
+        lemma_moved_refl(h0);
+        lemma_readable_kept(h0, h0, w);
+        lemma_moved_refl(h1);
+        lemma_readable_kept(h1, h1, w);
+        assert(same_head(h1, h0, b));
+        assert(h1.core.perm(b).slots == h0.core.perm(b).slots);
     }
 
     /// `evv` の物体の外の参照は、`Ctx` の参照と、引数のうちその物体を指す語の分を合わせた数以上ある。
@@ -520,12 +854,10 @@ impl<M: Mode> Ctx<M> {
             },
             self.heap.settleable(),
             forall|i: int| #[trigger] self.heap.scanned_word(ev, i) == s0.heap.scanned_word(ev, i),
-            self.heap.scanned_at(ev, 0) && self.heap.scanned_at(ev, 1) && self.heap.scanned_at(
-                ev,
-                2,
-            ),
-            self.heap.scanned_word(ev, 1) == self.heap.word_at(ev, 1),
-            self.heap.scanned_word(ev, 0) == self.heap.word_at(ev, 0),
+            self.heap.scanned_at(ev, EV_TABLE as int) && self.heap.scanned_at(ev, EV_STATE as int)
+                && self.heap.scanned_at(ev, EV_OUTER as int),
+            self.heap.scanned_word(ev, EV_STATE as int) == self.heap.word_at(ev, EV_STATE as int),
+            self.heap.scanned_word(ev, EV_TABLE as int) == self.heap.word_at(ev, EV_TABLE as int),
     {
         let z = |b: usize| 0int;
         let none = Set::<usize>::empty();
@@ -561,9 +893,9 @@ impl<M: Mode> Ctx<M> {
             h1.core.dom().contains(ev.bits_spec()),
             h1.core.state(ev.bits_spec()) == BlockState::Live,
             forall|i: int| #[trigger] h1.scanned_word(ev, i) == s0.heap.scanned_word(ev, i),
-            h1.scanned_at(ev, 1),
-            h1.scanned_word(ev, 1) == h1.word_at(ev, 1),
-            s == h1.word_at(ev, 1),
+            h1.scanned_at(ev, EV_STATE as int),
+            h1.scanned_word(ev, EV_STATE as int) == h1.word_at(ev, EV_STATE as int),
+            s == h1.word_at(ev, EV_STATE as int),
             unit.bits_spec() == 1,
             self.heap.field_set(h1, ev, 1, unit),
             self.heap.consistent(),
@@ -588,13 +920,13 @@ impl<M: Mode> Ctx<M> {
         let d = |b: usize| points(s, b);
         lemma_unit_bits();
         lemma_settle_moved(h1, h0);
-        lemma_set_moved(h2, h1, ev, 1, unit);
+        lemma_set_moved(h2, h1, ev, EV_STATE as int, unit);
         lemma_moved_chain(
             h2,
             h1,
             h0,
             z,
-            |b: usize| points(h1.word_at(ev, 1), b) - points(unit, b),
+            |b: usize| points(h1.word_at(ev, EV_STATE as int), b) - points(unit, b),
             d,
             none,
             x,
@@ -608,18 +940,18 @@ impl<M: Mode> Ctx<M> {
         ) by {
             assert(h2.word_at(ev, i) == h1.word_at(ev, i));
         }
-        assert(h2.scanned_word(ev, 1) == unit);
+        assert(h2.scanned_word(ev, EV_STATE as int) == unit);
         assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + d(
             b,
         ) >= self.need(seq![], b) by {
             lemma_points_in(seq![], b);
         }
         self.lemma_holds_moved(s0, seq![], seq![], d, x);
-        h0.lemma_readable_scanned(ev, 1);
+        h0.lemma_readable_scanned(ev, EV_STATE as int);
         self.lemma_dupped_holds(s0, s, x);
         lemma_readable_kept(h1, h0, ev);
         lemma_readable_kept(h2, h1, ev);
-        lemma_ev_field_written(h2, h0, d, ev, 1, unit);
+        lemma_ev_field_written(h2, h0, d, ev, EV_STATE as int, unit);
         lemma_listed_kept(h2, h0, d, x, self.evv, self.max_evv);
     }
 
@@ -644,9 +976,9 @@ impl<M: Mode> Ctx<M> {
             h1.core.dom().contains(ev.bits_spec()),
             h1.core.state(ev.bits_spec()) == BlockState::Live,
             forall|i: int| #[trigger] h1.scanned_word(ev, i) == s0.heap.scanned_word(ev, i),
-            h1.scanned_at(ev, 2),
-            h1.scanned_word(ev, 2) == h1.word_at(ev, 2),
-            w == h1.word_at(ev, 2),
+            h1.scanned_at(ev, EV_OUTER as int),
+            h1.scanned_word(ev, EV_OUTER as int) == h1.word_at(ev, EV_OUTER as int),
+            w == h1.word_at(ev, EV_OUTER as int),
             unit.bits_spec() == 1,
             self.heap.field_set(h1, ev, 2, unit),
             self.heap.consistent(),
@@ -671,13 +1003,13 @@ impl<M: Mode> Ctx<M> {
         let d = |b: usize| points(w, b);
         lemma_unit_bits();
         lemma_settle_moved(h1, h0);
-        lemma_set_moved(h2, h1, ev, 2, unit);
+        lemma_set_moved(h2, h1, ev, EV_OUTER as int, unit);
         lemma_moved_chain(
             h2,
             h1,
             h0,
             z,
-            |b: usize| points(h1.word_at(ev, 2), b) - points(unit, b),
+            |b: usize| points(h1.word_at(ev, EV_OUTER as int), b) - points(unit, b),
             d,
             none,
             x,
@@ -691,18 +1023,18 @@ impl<M: Mode> Ctx<M> {
         ) by {
             assert(h2.word_at(ev, i) == h1.word_at(ev, i));
         }
-        assert(h2.scanned_word(ev, 2) == unit);
+        assert(h2.scanned_word(ev, EV_OUTER as int) == unit);
         assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + d(
             b,
         ) >= self.need(seq![], b) by {
             lemma_points_in(seq![], b);
         }
         self.lemma_holds_moved(s0, seq![], seq![], d, x);
-        h0.lemma_readable_scanned(ev, 2);
+        h0.lemma_readable_scanned(ev, EV_OUTER as int);
         self.lemma_dupped_holds(s0, w, x);
         lemma_readable_kept(h1, h0, ev);
         lemma_readable_kept(h2, h1, ev);
-        lemma_ev_field_written(h2, h0, d, ev, 2, unit);
+        lemma_ev_field_written(h2, h0, d, ev, EV_OUTER as int, unit);
         lemma_listed_kept(h2, h0, d, x, self.evv, self.max_evv);
     }
 
@@ -729,9 +1061,9 @@ impl<M: Mode> Ctx<M> {
             h1.core.state(ev.bits_spec()) == BlockState::Live,
             h1.holds(s),
             held_word(h1, s),
-            h1.scanned_at(ev, 1),
-            h1.scanned_word(ev, 1) == h1.word_at(ev, 1),
-            old_state == h1.word_at(ev, 1),
+            h1.scanned_at(ev, EV_STATE as int),
+            h1.scanned_word(ev, EV_STATE as int) == h1.word_at(ev, EV_STATE as int),
+            old_state == h1.word_at(ev, EV_STATE as int),
             self.heap.field_set(h1, ev, 1, s),
             self.heap.consistent(),
         ensures
@@ -740,8 +1072,8 @@ impl<M: Mode> Ctx<M> {
         let h2 = self.heap;
         let x = Set::<usize>::empty().insert(ev.bits_spec());
         let d = |b: usize| points(old_state, b) - points(s, b);
-        lemma_set_moved(h2, h1, ev, 1, s);
-        h1.lemma_readable_scanned(ev, 1);
+        lemma_set_moved(h2, h1, ev, EV_STATE as int, s);
+        h1.lemma_readable_scanned(ev, EV_STATE as int);
         let ob = old_state.bits_spec();
         if old_state.is_ptr_spec() && h1.core.settled_view().rc_of(ob) != 0 {
             assert(live(h1, ob));
@@ -778,9 +1110,9 @@ impl<M: Mode> Ctx<M> {
             h1.core.dom().contains(ev.bits_spec()),
             h1.core.state(ev.bits_spec()) == BlockState::Live,
             forall|i: int| #[trigger] h1.scanned_word(ev, i) == s0.heap.scanned_word(ev, i),
-            h1.scanned_at(ev, 1),
-            h1.scanned_word(ev, 1) == h1.word_at(ev, 1),
-            old_state == h1.word_at(ev, 1),
+            h1.scanned_at(ev, EV_STATE as int),
+            h1.scanned_word(ev, EV_STATE as int) == h1.word_at(ev, EV_STATE as int),
+            old_state == h1.word_at(ev, EV_STATE as int),
             h2.field_set(h1, ev, 1, s),
             h2.consistent(),
             h2.decref_ok(old_state),
@@ -805,11 +1137,11 @@ impl<M: Mode> Ctx<M> {
         let z = |b: usize| 0int;
         let none = Set::<usize>::empty();
         let x = none.insert(ev.bits_spec());
-        let d12 = |b: usize| points(h1.word_at(ev, 1), b) - points(s, b);
+        let d12 = |b: usize| points(h1.word_at(ev, EV_STATE as int), b) - points(s, b);
         let d23 = |b: usize| -points(old_state, b);
         let d = |b: usize| -points(s, b);
         lemma_settle_moved(h1, h0);
-        lemma_set_moved(h2, h1, ev, 1, s);
+        lemma_set_moved(h2, h1, ev, EV_STATE as int, s);
         lemma_decref_moved(h3, h2, old_state);
         lemma_moved_chain(h3, h2, h1, d12, d23, d, x, none, x);
         lemma_moved_chain(h3, h1, h0, z, d, d, none, x, x);
@@ -847,8 +1179,8 @@ impl<M: Mode> Ctx<M> {
         ) by {
             assert(h2.word_at(ev, i) == h1.word_at(ev, i));
         }
-        assert(h3.scanned_word(ev, 1) == s);
-        lemma_ev_field_written(h3, h0, d, ev, 1, s);
+        assert(h3.scanned_word(ev, EV_STATE as int) == s);
+        lemma_ev_field_written(h3, h0, d, ev, EV_STATE as int, s);
         lemma_listed_kept(h3, h0, d, x, self.evv, self.max_evv);
     }
 
@@ -947,7 +1279,7 @@ impl<M: Mode> Ctx<M> {
             x,
             x,
         );
-        // Ctx の語
+        // `Ctx`の語
         let ws = seq![c];
         assert(held_word(h0, ws[0]));
         assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(ws, b) + d(b)
@@ -961,9 +1293,9 @@ impl<M: Mode> Ctx<M> {
         lemma_readable_kept(h2, h1, ev);
         assert(live(h0, ev.bits_spec()) && live(h2, ev.bits_spec()));
         assert(ev.bits_spec() != t.bits_spec());
-        assert(h2.scanned_word(ev, 0) == t);
-        h2.lemma_readable_scanned(ev, 0);
-        h0.lemma_readable_scanned(ev, 0);
+        assert(h2.scanned_word(ev, EV_TABLE as int) == t);
+        h2.lemma_readable_scanned(ev, EV_TABLE as int);
+        h0.lemma_readable_scanned(ev, EV_TABLE as int);
         assert(live(h0, t.bits_spec()) && live(h2, t.bits_spec()));
         assert(same_head(h2, h0, t.bits_spec()));
         assert(h2.count_of(t) == h0.count_of(t));
@@ -1010,7 +1342,7 @@ impl<M: Mode> Ctx<M> {
             h2.settled(),
             h3.made(h2, e),
             h3.kind_of(e) == Kind::Data,
-            h3.scan_of(e) == 3,
+            h3.scan_of(e) == EV_WORDS,
             h3.tag_of(e) == s0.heap.tag_of(ev),
             h3.lin_of(e) == false,
             h3.owned(e),
@@ -1054,19 +1386,19 @@ impl<M: Mode> Ctx<M> {
         lemma_alloc_moved(h3, h2, e);
         lemma_moved_chain(h3, h2, h0, d2, z, d2, none, none, none);
         lemma_unextended(h3, e);
-        assert(h3.scanned_word(e, 0).bits_spec() == 1);
-        assert(h3.scanned_word(e, 1).bits_spec() == 1);
-        assert(h3.scanned_word(e, 2).bits_spec() == 1);
-        lemma_set_unit_moved(h4, h3, e, 0, t);
+        assert(h3.scanned_word(e, EV_TABLE as int).bits_spec() == 1);
+        assert(h3.scanned_word(e, EV_STATE as int).bits_spec() == 1);
+        assert(h3.scanned_word(e, EV_OUTER as int).bits_spec() == 1);
+        lemma_set_unit_moved(h4, h3, e, EV_TABLE as int, t);
         lemma_moved_chain(h4, h3, h0, d2, |b: usize| -points(t, b), d4, none, x, none);
         lemma_unextended(h4, e);
-        assert(h4.word_at(e, 1) == h3.word_at(e, 1));
-        assert(h4.word_at(e, 2) == h3.word_at(e, 2));
-        lemma_set_unit_moved(h5, h4, e, 1, state);
+        assert(h4.word_at(e, EV_STATE as int) == h3.word_at(e, EV_STATE as int));
+        assert(h4.word_at(e, EV_OUTER as int) == h3.word_at(e, EV_OUTER as int));
+        lemma_set_unit_moved(h5, h4, e, EV_STATE as int, state);
         lemma_moved_chain(h5, h4, h0, d4, |b: usize| -points(state, b), d5, none, x, none);
         lemma_unextended(h5, e);
-        assert(h5.word_at(e, 2) == h4.word_at(e, 2));
-        lemma_set_unit_moved(h6, h5, e, 2, l);
+        assert(h5.word_at(e, EV_OUTER as int) == h4.word_at(e, EV_OUTER as int));
+        lemma_set_unit_moved(h6, h5, e, EV_OUTER as int, l);
         lemma_moved_chain(h6, h5, h0, d5, |b: usize| -points(l, b), d, none, x, none);
         // 新しい evidence についての変化
         let e4 = |b: usize| -points(t, b);
@@ -1079,7 +1411,7 @@ impl<M: Mode> Ctx<M> {
         assert(!live(h2, eb));
         assert(e6(eb) == 0) by {
             lemma_readable_kept(h2, h0, ev);
-            h0.lemma_readable_scanned(ev, 0);
+            h0.lemma_readable_scanned(ev, EV_TABLE as int);
             lemma_readable_kept(h2, h0, t);
             lemma_listed_head(h0, l, s0.max_evv);
             lemma_readable_kept(h2, h0, l);
@@ -1088,9 +1420,9 @@ impl<M: Mode> Ctx<M> {
         }
         assert(live(h6, eb));
         lemma_unextended(h6, e);
-        assert(h6.scanned_word(e, 0) == t);
-        assert(h6.scanned_word(e, 1) == state);
-        assert(h6.scanned_word(e, 2) == l);
+        assert(h6.scanned_word(e, EV_TABLE as int) == t);
+        assert(h6.scanned_word(e, EV_STATE as int) == state);
+        assert(h6.scanned_word(e, EV_OUTER as int) == l);
         // Ctx の語と引数
         let ws = seq![state];
         assert(held_word(h0, ws[0]));
@@ -1108,10 +1440,10 @@ impl<M: Mode> Ctx<M> {
         lemma_readable_kept(h5, h4, ev);
         lemma_readable_kept(h6, h5, ev);
         lemma_ev_kept(h6, h0, d, none, ev);
-        h6.lemma_readable_scanned(e, 0);
-        h6.lemma_readable_scanned(e, 1);
-        h6.lemma_readable_scanned(e, 2);
-        h0.lemma_readable_scanned(ev, 0);
+        h6.lemma_readable_scanned(e, EV_TABLE as int);
+        h6.lemma_readable_scanned(e, EV_STATE as int);
+        h6.lemma_readable_scanned(e, EV_OUTER as int);
+        h0.lemma_readable_scanned(ev, EV_TABLE as int);
         lemma_table_kept(h6, h0, d, none, t);
         lemma_listed_head(h0, l, s0.max_evv);
         lemma_word_kept(h6, h0, d, none, state);
@@ -1120,6 +1452,226 @@ impl<M: Mode> Ctx<M> {
         assert(ev_ok(h6, e));
         // 呼ぶ側が新しい evidence の参照を1つ持つ
         self.lemma_fresh_holds(s0, e);
+    }
+
+    /// `ev_retire`で写す道の、表を`dup`して新しいevidenceを確保した後。呼ぶ側の`ev`の参照は残っているので、`ev`を
+    /// `decref`できる。
+    pub(super) proof fn lemma_retire_copied(
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        h2: Heap<M>,
+        ev: Word,
+        t: Word,
+        e: Word,
+    )
+        requires
+            s0.held_ok(),
+            s0.ev_shape(ev),
+            s0.holds(ev),
+            t == s0.ev_table(ev),
+            h1.bumped(s0.heap, t),
+            h1.settled(),
+            h1.consistent(),
+            h2.made(h1, e),
+        ensures
+            h2.decref_ok(ev),
+            moved(h2, s0.heap, |b: usize| points(t, b), Set::empty()),
+            no_free(h2, s0.heap),
+            exact(h2, s0.heap, |b: usize| points(t, b)),
+            !live(s0.heap, e.bits_spec()),
+            live(h2, e.bits_spec()),
+            h2.core.settled_view().ext(e.bits_spec()) == 1,
+    {
+        let h0 = s0.heap;
+        let z = |b: usize| 0int;
+        let none = Set::<usize>::empty();
+        let d = |b: usize| points(t, b);
+        lemma_unextended(h0, ev);
+        h0.lemma_readable_scanned(ev, EV_TABLE as int);
+        lemma_dup_moved(h1, h0, t);
+        lemma_alloc_moved(h2, h1, e);
+        lemma_moved_chain(h2, h1, h0, d, z, d, none, none, none);
+        assert(!live(h0, e.bits_spec()));
+        s0.lemma_arg_counted(seq![ev], 0);
+        lemma_points_in(seq![ev], ev.bits_spec());
+        // 表のtagは0でevidenceのtagは0でないので、表は`ev`と別の物体である
+        assert(points(t, ev.bits_spec()) == 0);
+        lemma_arg_moved(h2, h0, d, none, ev);
+    }
+
+    /// `ev_retire`で写す道の、`ev`を手放した後。新しいevidenceは生きていて書けて、表は呼ぶ側の参照で生きている。
+    pub(super) proof fn lemma_retire_released(
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        h2: Heap<M>,
+        h3: Heap<M>,
+        ev: Word,
+        t: Word,
+        e: Word,
+    )
+        requires
+            s0.held_ok(),
+            s0.ev_shape(ev),
+            s0.holds(ev),
+            t == s0.ev_table(ev),
+            h1.bumped(s0.heap, t),
+            h1.settled(),
+            h1.consistent(),
+            h2.made(h1, e),
+            h2.kind_of(e) == Kind::Data,
+            h2.scan_of(e) == EV_WORDS,
+            h2.lin_of(e) == false,
+            h2.owned(e),
+            h2.decref_ok(ev),
+            h3.consistent(),
+            h3.settled(),
+            h3.evolved(h2, ev, -1),
+            h3.kept_live(h2),
+        ensures
+            h3.writable(e),
+            h3.holds(t),
+            h3.scanned_at(e, EV_TABLE as int),
+            h3.owned(e),
+            h3.word_in(t),
+            moved(h3, s0.heap, |b: usize| points(t, b) - points(ev, b), Set::empty()),
+            live(h3, e.bits_spec()),
+            same_head(h3, h2, e.bits_spec()),
+            h3.core.perm(e.bits_spec()).slots == h2.core.perm(e.bits_spec()).slots,
+            h3.core.settled_view().ext(e.bits_spec()) == 1,
+            !live(s0.heap, e.bits_spec()),
+    {
+        let h0 = s0.heap;
+        let none = Set::<usize>::empty();
+        let d = |b: usize| points(t, b) - points(ev, b);
+        Self::lemma_retire_copied(s0, h1, h2, ev, t, e);
+        lemma_decref_moved(h3, h2, ev);
+        lemma_moved_chain(
+            h3,
+            h2,
+            h0,
+            |b: usize| points(t, b),
+            |b: usize| -points(ev, b),
+            d,
+            none,
+            none,
+            none,
+        );
+        lemma_unextended(h0, ev);
+        h0.lemma_readable_scanned(ev, EV_TABLE as int);
+        assert(points(t, ev.bits_spec()) == 0);
+        assert(points(ev, t.bits_spec()) == 0);
+        lemma_ext_nonneg_word(h0, t);
+        lemma_arg_moved(h3, h0, d, none, t);
+        // 新しいevidenceは`ev`の物体でないので、`decref`の後も生きている
+        let eb = e.bits_spec();
+        assert(points(ev, eb) == 0) by {
+            lemma_readable_kept(h0, h0, ev);
+        }
+        assert(live(h3, eb));
+        assert(same_head(h3, h2, eb));
+        lemma_unextended(h2, e);
+        lemma_unextended(h3, e);
+        lemma_view_live(h3, eb);
+    }
+
+    /// `ev_retire`で写す道の、モデルが合っている道。
+    pub(super) proof fn lemma_ev_retire_ok(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        h2: Heap<M>,
+        h3: Heap<M>,
+        ev: Word,
+        t: Word,
+        e: Word,
+    )
+        requires
+            s0.held_ok(),
+            s0.ev_shape(ev),
+            s0.holds(ev),
+            t == s0.ev_table(ev),
+            h1.bumped(s0.heap, t),
+            h1.settled(),
+            h1.consistent(),
+            h2.made(h1, e),
+            h2.kind_of(e) == Kind::Data,
+            h2.scan_of(e) == EV_WORDS,
+            h2.tag_of(e) == s0.heap.tag_of(ev),
+            h2.lin_of(e) == false,
+            h2.owned(e),
+            forall|i: int| 0 <= i < 3 ==> (#[trigger] h2.scanned_word(e, i)).bits_spec() == 1,
+            h2.decref_ok(ev),
+            h3.consistent(),
+            h3.settled(),
+            h3.evolved(h2, ev, -1),
+            h3.kept_live(h2),
+            self.heap.field_set(h3, e, 0, t),
+            self.heap.consistent(),
+            self.evv == s0.evv,
+            self.native.yielding == s0.native.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.holds(e),
+            self.ev_shape(e),
+            self.heap.rc_value(e) > 0,
+            self.ev_tag(e) == s0.ev_tag(ev),
+            self.ev_table(e) == s0.ev_table(ev),
+            self.ev_state(e).bits_spec() == 1,
+            self.ev_outer(e).bits_spec() == 1,
+            self.evolved_by(s0, |b: usize| points(e, b) - points(ev, b), Set::empty()),
+    {
+        let h0 = s0.heap;
+        let h4 = self.heap;
+        let none = Set::<usize>::empty();
+        let eb = e.bits_spec();
+        let x = none.insert(eb);
+        let d3 = |b: usize| points(t, b) - points(ev, b);
+        let d = |b: usize| -points(ev, b);
+        Self::lemma_retire_released(s0, h1, h2, h3, ev, t, e);
+        lemma_unextended(h3, e);
+        assert forall|i: int| #[trigger] h3.scanned_word(e, i) == h2.scanned_word(e, i) by {
+            assert(h3.core.perm(eb).meta == h2.core.perm(eb).meta);
+            assert(h3.core.perm(eb).slots == h2.core.perm(eb).slots);
+        }
+        assert(h3.scanned_word(e, EV_TABLE as int).bits_spec() == 1);
+        lemma_set_unit_moved(h4, h3, e, EV_TABLE as int, t);
+        lemma_moved_chain(h4, h3, h0, d3, |b: usize| -points(t, b), d, none, x, none);
+        // 新しいevidenceについての変化
+        lemma_unextended(h4, e);
+        assert(live(h4, eb));
+        assert(same_head(h4, h2, eb));
+        assert(h4.scanned_word(e, EV_TABLE as int) == t);
+        assert(h4.word_at(e, EV_STATE as int) == h3.word_at(e, EV_STATE as int));
+        assert(h4.word_at(e, EV_OUTER as int) == h3.word_at(e, EV_OUTER as int));
+        assert(h2.scanned_word(e, EV_STATE as int).bits_spec() == 1);
+        assert(h2.scanned_word(e, EV_OUTER as int).bits_spec() == 1);
+        assert(h3.scanned_word(e, EV_STATE as int) == h2.scanned_word(e, EV_STATE as int));
+        assert(h3.scanned_word(e, EV_OUTER as int) == h2.scanned_word(e, EV_OUTER as int));
+        assert(h4.scanned_word(e, EV_STATE as int).bits_spec() == 1);
+        assert(h4.scanned_word(e, EV_OUTER as int).bits_spec() == 1);
+        // Ctxの語
+        let ws = seq![ev];
+        assert(held_word(h0, ws[0]));
+        assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(ws, b) + d(b)
+            >= self.need(seq![], b) by {
+            lemma_points_in(seq![], b);
+            lemma_points_in(ws, b);
+        }
+        self.lemma_holds_moved(s0, ws, seq![], d, none);
+        self.lemma_evv_kept(s0, d, none);
+        // 表と新しいevidenceの形
+        lemma_unextended(h0, ev);
+        h0.lemma_readable_scanned(ev, EV_TABLE as int);
+        lemma_table_kept(h3, h0, d3, none, t);
+        lemma_readable_kept(h4, h3, t);
+        lemma_table_kept(h4, h3, |b: usize| -points(t, b), x, t);
+        h4.lemma_readable_scanned(e, EV_TABLE as int);
+        lemma_unit_bits();
+        assert(ev_ok(h4, e));
+        // 呼ぶ側が新しいevidenceの参照を1つ持つ
+        self.lemma_fresh_holds(s0, e);
+        lemma_moved_weaken(h4, h0, d, |b: usize| points(e, b) - points(ev, b), none, none);
     }
 
     /// evidence から読んだ `w` を `dup` した後の、モデルが合っている道。
@@ -1401,6 +1953,36 @@ pub(super) proof fn lemma_moved_weaken<M: Mode>(
         &&& v0.rc_of(b) != 0 ==> h1.core.settled_view().ext(b) == v0.ext(b) + e(b)
     } by {
         assert(d(b) == e(b));
+    }
+}
+
+/// 不死の物体`t`の外の参照の数は`moved`に現れないので、`t`のほかで変化の数が合えば、同じ変化と言える。
+pub(super) proof fn lemma_moved_immortal<M: Mode>(
+    h1: Heap<M>,
+    h0: Heap<M>,
+    d: spec_fn(usize) -> int,
+    e: spec_fn(usize) -> int,
+    x: Set<usize>,
+    t: Word,
+)
+    requires
+        moved(h1, h0, d, x),
+        h0.core.settled_view().rc_of(t.bits_spec()) == 0,
+        forall|b: usize| live(h0, b) && b != t.bits_spec() ==> #[trigger] d(b) == e(b),
+    ensures
+        moved(h1, h0, e, x),
+{
+    let v0 = h0.core.settled_view();
+    assert forall|b: usize|
+        #![trigger live(h0, b)]
+        live(h0, b) && (v0.rc_of(b) == 0 || v0.ext(b) + e(b) >= 1) implies {
+        &&& live(h1, b)
+        &&& h1.core.block(b) == h0.core.block(b)
+        &&& v0.rc_of(b) != 0 ==> h1.core.settled_view().ext(b) == v0.ext(b) + e(b)
+    } by {
+        if b != t.bits_spec() {
+            assert(d(b) == e(b));
+        }
     }
 }
 
@@ -1949,7 +2531,7 @@ pub(super) proof fn lemma_path_mono<M: Mode>(h: Heap<M>, w: Word, f: nat, g: nat
     decreases f,
 {
     if w.bits_spec() != 1 && f > 0 {
-        lemma_path_mono(h, h.scanned_word(w, 1), (f - 1) as nat, (g - 1) as nat);
+        lemma_path_mono(h, h.scanned_word(w, NODE_NEXT as int), (f - 1) as nat, (g - 1) as nat);
     }
 }
 
@@ -2021,7 +2603,10 @@ pub(super) proof fn lemma_ev_kept<M: Mode>(
         ev_ok(h0, e),
         h1.readable(e),
         !x.contains(e.bits_spec()),
-        x.contains(h0.scanned_word(e, 0).bits_spec()) ==> table_ok(h1, h0.scanned_word(e, 0)),
+        x.contains(h0.scanned_word(e, EV_TABLE as int).bits_spec()) ==> table_ok(
+            h1,
+            h0.scanned_word(e, EV_TABLE as int),
+        ),
     ensures
         ev_ok(h1, e),
         h1.tag_of(e) == h0.tag_of(e),
@@ -2032,15 +2617,15 @@ pub(super) proof fn lemma_ev_kept<M: Mode>(
     assert(same_head(h1, h0, b));
     assert(h1.core.perm(b).slots == h0.core.perm(b).slots);
     assert forall|i: int| #[trigger] h1.scanned_word(e, i) == h0.scanned_word(e, i) by {}
-    assert(h1.count_of(e) == 3);
-    let t = h0.scanned_word(e, 0);
-    h1.lemma_readable_scanned(e, 0);
-    h1.lemma_readable_scanned(e, 1);
-    h1.lemma_readable_scanned(e, 2);
-    h0.lemma_readable_scanned(e, 1);
-    h0.lemma_readable_scanned(e, 2);
-    lemma_word_kept(h1, h0, d, x, h0.scanned_word(e, 1));
-    lemma_word_kept(h1, h0, d, x, h0.scanned_word(e, 2));
+    assert(h1.count_of(e) == EV_WORDS);
+    let t = h0.scanned_word(e, EV_TABLE as int);
+    h1.lemma_readable_scanned(e, EV_TABLE as int);
+    h1.lemma_readable_scanned(e, EV_STATE as int);
+    h1.lemma_readable_scanned(e, EV_OUTER as int);
+    h0.lemma_readable_scanned(e, EV_STATE as int);
+    h0.lemma_readable_scanned(e, EV_OUTER as int);
+    lemma_word_kept(h1, h0, d, x, h0.scanned_word(e, EV_STATE as int));
+    lemma_word_kept(h1, h0, d, x, h0.scanned_word(e, EV_OUTER as int));
     if !x.contains(t.bits_spec()) {
         lemma_table_kept(h1, h0, d, x, t);
     }
@@ -2123,13 +2708,13 @@ pub(super) proof fn lemma_ev_field_written<M: Mode>(
     let b = ev.bits_spec();
     assert(live(h0, b) && live(h1, b));
     assert(same_head(h1, h0, b));
-    let t = h0.scanned_word(ev, 0);
+    let t = h0.scanned_word(ev, EV_TABLE as int);
     let k = 3 - f;
-    h1.lemma_readable_scanned(ev, 0);
-    h1.lemma_readable_scanned(ev, 1);
-    h1.lemma_readable_scanned(ev, 2);
+    h1.lemma_readable_scanned(ev, EV_TABLE as int);
+    h1.lemma_readable_scanned(ev, EV_STATE as int);
+    h1.lemma_readable_scanned(ev, EV_OUTER as int);
     h0.lemma_readable_scanned(ev, k);
-    assert(h1.scanned_word(ev, 0) == t);
+    assert(h1.scanned_word(ev, EV_TABLE as int) == t);
     assert(h1.scanned_word(ev, k) == h0.scanned_word(ev, k));
     assert(t.bits_spec() != b);
     lemma_table_kept(h1, h0, d, x, t);
@@ -2237,26 +2822,26 @@ pub(super) proof fn lemma_path_kept<M: Mode>(
 {
     if w.bits_spec() != 1 && f > 0 {
         let b = w.bits_spec();
-        let e = h0.scanned_word(w, 0);
-        let n = h0.scanned_word(w, 1);
+        let e = h0.scanned_word(w, NODE_EV as int);
+        let n = h0.scanned_word(w, NODE_NEXT as int);
         assert(node_ok(h0, w));
         assert(live(h0, b) && live(h1, b));
         assert(same_head(h1, h0, b));
         assert(!x.contains(b));
-        assert(h1.scanned_word(w, 0) == e);
-        assert(h1.scanned_word(w, 1) == n);
+        assert(h1.scanned_word(w, NODE_EV as int) == e);
+        assert(h1.scanned_word(w, NODE_NEXT as int) == n);
         assert(node_ok(h1, w));
-        h1.lemma_readable_scanned(w, 0);
-        h1.lemma_readable_scanned(w, 1);
+        h1.lemma_readable_scanned(w, NODE_EV as int);
+        h1.lemma_readable_scanned(w, NODE_NEXT as int);
         if x.contains(e.bits_spec()) {
             assert(ev_ok(h1, e));
         } else {
-            let t = h0.scanned_word(e, 0);
+            let t = h0.scanned_word(e, EV_TABLE as int);
             if x.contains(t.bits_spec()) {
                 assert(live(h0, e.bits_spec()) && live(h1, e.bits_spec()));
                 assert(same_head(h1, h0, e.bits_spec()));
-                assert(h1.scanned_word(e, 0) == t);
-                h1.lemma_readable_scanned(e, 0);
+                assert(h1.scanned_word(e, EV_TABLE as int) == t);
+                h1.lemma_readable_scanned(e, EV_TABLE as int);
                 assert(table_ok(h0, t));
             }
             lemma_ev_kept(h1, h0, d, x, e);
@@ -2593,8 +3178,8 @@ pub(super) proof fn lemma_walk_kept<M: Mode>(h1: Heap<M>, h0: Heap<M>, w: Word, 
         assert(walk_node(h0, n));
         lemma_node_kept(h1, h0, Set::empty(), n);
         assert(nth(h1, w, k1) == n);
-        assert(nth(h1, w, k) == h1.scanned_word(n, 1));
-        assert(nth(h0, w, k) == h0.scanned_word(n, 1));
+        assert(nth(h1, w, k) == h1.scanned_word(n, NODE_NEXT as int));
+        assert(nth(h0, w, k) == h0.scanned_word(n, NODE_NEXT as int));
         assert forall|j: nat| j < k implies walk_node(h1, #[trigger] nth(h1, w, j)) by {
             if j < k1 {
             } else {
@@ -2634,8 +3219,8 @@ pub(super) proof fn lemma_copies_kept<M: Mode>(
         &&& node_ok(h1, #[trigger] cs[k])
         &&& h1.rc_value(cs[k]) > 0
         &&& h1.tag_of(cs[k]) == out[k].0
-        &&& h1.scanned_word(cs[k], 0) == out[k].1
-        &&& k + 1 < cs.len() ==> h1.scanned_word(cs[k], 1) == cs[k + 1]
+        &&& h1.scanned_word(cs[k], NODE_EV as int) == out[k].1
+        &&& k + 1 < cs.len() ==> h1.scanned_word(cs[k], NODE_NEXT as int) == cs[k + 1]
     } by {
         assert(!x.contains(cs[k].bits_spec()));
         lemma_node_kept(h1, h0, x, cs[k]);
@@ -2651,15 +3236,15 @@ pub(super) proof fn lemma_path_step<M: Mode>(h: Heap<M>, n: Word, g: nat, r: Seq
         r.len() > 0 ==> {
             &&& g > 0
             &&& node_ok(h, n)
-            &&& ev_ok(h, h.scanned_word(n, 0))
-            &&& h.tag_of(h.scanned_word(n, 0)) == h.tag_of(n)
-            &&& r[0] == (h.tag_of(n), h.scanned_word(n, 0))
-            &&& path(h, h.scanned_word(n, 1), (g - 1) as nat) == Some(r.drop_first())
+            &&& ev_ok(h, h.scanned_word(n, NODE_EV as int))
+            &&& h.tag_of(h.scanned_word(n, NODE_EV as int)) == h.tag_of(n)
+            &&& r[0] == (h.tag_of(n), h.scanned_word(n, NODE_EV as int))
+            &&& path(h, h.scanned_word(n, NODE_NEXT as int), (g - 1) as nat) == Some(r.drop_first())
         },
 {
     if n.bits_spec() != 1 {
-        let next = path(h, h.scanned_word(n, 1), (g - 1) as nat);
-        let x = (h.tag_of(n), h.scanned_word(n, 0));
+        let next = path(h, h.scanned_word(n, NODE_NEXT as int), (g - 1) as nat);
+        let x = (h.tag_of(n), h.scanned_word(n, NODE_EV as int));
         assert(r =~= seq![x] + next->0);
         assert((seq![x] + next->0).drop_first() =~= next->0);
     }
@@ -2906,7 +3491,7 @@ pub(super) proof fn lemma_copies_path<M: Mode>(
 {
     let n = cs[k];
     let fuel = (g + cs.len() - k) as nat;
-    let next = h.scanned_word(n, 1);
+    let next = h.scanned_word(n, NODE_NEXT as int);
     assert(node_ok(h, n));
     lemma_unit_bits();
     if k + 1 < cs.len() {
@@ -2964,7 +3549,7 @@ pub(super) proof fn lemma_copies_link<M: Mode>(
 {
     let last = cs.last();
     let x = Set::empty().insert(last.bits_spec());
-    lemma_kept_set(h1, h0, last, 1, v);
+    lemma_kept_set(h1, h0, last, NODE_NEXT as int, v);
     assert(node_ok(h0, cs[cs.len() - 1]));
     lemma_unextended(h0, last);
     lemma_node_kept(h1, h0, x, last);
@@ -2974,8 +3559,8 @@ pub(super) proof fn lemma_copies_link<M: Mode>(
         &&& node_ok(h1, #[trigger] cs[k])
         &&& h1.rc_value(cs[k]) > 0
         &&& h1.tag_of(cs[k]) == out[k].0
-        &&& h1.scanned_word(cs[k], 0) == out[k].1
-        &&& k + 1 < cs.len() ==> h1.scanned_word(cs[k], 1) == cs[k + 1]
+        &&& h1.scanned_word(cs[k], NODE_EV as int) == out[k].1
+        &&& k + 1 < cs.len() ==> h1.scanned_word(cs[k], NODE_NEXT as int) == cs[k + 1]
     } by {
         lemma_node_kept(h1, h0, x, cs[k]);
         if k + 1 < cs.len() {
@@ -3001,7 +3586,7 @@ pub(super) proof fn lemma_copies_push<M: Mode>(
         node_ok(h, cp),
         h.rc_value(cp) > 0,
         h.tag_of(cp) == pair.0,
-        h.scanned_word(cp, 0) == pair.1,
+        h.scanned_word(cp, NODE_EV as int) == pair.1,
     ensures
         copies_ok(h, cs.push(cp), out.push(pair)),
 {
@@ -3011,8 +3596,8 @@ pub(super) proof fn lemma_copies_push<M: Mode>(
         &&& node_ok(h, #[trigger] cs1[k])
         &&& h.rc_value(cs1[k]) > 0
         &&& h.tag_of(cs1[k]) == out1[k].0
-        &&& h.scanned_word(cs1[k], 0) == out1[k].1
-        &&& k + 1 < cs1.len() ==> h.scanned_word(cs1[k], 1) == cs1[k + 1]
+        &&& h.scanned_word(cs1[k], NODE_EV as int) == out1[k].1
+        &&& k + 1 < cs1.len() ==> h.scanned_word(cs1[k], NODE_NEXT as int) == cs1[k + 1]
     } by {
         if k < cs.len() {
             assert(cs1[k] == cs[k]);
@@ -3157,8 +3742,8 @@ pub(super) proof fn lemma_copy_set<M: Mode>(
         cp.is_ptr_spec(),
         h2.core.dom().contains(cp.bits_spec()),
         h2.core.state(cp.bits_spec()) == BlockState::Live,
-        h2.scanned_at(cp, 0),
-        h2.word_at(cp, 0).bits_spec() == 1,
+        h2.scanned_at(cp, NODE_EV as int),
+        h2.word_at(cp, NODE_EV as int).bits_spec() == 1,
         h2.rc_value(cp) > 0,
         h3.field_set(h2, cp, 0, ev),
         h3.consistent(),
@@ -3173,9 +3758,9 @@ pub(super) proof fn lemma_copy_set<M: Mode>(
     let z = |b: usize| 0int;
     let none = Set::<usize>::empty();
     let x = none.insert(cp.bits_spec());
-    lemma_set_unit_moved(h3, h2, cp, 0, ev);
+    lemma_set_unit_moved(h3, h2, cp, NODE_EV as int, ev);
     lemma_moved_chain(h3, h2, hs, d, e, z, none, x, none);
-    lemma_kept_set(h3, h2, cp, 0, ev);
+    lemma_kept_set(h3, h2, cp, NODE_EV as int, ev);
     lemma_copies_kept(h3, h2, x, cs, out);
     assert(h2.core.settled_view().rc_of(cp.bits_spec()) != 0);
     if cs.len() > 0 {
@@ -3296,8 +3881,8 @@ pub(super) proof fn lemma_copy_push<M: Mode>(
         node_ok(h3, cp),
         h3.rc_value(cp) > 0,
         h3.tag_of(cp) == pair.0,
-        h3.scanned_word(cp, 0) == pair.1,
-        h3.scanned_word(cp, 1).bits_spec() == 1,
+        h3.scanned_word(cp, NODE_EV as int) == pair.1,
+        h3.scanned_word(cp, NODE_NEXT as int).bits_spec() == 1,
         h3.core.settled_view().ext(cp.bits_spec()) == 1,
         cs.len() == 0 ==> h4 == h3,
         cs.len() > 0 ==> h4.field_set(h3, cs.last(), 1, cp) && h4.consistent(),
@@ -3318,7 +3903,7 @@ pub(super) proof fn lemma_copy_push<M: Mode>(
         let x = none.insert(last.bits_spec());
         let e = |b: usize| -points(cp, b);
         lemma_last_ready(h3, cs, out);
-        lemma_set_unit_moved(h4, h3, last, 1, cp);
+        lemma_set_unit_moved(h4, h3, last, NODE_NEXT as int, cp);
         assert(cs[cs.len() - 1] == last);
         assert(!live(hs, last.bits_spec()));
         lemma_moved_chain(h4, h3, hs, z, e, z, none, x, none);
@@ -3380,7 +3965,7 @@ pub(super) proof fn lemma_copy_close<M: Mode>(
     let last = cs.last();
     let x = none.insert(last.bits_spec());
     lemma_last_ready(h6, cs, out);
-    lemma_set_unit_moved(h7, h6, last, 1, rest);
+    lemma_set_unit_moved(h7, h6, last, NODE_NEXT as int, rest);
     assert(cs[cs.len() - 1] == last);
     assert(!live(hs, last.bits_spec()));
     lemma_moved_chain(h7, h6, hs, d, e, z, none, x, none);
@@ -3468,7 +4053,7 @@ impl<M: Mode> Ctx<M> {
         lemma_skip_prefix(items, 0);
         assert(mask_from(items, s, bound as int) =~= tail);
         assert(mask_spec(items, s) == out + tail);
-        // Ctx の語
+        // `Ctx`の語
         assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + d(
             b,
         ) >= self.need(seq![], b) by {

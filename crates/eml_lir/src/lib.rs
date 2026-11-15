@@ -32,7 +32,7 @@ pub use flatten::flatten;
 pub use perceus::perceus;
 pub use pipeline::{Pass, passes_until};
 pub use pretty::{pretty, pretty_with_positions};
-pub use prim::{Immediates, Prim, PrimRow};
+pub use prim::{Immediates, Prim, PrimRow, Step};
 pub use reuse::reuse;
 pub use text::parse;
 pub use verify::{verify, verify_borrowed, verify_flattened, verify_lowered, verify_scopes};
@@ -111,9 +111,9 @@ pub struct LirFn {
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
-    /// in-place のエントリの関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
-    /// 返す。`ev_set_clause` に渡す値としてだけ参照される。テキストの形では `yields` の後に `clause E.op fn` と書く
-    /// (docs/spec/lir.md の「エントリの関数の印」)。
+    /// in-placeのエントリの関数が受け持つ (エフェクト, 操作)。捕獲の後にevidenceと操作の引数を受け、操作の結果を
+    /// 返す。`evidence`のエントリとしてだけ参照される。テキストの形では`yields`の後に`clause E.op fn`と書く
+    /// (docs/spec/lir.mdの「エントリの関数の印」)。
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr と印の並び。長さは1以上である。開くパス (flatten) の前はいつも1つで、開いた後は
@@ -336,6 +336,31 @@ impl Stmt {
         }
     }
 
+    /// 文が値として名指す関数と、それぞれが捕獲する値の数 (`Rhs::for_each_fn`)。複数の値の呼び出しでは、引数の
+    /// 関数の値である。
+    pub fn for_each_fn(&self, mut f: impl FnMut(FnIdx, usize)) {
+        match self {
+            Stmt::Let { var: _, rhs } => rhs.for_each_fn(f),
+            _ => self.for_each_atom(|atom| {
+                if let Atom::Fn(target) = atom {
+                    f(target, 0);
+                }
+            }),
+        }
+    }
+
+    /// `for_each_fn`と同じ関数を書き換える。
+    pub fn for_each_fn_mut(&mut self, mut f: impl FnMut(&mut FnIdx, usize)) {
+        match self {
+            Stmt::Let { var: _, rhs } => rhs.for_each_fn_mut(f),
+            _ => self.for_each_atom_mut(|atom| {
+                if let Atom::Fn(target) = atom {
+                    f(target, 0);
+                }
+            }),
+        }
+    }
+
     /// `let` の右辺と複数の値の呼び出しの値。`unpack` の値は変数なので、定数に書き換える所ではない。
     pub fn for_each_atom_mut(&mut self, f: impl FnMut(&mut Atom)) {
         match self {
@@ -521,10 +546,20 @@ pub enum Rhs {
     /// evidence passing の基本操作。借用の印 (`PrimRow::borrowed`) が立つ引数は読むだけで、ほかの引数は extern と同じく
     /// 消費する。結果は所有した値である (docs/spec/lir.md の「基本操作」)。
     Prim(Prim, Vec<Atom>),
+    /// エフェクト`effect`のevidenceを、状態、外側のリスト、操作ごとのエントリとともに1つの命令で作る。エントリは操作の
+    /// 順に並び、節の関数とそのクロージャの捕獲を持つ。状態、外側のリスト、捕獲を消費する。呼び出しでも巻き戻しの地点
+    /// でもない (docs/spec/lir.mdの「evidence」)。
+    Evidence {
+        effect: u32,
+        state: Atom,
+        outer: Atom,
+        entries: Vec<(FnIdx, Vec<Atom>)>,
+    },
 }
 
 impl Rhs {
-    /// 右辺が使う値。消費する使いと読む使いの区別は `for_each_consumed` が決める。
+    /// 右辺が使う値。消費する使いと読む使いの区別は`for_each_consumed`が決める。`evidence`は状態、外側のリスト、
+    /// エントリの捕獲の順に渡す。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Rhs::Call(call) => call.for_each_atom(f),
@@ -542,7 +577,38 @@ impl Rhs {
             | Rhs::Prim(_, args) => args.iter().for_each(|&atom| f(atom)),
             Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(*atom),
             Rhs::ConstString(_) => {}
+            Rhs::Evidence {
+                effect: _,
+                state,
+                outer,
+                entries,
+            } => {
+                f(*state);
+                f(*outer);
+                entries
+                    .iter()
+                    .flat_map(|(_, captures)| captures)
+                    .for_each(|&atom| f(atom));
+            }
         }
+    }
+
+    /// 右辺が値として名指す関数と、それぞれが捕獲する値の数。`closure`の関数は引数の数、関数の値`&f`は0、
+    /// `evidence`のエントリは捕獲の数である。直接の呼び出しの相手は入らない。`evidence`のエントリは`Atom::Fn`でも
+    /// `MakeClosure`でもないので、参照する関数を集める所はこれか`Stmt::for_each_fn`を使う。
+    pub fn for_each_fn(&self, mut f: impl FnMut(FnIdx, usize)) {
+        match self {
+            Rhs::MakeClosure(target, args) => f(*target, args.len()),
+            Rhs::Evidence { entries, .. } => entries
+                .iter()
+                .for_each(|(target, captures)| f(*target, captures.len())),
+            _ => {}
+        }
+        self.for_each_atom(|atom| {
+            if let Atom::Fn(target) = atom {
+                f(target, 0);
+            }
+        });
     }
 
     /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値と、基本操作と extern の借用の引数は読むだけなので
@@ -592,7 +658,36 @@ impl Rhs {
             | Rhs::Prim(_, args) => args.iter_mut().for_each(f),
             Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(atom),
             Rhs::ConstString(_) => {}
+            Rhs::Evidence {
+                effect: _,
+                state,
+                outer,
+                entries,
+            } => {
+                f(state);
+                f(outer);
+                entries
+                    .iter_mut()
+                    .flat_map(|(_, captures)| captures)
+                    .for_each(f);
+            }
         }
+    }
+
+    /// `for_each_fn`と同じ関数を、同じ捕獲の数と一緒に渡して書き換える。
+    pub fn for_each_fn_mut(&mut self, mut f: impl FnMut(&mut FnIdx, usize)) {
+        match self {
+            Rhs::MakeClosure(target, args) => f(target, args.len()),
+            Rhs::Evidence { entries, .. } => entries
+                .iter_mut()
+                .for_each(|(target, captures)| f(target, captures.len())),
+            _ => {}
+        }
+        self.for_each_atom_mut(|atom| {
+            if let Atom::Fn(target) = atom {
+                f(target, 0);
+            }
+        });
     }
 }
 
@@ -623,16 +718,15 @@ pub enum Call {
         yields: bool,
         /// 着地の印。この呼び出しの中で始まった abort は、`prompt$` が使う evidence `v` を持つ呼び出しの
         /// フレームまで VM のスタックを巻き戻す。`v` は呼び出しが消費も読みもしないので `for_each_atom` は
-        /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
+        /// 見せず、呼び出しの後も生きている`ev`の変数である (docs/spec/lir.mdの「着地の印」)。
         prompt: Option<VarId>,
     },
-    /// 操作の in-place のエントリのクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
-    /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
-    /// (docs/spec/lir.md の「節の呼び出し」)。
+    /// `effect`の操作`op`をする。`evv`から`effect`の最初のevidenceを探し、その操作のエントリを読み、evidenceと`args`で
+    /// 呼ぶ。`args`は操作の引数で、引数と結果のReprは操作の表の`params`と`ret`から取る。`mask`は持たない
+    /// (docs/spec/lir.mdの「節の呼び出し」)。
     Clause {
         effect: u32,
         op: u32,
-        callee: Atom,
         args: Vec<Atom>,
     },
     /// `par` の fork と join。`left` と `right` の関数値に `()` を適用する子を作り、両方の値を `pair` の構築子で組にして
@@ -657,7 +751,12 @@ impl Call {
     /// 呼び出しが使う値。関数値の呼び出しでは、呼ばれる値が先に来る。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
-            Call::Direct(_, args) => args.iter().for_each(|&atom| f(atom)),
+            Call::Direct(_, args)
+            | Call::Clause {
+                effect: _,
+                op: _,
+                args,
+            } => args.iter().for_each(|&atom| f(atom)),
             Call::Par {
                 left,
                 right,
@@ -672,12 +771,6 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
-            }
-            | Call::Clause {
-                effect: _,
-                op: _,
-                callee,
-                args,
             } => {
                 f(*callee);
                 args.iter().for_each(|&atom| f(atom));
@@ -685,8 +778,8 @@ impl Call {
         }
     }
 
-    /// 値の使いのうち消費。呼ばれる関数の貸された位置の、直接の呼び出しの引数を除くすべての値である。`apply`、
-    /// `clause`、`par`は、呼ぶ値と引数を消費する。
+    /// 値の使いのうち消費。呼ばれる関数の貸された位置の、直接の呼び出しの引数を除くすべての値である。`apply`と`par`は
+    /// 呼ぶ値と引数を、`clause`は引数を消費する。
     pub fn for_each_consumed(&self, lends: &Lends, f: impl FnMut(Atom)) {
         match self {
             Call::Direct(callee, args) => each_marked(args, lends.call(*callee), false, f),
@@ -703,7 +796,12 @@ impl Call {
 
     pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
-            Call::Direct(_, args) => args.iter_mut().for_each(f),
+            Call::Direct(_, args)
+            | Call::Clause {
+                effect: _,
+                op: _,
+                args,
+            } => args.iter_mut().for_each(f),
             Call::Par {
                 left,
                 right,
@@ -718,12 +816,6 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
-            }
-            | Call::Clause {
-                effect: _,
-                op: _,
-                callee,
-                args,
             } => {
                 f(callee);
                 args.iter_mut().for_each(f);

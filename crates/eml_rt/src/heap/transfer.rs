@@ -33,6 +33,8 @@ pub(crate) enum TransferError {
     Dead,
     /// 子でも今の worker でもない ID の局所の物体に届いた。
     WrongOwner(u32),
+    /// 数える不死の物体に届いた。
+    Counted,
 }
 
 // 仕様
@@ -508,6 +510,11 @@ pub(crate) fn transfer_walk<G: Graph>(
                     }
                 }
             }
+        } else if check && rc == 0 && graph.counted(node) {
+            proof {
+                lemma_returned(g0, graph.gv(), worker, from, check, known, flipped);
+            }
+            return Err(TransferError::Counted);
         } else if check && rc == -1 && !graph.lin(node) {
             let ghost before = *graph;
             let fresh = graph.see(node);
@@ -888,11 +895,12 @@ impl<M: Mode> Heap<M> {
         assert(self.share_graph() == o1.gv());
     }
 
-    /// 子 `from` の値 `w` を、今の worker の局所の値に戻す (docs/spec/object-model.md の「`transfer_back`」)。join で、
-    /// 右の子の値を受け取った後、`retire_worker(from)` の前に呼ぶ。根から rc -1 の物体だけを通って届く rc -1 の物体を
-    /// rc 1 の局所の物体にし、所有者を今の worker にする。検査モードでは、届いた局所の物体の所有者が `from` なら今の
-    /// worker に書き換え、ほかの ID なら `WrongOwner` を返す。`from` が今の worker なら、何も変えずに `WrongOwner` を
-    /// 返す。
+    /// 子`from`の値`w`を、今のworkerの局所の値に戻す (docs/spec/object-model.mdの「`transfer_back`」)。joinで、
+    /// 右の子の値を受け取った後、`retire_worker(from)`の前に呼ぶ。根からrc -1の物体だけを通って届くrc -1の物体を
+    /// rc 1の局所の物体にし、所有者を今のworkerにする。検査モードでは、届いた局所の物体の所有者が`from`なら今の
+    /// workerに書き換え、ほかのIDなら`WrongOwner`を返す。`from`が今のworkerなら、何も変えずに`WrongOwner`を
+    /// 返す。検査モードでは、たどりが数える不死の物体に届くと`CountedImmortal`を返す (docs/spec/object-model.mdの
+    /// 「不死の物体の数え方」)。`WrongOwner`と同じく、それまでの裏返しと所有者の書き換えは残る。
     ///
     /// # Safety
     /// `w` は即値か、このヒープか付けた塊の生きている物体を指し、そこから届く物体はどれも生きている。裏返す rc -1 の物体を
@@ -919,7 +927,9 @@ impl<M: Mode> Heap<M> {
             ).transfer_reaches_dead(w),
             M::CHECKED && old(self).transfer_ok(w) && !(w.is_ptr_spec() && old(
                 self,
-            ).transfer_reaches_dead(w)) ==> r is Ok || r matches Err(HeapError::WrongOwner { .. }),
+            ).transfer_reaches_dead(w)) ==> r is Ok || r == Err::<(), HeapError>(
+                HeapError::CountedImmortal,
+            ) || r matches Err(HeapError::WrongOwner { .. }),
     {
         let ghost pre_ok = self.transfer_ok(w);
         let worker = self.worker;
@@ -997,6 +1007,7 @@ impl<M: Mode> Heap<M> {
             Ok(()) => Ok(()),
             Err(TransferError::Dead) => Err(HeapError::UseAfterFree),
             Err(TransferError::WrongOwner(owner)) => Err(HeapError::WrongOwner { owner, worker }),
+            Err(TransferError::Counted) => Err(HeapError::CountedImmortal),
         }
     }
 }

@@ -16,6 +16,20 @@ use eml_rt::{Buffering, Control, Ctx, Fast, HostRef, Limits, StdHost};
 eml_nrt::entries! {
     const ECHO;
 
+    plain fn eml_t_echo_none_i(ctx) -> i64 {
+        let _ = ctx;
+        -10
+    }
+
+    plain fn eml_t_echo_iii(ctx, a: i64, b: i64, c: i64) {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe {
+            *out = a as u64;
+            *out.add(1) = b as u64;
+            *out.add(2) = c as u64;
+        }
+    }
+
     plain fn eml_t_echo_ii(ctx, a: i64, b: i64) {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
@@ -314,6 +328,8 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
             })
             .collect();
         let sent = argv.clone();
+        // 引数のない関数も、結果を`argv[0]`に書く
+        argv.resize(n.max(1), 0);
         let mut seen = vec![0u64; n];
         ctx.set_runtime(seen.as_mut_ptr().cast());
         let r = unsafe {
@@ -335,6 +351,7 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
             "eml_t_echo_ii_f" => assert_eq!(f64::from_bits(argv[0]), -2.25),
             "eml_t_echo_iif_i" => assert_eq!(argv[0] as i64, -3),
             "eml_t_echo_iii_i" => assert_eq!(argv[0] as i64, -3),
+            "eml_t_echo_none_i" => assert_eq!(argv[0] as i64, -10),
             "eml_t_echo_obj_tobj" => assert_eq!(
                 eml_rt::Word::from_bits(argv[0] as usize),
                 eml_rt::Word::imm(-7)

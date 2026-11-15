@@ -1174,7 +1174,7 @@ fn step<R: Exec>(
             let o = ops(at);
             let (f, lin, n) = (o[0], o[1] != 0, o[2] as usize);
             task.load_scratch(slots(&o[3..3 + n]));
-            let w = apply::make_closure::<R>(code, ctx, f, lin, &task.scratch)?;
+            let w = apply::make_closure::<R>(code, ctx, f, lin, task.scratch.iter().copied())?;
             task.scratch.clear();
             task.set(dst, w);
         }
@@ -1413,8 +1413,8 @@ fn step<R: Exec>(
             unsafe { ctx.evv_set(task.get(l)) }?;
             task.set(dst, Word::UNIT);
         }
-        Op::EvvPush { dst, l, e } => {
-            let w = unsafe { ctx.evv_push(task.get(l), task.get(e)) }?;
+        Op::EvvEnter { dst, l, e } => {
+            let w = unsafe { ctx.evv_enter(task.get(l), task.get(e)) }?;
             task.set(dst, w);
         }
         Op::EvvMask { dst, at } => {
@@ -1423,28 +1423,13 @@ fn step<R: Exec>(
             let w = unsafe { ctx.evv_mask(items, task.get(o[2] as Slot)) }?;
             task.set(dst, w);
         }
-        Op::EvNew { dst, at } => {
-            let o = ops(at);
-            let (state, outer) = (task.get(o[2] as Slot), task.get(o[3] as Slot));
-            let w = unsafe { ctx.ev_new(o[0] as u16, o[1] as usize, state, outer) }?;
-            task.set(dst, w);
-        }
-        Op::EvSetClause { dst, at } => {
-            let o = ops(at);
-            let (ev, entry) = (task.get(o[0] as Slot), task.get(o[2] as Slot));
-            unsafe { ctx.ev_set_clause(ev, o[1] as usize, entry) }?;
-            task.set(dst, Word::UNIT);
-        }
+        Op::Evidence { dst, at } => evidence::<R>(code, ctx, task, dst, at)?,
         Op::EvRenew { dst, ev, state } => {
             let w = unsafe { ctx.ev_renew(task.get(ev), task.get(state)) }?;
             task.set(dst, w);
         }
-        Op::EvLookup { dst, effect } => {
-            let w = unsafe { ctx.ev_lookup(effect) }?;
-            task.set(dst, w);
-        }
-        Op::EvClause { dst, ev, op } => {
-            let w = unsafe { ctx.ev_clause(task.get(ev), op.into()) }?;
+        Op::EvRetire { dst, ev } => {
+            let w = unsafe { ctx.ev_retire(task.get(ev)) }?;
             task.set(dst, w);
         }
         Op::EvEvv { dst, ev } => {
@@ -1541,7 +1526,9 @@ fn apply_call<R: Exec>(
     Ok(())
 }
 
-/// `clause` の命令。オペランドは [呼ばれる値, n, 引数…] である。
+/// `clause`の命令。オペランドは[エフェクト, 操作, n, 引数…]である。`evv`からエフェクトの最初のevidenceを探して操作の
+/// エントリを読み、evidenceと引数でエントリを呼ぶ。`ev_lookup`が`dup`して返すevidenceの参照は呼び出しの先頭の引数に
+/// なり、`ev_clause`はevidenceを借りて、エントリを`dup`して返す (docs/spec/vm.mdの「呼び出しと戻り」)。
 fn clause_call<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1550,10 +1537,85 @@ fn clause_call<R: Exec>(
     at: u32,
     target: apply::Target,
 ) -> Result<(), RunFault> {
-    let callee = load_call::<R>(code, task, at);
+    let o = &code.tables.operands[at as usize..];
+    let (effect, op, n) = (o[0] as u16, o[1] as usize, o[2] as usize);
+    let ev = unsafe { ctx.ev_lookup(effect) }?;
+    let callee = unsafe { ctx.ev_clause(ev, op) }?;
+    task.scratch.clear();
+    task.scratch.push(ev);
+    for &slot in &o[3..3 + n] {
+        let w = task.get(slot as Slot);
+        task.scratch.push(w);
+    }
     apply::apply_clause::<R>(code, ctx, task, callee, target)?;
     safepoint::<R>(code, ctx, task, sched)?;
     Ok(())
+}
+
+/// `evidence`の命令。オペランドは[エフェクト, 操作の数, 状態, 外側のリスト, 続いてエントリごとに関数, n, 捕獲…]である。
+/// エントリごとのクロージャを`closure`と同じ道で作り (捕獲のないエントリは関数の値である)、`ev_new`でevidenceを作って、
+/// `ev_set_clause`でエントリを操作の順に表に入れる。状態、外側のリスト、捕獲は消費する (docs/spec/vm.mdの「基本操作と extern」)。
+fn evidence<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    dst: Slot,
+    at: u32,
+) -> Result<(), RunFault> {
+    let o = &code.tables.operands[at as usize..];
+    let (effect, n_ops) = (o[0] as u16, o[1] as usize);
+    let (state, outer) = (task.get(o[2] as Slot), task.get(o[3] as Slot));
+    task.scratch.clear();
+    let mut next = 4;
+    for _ in 0..n_ops {
+        let (f, n) = (o[next], o[next + 1] as usize);
+        let captures = &o[next + 2..next + 2 + n];
+        next += 2 + n;
+        let entry = if n == 0 {
+            Ok(Word::imm(i64::from(f)))
+        } else {
+            let words = captures.iter().map(|&slot| task.get(slot as Slot));
+            apply::make_closure::<R>(code, ctx, f, false, words)
+        };
+        match entry {
+            Ok(entry) => task.scratch.push(entry),
+            Err(fault) => return Err(abandon_entries(ctx, task, 0, None, fault)),
+        }
+    }
+    let ev = match unsafe { ctx.ev_new(effect, n_ops, state, outer) } {
+        Ok(ev) => ev,
+        Err(error) => return Err(abandon_entries(ctx, task, 0, None, error.into())),
+    };
+    for op in 0..n_ops {
+        let entry = task.scratch[op];
+        if let Err(error) = unsafe { ctx.ev_set_clause(ev, op, entry) } {
+            return Err(abandon_entries(ctx, task, op, Some(ev), error.into()));
+        }
+    }
+    task.scratch.clear();
+    task.set(dst, ev);
+    Ok(())
+}
+
+/// 失敗した`evidence`が、まだ表に入れていないエントリ (`scratch`の`from..`) と、作ったevidenceを手放す。失敗した操作は
+/// ヒープを変えないので、これらの参照はまだこの命令が持っている。検査モードのリークの検査が、失敗したrunの後にこれらを
+/// 漏れとして数えないためである。最初の誤りを返す。
+fn abandon_entries<M: Mode>(
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    from: usize,
+    ev: Option<Word>,
+    fault: RunFault,
+) -> RunFault {
+    let heap = unsafe { ctx.heap_mut() };
+    for &entry in &task.scratch[from..] {
+        let _ = unsafe { heap.decref(entry) };
+    }
+    if let Some(ev) = ev {
+        let _ = unsafe { heap.decref(ev) };
+    }
+    task.scratch.clear();
+    fault
 }
 
 /// 関数の値を呼ぶ命令のオペランド [呼ばれる値, n, 引数…] の引数を scratch に読み、呼ばれる値を返す。
@@ -1917,14 +1979,12 @@ fn fork_evv<R: Exec>(
     let forks = &code.forks;
     let mut mirrored: Vec<(u16, Word, u32)> = Vec::new();
     let mut ranks: Vec<(u16, u32)> = Vec::new();
-    let heap = ctx.heap();
     let mut node = parent;
-    // `parent` は `Ctx` が参照を持つ `evv` のリストで、節点も evidence も生きている
-    while node.is_ptr() {
-        let effect = unsafe { heap.meta(node) }?
-            .tag()
-            .checked_sub(1)
-            .ok_or(RunFault::Internal("an evv node has tag 0"))?;
+    while let Some((effect, rest)) =
+        // SAFETY: `node`は`parent`か、そこから辿った節点で、`parent`は`Ctx`が参照を持つ`evv`のリストなので、
+        // 節点もevidenceも生きている。読むだけなので`heap_mut`の前提を守る
+        unsafe { ctx.evv_step(node) }?
+    {
         if Some(effect) != forks.panic {
             match forks.tables.get(usize::from(effect)) {
                 Some(ForkTable::Resumable) => {}
@@ -1948,23 +2008,19 @@ fn fork_evv<R: Exec>(
                 }
             }
         }
-        node = unsafe { heap.scanned(node, 1) }?;
+        node = rest;
     }
-    // 作る物体だけに書き、`Ctx` の持つ語には触れない。表と末尾は凍結した塊の物体なので、参照を数えない
-    let heap = unsafe { ctx.heap_mut() };
+    // 下の呼び出しは`heap_mut`の前提を守る。作る物体だけに書き、`Ctx`の持つ語には触れない。表と末尾は凍結した塊の
+    // 物体なので、参照を数えない
     let mut next = forks.tail;
-    const EV: usize = data_first(3, false);
-    const NODE: usize = data_first(2, false);
     for &(effect, table, depth) in mirrored.iter().rev() {
-        let ev = heap.alloc_data(effect + 1, 3, 0, false);
-        let node = heap.alloc_data(effect + 1, 2, 0, false);
-        unsafe {
-            heap.set_field(ev, EV, table)?;
-            heap.set_field(ev, EV + 1, Word::imm(i64::from(depth)))?;
-            heap.set_field(node, NODE, ev)?;
-            heap.set_field(node, NODE + 1, next)?;
-        }
-        next = node;
+        // SAFETY: `table`は`alloc_fork_table`が作って凍結した表で、凍結した領域の物体である。`effect`は
+        // 親の`evv`の節点のtagから求めた番号で、65535より小さい
+        let ev = unsafe { ctx.fork_ev(effect, table, depth) }?;
+        // SAFETY: `next`は凍結した末尾か、直前に作った節点で、`ev`は作ったばかりのfork evidenceである。どちらも
+        // 参照を1つずつ持ち、不死の物体の参照は数えない。子のリストは親のリストより長くても節点1つ分で、VMは`max_evv`に
+        // 上限を置かないので (docs/spec/vm.mdの「上限と割り込み」)、長さは上限より短い
+        next = unsafe { ctx.evv_push(next, ev) }?;
     }
     Ok(next)
 }
@@ -2500,21 +2556,8 @@ fn child_abort<R: Exec>(
         return Err(RunFault::Internal("a child abort outside a par child"));
     }
     let ev = task.get(ev);
-    // `ev` は節のエントリが持つ fork evidence で、状態の欄は深さの即値である
-    let heap = ctx.heap();
-    let effect = unsafe { heap.meta(ev) }?
-        .tag()
-        .checked_sub(1)
-        .ok_or(RunFault::Internal(
-            "a child abort gets something other than evidence",
-        ))?;
-    let depth = unsafe { heap.scanned(ev, 1) }?;
-    let depth = u32::try_from(depth.imm_value())
-        .ok()
-        .filter(|_| depth.is_imm())
-        .ok_or(RunFault::Internal(
-            "a child abort gets evidence without a depth",
-        ))?;
+    // SAFETY: `ev`は節のエントリが持つfork evidenceで、状態の欄は深さの即値である。読むだけなので`heap_mut`の前提を守る
+    let (effect, depth) = unsafe { ctx.fork_of(ev) }?;
     let clause = task.get(c);
     let dummy = ctx.heap().dummy();
     unwind::<R>(code, ctx, task, counts, dummy)?;
@@ -4429,10 +4472,16 @@ fn f(p.0: unit) -> unit {
 }
 ";
 
-    /// どの関数も、先頭の位置にエントリの行を持つ。RC の対象の引数を持たない関数と、verifier の拒む関数の行は空である
-    /// (docs/spec/vm.md の「巻き戻しの表」)。
+    /// どの関数も、先頭の位置にエントリの行を持つ。RCの対象の引数を持たない関数の行は空である。確かめない読み込みは、
+    /// verifierの拒む関数も空のエントリの行で読む (docs/spec/vm.mdの「巻き戻しの表」)。
     #[test]
     fn every_function_has_an_entry_row_at_its_start() {
+        let entry_row = |code: &CodeBase<eml_rt::Checked>, name: &str| {
+            let start = code.functions[function(code, name) as usize].start;
+            let row = code.tables.unwind_at(start).expect(name);
+            assert_ne!(row.entry, UnwindEntry::No, "{name}");
+            row.slots.clone()
+        };
         let text = "\
 fn main() -> unit {
   let n.0: int = call count(3)
@@ -4445,24 +4494,27 @@ fn keep(a.0: obj, n.1: int) -> unit {
   decref a.0
   return ()
 }
+";
+        let (code, _, _) = limit_fixture(text);
+        for (name, slots) in [("main", vec![]), ("count", vec![]), ("keep", vec![(0, 1)])] {
+            assert_eq!(entry_row(&code, name), slots, "{name}");
+        }
+
+        let text = "\
+fn main() -> unit {
+  return ()
+}
 fn leaks(a.0: obj) -> unit {
   return ()
 }
 ";
         let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
         assert!(eml_lir::verify(&program).is_err(), "`leaks` is rejected");
-        let (code, _, _) = limit_fixture(text);
-        for (name, slots) in [
-            ("main", vec![]),
-            ("count", vec![]),
-            ("keep", vec![(0, 1)]),
-            ("leaks", vec![]),
-        ] {
-            let start = code.functions[function(&code, name) as usize].start;
-            let row = code.tables.unwind_at(start).expect(name);
-            assert_ne!(row.entry, UnwindEntry::No, "{name}");
-            assert_eq!(row.slots, slots, "{name}");
-        }
+        let mut code =
+            CodeBase::<eml_rt::Checked>::new(Arc::new(Control::new(eml_rt::Limits::default())));
+        // SAFETY: `leaks`の漏れはわざと置いた誤りで、実行すれば検査モードのリークの検査が止める。ここでは読み込むだけである
+        unsafe { code.load_unverified(&program, &crate::Linked::default()) }.unwrap();
+        assert_eq!(entry_row(&code, "leaks"), vec![]);
     }
 
     /// タスクの外で深さの上限を超えたら、run を止める。
@@ -4667,17 +4719,15 @@ fn boom(p.0: unit) -> tobj {
   return r.2
 }
 fn try_panic(f.0: tobj, c.1: tobj) -> tobj {
-  let w.2: tobj = prim evv_get()
+  let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: obj = prim ev_new[Prelude.Panic](c.1, w.2)
-  let u.4: unit = prim ev_set_clause[Prelude.Panic.panicked](ev.3, &panicked$entry)
-  dup ev.3
-  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let ev.3: ev lin = evidence Prelude.Panic(c.1, w.2) [&panicked$entry]
+  let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply f.0(()) prompt ev.3
   tail call prompt$(ev.3, &return$, x.7)
 }
-clause Prelude.Panic.panicked fn panicked$entry(e.0: obj, m.1: obj) -> obj poly {
+clause Prelude.Panic.panicked fn panicked$entry(e.0: cev, m.1: obj) -> obj poly {
   decref m.1
   let u.2: unit = prim yield_abort(e.0, &panicked$clause)
   let d.3: obj poly = prim dummy()
@@ -4686,50 +4736,51 @@ clause Prelude.Panic.panicked fn panicked$entry(e.0: obj, m.1: obj) -> obj poly 
 fn panicked$clause(c.0: tobj) -> tobj {
   return c.0
 }
-yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
-  let w.3: tobj = prim ev_take_evv(ev.0)
+yields fn prompt$(ev.0: ev lin, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: evv = prim ev_take_evv(ev.0)
   let u.4: unit = prim evv_set(w.3)
   let s.5: int = prim yield_status(ev.0)
   switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
 b1:
-  let st.6: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.6: tobj poly = prim ev_last_state(ev.0)
+  let u.25: unit = drop ev.0
   tail yields apply ret.1(x.2, st.6)
 b2:
   let u.8: unit = drop x.2
   let k.9: tobj poly = prim yield_cont_take()
   let c.10: tobj poly = prim yield_finish()
-  let st.11: tobj poly = prim ev_take_state(ev.0)
-  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  let st.11: tobj poly = prim ev_last_state(ev.0)
+  let h.26: rev = prim ev_retire(ev.0)
+  let k.12: tobj poly = closure resume$(h.26, ret.1, k.9)
   tail yields apply c.10(k.12, st.11)
 b3:
   let u.14: unit = drop ret.1
   let u.15: unit = drop x.2
   let c.16: tobj poly = prim yield_finish()
-  let st.17: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.17: tobj poly = prim ev_last_state(ev.0)
+  let u.27: unit = drop ev.0
   tail yields apply c.16(st.17)
 b4:
   let u.19: unit = drop x.2
-  let st.20: tobj poly = prim ev_take_state(ev.0)
+  let st.20: tobj poly = prim ev_last_state(ev.0)
   let k.21: tobj poly = prim yield_cont_take()
-  let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+  let h.28: rev = prim ev_retire(ev.0)
+  let k.22: tobj poly = closure rewind$(h.28, ret.1, st.20, k.21)
   let u.23: unit = prim yield_cont_set(k.22)
   let d.24: obj poly = prim dummy()
   return d.24
 }
-yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
-  let e.5: obj = prim ev_renew(ev.0, s.4)
-  decref ev.0
-  let w.6: tobj = prim evv_get()
-  dup e.5
-  let w.7: tobj = prim evv_push(w.6, e.5)
+yields fn resume$(h.0: rev, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: ev lin = prim ev_renew(h.0, s.4)
+  decref h.0
+  let w.6: evv = prim evv_get()
+  let w.7: evv = prim evv_enter(w.6, e.5)
   let u.8: unit = prim evv_set(w.7)
   let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
   tail call prompt$(e.5, ret.1, x.9)
 }
-yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
-  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+yields fn rewind$(h.0: rev, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(h.0, ret.1, k.3, v.4, s.2)
 }
 fn return$(r.0: tobj, s.1: unit) -> tobj {
   return r.0
@@ -4791,17 +4842,15 @@ fn leaf(p.0: unit) -> tobj {
   return b.1
 }
 fn try_io(f.0: tobj, c.1: tobj) -> tobj {
-  let w.2: tobj = prim evv_get()
+  let w.2: evv = prim evv_get()
   dup w.2
-  let ev.3: obj = prim ev_new[Prelude.IO](c.1, w.2)
-  let u.4: unit = prim ev_set_clause[Prelude.IO.io_failed](ev.3, &io_failed$entry)
-  dup ev.3
-  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let ev.3: ev lin = evidence Prelude.IO(c.1, w.2) [&io_failed$entry]
+  let w.5: evv = prim evv_enter(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
   let x.7: tobj poly = yields apply f.0(()) prompt ev.3
   tail call prompt$(ev.3, &return$, x.7)
 }
-clause Prelude.IO.io_failed fn io_failed$entry(e.0: obj, k.1: enum, m.2: obj) -> obj poly {
+clause Prelude.IO.io_failed fn io_failed$entry(e.0: cev, k.1: enum, m.2: obj) -> obj poly {
   decref m.2
   let u.3: unit = prim yield_abort(e.0, &io_failed$clause)
   let d.4: obj poly = prim dummy()
@@ -4810,50 +4859,51 @@ clause Prelude.IO.io_failed fn io_failed$entry(e.0: obj, k.1: enum, m.2: obj) ->
 fn io_failed$clause(c.0: tobj) -> tobj {
   return c.0
 }
-yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
-  let w.3: tobj = prim ev_take_evv(ev.0)
+yields fn prompt$(ev.0: ev lin, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: evv = prim ev_take_evv(ev.0)
   let u.4: unit = prim evv_set(w.3)
   let s.5: int = prim yield_status(ev.0)
   switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
 b1:
-  let st.6: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.6: tobj poly = prim ev_last_state(ev.0)
+  let u.25: unit = drop ev.0
   tail yields apply ret.1(x.2, st.6)
 b2:
   let u.8: unit = drop x.2
   let k.9: tobj poly = prim yield_cont_take()
   let c.10: tobj poly = prim yield_finish()
-  let st.11: tobj poly = prim ev_take_state(ev.0)
-  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  let st.11: tobj poly = prim ev_last_state(ev.0)
+  let h.26: rev = prim ev_retire(ev.0)
+  let k.12: tobj poly = closure resume$(h.26, ret.1, k.9)
   tail yields apply c.10(k.12, st.11)
 b3:
   let u.14: unit = drop ret.1
   let u.15: unit = drop x.2
   let c.16: tobj poly = prim yield_finish()
-  let st.17: tobj poly = prim ev_take_state(ev.0)
-  decref ev.0
+  let st.17: tobj poly = prim ev_last_state(ev.0)
+  let u.27: unit = drop ev.0
   tail yields apply c.16(st.17)
 b4:
   let u.19: unit = drop x.2
-  let st.20: tobj poly = prim ev_take_state(ev.0)
+  let st.20: tobj poly = prim ev_last_state(ev.0)
   let k.21: tobj poly = prim yield_cont_take()
-  let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+  let h.28: rev = prim ev_retire(ev.0)
+  let k.22: tobj poly = closure rewind$(h.28, ret.1, st.20, k.21)
   let u.23: unit = prim yield_cont_set(k.22)
   let d.24: obj poly = prim dummy()
   return d.24
 }
-yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
-  let e.5: obj = prim ev_renew(ev.0, s.4)
-  decref ev.0
-  let w.6: tobj = prim evv_get()
-  dup e.5
-  let w.7: tobj = prim evv_push(w.6, e.5)
+yields fn resume$(h.0: rev, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: ev lin = prim ev_renew(h.0, s.4)
+  decref h.0
+  let w.6: evv = prim evv_get()
+  let w.7: evv = prim evv_enter(w.6, e.5)
   let u.8: unit = prim evv_set(w.7)
   let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
   tail call prompt$(e.5, ret.1, x.9)
 }
-yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
-  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+yields fn rewind$(h.0: rev, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(h.0, ret.1, k.3, v.4, s.2)
 }
 fn return$(r.0: tobj, s.1: unit) -> tobj {
   return r.0

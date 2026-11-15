@@ -800,6 +800,7 @@ dependencies = [
  "eml_rt",
  "eml_sched",
  "eml_test_support",
+ "eml_vm",
  "insta",
  "libc",
  "rustc-hash 2.1.3",

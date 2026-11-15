@@ -148,18 +148,20 @@ fn effects_are_renumbered_by_name() {
     let first = "\
 effect A { a(unit) -> unit }
 fn f(p.0: unit) -> unit {
-  let ev.1: obj = prim ev_lookup[A]()
-  return ()
+  let r.1: unit = clause A.a(())
+  return r.1
 }
 ";
     let second = "\
 effect B { b(unit) -> unit }
 effect A { a(unit) -> unit }
 fn g(p.0: unit) -> unit {
-  let ev.1: obj = prim ev_lookup[A]()
-  let ev.2: obj = prim ev_lookup[B]()
-  let w.3: tobj = prim evv_get()
-  let w.4: tobj = prim evv_mask[B, A@1](w.3)
+  let r.1: unit = clause A.a(())
+  let r.2: unit = clause B.b(())
+  let w.3: evv = prim evv_get()
+  let w.4: evv = prim evv_mask[B, A@1](w.3)
+  decref w.3
+  decref w.4
   return ()
 }
 ";
@@ -173,9 +175,9 @@ fn g(p.0: unit) -> unit {
         .unwrap();
     let text = disassemble(machine.code());
     let g = &text[text.find("fn g").unwrap()..];
-    assert!(g.contains("ev_lookup s0, E0"), "{g}");
-    assert!(g.contains("ev_lookup s0, E1"), "{g}");
-    assert!(g.contains("evv_mask s0, [0@1, 1]"), "{g}");
+    assert!(g.contains("= E0.op0("), "{g}");
+    assert!(g.contains("= E1.op0("), "{g}");
+    assert!(g.contains("evv_mask s1, [0@1, 1]"), "{g}");
 }
 
 /// 位置のファイルはパスで引く。2つ目のプログラムの `Program.files` では `b.em` が 0 番だが、誤りの位置は `b.em` を指す。
@@ -242,6 +244,37 @@ fn one() -> int {
         CompileError::Mismatch {
             function: "one".to_string()
         }
+    );
+}
+
+/// 読み込みはどのビルドでもプログラムをverifierで確かめ、verifierが拒むプログラムを何も変換せずに断る。文言は規則と
+/// 関数を挙げる (docs/spec/vm.mdの「追記」)。
+#[test]
+fn a_program_the_verifier_refuses_is_not_loaded() {
+    let text = "\
+fn main() -> unit {
+  let s.0: obj = const \"kept\"
+  return ()
+}
+";
+    let (host, _) = capture_host(Default::default());
+    let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
+    let program = parse(text);
+    let error = machine
+        .load(&program, &eml_vm::Linked::default())
+        .unwrap_err();
+    assert!(
+        matches!(&error, CompileError::Invalid(error) if error.function == "main"),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "invalid LIR: `s.0` is still owned at the end of the function in `main`"
+    );
+    assert!(names(&machine).is_empty());
+    assert_eq!(
+        eml_vm::compile_error(&program, error).to_string(),
+        "internal error: invalid LIR: `s.0` is still owned at the end of the function in `main`"
     );
 }
 
@@ -350,7 +383,7 @@ fn second() -> unit {
   let u.1: unit = extern Prelude.println(t.0)
   return u.1
 }
-clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {
+clause Fail.fail fn fork$Fail.fail(ev.0: fev, a.1: tobj poly) -> obj poly {
   let c.2: tobj poly = closure reperform$Fail.fail(a.1)
   let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
@@ -358,9 +391,7 @@ clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {
   return d.4
 }
 uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
-  let ev.2: obj = prim ev_lookup[Fail]()
-  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
-  tail clause Fail.fail c.3(ev.2, a.0)
+  tail clause Fail.fail(a.0)
 }
 ";
     assert!(parse(second).may_fork());
@@ -375,12 +406,17 @@ fn a_continuable_error_recovers_the_heap_for_the_next_run() {
     let first = "\
 effect A { a(unit) -> unit }
 fn main() -> unit {
-  let w.0: tobj = prim evv_get()
+  let w.0: evv = prim evv_get()
   dup w.0
-  let e.1: obj = prim ev_new[A]((), w.0)
-  let w.2: tobj = prim evv_push(w.0, e.1)
+  let e.1: ev lin = evidence A((), w.0) [&a$entry]
+  let w.2: evv = prim evv_enter(w.0, e.1)
   let u.3: unit = prim evv_set(w.2)
+  let u.6: unit = drop e.1
   let n.4: int = extern \"Prelude.Div Int.%\"(1, 0)
+  return ()
+}
+internal clause A.a fn a$entry(e.0: cev, u.1: unit) -> unit {
+  decref e.0
   return ()
 }
 ";
@@ -536,9 +572,9 @@ fn main() -> unit {
         let (host, _) = capture_host(root.clone());
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
-        let loaded = machine
-            .load(&parse(text), &eml_vm::Linked::default())
-            .unwrap();
+        // SAFETY: 根に`lin`の値を置くことのほかは実行の前提を守り、それを回復の見張りが断る
+        let loaded =
+            unsafe { machine.load_unverified(&parse(text), &eml_vm::Linked::default()) }.unwrap();
         errors.push(machine.run(loaded.entry).unwrap_err());
     }
     std::fs::remove_dir_all(&root).unwrap();

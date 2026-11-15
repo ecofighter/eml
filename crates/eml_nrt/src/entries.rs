@@ -36,6 +36,21 @@ macro_rules! __kind {
     (token) => {
         $crate::Kind::I64
     };
+    (ev) => {
+        $crate::Kind::I64
+    };
+    (cev) => {
+        $crate::Kind::I64
+    };
+    (fev) => {
+        $crate::Kind::I64
+    };
+    (rev) => {
+        $crate::Kind::I64
+    };
+    (evv) => {
+        $crate::Kind::I64
+    };
     (unit) => {
         $crate::Kind::I64
     };
@@ -57,7 +72,7 @@ macro_rules! __kind {
 }
 
 /// 引数と結果のRustの型。`i64`と`f64`のほかに、行の表が書くReprの名前も受ける。ほかのトークンはコンパイルの誤りになる。
-/// 機械の型はどの引数も`i64`か`f64`だが、物体の語 (`obj`、`tobj`、`token`) のRustの型は`Word`である。`Word`は
+/// 機械の型はどの引数も`i64`か`f64`だが、物体の語 (`obj`、`tobj`、`token`と文脈のRepr) のRustの型は`Word`である。`Word`は
 /// `repr(transparent)`のポインタなので、どの対象でも`i64`と同じ渡し方で、語のprovenanceが入口をまたいで残る。引数の
 /// `ptr`は語の並びへのポインタで、Rustの型は`*const Word`なので、それを通して読む語もprovenanceを保つ。引数の`dtor`は
 /// ハンドルの型のdtorかなしで、Rustの型は`Option<eml_rows::ffi::Dtor>`である。関数ポインタの`Option`はポインタと同じ
@@ -87,6 +102,21 @@ macro_rules! __ty {
         $crate::__rt::Word
     };
     (token) => {
+        $crate::__rt::Word
+    };
+    (ev) => {
+        $crate::__rt::Word
+    };
+    (cev) => {
+        $crate::__rt::Word
+    };
+    (fev) => {
+        $crate::__rt::Word
+    };
+    (rev) => {
+        $crate::__rt::Word
+    };
+    (evv) => {
         $crate::__rt::Word
     };
     (ptr) => {
@@ -528,12 +558,14 @@ mod tests {
 
     /// `paps`だけを持つ`Image`。
     fn image_with(paps: &[crate::image::PapRow]) -> crate::image::Image {
-        use crate::image::{Image, Slice};
+        use crate::image::{Image, NO_EFFECT, Slice};
         Image {
             functions: Slice::new(&[]),
             files: Slice::new(&[]),
             data: Slice::new(&[]),
             paps: Slice::new(paps),
+            panic_effect: NO_EFFECT,
+            io_effect: NO_EFFECT,
         }
     }
 
@@ -639,15 +671,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_effect_entries_install_and_find_a_handler() {
+        use crate::effects::{
+            ev_clause, ev_lookup, ev_new, ev_set_clause, evv_enter, evv_get, evv_set,
+        };
+        use crate::heap::eml_rt_decref;
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。どの呼び出しも前提を満たす。`evv`は空から始まり、物体の参照は移る先に1つずつ渡し、
+        // 最後に手放す。節は`lin`でない閉包で、表の欄は新しいevidenceのものなので`()`である
+        unsafe {
+            let outer = evv_get(c);
+            let ev = ev_new(c, 3, 1, Word::imm(7), outer);
+            let clause = closure(c, 2, false);
+            ev_set_clause(c, ev, 0, clause);
+            let installed = evv_enter(c, evv_get(c), ev);
+            evv_set(c, installed);
+            let found = ev_lookup(c, 3);
+            let found_clause = ev_clause(c, found, 0);
+            assert_eq!(found, ev);
+            assert_eq!(found_clause, clause);
+            eml_rt_decref(c, found_clause);
+            eml_rt_decref(c, found);
+            evv_set(c, Word::UNIT);
+            eml_rt_decref(c, ev);
+            assert_eq!(live(&mut *c), []);
+            assert_eq!((*c).take_fault(), None);
+        }
+    }
+
     /// 致命的な誤りの道を通るので、Miriでは流さない (docs/implementation/testing.md の「`eml_nrt`の検証」)。
     #[cfg(not(miri))]
     mod fatal {
-        use eml_rt::{Ctx, Fast, Kind as ObjectKind, Meta, Word, layout};
+        use eml_rt::{Ctx, Fast, Fault, HeapError, Kind as ObjectKind, Meta, Word, layout};
         use eml_sched::error::{RunFault, RuntimeError};
 
         use super::{closure, ctx, image_with};
         use crate::closures::eml_nrt_pap;
-        use crate::enter::{FATAL_RECORDED, Fatal, enter};
+        use crate::enter::{FATAL_FAULT, FATAL_RECORDED, Fatal, enter};
         use crate::image::PapRow;
         use crate::worker::{NATIVE_CODE, Worker};
 
@@ -768,6 +830,43 @@ mod tests {
                 }
             };
             assert_eq!(pap_error_of(&adapters(), float, 1), not_a_function());
+        }
+
+        /// 65535を効果の番号にする`ev_new`の呼び出しの代役のthunk。
+        unsafe extern "C" fn new_with_the_reserved_number(
+            ctx: *mut Ctx<Fast>,
+            _entry: *const u8,
+            argv: *mut u64,
+        ) {
+            // SAFETY: `enter`は生きている`Ctx`を渡す。エントリは戻らない
+            unsafe {
+                let words = argv.cast::<Word>();
+                *words = crate::effects::ev_new(ctx, 65535, 0, Word::UNIT, Word::UNIT);
+            }
+        }
+
+        #[test]
+        fn an_effect_number_of_65535_is_refused() {
+            let mut ctx = ctx();
+            let raw: *mut Ctx<Fast> = &mut *ctx;
+            let mut argv = [Word::UNIT];
+            // SAFETY: `enter`の間は`raw`だけを通す。エントリは致命的な誤りの道を通るので、`enter`の中で呼ぶ
+            let entered = unsafe {
+                enter(
+                    raw,
+                    new_with_the_reserved_number,
+                    std::ptr::null(),
+                    argv.as_mut_ptr().cast(),
+                )
+            };
+            assert_eq!(
+                entered,
+                Err(Fatal {
+                    code: FATAL_FAULT,
+                    site: 0
+                })
+            );
+            assert_eq!(ctx.take_fault(), Some(Fault::Heap(HeapError::BadEvidence)));
         }
     }
 

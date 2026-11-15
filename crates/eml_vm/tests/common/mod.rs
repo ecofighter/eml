@@ -5,8 +5,9 @@ use std::sync::Arc;
 use eml_lir::Program;
 use eml_rt::{Control, Fast, Limits};
 use eml_sched::config::RunStats;
+use eml_sched::config::{Finished, Seat};
 use eml_test_support::execute;
-use eml_vm::{CodeBase, CompileError, RuntimeError, disassemble};
+use eml_vm::{AnyMachine, CodeBase, CompileError, RunConfig, RuntimeError, disassemble};
 
 pub fn parse(text: &str) -> Program {
     eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"))
@@ -54,7 +55,7 @@ pub fn run_lowered_stats(text: &str) -> (String, Result<RunStats, RuntimeError>)
 
 /// `lowered` の LIR の逆アセンブル。
 pub fn disasm_lowered(text: &str) -> String {
-    disasm_unverified_program(&lowered(text))
+    disasm_program(&lowered(text))
 }
 
 fn run_both(program: &Program) -> (String, Result<RunStats, RuntimeError>) {
@@ -70,27 +71,41 @@ fn run_both(program: &Program) -> (String, Result<RunStats, RuntimeError>) {
     (out, result)
 }
 
-/// verifier を通さずに、検査モードだけで実行する。verifier が拒む IR で、VM 自身の見張りを確かめるテストのためである。
+/// verifierが拒むIRを、`execute_unverified`で検査モードだけで実行する。
 pub fn run_unverified(text: &str) -> (String, Result<(), RuntimeError>) {
-    let (out, result) = execute(
+    let (out, result) = execute_unverified(
         &parse(text),
         &eml_vm::RunConfig::default().with_debug_heap(true),
     );
     (out, result.map(|_| ()))
 }
 
-/// verifier を通した LIR の逆アセンブル。
+/// 確かめない読み込みでプログラムを読み込み、`eml_vm::execute`と同じ手順で実行する。使うのは、verifierが拒むIRの上で
+/// VM自身の見張りか検査モードを確かめるテストだけである (docs/implementation/testing.mdの「`eml_vm` のテスト」)。
+pub fn execute_unverified(
+    program: &Program,
+    config: &RunConfig,
+) -> (String, Result<Finished, RuntimeError>) {
+    let config = config.clone().with_seat(Seat::Separate);
+    let (host, out) = eml_vm::capture_host(Default::default());
+    let mut machine = AnyMachine::new(&config, host);
+    let mut run = || {
+        // SAFETY: 呼ぶテストは、わざと起こす誤りのほかは実行の前提を守り、VMの見張りと検査モードだけを守りとする
+        let loaded = unsafe { machine.load_unverified(program, &eml_vm::Linked::default()) }
+            .map_err(|error| eml_vm::compile_error(program, error))?;
+        machine.run(loaded.entry)
+    };
+    let result = run().and_then(|finished| machine.close().map(|()| finished));
+    (out.contents(), result)
+}
+
+/// verifierを通したLIRの逆アセンブル。
 pub fn disasm(text: &str) -> String {
-    disasm_unverified_program(&verified(text))
+    disasm_program(&verified(text))
 }
 
-/// verifier を通さない逆アセンブル。コード生成だけを確かめるテストのためである。
-pub fn disasm_unverified(text: &str) -> String {
-    disasm_unverified_program(&parse(text))
-}
-
-fn disasm_unverified_program(program: &Program) -> String {
-    let code = compile(program).unwrap_or_else(|error| panic!("{error:?}"));
+fn disasm_program(program: &Program) -> String {
+    let code = compile(program).unwrap_or_else(|error| panic!("{error}"));
     disassemble(&code)
 }
 

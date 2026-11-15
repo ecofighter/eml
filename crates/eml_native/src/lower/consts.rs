@@ -1,11 +1,13 @@
-//! 読み込み時の値のデータの記号。値ごとに、中身だけで名前の決まる8バイトの書けるデータの物を1つ持ち、生成したコードは
-//! そこから語を1回のロードで読む。だからコードは、プログラムのほかの部分で変わる番号を持たない
-//! (docs/spec/native.md の「値と定数」)。
+//! 読み込み時の値のデータの記号。値ごとに、中身だけで名前の決まる書けるデータの物を1つ持ち、生成したコードは
+//! そこから語を1回のロードで読むか、マスクならそのアドレスを取る。だからコードは、プログラムのほかの部分で変わる番号を
+//! 持たない (docs/spec/native.mdの「値と定数」)。
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::{GlobalValue, Type, Value, types};
 use cranelift_module::{DataDescription, DataId, Linkage, Module};
-use eml_lir::{FnIdx, Program};
+use eml_lir::syntax::{effect_text, mask_text};
+use eml_lir::{FnIdx, MaskItem, Program};
+use eml_nrt::image::mask_bytes;
 
 use super::apply::{ClosureEntries, ClosureEntry};
 use super::function::FnLower;
@@ -24,6 +26,11 @@ pub enum Datum {
     Fn(FnIdx),
     /// 長さ0の`MutArray`の不死の物体 (docs/spec/native.md の「値と定数」)。
     EmptyMutArray,
+    /// エフェクトのマシンの番号。値は`Program.effects`でのエフェクトの添字を持ち、slotはそのマシンの番号を持つ
+    /// (docs/spec/native.mdの「エフェクト」)。
+    Effect(u32),
+    /// `evv_mask`の項目。LIRの順で、エフェクトは`Program.effects`の添字である。
+    Mask(Vec<MaskItem>),
 }
 
 impl Datum {
@@ -35,6 +42,16 @@ impl Datum {
             Datum::Float(bits) => names::float(*bits),
             Datum::Fn(function) => names::fn_value(&program.function(*function).name),
             Datum::EmptyMutArray => names::EMPTY_MUT_ARRAY.to_string(),
+            Datum::Effect(effect) => names::effect(&effect_text(&program.effects, *effect)),
+            Datum::Mask(items) => names::mask(&mask_text(&program.effects, items)),
+        }
+    }
+
+    /// データの物のバイト数。1語か、マスクの項目である。
+    pub fn bytes(&self) -> usize {
+        match self {
+            Datum::Mask(items) => mask_bytes(items.len()),
+            _ => 8,
         }
     }
 }
@@ -79,13 +96,13 @@ impl Data {
         id
     }
 
-    /// 宣言したどの記号も、0で埋めた8バイトの、8バイトにそろえた物として定義し、値と記号を返す。
+    /// 宣言したどの記号も、0で埋めた、値のバイト数の、8バイトにそろえた物として定義し、値と記号を返す。
     pub fn define<M: Module>(self, module: &mut M) -> Built<Vec<(Datum, DataId)>> {
-        for &(_, id) in &self.declared {
+        for (datum, id) in &self.declared {
             let mut description = DataDescription::new();
-            description.define_zeroinit(8);
+            description.define_zeroinit(datum.bytes());
             description.set_align(8);
-            module.define_data(id, &description)?;
+            module.define_data(*id, &description)?;
         }
         Ok(self.declared)
     }
@@ -97,6 +114,13 @@ impl<M: Module> FnLower<'_, '_, M> {
         let id = self.data.id(self.module, self.callees.program, datum);
         let slot = self.global_value(id);
         mem::data_word(&mut self.b, slot, ty)
+    }
+
+    /// `datum`のデータの物のアドレス。
+    pub(super) fn datum_address(&mut self, datum: Datum) -> Value {
+        let id = self.data.id(self.module, self.callees.program, datum);
+        let slot = self.global_value(id);
+        mem::data_address(&mut self.b, slot)
     }
 
     /// 関数`function`の静的なクロージャの語。

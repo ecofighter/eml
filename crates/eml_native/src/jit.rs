@@ -7,10 +7,12 @@ use std::collections::HashMap;
 use cranelift_jit::JITModule;
 use cranelift_module::ModuleError;
 use eml_cabi::Linked;
-use eml_lir::{Program, Repr};
+use eml_extern::ExternEffect;
+use eml_lir::{OpRet, Program, Repr};
 use eml_nrt::image::{
-    DATUM_BIG_INT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow, FnRow,
-    Image, Options, PapRow, SiteRow, Slice, Start, Str,
+    DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
+    DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow, Slice,
+    Start, Str,
 };
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
@@ -45,6 +47,9 @@ pub enum LoadError {
     Module(String),
     /// `Linked`がつないだCの関数とハンドルの型の宣言が、プログラムの表と違う。
     LinkMismatch,
+    /// プログラムのエフェクトの表の`Prelude.Panic`か`Prelude.IO`が、`eml$raise`が呼ぶ決まった形の操作をちょうど1つ
+    /// 持たない。
+    Prelude { effect: String },
 }
 
 impl LoadError {
@@ -55,6 +60,9 @@ impl LoadError {
             LoadError::RegionFull => REGION_FULL,
             LoadError::Module(_) => UNBUILT,
             LoadError::LinkMismatch => "the linked C functions are not the program's",
+            LoadError::Prelude { .. } => {
+                "the program's Prelude effects do not have their fixed shape"
+            }
         }
     }
 }
@@ -90,8 +98,9 @@ struct Static {
     arity: u16,
 }
 
-/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`、`paps`と、各関数の`sites`と各値の文字列の中を
-/// 指す。どれも`new`の後で変わらず、`Vec`を動かしてもその要素は動かない。`data`のslotはmoduleのデータの物を指す。
+/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`、`masks`、`paps`と、各関数の`sites`と各値の
+/// 文字列の中を指す。どれも`new`の後で変わらず、`Vec`を動かしてもその要素は動かない。`data`のslotはmoduleのデータの
+/// 物を指す。
 struct Tables {
     functions: Vec<Function>,
     _files: Vec<String>,
@@ -99,17 +108,22 @@ struct Tables {
     _rows: Vec<FnRow>,
     _data: Vec<Datum>,
     _datum_rows: Vec<DatumRow>,
+    _masks: Vec<Vec<MaskRow>>,
     _paps: Vec<PapRow>,
     image: Image,
 }
 
 impl Tables {
-    /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードと待つ引数の数を持つ。
+    /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードと待つ引数の数を持つ。`number`はプログラムの
+    /// エフェクトの添字をマシンの番号にする。`raise_effects`は`Prelude.Panic`と`Prelude.IO`のマシンの番号か`NO_EFFECT`
+    /// である。
     fn new(
         functions: Vec<Function>,
         files: Vec<String>,
         data: Vec<(Datum, *mut u64, Static)>,
         paps: Vec<PapRow>,
+        number: impl Fn(u32) -> u16,
+        raise_effects: (u32, u32),
     ) -> Tables {
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
         let mut rows: Vec<FnRow> = functions
@@ -122,9 +136,24 @@ impl Tables {
                 value: std::ptr::null_mut(),
             })
             .collect();
+        let masks: Vec<Vec<MaskRow>> = data
+            .iter()
+            .map(|(datum, _, _)| match datum {
+                Datum::Mask(items) => items
+                    .iter()
+                    .map(|item| MaskRow {
+                        effect: number(item.effect),
+                        keep: item.keep,
+                        skip: item.skip,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
         let datum_rows: Vec<DatumRow> = data
             .iter()
-            .map(|&(ref datum, slot, Static { code, arity })| {
+            .zip(&masks)
+            .map(|(&(ref datum, slot, Static { code, arity }), items)| {
                 let (kind, bits, text) = match datum {
                     Datum::String(text) => (DATUM_STRING, 0, text.as_str()),
                     Datum::BigInt(n) => (DATUM_BIG_INT, *n as u64, ""),
@@ -134,6 +163,8 @@ impl Tables {
                         rows[function.0 as usize].value = slot;
                         (DATUM_FN, u64::from(arity), "")
                     }
+                    Datum::Effect(effect) => (DATUM_EFFECT, u64::from(number(*effect)), ""),
+                    Datum::Mask(_) => (DATUM_MASK, 0, ""),
                 };
                 DatumRow {
                     kind,
@@ -141,6 +172,7 @@ impl Tables {
                     text: Str::new(text),
                     code,
                     slot,
+                    items: Slice::new(items),
                 }
             })
             .collect();
@@ -149,6 +181,8 @@ impl Tables {
             files: Slice::new(&file_rows),
             data: Slice::new(&datum_rows),
             paps: Slice::new(&paps),
+            panic_effect: raise_effects.0,
+            io_effect: raise_effects.1,
         };
         Tables {
             functions,
@@ -157,6 +191,7 @@ impl Tables {
             _rows: rows,
             _data: data.into_iter().map(|(datum, _, _)| datum).collect(),
             _datum_rows: datum_rows,
+            _masks: masks,
             _paps: paps,
             image,
         }
@@ -176,6 +211,10 @@ pub struct NativeMachine {
     /// マシンはもう何も定義しない。
     spent: bool,
     tables: Option<Tables>,
+    /// マシンのエフェクトの番号を名前で引く表。`load`が`program.effects`の順に振る。VMが読み込みのエフェクトに番号を
+    /// 振るのと同じで、`Image`がそれを実行系に運ぶので、生成したコードはプログラムのエフェクトの番号を持たない
+    /// (docs/spec/native.mdの「エフェクト」)。
+    effects: HashMap<String, u16>,
     thunks: HashMap<(Vec<Kind>, Vec<Kind>), Thunk>,
     clif: HashMap<String, String>,
     symbols: Vec<Symbol>,
@@ -191,6 +230,7 @@ impl NativeMachine {
             module: None,
             spent: false,
             tables: None,
+            effects: HashMap::new(),
             thunks: HashMap::new(),
             clif: HashMap::new(),
             symbols: Vec::new(),
@@ -209,26 +249,33 @@ impl NativeMachine {
     /// `LoadError::Loaded`を返す。`load`は`program`を信頼する。`program`は、型を検査したプログラムからコンパイラが作った
     /// 最後のパスの後のLIRか、同じ規則を守る手書きのLIRでなければならない。ネイティブのコードは実行時に何も確かめないので、
     /// ほかのプログラムの実行の振る舞いは、VMの速いモードと同じく未定義である (docs/spec/native.md の「関数の形」)。
-    /// debugのビルドは、この約束のうちverifierが確かめる部分を確かめ、破れていればpanicする。`unsupported`が断る形は、
+    /// どのビルドも、この約束のうちverifierが確かめる部分を確かめ、破れていればpanicする。`unsupported`が断る形は、
     /// 下ろしの中でpanicする。`linked`はプログラムのCの関数をつないだ結果で、その宣言がプログラムの表と違えば、何も
     /// 作らずに`LoadError::LinkMismatch`を返す。
     pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, LoadError> {
         if std::mem::replace(&mut self.asked, true) {
             return Err(LoadError::Loaded);
         }
-        if cfg!(debug_assertions)
-            && let Err(error) = eml_lir::verify(program)
-        {
-            panic!("internal error: invalid LIR at the native load: {error}");
-        }
+        prelude_shape(program)?;
         if !linked.fits(&program.c_functions, &program.c_handles) {
             return Err(LoadError::LinkMismatch);
         }
+        // プログラムを信頼するコード (エントリの形、エフェクトの番号、下ろし) より前に確かめる
+        let unwinds = match eml_lir::unwind::verified(program) {
+            Ok(unwinds) => unwinds,
+            Err(error) => panic!("internal error: invalid LIR at the native load: {error}"),
+        };
         let entry = program.function(program.entry);
         if lower::rets(entry) != [Kind::I64] {
             return Err(LoadError::Entry {
                 function: entry.name.clone(),
             });
+        }
+        for effect in &program.effects {
+            let next = self.effects.len();
+            self.effects
+                .entry(effect.name.clone())
+                .or_insert_with(|| effect_number(next));
         }
         let mut builder = jit_builder().map_err(|error| LoadError::Module(error.to_string()))?;
         for entry in eml_nrt::entries() {
@@ -246,7 +293,7 @@ impl NativeMachine {
             }
         }
         let module = self.module.insert(JITModule::new(builder));
-        let defined = lower::program(module, program, self.keep_clif)
+        let defined = lower::program(module, program, unwinds, self.keep_clif)
             .and_then(|defined| Ok(module.finalize_definitions().map(|()| defined)?));
         let lowered = match defined {
             Ok(lowered) => lowered,
@@ -255,6 +302,9 @@ impl NativeMachine {
                 return Err(module_error(*error));
             }
         };
+        if let Some(clif) = lowered.raise.clif {
+            self.clif.insert(names::RAISE.to_string(), clif);
+        }
         self.symbols.push(Symbol {
             name: names::RAISE.to_string(),
             address: module.get_finalized_function(lowered.raise.id),
@@ -302,6 +352,9 @@ impl NativeMachine {
             }
         }
         for (index, defined) in lowered.applies.into_iter().enumerate() {
+            if let Some(clif) = defined.clif {
+                self.clif.insert(names::apply(index + 1), clif);
+            }
             self.symbols.push(Symbol {
                 name: names::apply(index + 1),
                 address: module.get_finalized_function(defined.id),
@@ -334,7 +387,25 @@ impl NativeMachine {
                 (datum, slot.cast_mut().cast::<u64>(), fn_value)
             })
             .collect();
-        self.tables = Some(Tables::new(functions, program.files.clone(), data, paps));
+        let effects = &self.effects;
+        let number = |effect: u32| effects[&program.effects[effect as usize].name];
+        let machine_number = |effect: ExternEffect| {
+            effects
+                .get(effect.row().name)
+                .map_or(NO_EFFECT, |&number| u32::from(number))
+        };
+        let raise_effects = (
+            machine_number(ExternEffect::Panic),
+            machine_number(ExternEffect::Io),
+        );
+        self.tables = Some(Tables::new(
+            functions,
+            program.files.clone(),
+            data,
+            paps,
+            number,
+            raise_effects,
+        ));
         Ok(Loaded {
             entry: program.entry.0,
         })
@@ -431,7 +502,8 @@ impl NativeMachine {
         Ok((thunk, code))
     }
 
-    /// 読み込んだ関数`name`のコンパイルの前のCLIF。`new_with_clif`で作ったマシンだけが持つ。
+    /// 読み込んだ関数`name`、または補助の関数`eml$apply$<m>`か`eml$raise`の、コンパイルの前のCLIF。`new_with_clif`で
+    /// 作ったマシンだけが持つ。
     #[doc(hidden)]
     pub fn clif(&self, name: &str) -> Option<&str> {
         self.clif.get(name).map(String::as_str)
@@ -538,6 +610,15 @@ impl Drop for NativeMachine {
     }
 }
 
+/// マシンの`next`番目のエフェクトの番号。evidenceのtagはエフェクトの番号に1を足したものなので、番号は65535より
+/// 小さい。VMが番号を振るときと同じく、超えればpanicする (docs/spec/object-model.mdの「evidence の3つの物体」)。
+fn effect_number(next: usize) -> u16 {
+    u16::try_from(next)
+        .ok()
+        .filter(|&e| e < u16::MAX)
+        .expect("effect numbers are below 65535 (docs/spec/object-model.md)")
+}
+
 fn module_error(error: ModuleError) -> LoadError {
     match error {
         ModuleError::Allocation { .. } => LoadError::RegionFull,
@@ -564,6 +645,32 @@ fn internal(function: &str, what: &'static str) -> RuntimeError {
         function: function.to_string(),
         at: None,
     }
+}
+
+/// プログラムの`Prelude.Panic`と`Prelude.IO`が、`eml$raise`の呼ぶ決まった形の操作をちょうど1つ持つことを、どのビルドでも
+/// 確かめる。`panicked`は`obj`を、`io_failed`は`enum`と`obj`を取り、どちらも戻らない。`eml$raise`はその節を決まった
+/// シグネチャで呼ぶので、形の違う節を呼べば未定義の動作になる (docs/spec/native.mdの「externの失敗」)。
+fn prelude_shape(program: &Program) -> Result<(), LoadError> {
+    let shapes = [
+        (ExternEffect::Panic, &[Repr::Obj][..]),
+        (ExternEffect::Io, &[Repr::Enum, Repr::Obj][..]),
+    ];
+    for (effect, params) in shapes {
+        let name = effect.row().name;
+        let Some(info) = program.effects.iter().find(|info| info.name == name) else {
+            continue;
+        };
+        let fits = matches!(
+            &info.operations[..],
+            [operation] if operation.params == params && operation.ret == OpRet::Never
+        );
+        if !fits {
+            return Err(LoadError::Prelude {
+                effect: name.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// `program`を新しいマシンで1回実行する。VMの`eml_vm::execute`に当たる。

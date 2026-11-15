@@ -25,49 +25,50 @@
 
 use std::collections::BTreeMap;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::check::{
-    self, BlockShape, Context, Dominators, FnSummary, Site, Tables, TermShape, boxed_scalars,
-    clause_function, field_count, shape,
+    self, BlockShape, Context, Dominators, FnSummary, Landed, Site, Tables, TermShape,
+    boxed_scalars, clause_function, field_count, repr_names, shape,
 };
 use crate::liveness;
 use crate::reuse;
-use crate::syntax::{layout_text, operation_text, prim_text, repr_text, rets_text};
+use crate::syntax::{effect_text, layout_text, operation_text, prim_text, repr_text, rets_text};
 use crate::unwind::{self, UnwindPoint, Unwinds};
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Lends, LirFn, Mark, OpRet, Prim, Program,
-    Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
+    Atom, Block, BlockId, Call, CasePattern, Ctor, EP_PROMPT, FnIdx, Lends, LirFn, Mark, OpRet,
+    Prim, Program, Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
 };
+use eml_extern::{CFunction, RuntimeEntry};
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
 pub fn verify(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Ownership)
+    verify_at(program, Level::Ownership, |_| true, false).map(drop)
 }
 
 /// 開くパス (flatten) より前の LIR を確かめる。形と範囲と境界を確かめ、RC の命令がまだないことを確かめる。構造体の
 /// 変数を受け、複数の値の `let` と `return` と構造体の `unbox` を拒む。
 pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Scopes)
+    verify_at(program, Level::Scopes, |_| true, false).map(drop)
 }
 
 /// 開くパスの後で Perceus より前の LIR (縮約の後も) を確かめる。範囲の段の検査に加えて、構造体がどこにも残らないことを確かめ、
 /// 複数の値の `let` と `return` と構造体の `unbox` を受ける
 /// (docs/spec/lir.md の「verifier」)。
 pub fn verify_flattened(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Flattened)
+    verify_at(program, Level::Flattened, |_| true, false).map(drop)
 }
 
 /// 借用のパスの後でPerceusより前のLIRを確かめる。開いた後の段の検査に、貸された引数の規則を足す (docs/spec/lir.mdの「verifier」)。
 pub fn verify_borrowed(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Borrowed)
+    verify_at(program, Level::Borrowed, |_| true, false).map(drop)
 }
 
 /// box の挿入の前の LIR を確かめる。範囲の段と同じ形と範囲を確かめ、境界は比べない。box の挿入と縮約が作るもの
 /// (`box`、`unbox`、`tail`) と、Perceus が入れるもの (`dup`、`decref`、`release`) がまだないことを確かめる。
 /// box の挿入は、末尾呼び出しと変換のない入力を前提にするためである (docs/spec/lir.md の「パスの順番」)。
 pub fn verify_lowered(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Lowered)
+    verify_at(program, Level::Lowered, |_| true, false).map(drop)
 }
 
 /// 検査の段。段はパスの順に直線に並ぶ。エントリの段の LIR には、box の挿入と縮約が作るものがまだない。開くパスより前の
@@ -81,8 +82,9 @@ enum Level {
     Ownership,
 }
 
-/// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points`)。
-/// 検査の表は、プログラムに1回だけ求める。`wanted` でない関数はたどらずに `None` にする。
+/// Perceusの後の`wanted`の関数を所有の段で1つずつ確かめながら、巻き戻しの地点ごとの所有を書き留める
+/// (`unwind::points`)。プログラム全体の規則は確かめない。拒まれた関数はその関数の欄に誤りを返すので、呼ぶ側はほかの
+/// 関数の表を読める。検査の表は、プログラムに1回だけ求める。`wanted`でない関数はたどらずに`None`にする。
 pub(crate) fn unwind_points(
     program: &Program,
     wanted: impl Fn(FnIdx) -> bool,
@@ -94,40 +96,55 @@ pub(crate) fn unwind_points(
             .iter()
             .enumerate()
             .map(|(index, function)| {
-                if !wanted(FnIdx(index as u32)) {
-                    return None;
-                }
-                let points = shape(&block_shapes(function))
-                    .and_then(|dominators| {
-                        let mut checker = Checker::new(
-                            program,
-                            tables,
-                            &callees,
-                            function,
-                            Level::Ownership,
-                            dominators,
-                        );
-                        checker.unwind = Some(Recorder {
-                            entry: Vec::new(),
-                            points: Vec::new(),
-                        });
-                        checker.run()
-                    })
-                    .map(|points| points.expect("the checker was given a list"))
-                    .map_err(|message| VerifyError {
-                        function: function.name.clone(),
-                        message,
-                    });
-                Some(points)
+                wanted(FnIdx(index as u32)).then(|| {
+                    walk(program, tables, &callees, function, Level::Ownership, true)
+                        .map(|table| table.expect("the walk was given a recorder"))
+                })
             })
             .collect()
     })
 }
 
-fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
+/// `verify`と同じ検査を走らせ、同じ走査で関数ごとの巻き戻しの表も求める (`unwind::verified`、
+/// `unwind::verified_for`)。たどるのは`walked`の関数だけで、プログラム全体の規則はすべての関数に当てる。
+pub(crate) fn verified(
+    program: &Program,
+    walked: impl Fn(FnIdx) -> bool,
+) -> Result<Vec<Option<Unwinds>>, VerifyError> {
+    verify_at(program, Level::Ownership, walked, true)
+}
+
+/// `level`の検査。すべての関数にプログラム全体の規則を当て、`walked`の関数を1つずつたどり、最後に値の参照の規則を
+/// 当てる。結果は`program.functions`の関数ごとに1つの欄を持ち、`record`でたどった関数の欄だけが`Some`である。
+fn verify_at(
+    program: &Program,
+    level: Level,
+    walked: impl Fn(FnIdx) -> bool,
+    record: bool,
+) -> Result<Vec<Option<Unwinds>>, VerifyError> {
+    distinct_effects(program)?;
     if level >= Level::Flattened {
         no_struct_layouts(program)?;
     }
+    check::no_context_reprs(
+        &program.layouts,
+        &program.structs,
+        &program.effects,
+        &program.c_functions,
+        program
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(index, function)| {
+                let params = function.params().iter().map(|&param| function.repr(param));
+                (
+                    function.name.as_str(),
+                    params.collect(),
+                    function.rets.iter().map(|&(repr, _)| repr).collect(),
+                    entered(program, FnIdx(index as u32)),
+                )
+            }),
+    )?;
     forks(program)?;
     let callees = program.lends();
     with_tables(program, |tables| {
@@ -173,15 +190,13 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                 message,
             })?;
         }
-        for function in &program.functions {
-            shape(&block_shapes(function))
-                .and_then(|dominators| {
-                    Checker::new(program, tables, &callees, function, level, dominators).run()
-                })
-                .map_err(|message| VerifyError {
-                    function: function.name.clone(),
-                    message,
-                })?;
+        let mut unwinds = Vec::with_capacity(program.functions.len());
+        for (index, function) in program.functions.iter().enumerate() {
+            unwinds.push(if walked(FnIdx(index as u32)) {
+                walk(program, tables, &callees, function, level, record)?
+            } else {
+                None
+            });
         }
         // 値の参照の規則は、参照の形 (`closure` の引数の数など) を本体の検査が確かめた後に見る
         if level >= Level::Scopes {
@@ -200,23 +215,121 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                 })?;
             }
         }
-        Ok(())
+        Ok(unwinds)
     })
+}
+
+/// ランタイムがその関数に入るか。プログラムのエントリと`RuntimeEntry::ALL`の関数で、エンジンは名前でそれを探す。
+fn entered(program: &Program, index: FnIdx) -> bool {
+    let name = program.functions[index.0 as usize].name.as_str();
+    index == program.entry || RuntimeEntry::ALL.iter().any(|entry| entry.name() == name)
+}
+
+/// 1つの関数の走査。ブロックの列の形を確かめ、本体を確かめる。`record`なら関数の巻き戻しの表も返す。
+fn walk(
+    program: &Program,
+    tables: Tables<'_>,
+    callees: &[Vec<bool>],
+    function: &LirFn,
+    level: Level,
+    record: bool,
+) -> Result<Option<Unwinds>, VerifyError> {
+    shape(&block_shapes(function))
+        .and_then(|dominators| {
+            let mut checker = Checker::new(program, tables, callees, function, level, dominators);
+            if record {
+                checker.unwind = Some(Recorder {
+                    entry: Vec::new(),
+                    points: Vec::new(),
+                });
+            }
+            checker.run()
+        })
+        .map_err(|message| VerifyError {
+            function: function.name.clone(),
+            message,
+        })
 }
 
 /// 子を fork しうるプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を持つ
 /// `fork$E.op` と `reperform$E.op` を持つ。VM は子の evidence をこの名前で作るためである
 /// (docs/spec/core-ir.md の「`par` の子の中断」)。関数の形は、ほかの関数と同じく本体の検査が確かめる。
+/// 規則Fはどのプログラムでも成り立つ。`E.op`のforkの名前の関数は`E.op`の節で、evidenceと操作の引数を受け、evidenceを
+/// `fev`で受ける。`fev`を受ける節の関数は、その操作のforkの名前を持つ。エンジンは持つすべての関数から名前でforkのエント
+/// リを探し、どの読み込みもプログラムを確かめるので、forkの名前の関数はその名前の下で確かめてある (docs/spec/lir.mdの
+/// 「verifier」)。
 fn forks(program: &Program) -> Result<(), VerifyError> {
+    let effects = &program.effects;
+    let by_name: FxHashMap<&str, &LirFn> = program
+        .functions
+        .iter()
+        .map(|function| (function.name.as_str(), function))
+        .collect();
+    let find = |name: &str| by_name.get(name).copied();
+    for (effect, info) in effects.iter().enumerate() {
+        let effect = effect as u32;
+        for (op, operation) in info.operations.iter().enumerate() {
+            let op = op as u32;
+            let fork = crate::fork_name(effects, effect, op);
+            let Some(function) = find(&fork) else {
+                continue;
+            };
+            let refuse = |message: String| VerifyError {
+                function: fork.clone(),
+                message,
+            };
+            if function.clause != Some((effect, op)) {
+                return Err(refuse(format!(
+                    "the fork entry is not a clause of `{}`",
+                    operation_text(effects, effect, op)
+                )));
+            }
+            let params = function.params();
+            if params.len() != 1 + operation.params.len() {
+                return Err(refuse(format!(
+                    "the fork entry has {} parameters, but it takes the evidence and {} arguments of the operation",
+                    params.len(),
+                    operation.params.len()
+                )));
+            }
+            let evidence = function.repr(params[0]);
+            if evidence != Repr::Fev {
+                return Err(refuse(format!(
+                    "the fork entry takes its evidence as {}, not fev",
+                    evidence.name()
+                )));
+            }
+        }
+    }
+    for function in &program.functions {
+        let Some((effect, op)) = function.clause else {
+            continue;
+        };
+        let Some(operation) = effects
+            .get(effect as usize)
+            .and_then(|info| info.operations.get(op as usize))
+        else {
+            continue;
+        };
+        let params = function.params();
+        // 引数が足りない節の関数は`clause_function`が拒む
+        let Some(captures) = params.len().checked_sub(1 + operation.params.len()) else {
+            continue;
+        };
+        let fork = crate::fork_name(effects, effect, op);
+        if function.repr(params[captures]) == Repr::Fev && function.name != fork {
+            return Err(VerifyError {
+                function: function.name.clone(),
+                message: format!(
+                    "`{}` takes a fork evidence, but its name is not `{fork}`",
+                    function.name
+                ),
+            });
+        }
+    }
     if !program.may_fork() {
         return Ok(());
     }
-    let find = |name: &str| {
-        program
-            .functions
-            .iter()
-            .find(|function| function.name == name)
-    };
     for effect in crate::fork_effects(&program.effects) {
         let info = &program.effects[effect as usize];
         for op in 0..info.operations.len() as u32 {
@@ -228,18 +341,8 @@ fn forks(program: &Program) -> Result<(), VerifyError> {
                 ),
             };
             let fork = crate::fork_name(&program.effects, effect, op);
-            match find(&fork) {
-                None => return Err(missing("fork", fork)),
-                Some(function) if function.clause != Some((effect, op)) => {
-                    return Err(VerifyError {
-                        function: fork,
-                        message: format!(
-                            "the fork entry is not a clause of `{}`",
-                            operation_text(&program.effects, effect, op)
-                        ),
-                    });
-                }
-                Some(_) => {}
+            if find(&fork).is_none() {
+                return Err(missing("fork", fork));
             }
             let reperform = crate::reperform_name(&program.effects, effect, op);
             if find(&reperform).is_none() {
@@ -291,31 +394,41 @@ fn value_references(program: &Program, function: &LirFn) -> Result<(), String> {
         }
     };
     let mut result = Ok(());
-    let mut atom = |atom: Atom| {
-        if let Atom::Fn(target) = atom
-            && result.is_ok()
-        {
-            result = check(target, 0);
+    let mut reference = |target: FnIdx, captured: usize| {
+        if result.is_ok() {
+            result = check(target, captured);
         }
     };
     for block in &function.blocks {
         for stmt in &block.stmts {
-            if let Stmt::Let {
-                var: _,
-                rhs: Rhs::MakeClosure(target, args),
-            } = stmt
-            {
-                check(*target, args.len())?;
-            }
-            stmt.for_each_atom(&mut atom);
+            stmt.for_each_fn(&mut reference);
         }
-        block.term.for_each_atom(&mut atom);
+        block.term.for_each_atom(|atom| {
+            if let Atom::Fn(target) = atom {
+                reference(target, 0);
+            }
+        });
     }
     result
 }
 
 /// 開いた後の段では、配置のフィールドに構造体は来ない。構造体の型を宣言したフィールドは `tobj` である
 /// (docs/spec/lir.md の「verifier」)。
+/// エフェクトの表の名前はどれも違う。実行系はエフェクトに名前で番号を振り、組み込みのエフェクトの操作の形も名前で引いて
+/// 確かめるので、同じ名前の2つ目のエフェクトは確かめを逃れる (docs/spec/lir.mdの「verifier」)。
+fn distinct_effects(program: &Program) -> Result<(), VerifyError> {
+    let mut seen = FxHashSet::default();
+    for info in &program.effects {
+        if !seen.insert(info.name.as_str()) {
+            return Err(VerifyError {
+                function: info.name.clone(),
+                message: format!("the effect `{}` is declared twice", info.name),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn no_struct_layouts(program: &Program) -> Result<(), VerifyError> {
     for layout in &program.layouts {
         for constructor in &layout.constructors {
@@ -371,9 +484,10 @@ fn borrowed_params(program: &Program, function: &LirFn) -> Result<(), String> {
             let info = &function.vars[var.0 as usize];
             if !info.repr.is_rc() {
                 return Err(format!(
-                    "`{}` ({}) is a borrowed parameter, but only obj and tobj can be",
+                    "`{}` ({}) is a borrowed parameter, but only {} can be",
                     name(var),
-                    repr_text(&program.layouts, &program.structs, info.repr)
+                    repr_text(&program.layouts, &program.structs, info.repr),
+                    repr_names(|repr| repr.is_rc(), "and")
                 ));
             }
             if info.mark != Mark::Unr {
@@ -491,6 +605,11 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
         name: &function.name,
         clause: function.clause,
         params: function.params().len(),
+        takes_fork: function
+            .params()
+            .iter()
+            .any(|&param| function.repr(param) == Repr::Fev),
+        landed: Some(landed(function, &program.c_functions)),
     });
     check::with_tables(
         &program.layouts,
@@ -501,6 +620,91 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
         summaries,
         f,
     )
+}
+
+/// 飛んでいるyieldが通ってはならない文。巻き戻しの地点か`prim yield_to`である (docs/spec/lir.mdの
+/// 「yieldの確認までの間」「着地の印」)。
+fn crosses(stmt: &Stmt, c_functions: &[CFunction]) -> bool {
+    unwind::point(stmt, c_functions).is_some()
+        || matches!(
+            stmt,
+            Stmt::Let {
+                var: _,
+                rhs: Rhs::Prim(Prim::YieldTo, _)
+            }
+        )
+}
+
+/// 着地が入ったときの`function`の形 (docs/spec/lir.mdの「着地の印」)。エントリのブロックが最初の引数の
+/// `prim yield_status`を最後の文に持ち、その値の`switch`で終わるなら、ブロックは地点を通らず、`0`のほかの
+/// 行き先はどれも終えるブロックである。そうでなければ、エントリのブロックが終えるブロックである。関数の名前は
+/// 見ない。着地の検査が、呼ぶ相手の本体を読まずにこれを引く。
+fn landed(function: &LirFn, c_functions: &[CFunction]) -> Landed {
+    // 終えるブロックは、どの地点より前に`yield_finish`を走らせるか、地点を持たずに`return`で終わる
+    let finishing = |block: &Block| {
+        for stmt in &block.stmts {
+            if matches!(
+                stmt,
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Prim(Prim::YieldFinish, _)
+                }
+            ) {
+                return Landed::Finishes;
+            }
+            if crosses(stmt, c_functions) {
+                return Landed::Crosses;
+            }
+        }
+        if matches!(block.term, Term::Return(_) | Term::ReturnMany(_)) {
+            Landed::Returns
+        } else {
+            Landed::Open
+        }
+    };
+    let entry = &function.blocks[BlockId::ENTRY.0 as usize];
+    if let Some(Stmt::Let {
+        var: status,
+        rhs: Rhs::Prim(Prim::YieldStatus, args),
+    }) = entry.stmts.last()
+        && let Term::Switch {
+            scrutinee,
+            layout: None,
+            cases,
+            default,
+        } = &entry.term
+        && *scrutinee == Atom::Var(*status)
+        && entry
+            .params
+            .first()
+            .is_some_and(|&first| args.first() == Some(&Atom::Var(first)))
+    {
+        if entry.stmts.iter().any(|stmt| crosses(stmt, c_functions)) {
+            return Landed::Crosses;
+        }
+        // 行き先が範囲の外なら、関数の走査が拒む。ここでは終えない道として数える
+        let paths = cases
+            .iter()
+            .filter(|case| case.pattern != CasePattern::Int(0))
+            .map(|case| case.target)
+            .chain(*default)
+            .map(|target| {
+                function
+                    .blocks
+                    .get(target.0 as usize)
+                    .map_or(Landed::Open, finishing)
+            });
+        let mut landed = Landed::Finishes;
+        for path in paths {
+            match path {
+                Landed::Crosses | Landed::Open => return path,
+                Landed::Returns => landed = Landed::Returns,
+                Landed::Finishes => {}
+            }
+        }
+        return landed;
+    }
+    finishing(entry)
 }
 
 /// 辺の規則の検査 (`shape`) に渡す、ブロックの形。
@@ -586,7 +790,7 @@ struct Checker<'a> {
     /// (docs/spec/lir.md の「ダミーの値」)。変数は1回だけ
     /// 定義されるので (R5)、関数に1つの表にする。
     unboxed: Vec<bool>,
-    /// 巻き戻しの地点ごとの所有を書き留める先。`unwind_points` だけが与える。
+    /// 巻き戻しの地点ごとの所有を書き留める先。表を求める走査だけが与える。
     unwind: Option<Recorder>,
 }
 
@@ -628,7 +832,6 @@ impl<'a> Checker<'a> {
 
     fn run(mut self) -> Result<Option<Unwinds>, String> {
         let function = self.function;
-        self.clause_values()?;
         for (index, block) in function.blocks.iter().enumerate() {
             let index = index as u32;
             let mut owned = if index == 0 {
@@ -657,39 +860,6 @@ impl<'a> Checker<'a> {
         }))
     }
 
-    /// `clause` の印の関数の値の使いを確かめる (`Context::clause_values`)。
-    fn clause_values(&self) -> Result<(), String> {
-        let blocks = &self.function.blocks;
-        let closures = blocks
-            .iter()
-            .flat_map(|block| &block.stmts)
-            .filter_map(|stmt| match stmt {
-                Stmt::Let {
-                    var,
-                    rhs: Rhs::MakeClosure(target, _),
-                } => Some((*var, *target)),
-                _ => None,
-            });
-        self.cx.clause_values(closures, |check| {
-            for block in blocks {
-                for stmt in &block.stmts {
-                    match stmt {
-                        Stmt::Let {
-                            var: _,
-                            rhs: Rhs::Prim(Prim::EvSetClause { .. }, args),
-                        } => args
-                            .iter()
-                            .enumerate()
-                            .filter(|&(index, _)| index != 1)
-                            .for_each(|(_, &atom)| check(atom)),
-                        _ => stmt.for_each_atom(&mut *check),
-                    }
-                }
-                block.term.for_each_atom(&mut *check);
-            }
-        })
-    }
-
     fn check_block(&mut self, index: u32, block: &Block, mut owned: Owned) -> Result<(), String> {
         let function = self.function;
         if index == 0
@@ -707,6 +877,27 @@ impl<'a> Checker<'a> {
                 index: at as i64,
             };
             self.check_stmt(&mut owned, stmt)?;
+            let marked = match stmt {
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Call(call),
+                }
+                | Stmt::LetMany { vars: _, call } => call.prompt(),
+                _ => None,
+            };
+            if let Some(marker) = marked {
+                self.check_landing(block, at, marker)?;
+            }
+            if let Stmt::Let {
+                var: _,
+                rhs: Rhs::Call(call),
+            }
+            | Stmt::LetMany { vars: _, call } = stmt
+                && call.prompt().is_none()
+                && reuse::may_yield(self.program, function, call)
+            {
+                self.check_yield_window(block, at, call)?;
+            }
             if let Some(Recorder { entry: _, points }) = &mut self.unwind
                 && let Some((vars, landing)) = unwind::point(stmt, &self.program.c_functions)
             {
@@ -757,9 +948,6 @@ impl<'a> Checker<'a> {
                     Rhs::MakeClosure(target, args) => {
                         self.cx.note_closure(*var, *target, args.len());
                     }
-                    Rhs::Prim(Prim::EvNew(effect), _) => {
-                        self.cx.note_evidence(*var, *effect);
-                    }
                     Rhs::Extern {
                         ext,
                         args: _,
@@ -769,6 +957,7 @@ impl<'a> Checker<'a> {
                             .note_never(*var, self.program.row(*ext).ret == OpRet::Never);
                     }
                     Rhs::Prim(_, _)
+                    | Rhs::Evidence { .. }
                     | Rhs::ConstString(_)
                     | Rhs::Con { .. }
                     | Rhs::Drop(_)
@@ -783,6 +972,9 @@ impl<'a> Checker<'a> {
                         "a let of {} values is formed before flatten",
                         vars.len()
                     ));
+                }
+                for &var in vars {
+                    self.cx.context_binding(var, None)?;
                 }
                 self.check_call(owned, call, Receiver::Many(vars))?;
                 if reuse::may_yield(self.program, self.function, call) {
@@ -1368,6 +1560,7 @@ impl<'a> Checker<'a> {
         let entry_borrowed = self.entry_borrowed[value.0 as usize];
         let entry_backed = self.entry_backed[value.0 as usize] && !owned.contains_key(&value);
         for (slot, field) in fields {
+            self.cx.context_binding(field, None)?;
             self.define(owned, field, site)?;
             owned.remove(&field);
             self.entry_borrowed[field.0 as usize] = entry_borrowed;
@@ -1536,13 +1729,96 @@ impl<'a> Checker<'a> {
         self.give_up(owned, var, "used")
     }
 
+    /// 境界の段の`evidence`の検査。束縛は`ev`、状態は`tobj`、外側のリストは`evv`の位置で、捕獲はエントリの関数の引数の
+    /// Reprに収まる。表は`ev`の持ち主のほかに退いたevidenceと複製した継続からも届くので、捕獲はどれも`unr`の位置に渡せる
+    /// (docs/spec/lir.mdの「verifier」)。
+    fn evidence_boundaries(
+        &self,
+        var: VarId,
+        effect: u32,
+        state: Atom,
+        outer: Atom,
+        entries: &[(FnIdx, Vec<Atom>)],
+    ) -> Result<(), String> {
+        let subject = format!(
+            "an evidence of `{}`",
+            effect_text(&self.program.effects, effect)
+        );
+        let repr = self.function.repr(var);
+        if repr != Repr::Ev {
+            return Err(format!(
+                "`{}` ({}) is bound to {subject}, which is ev",
+                self.cx.name(var),
+                self.cx.repr_text(repr)
+            ));
+        }
+        if !self.cx.passes(state, Repr::TObj) {
+            return Err(format!(
+                "the state of {subject} is {}, but the evidence takes tobj",
+                self.cx.typed_atom_text(state)
+            ));
+        }
+        if !self.cx.passes(outer, Repr::Evv) {
+            return Err(format!(
+                "the outer list of {subject} is {}, but the evidence takes evv",
+                self.cx.typed_atom_text(outer)
+            ));
+        }
+        if !self.cx.mark_passes(outer, Mark::Unr) {
+            return Err(format!(
+                "the outer list of {subject} is {}, but the evidence takes unr",
+                self.cx.marked_atom_text(outer)
+            ));
+        }
+        for (op, (target, captures)) in entries.iter().enumerate() {
+            let target = self.function_at(*target)?;
+            for (index, (&capture, &param)) in captures.iter().zip(target.params()).enumerate() {
+                let expected = target.repr(param);
+                if !self.cx.passes(capture, expected) {
+                    return Err(format!(
+                        "capture {index} of entry {op} of {subject} is {}, but the function takes {}",
+                        self.cx.typed_atom_text(capture),
+                        self.cx.repr_text(expected)
+                    ));
+                }
+                if !self.cx.mark_passes(capture, Mark::Unr) {
+                    return Err(format!(
+                        "capture {index} of entry {op} of {subject} is {}, but the evidence takes unr",
+                        self.cx.marked_atom_text(capture)
+                    ));
+                }
+            }
+        }
+        self.cx.bound_mark(var, Mark::Lin, || subject.clone())
+    }
+
     fn check_rhs(&self, owned: &mut Owned, var: VarId, rhs: &Rhs) -> Result<(), String> {
+        self.cx.context_binding(
+            var,
+            match rhs {
+                Rhs::Prim(prim, _) => Some(prim.row().ret),
+                Rhs::Evidence { .. } => Some(Repr::Ev),
+                _ => None,
+            },
+        )?;
         match rhs {
             Rhs::Call(call) => {
                 return self.check_call(owned, call, Receiver::Bound(var));
             }
+            Rhs::Evidence {
+                effect,
+                state,
+                outer,
+                entries,
+            } => {
+                self.cx.check_evidence(*effect, entries)?;
+                if self.cx.boundaries {
+                    self.evidence_boundaries(var, *effect, *state, *outer, entries)?;
+                }
+            }
             Rhs::MakeClosure(index, args) => {
                 self.cx.closure_arity(*index, args.len())?;
+                self.cx.context_captures(*index, args)?;
                 let target = self.function_at(*index)?;
                 if self.cx.boundaries {
                     for (index, (&arg, &param)) in args.iter().zip(target.params()).enumerate() {
@@ -1694,12 +1970,7 @@ impl<'a> Checker<'a> {
                 self.cx.direct_call(*target, args.len())?;
                 Some(self.function_at(*target)?.rets.clone())
             }
-            Call::Clause {
-                effect,
-                op,
-                callee: _,
-                args,
-            } => {
+            Call::Clause { effect, op, args } => {
                 let info = self.cx.effect(*effect)?;
                 let Some(operation) = info.operations.get(*op as usize) else {
                     return Err(format!(
@@ -1708,10 +1979,9 @@ impl<'a> Checker<'a> {
                         info.operations.len()
                     ));
                 };
-                let takes = 1 + operation.params.len();
-                if args.len() != takes {
+                if args.len() != operation.params.len() {
                     return Err(format!(
-                        "{} is given {} arguments, but it takes {takes} (the evidence and {} arguments of the operation)",
+                        "{} is given {} arguments, but the operation takes {}",
                         self.call_text(call, false),
                         args.len(),
                         operation.params.len()
@@ -1770,14 +2040,151 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 着地の印 `prompt v` の検査。`v` は呼び出しの後も生きている `obj` の変数でなければならない。所有の段では、
-    /// 呼び出しの直後にも所有していなければならない (docs/spec/lir.md の「着地の印」)。
+    /// 着地の印`v`を持つ`apply`の後、ブロックの次の呼び出しは、最初の引数が`v`である`prompt$`の直接の呼び出しで、
+    /// その間にexternの行もほかの巻き戻しの地点も`yield_to`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを
+    /// 確かめるので、着地から`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない。呼ぶ相手の側の
+    /// 半分は、相手の要約の`landed`と`yields`の印で確かめる (docs/spec/lir.mdの「着地の印」)。
+    fn check_landing(&self, block: &Block, at: usize, marker: VarId) -> Result<(), String> {
+        let refused = || {
+            format!(
+                "the apply with the prompt marker `{}` is not followed by `{EP_PROMPT}`",
+                self.cx.name(marker)
+            )
+        };
+        let mut calls = block.stmts[at + 1..]
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Call(call),
+                }
+                | Stmt::LetMany { vars: _, call } => Some(Some(call)),
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Extern { .. },
+                } => Some(None),
+                // 窓は呼ぶ相手の側と同じ`crosses`で閉じる。`prim child_abort`も巻き戻しの地点である
+                _ if crosses(stmt, &self.program.c_functions) => Some(None),
+                _ => None,
+            })
+            .chain(match &block.term {
+                Term::TailCall(call) => Some(Some(call)),
+                _ => None,
+            });
+        let callee = match calls.next() {
+            Some(Some(Call::Direct(target, args))) if args.first() == Some(&Atom::Var(marker)) => {
+                self.cx
+                    .function(*target)
+                    .ok()
+                    .filter(|callee| callee.name == EP_PROMPT)
+                    .map(|callee| (callee, self.program.function(*target).yields))
+            }
+            _ => None,
+        };
+        let Some((callee, yields)) = callee else {
+            return Err(refused());
+        };
+        // 呼ぶ相手はyieldか中断を飛ばしたまま入るので、その形を確かめる。形は要約が持ち、相手の本体は読まない
+        let entered = || {
+            format!(
+                "`{EP_PROMPT}` is entered at the apply with the prompt marker `{}`, but",
+                self.cx.name(marker)
+            )
+        };
+        match callee
+            .landed
+            .expect("the LIR verifier finds the landed form of every function")
+        {
+            Landed::Finishes => Ok(()),
+            // 呼ぶ側の窓の規則は`yields`の呼び出しにだけ働くので、yieldを飛ばしたまま戻る相手には印が要る
+            Landed::Returns if yields => Ok(()),
+            Landed::Returns => Err(format!(
+                "{} a path of it returns without `prim yield_finish`, and it is not marked `yields`",
+                entered()
+            )),
+            Landed::Crosses => Err(format!(
+                "{} it runs an unwind point or `prim yield_to` before `prim yield_finish`",
+                entered()
+            )),
+            Landed::Open => Err(format!(
+                "{} a path of it neither runs `prim yield_finish` nor returns",
+                entered()
+            )),
+        }
+    }
+
+    /// yieldしうる呼び出しは、yieldを飛ばしたまま戻る。そのフレームは`let y = prim yielding()`の確認か`return`まで、
+    /// 巻き戻しの地点も`prim yield_to`も通ってはならない。`yield_abort`が、飛んでいるyieldを前提にしないからである。
+    /// 確認は、ブロックの最後の文で、`switch y { 0 -> .., _ -> .. }`の遅い経路は地点を通らずに`return`する
+    /// (docs/spec/lir.mdの「yieldの確認までの間」)。
+    fn check_yield_window(&self, block: &Block, at: usize, call: &Call) -> Result<(), String> {
+        let crosses = |stmt: &Stmt| crosses(stmt, &self.program.c_functions);
+        let returns = |term: &Term| matches!(term, Term::Return(_) | Term::ReturnMany(_));
+        let what = self.call_text(call, false);
+        let rest = &block.stmts[at + 1..];
+        let test = rest.iter().position(|stmt| {
+            matches!(
+                stmt,
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Prim(Prim::Yielding, _)
+                }
+            )
+        });
+        let before = &rest[..test.unwrap_or(rest.len())];
+        if before.iter().any(crosses) {
+            return Err(format!(
+                "{what} may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()`"
+            ));
+        }
+        let Some(test) = test else {
+            return if returns(&block.term) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{what} may yield, but its block ends with neither `prim yielding()` nor `return`"
+                ))
+            };
+        };
+        let Stmt::Let { var: tested, .. } = &rest[test] else {
+            unreachable!("the position is a `let`")
+        };
+        let not_switched = || {
+            format!(
+                "the `prim yielding()` after {what} is not the last statement of a block that ends with a `switch` on it with the case `0` and a default"
+            )
+        };
+        let Term::Switch {
+            scrutinee,
+            layout: None,
+            cases,
+            default: Some(slow),
+        } = &block.term
+        else {
+            return Err(not_switched());
+        };
+        if test + 1 != rest.len()
+            || *scrutinee != Atom::Var(*tested)
+            || !matches!(&cases[..], [case] if case.pattern == CasePattern::Int(0))
+        {
+            return Err(not_switched());
+        }
+        match self.function.blocks.get(slow.0 as usize) {
+            Some(slow) if !slow.stmts.iter().any(crosses) && returns(&slow.term) => Ok(()),
+            _ => Err(format!(
+                "the slow path after {what} runs an unwind point or `prim yield_to`, or does not return"
+            )),
+        }
+    }
+
+    /// 着地の印`prompt v`の検査。`v`は呼び出しの後も生きている`ev`の変数、つまりフレーム自身のevidenceである。
+    /// 所有の段では、呼び出しの直後にも所有していなければならない (docs/spec/lir.mdの「着地の印」)。
     fn check_prompt(&self, owned: &Owned, call: &Call, marker: VarId) -> Result<(), String> {
         let what = self.call_text(call, false);
         self.cx.visible(marker)?;
-        if self.function.repr(marker) != Repr::Obj {
+        if self.function.repr(marker) != Repr::Ev {
             return Err(format!(
-                "`{}` is the prompt marker of {what}, but it is {}, not obj",
+                "`{}` is the prompt marker of {what}, but it is {}, not ev",
                 self.cx.name(marker),
                 self.function.repr(marker).name()
             ));
@@ -1880,52 +2287,22 @@ impl<'a> Checker<'a> {
                 uniform(&|| "argument 0".to_string(), *left)?;
                 uniform(&|| "argument 1".to_string(), *right)?;
             }
-            // 節の呼び出しは操作の ABI で呼ぶので、先頭の evidence は `obj`、残りは操作の表の Repr と比べる
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => {
+            // 節の呼び出しは操作のABIで呼ぶので、引数を操作の表のReprと印と比べる
+            Call::Clause { effect, op, args } => {
                 let operation = operation(&self.program.effects, *effect, *op);
                 let what = self.call_text(call, false);
-                if !self.cx.passes(*callee, Repr::TObj) {
-                    return Err(format!(
-                        "the callee of {what} is {}, but a clause takes tobj",
-                        self.cx.typed_atom_text(*callee)
-                    ));
-                }
-                // 呼ばれるエントリのクロージャは `ev_clause` が `dup` して返すので `unr` である
-                // (docs/spec/lir.md の「Kind の印の検査」)
-                if !self.cx.mark_passes(*callee, Mark::Unr) {
-                    return Err(format!(
-                        "the callee of {what} is {}, but a clause takes unr",
-                        self.cx.marked_atom_text(*callee)
-                    ));
-                }
-                let expected = std::iter::once((Repr::Obj, Mark::Unr)).chain(
-                    operation
-                        .params
-                        .iter()
-                        .copied()
-                        .zip(operation.param_marks.iter().copied()),
-                );
-                for (index, (&arg, (repr, mark))) in args.iter().zip(expected).enumerate() {
-                    let taker = if index == 0 {
-                        "a clause"
-                    } else {
-                        "the operation"
-                    };
+                let expected = operation.params.iter().zip(&operation.param_marks);
+                for (index, (&arg, (&repr, &mark))) in args.iter().zip(expected).enumerate() {
                     if !self.cx.passes(arg, repr) {
                         return Err(format!(
-                            "argument {index} of {what} is {}, but {taker} takes {}",
+                            "argument {index} of {what} is {}, but the operation takes {}",
                             self.cx.typed_atom_text(arg),
                             repr.name()
                         ));
                     }
                     if !self.cx.mark_passes(arg, mark) {
                         return Err(format!(
-                            "argument {index} of {what} is {}, but {taker} takes {}",
+                            "argument {index} of {what} is {}, but the operation takes {}",
                             self.cx.marked_atom_text(arg),
                             mark.name()
                         ));
@@ -2059,7 +2436,6 @@ impl<'a> Checker<'a> {
             Call::Clause {
                 effect,
                 op,
-                callee: _,
                 args: _,
             } => (
                 "a",

@@ -419,7 +419,13 @@ impl<'a> Flattener<'a> {
                     });
                     Atom::Var(dummy)
                 }
-                Repr::Token | Repr::Struct(_) => unreachable!("a leaf is a value word"),
+                Repr::Token
+                | Repr::Struct(_)
+                | Repr::Ev
+                | Repr::Cev
+                | Repr::Fev
+                | Repr::Rev
+                | Repr::Evv => unreachable!("a leaf is a value word"),
             })
             .collect();
         self.leaves.insert(var, leaves);
@@ -453,8 +459,7 @@ impl<'a> Flattener<'a> {
                     *arg = self.single(*arg);
                 }
             }
-            Call::Clause { callee, args, .. } => {
-                *callee = self.single(*callee);
+            Call::Clause { args, .. } => {
                 for arg in args.iter_mut() {
                     *arg = self.single(*arg);
                 }

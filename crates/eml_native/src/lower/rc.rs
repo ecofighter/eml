@@ -1,5 +1,6 @@
 //! インラインの`dup`と`decref`。局所の数は速い道 (ロード1つ、範囲の確かめ1つ、ストア1つ) を通る。0の数 (不死の物体) は
-//! 何もせず、ほかの数は遅い道のエントリを呼ぶ。即値を確かめるのは`tobj`の語だけである。`obj`の語はいつもポインタである
+//! 何もせず、ほかの数は遅い道のエントリを呼ぶ。即値を確かめるのは`tobj`と`evv`の語だけである。`obj`の語と、どの役の
+//! evidenceの語も、いつもポインタである
 //! (docs/spec/native.md の「RC」、docs/spec/object-model.md の「局所の速い道」)。
 use cranelift_codegen::ir::{FuncRef, InstBuilder, Value};
 use cranelift_frontend::FunctionBuilder;
@@ -63,14 +64,14 @@ pub(super) fn counted(
     b.set_cold_block(call);
     let done = b.create_block();
     match repr {
-        Repr::TObj => {
+        Repr::TObj | Repr::Evv => {
             let object = b.create_block();
             let imm = mem::is_imm(b, w);
             b.ins().brif(imm, done, &[], object, &[]);
             b.switch_to_block(object);
         }
-        Repr::Obj => {}
-        _ => unreachable!("only `obj` and `tobj` words are counted"),
+        Repr::Obj | Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev => {}
+        _ => unreachable!("only reference counted words are counted"),
     }
     let rc = mem::load_rc(b, w);
     let is_local = local(b, rc);

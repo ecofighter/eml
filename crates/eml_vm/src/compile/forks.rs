@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use eml_extern::ExternEffect;
 use eml_lir::Program;
-use eml_rt::layout::{INLINE_SCAN_LIMIT, data_extended, data_first, data_meta};
+use eml_rt::layout::{INLINE_SCAN_LIMIT, data_extended};
 use eml_rt::{Control, Frozen, Heap, Mode, Word};
 
 use super::Links;
@@ -85,37 +85,15 @@ fn table<M: Mode>(heap: &mut Heap<M>, entries: &[u32]) -> Word {
         !data_extended(n, false),
         "an effect with a fork table has fewer than {INLINE_SCAN_LIMIT} operations"
     );
-    let first = data_first(n, false);
-    // 作業用のヒープの構築中の物体で、ほかの操作の前に走査する語を書き終える (docs/spec/object-model.md の「核の操作」)
-    unsafe {
-        let w = heap.alloc_immortal(n, data_meta(0, n, false));
-        for (i, &f) in entries.iter().enumerate() {
-            heap.set_field(w, first + i, Word::imm(i64::from(f)))
-                .expect("a fresh table takes its entries");
-        }
-        w
-    }
+    let words: Vec<Word> = entries.iter().map(|&f| Word::imm(i64::from(f))).collect();
+    // SAFETY: エントリは即値なので、`lin`ビットと生きている物体の条件は成り立つ。数は上のassertが
+    // 数の語のない範囲に抑える
+    unsafe { heap.alloc_fork_table(&words) }.expect("a table of immediates is immortal")
 }
 
 /// `Panic` の fork evidence `[table, 即値 0, ()]` の節点 `[ev, ()]`。`Panic` は mask されないので、深さはいつも 0 で、
 /// 子の `evv` の末尾に1つあれば足りる (docs/spec/vm.md の「`par` の fork と join」)。
 fn panic_tail<M: Mode>(heap: &mut Heap<M>, panic: u16, table: Word) -> Word {
-    let tag = panic + 1;
-    // 決まった形の物理的な添字は、形から求める (docs/spec/object-model.mdの「語の位置」)
-    const EV: usize = data_first(3, false);
-    const NODE: usize = data_first(2, false);
-    // 構築中の物体の走査する語を、次の確保の前に書き終える
-    unsafe {
-        let ev = heap.alloc_immortal(3, data_meta(tag, 3, false));
-        for (i, w) in [table, Word::imm(0), Word::UNIT].into_iter().enumerate() {
-            heap.set_field(ev, EV + i, w)
-                .expect("a fresh fork evidence takes its fields");
-        }
-        let node = heap.alloc_immortal(2, data_meta(tag, 2, false));
-        for (i, w) in [ev, Word::UNIT].into_iter().enumerate() {
-            heap.set_field(node, NODE + i, w)
-                .expect("a fresh evv node takes its fields");
-        }
-        node
-    }
+    // SAFETY: `table`は`alloc_fork_table`の結果で、このヒープの不死のforkの表である
+    unsafe { heap.alloc_fork_tail(panic, table) }.expect("the panic tail takes a fork table")
 }

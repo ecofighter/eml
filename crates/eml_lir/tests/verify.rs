@@ -1,10 +1,13 @@
 //! LIR のテキストで書いた LIR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/lir.md)。
 //! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
+use eml_lir::unwind::verified_for;
+use eml_lir::{FnIdx, VarId, verify_borrowed};
 use eml_lir::{
     Prim, Program, Rhs, Stmt, parse, verify, verify_flattened, verify_lowered, verify_scopes,
 };
-use eml_lir::{VarId, verify_borrowed};
+
+use crate::common::ENTRY;
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
 const BOOL: &str = "layout Prelude.Bool { False, True }\n";
@@ -664,39 +667,39 @@ fn the_uses_of_a_never_binder_are_not_compared() {
     let text = "\
 layout Option { None, Some(tobj) }
 effect Fail { never fail(tobj) -> never }
-fn f(c.0: tobj, e.1: obj) -> tobj {
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+fn f() -> tobj {
+  let t.2: int = clause Fail.fail(())
   return t.2
 }
-fn g(c.0: tobj, e.1: obj) -> tobj {
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+fn g() -> tobj {
+  let t.2: int = clause Fail.fail(())
   jump b1(t.2)
 b1(a.3: tobj):
   return a.3
 }
-fn h(c.0: tobj, e.1: obj) -> tobj {
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+fn h() -> tobj {
+  let t.2: int = clause Fail.fail(())
   let r.3: tobj = call k(t.2)
   return r.3
 }
 fn k(x.0: tobj) -> tobj {
   return x.0
 }
-fn m(c.0: tobj, e.1: obj) -> tobj {
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+fn m() -> tobj {
+  let t.2: int = clause Fail.fail(())
   let c.3: tobj = closure n(t.2)
   return c.3
 }
 fn n(a.0: tobj, b.1: unit) -> tobj {
   return a.0
 }
-fn p(c.0: tobj, e.1: obj) -> tobj {
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+fn p() -> tobj {
+  let t.2: int = clause Fail.fail(())
   let r.3: tobj = apply &k(t.2)
   return r.3
 }
-fn q(c.0: tobj, e.1: obj) -> tobj {
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+fn q() -> tobj {
+  let t.2: int = clause Fail.fail(())
   let d.3: tobj = con Option #1(t.2)
   return d.3
 }
@@ -923,19 +926,14 @@ fn the_operands_of_uniform_calls_are_compatible_with_tobj() {
             "argument 0 of an apply is `n.1` (int), but an apply takes tobj",
         ),
         (
-            "c.0: int, e.1: obj",
-            "  let t.2: tobj = clause Ask.ask c.0(e.1, ())\n  return t.2\n",
-            "the callee of a clause of `Ask.ask` is `c.0` (int), but a clause takes tobj",
+            "n.2: int",
+            "  let t.3: tobj = clause Ask.ask(n.2)\n  return t.3\n",
+            "argument 0 of a clause of `Ask.ask` is `n.2` (int), but the operation takes tobj",
         ),
         (
-            "c.0: tobj, e.1: obj, n.2: int",
-            "  let t.3: tobj = clause Ask.ask c.0(e.1, n.2)\n  return t.3\n",
-            "argument 1 of a clause of `Ask.ask` is `n.2` (int), but the operation takes tobj",
-        ),
-        (
-            "c.0: tobj, e.1: obj",
-            "  let t.2: int = clause Fail.fail c.0(e.1, 1)\n  return ()\n",
-            "argument 1 of a clause of `Fail.fail` is 1, but the operation takes tobj",
+            "",
+            "  let t.2: int = clause Fail.fail(1)\n  return ()\n",
+            "argument 0 of a clause of `Fail.fail` is 1, but the operation takes tobj",
         ),
         (
             "n.0: int",
@@ -959,14 +957,14 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
             "`t.0` (int) is bound to an apply, which returns tobj",
         ),
         (
-            "c.0: tobj, e.1: obj",
-            "  let t.2: int = clause Ask.ask c.0(e.1, ())\n  return ()\n",
+            "",
+            "  let t.2: int = clause Ask.ask(())\n  return ()\n",
             "`t.2` (int) is bound to a clause of `Ask.ask`, which returns tobj",
         ),
         (
             "",
             "  let w.0: int = prim evv_get()\n  return ()\n",
-            "`w.0` (int) is bound to `prim evv_get`, which returns tobj",
+            "`w.0` (int) is bound to `prim evv_get`, which returns evv",
         ),
     ] {
         assert_eq!(
@@ -985,7 +983,7 @@ fn a_tail_call_result_is_compatible_with_the_ret() {
     for (ret, params, call) in [
         ("tobj", "c.0: tobj", "apply c.0(())"),
         ("int", "", "call k(1)"),
-        ("tobj", "c.0: tobj, e.1: obj", "clause Ask.ask c.0(e.1, ())"),
+        ("tobj", "", "clause Ask.ask(())"),
     ] {
         assert_eq!(check(&tail(ret, params, call)), Ok(()), "{call}");
     }
@@ -1004,8 +1002,8 @@ fn a_tail_call_result_is_compatible_with_the_ret() {
         ),
         (
             "int",
-            "c.0: tobj, e.1: obj",
-            "clause Ask.ask c.0(e.1, ())",
+            "",
+            "clause Ask.ask(())",
             "a tail clause of `Ask.ask` returns tobj, but this function returns int",
         ),
     ] {
@@ -1758,6 +1756,21 @@ fn scopes_reject_a_release() {
 }
 
 #[test]
+fn an_effect_declared_twice_is_rejected() {
+    // テキストの形では読めないので、読んだIRの表に同じ名前のエフェクトを足す
+    let mut program = read(
+        "effect Prelude.Panic { never panicked(obj) -> never }\nfn f() -> unit {\n  return ()\n}\n",
+    );
+    let mut second = program.effects[0].clone();
+    second.operations[0].params.push(eml_lir::Repr::Obj);
+    program.effects.push(second);
+    assert_eq!(
+        verify(&program).map_err(|error| error.to_string()),
+        Err("the effect `Prelude.Panic` is declared twice in `Prelude.Panic`".to_string())
+    );
+}
+
+#[test]
 fn a_release_that_keeps_no_field_is_rejected() {
     // テキストの形では書けないので、読んだ IR の項目を消す
     let mut program = read(RELEASE);
@@ -2217,66 +2230,72 @@ fn an_unbox_reads_its_value() {
 
 #[test]
 fn a_borrowed_prim_argument_is_read_at_the_ownership_level() {
-    // 借りたフィールドを借用の引数に渡せ、所有の数を変えない
+    // 借りたフィールドを借用の引数に渡せ、所有の数を変えない。evidenceはフィールドにならないので、借用の引数を持つ
+    // externで確かめる (docs/spec/lir.mdの「verifier」)
     let lent = "\
 layout W { W(obj) }
-fn g(w.0: obj) -> tobj {
-  unpack w.0 W #0(e.1: obj)
-  let v.2: tobj = prim ev_evv(e.1)
+fn g(w.0: obj) -> int {
+  unpack w.0 W #0(s.1: obj)
+  let n.2: int = extern Std.String.byte_length(s.1)
   decref w.0
-  return v.2
+  return n.2
 }
 ";
     assert_eq!(check(lent), Ok(()));
     // 持ち主を手放した後に借用の引数に渡すと拒む
     let after_owner = "\
 layout W { W(obj) }
-fn g(w.0: obj) -> tobj {
-  unpack w.0 W #0(e.1: obj)
+fn g(w.0: obj) -> int {
+  unpack w.0 W #0(s.1: obj)
   decref w.0
-  let v.2: tobj = prim ev_evv(e.1)
-  return v.2
+  let n.2: int = extern Std.String.byte_length(s.1)
+  return n.2
 }
 ";
     assert_eq!(
         check(after_owner),
-        Err("`e.1` is lent to `prim ev_evv` after its owner `w.0` was given up in `g`".to_string())
+        Err(
+            "`s.1` is lent to `Std.String.byte_length` after its owner `w.0` was given up in `g`"
+                .to_string()
+        )
     );
-    // 所有の変数を借用の引数に渡しても、所有は残る。手放さなければ漏れとして拒む
-    let kept = "\
-fn f(e.0: obj) -> tobj {
-  let v.1: tobj = prim ev_evv(e.0)
-  return v.1
-}
-";
+    // 所有の変数を基本操作の借用の引数に渡しても、所有は残る。手放さなければ漏れとして拒む
+    let kept = format!(
+        "{ENTRY}fn f(e.0: cev) -> unit {{
+  let v.1: evv = prim ev_evv(e.0)
+  let u.2: unit = prim evv_set(v.1)
+  return u.2
+}}
+"
+    );
     assert_eq!(
-        check(kept),
+        check(&kept),
         Err("`e.0` is still owned at the end of the function in `f`".to_string())
     );
 }
 
 #[test]
 fn a_variable_lent_and_consumed_by_one_instruction_needs_two_references() {
-    // `ev_renew` は第1引数を借りて第2引数を消費する。同じ変数を渡すには、参照が2つ要る
+    // `Std.Bytes.append_slice`は`src`を借りて`dst`を消費する。同じ変数を渡すには、参照が2つ要る
     // (docs/spec/lir.md の「extern の借用」)
     let without_dup = "\
-fn f(e.0: obj) -> obj {
-  let r.1: obj = prim ev_renew(e.0, e.0)
+fn f(b.0: obj) -> obj {
+  let r.1: obj = extern Std.Bytes.append_slice(0, 1, b.0, b.0)
   return r.1
 }
 ";
     assert_eq!(
         check(without_dup),
         Err(
-            "`e.0` is lent to `prim ev_renew` and consumed by the same instruction in `f`"
+            "`b.0` is lent to `Std.Bytes.append_slice` and consumed by the same instruction in `f`"
                 .to_string()
         )
     );
     let with_dup = "\
-fn f(e.0: obj) -> obj {
-  dup e.0
-  let r.1: obj = prim ev_renew(e.0, e.0)
-  decref e.0
+fn f(b.0: obj) -> obj {
+  dup b.0
+  let r.1: obj = extern Std.Bytes.append_slice(0, 1, b.0, b.0)
+  decref b.0
   return r.1
 }
 ";
@@ -2401,23 +2420,24 @@ const COUNTER: &str = "effect Counter { get(unit) -> int, put(int) -> unit }\n";
 const EVIDENCE_EXAMPLE: &str = "\
 effect State { get(unit) -> tobj, put(tobj) -> unit }
 yields fn f(s.0: tobj) -> tobj {
-  let w.1: tobj = prim evv_get()
-  let e.2: obj = prim ev_new[State](s.0, w.1)
-  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
-  let m.4: tobj = prim evv_mask[State*2](w.1)
-  let c.5: tobj = prim ev_clause[State.get](e.2)
-  let r.6: tobj = clause State.get c.5(e.2, ())
+  let w.1: evv = prim evv_get()
+  let e.2: ev lin = evidence State(s.0, w.1) [&g, &p]
+  let m.4: evv = prim evv_mask[State*2](w.1)
+  let r.6: tobj = clause State.get(())
   return r.6
 }
-internal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {
+internal yields clause State.get fn g(e.0: cev, u.1: unit) -> tobj {
   let s.2: tobj = prim ev_take_state(e.0)
   return s.2
+}
+internal clause State.put fn p(e.0: cev, x.1: tobj) -> unit {
+  return ()
 }
 ";
 
 /// `Counter.put` の印を持ち、捕獲を1つ持つ節の関数。
 const PUT_CLAUSE: &str =
-    "internal clause Counter.put fn g(m.0: tobj, e.1: obj, n.2: int) -> unit {\n  return ()\n}\n";
+    "internal clause Counter.put fn g(m.0: tobj, e.1: cev, n.2: int) -> unit {\n  return ()\n}\n";
 
 #[test]
 fn prims_and_clauses_are_accepted_after_the_evidence_pass() {
@@ -2438,20 +2458,14 @@ fn the_lowered_level_checks_prims_and_clauses() {
 fn the_boundaries_of_prims_and_clauses_are_compatible() {
     let errors: Vec<String> = [
         format!(
-            "{STATE}fn f(n.0: int, w.1: tobj) -> obj {{\n  let e.2: obj = prim ev_new[State](n.0, w.1)\n  return e.2\n}}\n"
+            "{STATE}{ENTRY}fn f(n.0: int, w.1: evv) -> unit {{\n  let e.2: ev lin = evidence State(n.0, w.1) [&get, &put]\n  let u.3: unit = drop e.2\n  return u.3\n}}\n{STATE_CLAUSES}"
         ),
         "fn f() -> int {\n  let w.0: int = prim evv_get()\n  return w.0\n}\n".to_string(),
         format!(
-            "{COUNTER}fn f(c.0: tobj, n.1: tobj, e.2: obj) -> unit {{\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+            "{COUNTER}fn f(n.1: tobj) -> unit {{\n  let u.3: unit = clause Counter.put(n.1)\n  return u.3\n}}\n"
         ),
         format!(
-            "{COUNTER}fn f(c.0: int, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
-        ),
-        format!(
-            "{COUNTER}fn f(c.0: tobj, e.1: int) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
-        ),
-        format!(
-            "{STATE}fn f(c.1: tobj, e.2: obj) -> int {{\n  let t.0: int = clause State.get c.1(e.2, ())\n  return t.0\n}}\n"
+            "{STATE}fn f() -> int {{\n  let t.0: int = clause State.get(())\n  return t.0\n}}\n"
         ),
     ]
     .iter()
@@ -2460,11 +2474,9 @@ fn the_boundaries_of_prims_and_clauses_are_compatible() {
     assert_eq!(
         errors,
         [
-            "argument 0 of `prim ev_new[State]` is `n.0` (int), but the primitive takes tobj in `f`",
-            "`w.0` (int) is bound to `prim evv_get`, which returns tobj in `f`",
-            "argument 1 of a clause of `Counter.put` is `n.1` (tobj), but the operation takes int in `f`",
-            "the callee of a clause of `Counter.get` is `c.0` (int), but a clause takes tobj in `f`",
-            "argument 0 of a clause of `Counter.get` is `e.1` (int), but a clause takes obj in `f`",
+            "the state of an evidence of `State` is `n.0` (int), but the evidence takes tobj in `f`",
+            "`w.0` (int) is bound to `prim evv_get`, which returns evv in `f`",
+            "argument 0 of a clause of `Counter.put` is `n.1` (tobj), but the operation takes int in `f`",
             "`t.0` (int) is bound to a clause of `State.get`, which returns tobj in `f`",
         ]
     );
@@ -2474,12 +2486,12 @@ fn the_boundaries_of_prims_and_clauses_are_compatible() {
 fn a_never_clause_has_no_result_to_compare() {
     let text = "\
 effect Fail { never fail(tobj) -> never }
-fn f(c.0: tobj, e.1: obj) -> tobj {
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+fn f() -> tobj {
+  let t.2: int = clause Fail.fail(())
   return t.2
 }
-fn g(c.0: tobj, e.1: obj) -> int {
-  tail clause Fail.fail c.0(e.1, ())
+fn g() -> int {
+  tail clause Fail.fail(())
 }
 ";
     assert_eq!(check_scopes(text), Ok(()));
@@ -2499,16 +2511,16 @@ fn a_clause_function_has_the_reprs_of_its_operation() {
         ))
     };
     assert_eq!(
-        clause("Counter.put fn g(m.0: tobj, e.1: obj, n.2: int)", "unit"),
+        clause("Counter.put fn g(m.0: tobj, e.1: cev, n.2: int)", "unit"),
         Ok(())
     );
-    assert_eq!(clause("Fail.fail fn g(e.0: obj, x.1: tobj)", "obj"), Ok(()));
+    assert_eq!(clause("Fail.fail fn g(e.0: cev, x.1: tobj)", "obj"), Ok(()));
     assert_eq!(
-        clause("Counter.put fn g(m.0: tobj, e.1: obj, n.2: tobj)", "unit"),
+        clause("Counter.put fn g(m.0: tobj, e.1: cev, n.2: tobj)", "unit"),
         Err("`g` is a clause of `Counter.put`, but its parameter 2 is tobj in `g`".to_string())
     );
     assert_eq!(
-        clause("Counter.put fn g(m.0: int, e.1: obj, n.2: int)", "unit"),
+        clause("Counter.put fn g(m.0: int, e.1: cev, n.2: int)", "unit"),
         Err("`g` is a clause of `Counter.put`, but its parameter 0 is int in `g`".to_string())
     );
     assert_eq!(
@@ -2516,11 +2528,11 @@ fn a_clause_function_has_the_reprs_of_its_operation() {
         Err("`g` is a clause of `Counter.put`, but its parameter 0 is int in `g`".to_string())
     );
     assert_eq!(
-        clause("Counter.get fn g(e.0: obj, u.1: unit)", "tobj"),
+        clause("Counter.get fn g(e.0: cev, u.1: unit)", "tobj"),
         Err("`g` is a clause of `Counter.get`, but it returns tobj in `g`".to_string())
     );
     assert_eq!(
-        clause("Fail.fail fn g(e.0: obj, x.1: tobj)", "int"),
+        clause("Fail.fail fn g(e.0: cev, x.1: tobj)", "int"),
         Err("`g` is a clause of `Fail.fail`, but it returns int in `g`".to_string())
     );
     // 引数の数は境界の検査でないので、エントリの段でも確かめる
@@ -2532,7 +2544,7 @@ fn a_clause_function_has_the_reprs_of_its_operation() {
     );
     assert_eq!(
         check_lowered(&format!(
-            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.#4 fn g(e.0: obj) -> unit {{\n  return ()\n}}\n"
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.#4 fn g(e.0: cev) -> unit {{\n  return ()\n}}\n"
         )),
         Err(
             "`g` is a clause of operation 4 of `Counter`, which has 2 operations in `g`"
@@ -2566,35 +2578,172 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
     );
     assert_eq!(
         check_lowered(&format!(
-            "{COUNTER}fn f(m.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = call g(m.0, e.1, 1)\n  return u.2\n}}\n{PUT_CLAUSE}"
+            "{COUNTER}{ENTRY}fn f(m.0: tobj, e.1: cev) -> unit {{\n  let u.2: unit = call g(m.0, e.1, 1)\n  return u.2\n}}\n{PUT_CLAUSE}"
         )),
         Err("`g` is a clause of `Counter.put`, but it is called directly in `f`".to_string())
     );
-    // 捕獲のある節は、同じ関数の中の `closure` でエントリの表に入れる
+    // 捕獲のある節は、evidenceのエントリに`closure`で書く
     let put = format!(
-        "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  return u.4\n}}\n{PUT_CLAUSE}"
+        "{COUNTER}{ENTRY}fn f(m.0: tobj, w.1: evv) -> unit {{\n  let e.2: ev lin = evidence Counter((), w.1) [&h, closure g(m.0)]\n  let u.4: unit = drop e.2\n  return u.4\n}}\n{PUT_CLAUSE}internal clause Counter.get fn h(e.0: cev, u.1: unit) -> int {{\n  return 0\n}}\n"
     );
     assert_eq!(check_lowered(&put), Ok(()));
     assert_eq!(check_scopes(&put), Ok(()));
 }
 
+/// `State`の節の関数`get`と、捕獲を1つ持つ`put`、`Counter.put`の節`g`、節でない`h`、`State.get`のforkのエントリ。
+/// Perceusの前の段の形である。
+const EVIDENCE_ENTRIES: &str = "\
+internal clause State.get fn get(e.0: cev, u.1: unit) -> tobj {
+  return ()
+}
+internal clause State.put fn put(m.0: tobj, e.1: cev, x.2: tobj) -> unit {
+  return ()
+}
+internal clause Counter.put fn g(e.0: cev, n.1: int) -> unit {
+  return ()
+}
+fn h(e.0: cev, u.1: unit) -> tobj {
+  return ()
+}
+clause State.get fn fork$State.get(e.0: fev, u.1: unit) -> tobj {
+  return ()
+}
+";
+
+/// evidenceは操作ごとに1つのエントリを操作の順に持ち、エントリiは`clause E.i`の印を持ち、forkのevidenceを取らない関数で、
+/// その関数がとる数だけ捕まえる。捕獲は文脈のReprでない。境界の段では、束縛は`ev`、状態は`tobj`、外側のリストは`evv`で、
+/// 捕獲は関数の引数に収まり`unr`に渡せる (docs/spec/lir.mdの「verifier」)。
 #[test]
-fn a_prim_names_known_effects_and_operations() {
-    assert_eq!(
-        check_lowered("fn f() -> obj {\n  let e.0: obj = prim ev_lookup[#2]()\n  return e.0\n}\n"),
-        Err(
-            "`prim ev_lookup[#2]` names effect 2, which is not in the effect table in `f`"
-                .to_string()
+fn an_evidence_names_one_clause_function_per_operation() {
+    let program = |params: &str, entries: &str| {
+        format!(
+            "{STATE}{COUNTER}{ENTRY}fn f({params}) -> unit {{\n  let e.9: ev lin = evidence State(s.0, w.1) [{entries}]\n  let u.10: unit = drop e.9\n  return u.10\n}}\n{EVIDENCE_ENTRIES}"
         )
+    };
+    let entries = |entries: &str| program("s.0: tobj, w.1: evv, a.2: tobj", entries);
+    let exact = entries("&get, closure put(a.2)");
+    assert_eq!(check_lowered(&exact), Ok(()));
+    assert_eq!(check_scopes(&exact), Ok(()));
+    let refused = [
+        (
+            entries("&get"),
+            "an evidence of `State` has 1 entries, but the effect has 2 operations",
+        ),
+        (
+            entries("&h, closure put(a.2)"),
+            "entry 0 of an evidence of `State` is `h`, which is not a clause",
+        ),
+        (
+            entries("&g, closure put(a.2)"),
+            "entry 0 of an evidence of `State` is `g`, a clause of `Counter.put`",
+        ),
+        (
+            entries("closure put(a.2), &get"),
+            "entry 0 of an evidence of `State` is `put`, a clause of `State.put`",
+        ),
+        (
+            entries("&fork$State.get, closure put(a.2)"),
+            "entry 0 of an evidence of `State` is `fork$State.get`, which takes a fork evidence",
+        ),
+        (
+            entries("&get, &put"),
+            "entry 1 of an evidence of `State` gives `put` 0 captures, but the clause captures 1",
+        ),
+        (
+            entries("&get, closure put(a.2, a.2)"),
+            "entry 1 of an evidence of `State` gives `put` 2 captures, but the clause captures 1",
+        ),
+        (
+            entries("&get, closure put(w.1)"),
+            "a closure of `put` captures `w.1` (evv), but only a retired evidence can be captured",
+        ),
+    ];
+    for (text, message) in &refused {
+        for check in [check_lowered, check_scopes] {
+            assert_eq!(check(text), Err(format!("{message} in `f`")), "{text}");
+        }
+    }
+    let bound = format!(
+        "{STATE}{COUNTER}{ENTRY}fn f(s.0: tobj, w.1: evv, a.2: tobj) -> unit {{\n  let e.9: obj = evidence State(s.0, w.1) [&get, closure put(a.2)]\n  return ()\n}}\n{EVIDENCE_ENTRIES}"
     );
+    assert_eq!(check_lowered(&bound), Ok(()));
+    assert_eq!(
+        check_scopes(&bound),
+        Err("`e.9` (obj) is bound to an evidence of `State`, which is ev in `f`".to_string())
+    );
+    // 束縛、状態、外側のリスト、捕獲のReprと印は、境界の段で比べる
+    let boundaries = [
+        (
+            program("s.0: tobj, w.1: tobj, a.2: tobj", "&get, closure put(a.2)"),
+            "the outer list of an evidence of `State` is `w.1` (tobj), but the evidence takes evv",
+        ),
+        (
+            program("s.0: int, w.1: evv, a.2: tobj", "&get, closure put(a.2)"),
+            "the state of an evidence of `State` is `s.0` (int), but the evidence takes tobj",
+        ),
+        (
+            program("s.0: tobj, w.1: evv, a.2: int", "&get, closure put(a.2)"),
+            "capture 0 of entry 1 of an evidence of `State` is `a.2` (int), but the function takes tobj",
+        ),
+        (
+            program(
+                "s.0: tobj, w.1: evv, a.2: tobj lin",
+                "&get, closure put(a.2)",
+            ),
+            "capture 0 of entry 1 of an evidence of `State` is `a.2` (lin), but the evidence takes unr",
+        ),
+    ];
+    for (text, message) in &boundaries {
+        assert_eq!(check_lowered(text), Ok(()), "{text}");
+        assert_eq!(
+            check_scopes(text),
+            Err(format!("{message} in `f`")),
+            "{text}"
+        );
+    }
+}
+
+/// 節の関数は操作のABIで呼ばれるので、evidenceのエントリだけがそれを名指す。`&g`と`closure g(..)`は、使われなくても
+/// 書いた所で断る (docs/spec/lir.mdの「エントリの関数の印」)。
+#[test]
+fn a_clause_function_is_named_only_by_an_evidence() {
+    let used_as_value = Err(
+        "`get` is a clause of `State.get`, but it is used as a function value in `f`".to_string(),
+    );
+    let body = |body: &str| {
+        format!(
+            "{STATE}{COUNTER}{ENTRY}fn f(a.0: tobj, b.1: enum) -> tobj {{\n{body}}}\n{EVIDENCE_ENTRIES}"
+        )
+    };
+    for text in [
+        body("  let c.2: tobj = closure put(a.0)\n  return a.0\n"),
+        body("  let c.2: tobj = closure get(a.0)\n  return a.0\n"),
+        body("  jump b1(&get)\nb1(c.2: tobj):\n  return c.2\n"),
+        body("  let t.2: tobj = apply a.0(&get)\n  return t.2\n"),
+    ] {
+        let expected = if text.contains("closure put") {
+            Err(
+                "`put` is a clause of `State.put`, but it is used as a function value in `f`"
+                    .to_string(),
+            )
+        } else {
+            used_as_value.clone()
+        };
+        assert_eq!(check_lowered(&text), expected, "{text}");
+    }
+    assert_eq!(
+        check_lowered(&body("  let t.2: tobj = call get((), ())\n  return t.2\n")),
+        Err("`get` is a clause of `State.get`, but it is called directly in `f`".to_string())
+    );
+}
+
+#[test]
+fn an_evidence_names_a_known_effect() {
     assert_eq!(
         check_lowered(&format!(
-            "{STATE}fn f(e.0: obj) -> tobj {{\n  let c.1: tobj = prim ev_clause[State.#2](e.0)\n  return c.1\n}}\n"
+            "{ENTRY}fn f(w.0: evv) -> unit {{\n  let e.1: ev lin = evidence #2((), w.0) []\n  let u.2: unit = drop e.1\n  return u.2\n}}\n"
         )),
-        Err(
-            "`prim ev_clause[State.#2]` names operation 2 of `State`, which has 2 operations in `f`"
-                .to_string()
-        )
+        Err("an evidence names effect 2, which is not in the effect table in `f`".to_string())
     );
 }
 
@@ -2604,7 +2753,7 @@ fn a_prim_names_known_effects_and_operations() {
 fn an_evv_mask_names_known_effects_in_order() {
     let mask = |effects: &str| {
         format!(
-            "{STATE}{COUNTER}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[{effects}](w.0)\n  return m.1\n}}\n"
+            "{STATE}{COUNTER}{ENTRY}fn f(w.0: evv) -> unit {{\n  let m.1: evv = prim evv_mask[{effects}](w.0)\n  let u.2: unit = prim evv_set(m.1)\n  return u.2\n}}\n"
         )
     };
     assert_eq!(check_lowered(&mask("State*2, Counter")), Ok(()));
@@ -2626,7 +2775,7 @@ fn an_evv_mask_names_known_effects_in_order() {
     let Stmt::Let {
         var: _,
         rhs: Rhs::Prim(Prim::EvvMask(effects), _),
-    } = &mut program.functions[0].blocks[0].stmts[0]
+    } = &mut program.functions[1].blocks[0].stmts[0]
     else {
         panic!("not an evv_mask");
     };
@@ -2642,7 +2791,7 @@ fn an_evv_mask_names_known_effects_in_order() {
 fn an_evv_mask_names_each_effect_once() {
     assert_eq!(
         check_lowered(&format!(
-            "{STATE}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[State, State@1](w.0)\n  return m.1\n}}\n"
+            "{STATE}fn f(w.0: tobj) -> tobj {{\n  let m.1: evv = prim evv_mask[State, State@1](w.0)\n  return m.1\n}}\n"
         )),
         Err(
             "the effects of `prim evv_mask[State, State@1]` are not in ascending order in `f`"
@@ -2655,7 +2804,7 @@ fn an_evv_mask_names_each_effect_once() {
 #[test]
 fn an_evv_mask_item_skips_some_handler() {
     let mut program = read(&format!(
-        "{STATE}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[State](w.0)\n  return m.1\n}}\n"
+        "{STATE}fn f(w.0: tobj) -> tobj {{\n  let m.1: evv = prim evv_mask[State](w.0)\n  return m.1\n}}\n"
     ));
     let Stmt::Let {
         var: _,
@@ -2676,7 +2825,7 @@ fn an_evv_mask_item_skips_some_handler() {
 fn a_clause_function_names_a_known_effect() {
     assert_eq!(
         check_lowered(&format!(
-            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause #3.#0 fn g(e.0: obj) -> unit {{\n  return ()\n}}\n"
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause #3.#0 fn g(e.0: cev) -> unit {{\n  return ()\n}}\n"
         )),
         Err("`g` is a clause of effect 3, which is not in the effect table in `g`".to_string())
     );
@@ -2686,50 +2835,39 @@ fn a_clause_function_names_a_known_effect() {
 fn a_clause_call_names_an_operation_and_takes_its_arguments() {
     assert_eq!(
         check_lowered(&format!(
-            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.#5 c.0(e.1, 1)\n  return u.2\n}}\n"
+            "{COUNTER}fn f() -> unit {{\n  let u.2: unit = clause Counter.#5(1)\n  return u.2\n}}\n"
         )),
         Err("a clause names operation 5 of `Counter`, which has 2 operations in `f`".to_string())
     );
     assert_eq!(
         check_lowered(&format!(
-            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.put c.0(e.1)\n  return u.2\n}}\n"
+            "{COUNTER}fn f() -> unit {{\n  let u.2: unit = clause Counter.put()\n  return u.2\n}}\n"
         )),
-        Err("a clause of `Counter.put` is given 1 arguments, but it takes 2 (the evidence and 1 arguments of the operation) in `f`".to_string())
+        Err(
+            "a clause of `Counter.put` is given 0 arguments, but the operation takes 1 in `f`"
+                .to_string()
+        )
     );
 }
 
-#[test]
-fn ev_set_clause_names_the_clause_of_its_function() {
-    let set = |entry: &str, value: &str| {
-        check_lowered(&format!(
-            "{STATE}{COUNTER}fn f(s.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[{entry}](e.2, {value})\n  return u.3\n}}\ninternal clause Counter.put fn g(e.0: obj, n.1: int) -> unit {{\n  return ()\n}}\nfn h(e.0: obj, u.1: unit) -> tobj {{\n  return ()\n}}\n"
-        ))
-    };
-    assert_eq!(
-        set("State.get", "&g"),
-        Err(
-            "`g` is a clause of `Counter.put`, but it is put into the `State.get` entry in `f`"
-                .to_string()
-        )
-    );
-    assert_eq!(
-        set("State.get", "&h"),
-        Err("`h` is not a clause, but it is put into the `State.get` entry in `f`".to_string())
-    );
-    assert_eq!(
-        set("Counter.put", "&g"),
-        Err(
-            "`prim ev_set_clause[Counter.put]` is given `e.2`, the evidence of `State` in `f`"
-                .to_string()
-        )
-    );
+/// `State`の2つの操作の、何もしない節の関数。
+const STATE_CLAUSES: &str = "\
+internal clause State.get fn get(e.0: cev, u.1: unit) -> tobj {
+  decref e.0
+  return ()
 }
+internal clause State.put fn put(e.0: cev, x.1: tobj) -> unit {
+  decref e.0
+  decref x.1
+  return ()
+}
+";
 
 #[test]
 fn the_lowered_level_does_not_compare_boundaries() {
     // box の挿入の前なので、Repr の食い違いは box の挿入が変換で埋める
     let text = format!(
-        "{COUNTER}fn f(c.0: tobj, n.1: tobj, e.2: obj) -> tobj {{\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+        "{COUNTER}fn f(n.1: tobj) -> tobj {{\n  let u.3: unit = clause Counter.put(n.1)\n  return u.3\n}}\n"
     );
     assert_eq!(check_lowered(&text), Ok(()));
 }
@@ -2832,24 +2970,15 @@ fn v2_rejects_passing_lin_to_unr_at_each_boundary() {
             "`h.1` (unr) is bound to `Std.FileIn.open`, which returns lin",
         ),
         (
-            "fn f(w.0: tobj lin) -> unit {\n  let u.1: unit = prim evv_set(w.0)\n  return u.1\n}\n"
-                .to_string(),
+            format!("{ENTRY}fn f(w.0: evv lin) -> unit {{\n  let u.1: unit = prim evv_set(w.0)\n  return u.1\n}}\n"),
             "argument 0 of `prim evv_set` is `w.0` (lin), but the primitive takes unr",
         ),
         (
-            format!("{LIN_OPS}fn f(c.0: tobj lin, e.1: obj) -> tobj {{\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
-            "the callee of a clause of `L.ask` is `c.0` (lin), but a clause takes unr",
-        ),
-        (
-            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj lin) -> tobj {{\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
-            "argument 0 of a clause of `L.ask` is `e.1` (lin), but a clause takes unr",
-        ),
-        (
-            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {{\n  let t.3: tobj = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
+            format!("{LIN_OPS}fn f(x.2: tobj lin) -> tobj {{\n  let t.3: tobj = clause L.take(x.2)\n  return t.3\n}}\n"),
             "`t.3` (unr) is bound to a clause of `L.take`, which returns lin",
         ),
         (
-            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {{\n  tail clause L.take c.0(e.1, x.2)\n}}\n"),
+            format!("{LIN_OPS}fn f(x.2: tobj lin) -> tobj {{\n  tail clause L.take(x.2)\n}}\n"),
             "a tail clause of `L.take` returns lin, but this function returns unr",
         ),
     ] {
@@ -2857,7 +2986,7 @@ fn v2_rejects_passing_lin_to_unr_at_each_boundary() {
     }
     // `clause` の印の付いた関数は、操作の表の印で呼ばれる
     let text = format!(
-        "{LIN_OPS}internal clause L.take fn g(e.0: obj, x.1: tobj) -> tobj lin {{\n  return #0\n}}\n"
+        "{LIN_OPS}{ENTRY}internal clause L.take fn g(e.0: cev, x.1: tobj) -> tobj lin {{\n  return #0\n}}\n"
     );
     assert_eq!(
         rejected_at_both_levels(&text),
@@ -2865,7 +2994,7 @@ fn v2_rejects_passing_lin_to_unr_at_each_boundary() {
     );
     // 結果は操作の結果の印へ渡る
     let text = format!(
-        "{LIN_OPS}internal clause L.ask fn g(e.0: obj, x.1: unit) -> tobj lin {{\n  return #0\n}}\n"
+        "{LIN_OPS}{ENTRY}internal clause L.ask fn g(e.0: cev, x.1: unit) -> tobj lin {{\n  return #0\n}}\n"
     );
     assert_eq!(
         rejected_at_both_levels(&text),
@@ -2883,15 +3012,15 @@ fn v2_lets_unr_pass_to_lin_at_each_boundary() {
         format!("fn f(s.0: obj) -> obj lin {{\n  tail call h(s.0)\n}}\n{GIVES_UNR}"),
         "fn f(s.0: obj) -> tobj lin {\n  let c.1: tobj lin = closure k(s.0)\n  return c.1\n}\nfn k(a.0: obj lin, b.1: unit) -> tobj lin {\n  return a.0\n}\n".to_string(),
         "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.FileIn.close(s.0)\n  return u.1\n}\n".to_string(),
-        "fn f() -> tobj lin {\n  let w.0: tobj lin = prim evv_get()\n  return w.0\n}\n".to_string(),
-        format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj) -> tobj lin {{\n  let t.3: tobj lin = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
+        "fn f() -> unit {\n  let w.0: evv lin = prim evv_get()\n  let u.1: unit = drop w.0\n  return u.1\n}\n".to_string(),
+        format!("{LIN_OPS}fn f(x.2: tobj) -> tobj lin {{\n  let t.3: tobj lin = clause L.take(x.2)\n  return t.3\n}}\n"),
     ] {
         assert_eq!(check_scopes(&text), Ok(()), "{text}");
         assert_eq!(check(&text), Ok(()), "{text}");
     }
     // `clause` の印の付いた関数の evidence の引数は、`unr` の送り手から `lin` の受け手へ渡せる
     let text = format!(
-        "{LIN_OPS}internal clause L.take fn g(e.0: obj lin, x.1: tobj lin) -> tobj lin {{\n  return x.1\n}}\n"
+        "{LIN_OPS}{ENTRY}internal clause L.take fn g(e.0: cev lin, x.1: tobj lin) -> tobj lin {{\n  return x.1\n}}\n"
     );
     assert_eq!(check_scopes(&text), Ok(()), "{text}");
 }
@@ -2901,18 +3030,19 @@ fn v2_lets_poly_meet_unr_and_lin_and_constants_meet_any_mark() {
     let text = format!(
         "\
 {OPTION}{LIN_OPS}effect Fail {{ never fail(tobj) -> never }}
-fn f(s.0: obj, h.1: obj lin, c.2: tobj, e.3: obj) -> tobj lin {{
+fn f(s.0: obj, h.1: obj lin) -> tobj lin {{
   jump b1(s.0, h.1)
 b1(p.4: obj poly, q.5: obj poly):
   let u.6: unit = call g(q.5)
-  let m.8: tobj lin = clause L.take c.2(e.3, #0)
-  let v.9: tobj lin = clause L.take c.2(e.3, ())
-  let w.10: tobj lin = clause L.take c.2(e.3, &i)
+  let m.8: tobj lin = clause L.take(#0)
+  let v.9: tobj lin = clause L.take(())
+  let w.10: tobj lin = clause L.take(&i)
   let r.11: tobj poly = call k(p.4)
   return r.11
 }}
 fn k(a.0: obj) -> tobj lin {{
-  let t.1: tobj = clause Fail.fail a.0(a.0, ())
+  let u.2: unit = drop a.0
+  let t.1: tobj = clause Fail.fail(())
   return t.1
 }}
 {TAKES_LIN}{UNIFORM}"
@@ -3006,25 +3136,61 @@ fn root_primitives_move_tobj_values() {
 
 // 着地の印 `prompt v`
 
-/// `ev` を呼び出しの後も持ち続けて返す、印の付いた `apply`。
-fn marked(body: &str, ev: &str) -> String {
-    format!("fn f(b.0: tobj, {ev}) -> obj {{\n{body}}}\n")
+/// いちばん小さい`prompt$`。印の変数と、印の付いた`apply`の結果を受け取る。verifierは`apply`の直後にその呼び出しを
+/// 求める (docs/spec/lir.mdの「着地の印」)。
+const PROMPT: &str = "yields fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {\n  let u.2: unit = drop ev.0\n  return x.1\n}\n";
+
+/// `Land`と、そのエントリの関数。着地の印のevidenceを`evidence`で作るテストが、エントリに使う。
+const LAND: &str = "\
+effect Land { land(unit) -> tobj }
+fn entry$main() -> unit {
+  return ()
+}
+internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
+";
+
+/// Perceusの前の段の`LAND`。エントリの関数は`decref`を書かない。
+fn land_before_perceus() -> String {
+    LAND.replace("  decref e.0\n", "")
+}
+
+/// 印`ev.1`をエントリとともに`evidence`で作り、`body`を続ける関数`f`。`land`は`LAND`か
+/// `land_before_perceus()`。
+fn made(land: &str, body: &str, ret: &str) -> String {
+    format!(
+        "{land}fn f(b.0: tobj, w.5: evv) -> {ret} {{
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
+{body}}}
+"
+    )
 }
 
 #[test]
 fn prompt_marker_is_accepted() {
-    let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
-        "ev.1: obj",
+    let text = format!(
+        "{LAND}fn f(b.0: tobj, w.5: evv) -> tobj {{
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
+  let x.2: tobj = yields apply b.0(()) prompt ev.1
+  let r.3: tobj = call prompt$(ev.1, x.2)
+  return r.3
+}}
+{PROMPT}"
     );
     assert_eq!(check(&text), Ok(()));
 }
 
 #[test]
 fn prompt_marker_in_tail_position_is_rejected() {
-    let text = "fn f(b.0: tobj, ev.1: obj) -> tobj {\n  tail yields apply b.0(()) prompt ev.1\n}\n";
+    let text = made(
+        &land_before_perceus(),
+        "  tail yields apply b.0(()) prompt ev.1\n",
+        "tobj",
+    );
     assert_eq!(
-        check_scopes(text),
+        check_scopes(&text),
         Err(
             "a tail apply has a prompt marker, but a tail call leaves no frame to land on in `f`"
                 .to_string()
@@ -3034,11 +3200,11 @@ fn prompt_marker_in_tail_position_is_rejected() {
 
 #[test]
 fn prompt_marker_on_a_dead_variable_is_rejected() {
-    let text = marked(
+    let text = made(
+        &land_before_perceus(),
         "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ()\n",
-        "ev.1: obj",
-    )
-    .replace("-> obj", "-> unit");
+        "unit",
+    );
     assert_eq!(
         check_scopes(&text),
         Err(
@@ -3049,20 +3215,21 @@ fn prompt_marker_on_a_dead_variable_is_rejected() {
 }
 
 #[test]
-fn prompt_marker_on_a_non_obj_variable_is_rejected() {
+fn prompt_marker_on_a_non_ev_variable_is_rejected() {
     let text = "fn f(b.0: tobj, ev.1: tobj) -> tobj {\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n}\n";
     assert_eq!(
         check_scopes(text),
-        Err("`ev.1` is the prompt marker of an apply, but it is tobj, not obj in `f`".to_string())
+        Err("`ev.1` is the prompt marker of an apply, but it is tobj, not ev in `f`".to_string())
     );
 }
 
 #[test]
 fn prompt_marker_on_an_unowned_variable_is_rejected() {
-    let text = marked(
-        "  decref ev.1\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
-        "ev.1: obj",
-    );
+    let text = made(
+        LAND,
+        "  let u.7: unit = drop ev.1\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  let r.3: tobj = call prompt$(ev.1, x.2)\n  return r.3\n",
+        "tobj",
+    ) + PROMPT;
     assert_eq!(
         check(&text),
         Err(
@@ -3075,15 +3242,18 @@ fn prompt_marker_on_an_unowned_variable_is_rejected() {
 #[test]
 fn prompt_marker_used_only_in_a_sibling_branch_is_rejected() {
     let text = format!(
-        "{BOOL}fn f(b.0: tobj, ev.1: obj, c.2: enum, e.3: obj) -> obj {{
+        "{BOOL}{}fn f(b.0: tobj, w.5: evv, c.2: enum, e.3: obj) -> obj {{
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
   switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
   let x.4: tobj = yields apply b.0(()) prompt ev.1
   return e.3
 b2:
-  return ev.1
+  let u.7: unit = drop ev.1
+  return e.3
 }}
-"
+",
+        land_before_perceus()
     );
     assert_eq!(
         check_scopes(&text),
@@ -3095,21 +3265,596 @@ b2:
 }
 
 #[test]
-fn prompt_marker_passed_only_to_a_jump_is_accepted() {
-    let text = "fn f(b.0: tobj, ev.1: obj) -> obj {
+fn prompt_marker_passed_only_to_a_jump_is_refused() {
+    // 呼び出しの後で印を`jump`だけが使うなら、`apply`の後に`prompt$`の呼び出しが続かないので、verifierが拒む
+    let text = format!(
+        "{}fn f(b.0: tobj, w.5: evv) -> tobj {{
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
   let x.2: tobj = yields apply b.0(()) prompt ev.1
   jump b1(ev.1)
-b1(p.3: obj):
-  return p.3
+b1(p.3: ev lin):
+  let u.4: unit = drop p.3
+  return x.2
+}}
+",
+        land_before_perceus()
+    );
+    assert_eq!(
+        check_scopes(&text),
+        Err(
+            "the apply with the prompt marker `ev.1` is not followed by `prompt$` in `f`"
+                .to_string()
+        )
+    );
+}
+
+/// evidence passingの出力の形で書いた`Panic`の`try_panic`と`prompt$`と、何もしない関数`g`。
+const TRY_PANIC: &str = "\
+effect Prelude.Panic { never panicked(obj) -> never }
+fn main() -> unit {
+  let c.0: tobj = box 42
+  let r.1: tobj = call try_panic(&boom, c.0)
+  decref r.1
+  return ()
+}
+fn boom(p.0: unit) -> tobj {
+  let m.1: obj = const \"boom\"
+  let r.2: tobj = extern Prelude.panic(m.1)
+  return r.2
+}
+fn try_panic(f.0: tobj, c.1: tobj) -> tobj {
+  let w.2: evv = prim evv_get()
+  dup w.2
+  let ev.3: ev lin = evidence Prelude.Panic(c.1, w.2) [&panicked$entry]
+  let w.5: evv = prim evv_enter(w.2, ev.3)
+  let u.6: unit = prim evv_set(w.5)
+  let x.7: tobj poly = yields apply f.0(()) prompt ev.3
+  tail call prompt$(ev.3, &return$, x.7)
+}
+clause Prelude.Panic.panicked fn panicked$entry(e.0: cev, m.1: obj) -> obj poly {
+  decref m.1
+  let u.2: unit = prim yield_abort(e.0, &panicked$clause)
+  let d.3: obj poly = prim dummy()
+  return d.3
+}
+fn panicked$clause(c.0: tobj) -> tobj {
+  return c.0
+}
+yields fn prompt$(ev.0: ev lin, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: evv = prim ev_take_evv(ev.0)
+  let u.4: unit = prim evv_set(w.3)
+  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
+b1:
+  let st.6: tobj poly = prim ev_last_state(ev.0)
+  let u.7: unit = drop ev.0
+  tail yields apply ret.1(x.2, st.6)
+b2:
+  let u.8: unit = drop x.2
+  let k.9: tobj poly = prim yield_cont_take()
+  let c.10: tobj poly = prim yield_finish()
+  let st.11: tobj poly = prim ev_last_state(ev.0)
+  let h.13: rev = prim ev_retire(ev.0)
+  let k.12: tobj poly = closure resume$(h.13, ret.1, k.9)
+  tail yields apply c.10(k.12, st.11)
+b3:
+  let u.14: unit = drop ret.1
+  let u.15: unit = drop x.2
+  let c.16: tobj poly = prim yield_finish()
+  let st.17: tobj poly = prim ev_last_state(ev.0)
+  let u.18: unit = drop ev.0
+  tail yields apply c.16(st.17)
+b4:
+  let u.19: unit = drop x.2
+  let st.20: tobj poly = prim ev_last_state(ev.0)
+  let k.21: tobj poly = prim yield_cont_take()
+  let h.25: rev = prim ev_retire(ev.0)
+  let k.22: tobj poly = closure rewind$(h.25, ret.1, st.20, k.21)
+  let u.23: unit = prim yield_cont_set(k.22)
+  let d.24: obj poly = prim dummy()
+  return d.24
+}
+yields fn resume$(h.0: rev, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: ev lin = prim ev_renew(h.0, s.4)
+  decref h.0
+  let w.6: evv = prim evv_get()
+  let w.7: evv = prim evv_enter(w.6, e.5)
+  let u.8: unit = prim evv_set(w.7)
+  let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
+  tail call prompt$(e.5, ret.1, x.9)
+}
+yields fn rewind$(h.0: rev, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(h.0, ret.1, k.3, v.4, s.2)
+}
+fn return$(r.0: tobj, s.1: unit) -> tobj {
+  return r.0
+}
+fn g() -> unit {
+  return ()
 }
 ";
-    assert_eq!(check_scopes(text), Ok(()));
+
+/// `TRY_PANIC`の印の付いた`apply`と`prompt$`の間に`stmt`を入れる。
+fn between_landing_and_prompt(stmt: &str) -> String {
+    let apply = "  let x.7: tobj poly = yields apply f.0(()) prompt ev.3\n";
+    assert!(TRY_PANIC.contains(apply));
+    TRY_PANIC.replace(apply, &format!("{apply}  {stmt}\n"))
+}
+
+#[test]
+fn a_prompted_apply_followed_by_prompt_is_accepted() {
+    assert_eq!(check(TRY_PANIC), Ok(()));
+}
+
+#[test]
+fn a_call_between_a_prompted_apply_and_prompt_is_refused() {
+    let text = between_landing_and_prompt("let z.9: unit = call g()");
+    let refused =
+        "the apply with the prompt marker `ev.3` is not followed by `prompt$` in `try_panic`";
+    assert_eq!(check(&text), Err(refused.to_string()));
+    // 複数の値の`let`で束縛した印の付いた`apply`も同じく確かめる。テキストの形は値が1つの`let`を括弧で書けないので、
+    // 読んだプログラムの文を置き換える
+    let mut program = read(&text);
+    let function = program
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "try_panic")
+        .expect("`try_panic` is in the program");
+    let stmt = function.blocks[0]
+        .stmts
+        .iter_mut()
+        .find(|stmt| matches!(stmt, Stmt::Let { rhs: Rhs::Call(call), .. } if call.prompt().is_some()))
+        .expect("`try_panic` has a marked apply");
+    let Stmt::Let {
+        var,
+        rhs: Rhs::Call(call),
+    } = stmt.clone()
+    else {
+        unreachable!()
+    };
+    *stmt = Stmt::LetMany {
+        vars: vec![var],
+        call,
+    };
+    assert_eq!(
+        verify(&program).map_err(|error| error.to_string()),
+        Err(refused.to_string())
+    );
+}
+
+#[test]
+fn an_extern_row_between_a_prompted_apply_and_prompt_is_refused() {
+    let text = between_landing_and_prompt("let z.9: int = extern \"Prelude.Num Int.+\"(1, 2)");
+    assert_eq!(
+        check(&text),
+        Err(
+            "the apply with the prompt marker `ev.3` is not followed by `prompt$` in `try_panic`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_child_abort_between_a_prompted_apply_and_prompt_is_refused() {
+    // `prim child_abort`も巻き戻しの地点なので、着地と`prompt$`の間に置けない
+    let text = between_landing_and_prompt(
+        "let q.41: tobj = box 1\n  let u.42: unit = prim child_abort(e.40, q.41)\n  decref e.40",
+    )
+    .replace(
+        "fn try_panic(f.0: tobj, c.1: tobj)",
+        "fn try_panic(f.0: tobj, c.1: tobj, e.40: fev)",
+    )
+    .replace(
+        "  let r.1: tobj = call try_panic(&boom, c.0)\n",
+        "  decref c.0\n  let r.1: tobj = box 0\n",
+    );
+    assert_eq!(
+        check(&text),
+        Err(
+            "the apply with the prompt marker `ev.3` is not followed by `prompt$` in `try_panic`"
+                .to_string()
+        )
+    );
+}
+
+// yieldの確認までの間
+
+/// yieldしうる`g`を呼ぶ`yields`の関数`f`。`body`は`g`の呼び出しの結果`n.1`の後に続く文で、`f`は`int`を返す
+/// (docs/spec/lir.mdの「yieldの確認までの間」)。
+fn yield_point(body: &str) -> String {
+    format!(
+        "yields fn g() -> int {{\n  return 1\n}}\nyields fn f(e.8: cev, c.9: tobj poly, s.10: tobj poly) -> int {{\n  let n.1: int = call g()\n{body}}}\n"
+    )
+}
+
+/// `before`を挟んで`prim yielding()`を確かめ、`slow`で遅い経路を終える`body`。
+fn tested(before: &str, slow: &str) -> String {
+    format!(
+        "{before}  let y.3: int = prim yielding()\n  switch y.3 {{ 0 -> b1, _ -> b2 }}\nb1:\n  return n.1\nb2:\n{slow}"
+    )
+}
+
+#[test]
+fn yield_point_followed_by_its_test_is_accepted() {
+    let before = "  decref e.8\n  let u.6: unit = drop c.9\n  let u.7: unit = drop s.10\n  let b.2: tobj = box n.1\n  let m.4: int = unbox b.2\n  decref b.2\n  let q.5: enum = extern \"Prelude.Eq Int.==\"(m.4, 1)\n";
+    assert_eq!(
+        check(&yield_point(&tested(before, "  return n.1\n"))),
+        Ok(())
+    );
+    let without_test = "yields fn h() -> tobj {\n  let n.0: int = call g()\n  let b.1: tobj = box n.0\n  return b.1\n}\n";
+    let text = format!("yields fn g() -> int {{\n  return 1\n}}\n{without_test}");
+    assert_eq!(check(&text), Ok(()));
+}
+
+#[test]
+fn yield_point_followed_by_a_faulting_row_is_refused() {
+    let before = "  let z.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)\n";
+    assert_eq!(
+        check(&yield_point(&tested(before, "  return n.1\n"))),
+        Err("`g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`".to_string())
+    );
+}
+
+#[test]
+fn yield_point_followed_by_a_call_is_refused() {
+    let before = "  let z.2: int = call g()\n";
+    assert_eq!(
+        check(&yield_point(&tested(before, "  return n.1\n"))),
+        Err("`g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`".to_string())
+    );
+}
+
+#[test]
+fn yield_point_followed_by_yield_to_is_refused() {
+    let before = "  let u.2: unit = prim yield_to(e.8, c.9, s.10)\n";
+    assert_eq!(
+        check(&yield_point(&tested(before, "  return n.1\n"))),
+        Err("`g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`".to_string())
+    );
+}
+
+#[test]
+fn yield_point_whose_block_ends_without_a_test_is_refused() {
+    let refused =
+        "`g` may yield, but its block ends with neither `prim yielding()` nor `return` in `f`";
+    assert_eq!(
+        check(&yield_point("  jump b1()\nb1:\n  return n.1\n")),
+        Err(refused.to_string())
+    );
+    assert_eq!(
+        check(&yield_point("  tail call g()\n")),
+        Err(refused.to_string())
+    );
+}
+
+#[test]
+fn yield_point_whose_test_is_not_switched_on_is_refused() {
+    let refused = "the `prim yielding()` after `g` is not the last statement of a block that ends with a `switch` on it with the case `0` and a default in `f`";
+    let after = "  let y.3: int = prim yielding()\n  let k.4: int = prim yielding()\n  switch y.3 { 0 -> b1, _ -> b2 }\nb1:\n  return n.1\nb2:\n  return n.1\n";
+    assert_eq!(check(&yield_point(after)), Err(refused.to_string()));
+    let other = "  let y.3: int = prim yielding()\n  switch n.1 { 0 -> b1, _ -> b2 }\nb1:\n  return n.1\nb2:\n  return n.1\n";
+    assert_eq!(check(&yield_point(other)), Err(refused.to_string()));
+}
+
+#[test]
+fn yield_point_whose_slow_path_runs_a_row_is_refused() {
+    let refused = "the slow path after `g` runs an unwind point or `prim yield_to`, or does not return in `f`";
+    let row = "  let z.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)\n  return z.2\n";
+    assert_eq!(
+        check(&yield_point(&tested("", row))),
+        Err(refused.to_string())
+    );
+    let jump = "  jump b3()\nb3:\n  return n.1\n";
+    assert_eq!(
+        check(&yield_point(&tested("", jump))),
+        Err(refused.to_string())
+    );
+}
+
+#[test]
+fn yield_point_is_found_for_apply_clause_and_multi_value_let() {
+    let row = "  let z.5: int = extern \"Prelude.Num Int.+\"(1, 2)\n";
+    let refused = |what: &str| {
+        Err(format!(
+            "{what} may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`"
+        ))
+    };
+    let apply = format!(
+        "yields fn f(b.0: tobj) -> int {{\n  let x.1: tobj = yields apply b.0(())\n{row}  decref x.1\n  return z.5\n}}\n"
+    );
+    assert_eq!(check(&apply), refused("an apply"));
+    let clause = format!(
+        "{ASK}yields fn f(b.0: tobj) -> int {{\n  let x.1: tobj = clause Ask.ask(b.0)\n{row}  decref x.1\n  return z.5\n}}\n"
+    );
+    assert_eq!(check(&clause), refused("a clause of `Ask.ask`"));
+    let mut program = read(&yield_point(&tested(row, "  return n.1\n")));
+    let stmt = &mut program.functions[1].blocks[0].stmts[0];
+    let Stmt::Let {
+        var,
+        rhs: Rhs::Call(call),
+    } = stmt.clone()
+    else {
+        unreachable!()
+    };
+    *stmt = Stmt::LetMany {
+        vars: vec![var],
+        call,
+    };
+    assert_eq!(
+        verify(&program).map_err(|error| error.to_string()),
+        refused("`g`")
+    );
+}
+
+#[test]
+fn yield_point_exemptions_are_accepted() {
+    let row = "  let z.5: int = extern \"Prelude.Num Int.+\"(1, 2)\n  return z.5\n";
+    let plain = format!(
+        "yields fn g() -> int {{\n  return 1\n}}\nfn f() -> int {{\n  let n.1: int = call g()\n{row}}}\n"
+    );
+    assert_eq!(check(&plain), Ok(()));
+    let parent = par(
+        "a.0: tobj, b.1: tobj",
+        "let t.2: obj = par (,) #0(a.0, b.1)",
+        "  let z.5: int = extern \"Prelude.Num Int.+\"(1, 2)\n  return t.2\n",
+    )
+    .replace("fn f(", "yields fn f(");
+    assert_eq!(check(&parent), Ok(()));
+    assert_eq!(check(TRY_PANIC), Ok(()));
+}
+
+#[test]
+fn yield_point_is_checked_at_every_level() {
+    let program = |before: &str| {
+        format!(
+            "yields fn g() -> int {{\n  return 1\n}}\nyields fn f() -> int {{\n  let n.1: int = call g()\n{before}  let y.3: int = prim yielding()\n  switch y.3 {{ 0 -> b1, _ -> b2 }}\nb1:\n  return n.1\nb2:\n  return n.1\n}}\n"
+        )
+    };
+    let accepted = program("");
+    let refused = program("  let z.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)\n");
+    let message = "`g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `f`";
+    type Level = fn(&str) -> Result<(), String>;
+    let levels: [Level; 5] = [
+        check,
+        check_scopes,
+        check_lowered,
+        |text| verify_flattened(&read(text)).map_err(|error| error.to_string()),
+        |text| verify_borrowed(&read(text)).map_err(|error| error.to_string()),
+    ];
+    for level in levels {
+        assert_eq!(level(&accepted), Ok(()));
+        assert_eq!(level(&refused), Err(message.to_string()));
+    }
+}
+
+#[test]
+fn yield_point_switch_must_have_exactly_the_case_zero_and_a_default() {
+    let refused = "the `prim yielding()` after `g` is not the last statement of a block that ends with a `switch` on it with the case `0` and a default in `f`";
+    let extra = "  let y.3: int = prim yielding()\n  switch y.3 { 0 -> b1, 1 -> b2, _ -> b3 }\nb1:\n  return n.1\nb2:\n  return n.1\nb3:\n  return n.1\n";
+    assert_eq!(check(&yield_point(extra)), Err(refused.to_string()));
+    let no_default = "  let y.3: int = prim yielding()\n  switch y.3 { 0 -> b1, 1 -> b2 }\nb1:\n  return n.1\nb2:\n  return n.1\n";
+    assert_eq!(check(&yield_point(no_default)), Err(refused.to_string()));
+}
+
+// 着地が入る関数
+
+/// `TRY_PANIC`の`prompt$`の`from`を`to`に替える。
+fn prompt_changed(from: &str, to: &str) -> String {
+    assert!(TRY_PANIC.contains(from));
+    TRY_PANIC.replace(from, to)
+}
+
+/// 印`ev.1`の`apply`の後に、引数`params`と本体`body`の`prompt$`を呼ぶ関数`f`。`f`は`params`を受け、そのまま
+/// `prompt$`に渡す (`args`)。
+fn landing_on(params: &str, args: &str, body: &str) -> String {
+    format!(
+        "{LAND}fn f(b.0: tobj, w.5: evv{params}) -> tobj {{
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
+  let x.2: tobj = yields apply b.0(()) prompt ev.1
+  let r.3: tobj = call prompt$(ev.1, x.2{args})
+  return r.3
+}}
+yields fn prompt$(ev.0: ev lin, x.1: tobj poly{params}) -> tobj poly {{
+{body}}}
+fn g() -> unit {{
+  return ()
+}}
+"
+    )
+}
+
+fn crossing_before_finish(function: &str) -> Result<(), String> {
+    Err(format!(
+        "`prompt$` is entered at the apply with the prompt marker `ev.3`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` in `{function}`"
+    ))
+}
+
+#[test]
+fn a_landing_enters_a_function_that_finishes_first() {
+    assert_eq!(check(TRY_PANIC), Ok(()));
+    // 状態を読まずに`yield_finish`を走らせれば、その後は呼び出しも走らせてよい
+    let finishes = "  let c.6: tobj poly = prim yield_finish()\n  let u.7: unit = call g()\n  let u.8: unit = drop c.6\n  let u.9: unit = drop ev.0\n  return x.1\n";
+    assert_eq!(check(&landing_on("", "", finishes)), Ok(()));
+    let returns = "  let u.9: unit = drop ev.0\n  return x.1\n";
+    assert_eq!(check(&landing_on("", "", returns)), Ok(()));
+    // 状態`0`の行き先は再開の道で、yieldも中断も飛んでいないので、規則に関わらない
+    let ret = "  let st.6: tobj poly = prim ev_last_state(ev.0)\n";
+    let on_zero = prompt_changed(ret, &format!("  let z.30: unit = call g()\n{ret}"));
+    assert_eq!(check(&on_zero), Ok(()));
+}
+
+#[test]
+fn a_landing_enters_a_function_that_returns_in_flight_only_when_it_is_marked_yields() {
+    let call = "  tail call prompt$(ev.3, &return$, x.7)\n";
+    assert!(TRY_PANIC.contains(call));
+    let probe = TRY_PANIC
+        .replace("fn try_panic", "yields fn try_panic")
+        .replace(
+            call,
+            "  let r.8: tobj poly = call prompt$(ev.3, &return$, x.7)
+  let m.9: obj = const \"boom\"
+  let z.10: tobj = extern Prelude.panic(m.9)
+  decref z.10
+  return r.8
+",
+        );
+    // 印があれば、`prompt$`の呼び出しはyieldしうる呼び出しで、窓の規則がその後の行を拒む
+    assert_eq!(
+        check(&probe),
+        Err("`prompt$` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `try_panic`".to_string())
+    );
+    let unmarked = probe.replace("yields fn prompt$", "fn prompt$");
+    assert_eq!(
+        check(&unmarked),
+        Err("`prompt$` is entered at the apply with the prompt marker `ev.3`, but a path of it returns without `prim yield_finish`, and it is not marked `yields` in `try_panic`".to_string())
+    );
+    // どの道も`yield_finish`を走らせる相手は、yieldを飛ばしたまま戻らないので、印が要らない
+    let finishes = "  let c.6: tobj poly = prim yield_finish()\n  let u.8: unit = drop c.6\n  let u.9: unit = drop ev.0\n  return x.1\n";
+    let finishing = landing_on("", "", finishes).replace("yields fn prompt$", "fn prompt$");
+    assert_eq!(check(&finishing), Ok(()));
+}
+
+#[test]
+fn a_landing_enters_a_call_before_the_status_is_refused() {
+    let status = "  let s.5: int = prim yield_status(ev.0)\n";
+    let text = prompt_changed(status, &format!("  let z.30: unit = call g()\n{status}"));
+    assert_eq!(check(&text), crossing_before_finish("try_panic"));
+}
+
+#[test]
+fn a_landing_enters_a_row_before_yield_finish_is_refused() {
+    let drop = "  let u.8: unit = drop x.2\n";
+    let text = prompt_changed(
+        drop,
+        &format!("{drop}  let z.30: int = extern \"Prelude.Num Int.+\"(1, 2)\n"),
+    );
+    assert_eq!(check(&text), crossing_before_finish("try_panic"));
+}
+
+#[test]
+fn a_landing_enters_yield_to_on_the_default_path_is_refused() {
+    let body = "  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  decref e.10
+  decref c.11
+  decref k.12
+  let u.6: unit = drop ev.0
+  return x.1
+b2:
+  let u.7: unit = prim yield_to(e.10, c.11, k.12)
+  let u.8: unit = drop ev.0
+  return x.1
+";
+    let text = landing_on(
+        ", e.10: cev, c.11: tobj, k.12: tobj",
+        ", e.10, c.11, k.12",
+        body,
+    );
+    assert_eq!(
+        check(&text),
+        Err("`prompt$` is entered at the apply with the prompt marker `ev.1`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_landing_enters_a_path_that_neither_finishes_nor_returns_is_refused() {
+    let body = "  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  let u.6: unit = drop ev.0
+  return x.1
+b2:
+  let u.7: unit = drop ev.0
+  jump b3()
+b3:
+  return x.1
+";
+    let open = Err("`prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it neither runs `prim yield_finish` nor returns in `f`".to_string());
+    assert_eq!(check(&landing_on("", "", body)), open);
+    // 状態の読み出しがエントリのブロックの最後の文でなければ、エントリのブロック自身が終えなければならない
+    let not_last = "  let s.5: int = prim yield_status(ev.0)
+  let u.6: unit = drop ev.0
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  return x.1
+b2:
+  return x.1
+";
+    assert_eq!(check(&landing_on("", "", not_last)), open);
+}
+
+#[test]
+fn a_landing_enters_a_bad_function_at_every_level_and_unwalked() {
+    let bad = "  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  let u.6: unit = drop ev.0
+  return x.1
+b2:
+  let u.7: unit = call g()
+  let u.8: unit = drop ev.0
+  return x.1
+";
+    let message = "`prompt$` is entered at the apply with the prompt marker `ev.1`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` in `f`";
+    let before_perceus = |body: &str| landing_on("", "", body).replace("  decref e.0\n", "");
+    let good = bad.replace("  let u.7: unit = call g()\n", "");
+    type Level = fn(&str) -> Result<(), String>;
+    let levels: [Level; 4] = [
+        check_scopes,
+        check_lowered,
+        |text| verify_flattened(&read(text)).map_err(|error| error.to_string()),
+        |text| verify_borrowed(&read(text)).map_err(|error| error.to_string()),
+    ];
+    for level in levels {
+        assert_eq!(level(&before_perceus(&good)), Ok(()));
+        assert_eq!(level(&before_perceus(bad)), Err(message.to_string()));
+    }
+    // 呼ぶ相手をたどらない`verified_for` (VMの追記で、すでに読んだ`prompt$`) でも、要約の形で拒む
+    let program = read(&landing_on("", "", bad));
+    let f = program
+        .functions
+        .iter()
+        .position(|function| function.name == "f")
+        .expect("`f` is in the program");
+    assert_eq!(
+        verified_for(&program, |FnIdx(index)| index as usize == f)
+            .map(drop)
+            .map_err(|error| error.to_string()),
+        Err(message.to_string())
+    );
+}
+
+#[test]
+fn a_landing_enters_a_status_of_another_evidence_is_refused() {
+    // 2つ目の引数の状態を読むのはただの読み出しなので、エントリのブロックが自分で終えなければならず、その`switch`を拒む
+    let body = "  let s.5: int = prim yield_status(d.10)
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  let u.6: unit = drop d.10
+  let u.7: unit = drop ev.0
+  return x.1
+b2:
+  let u.8: unit = drop d.10
+  let u.9: unit = drop ev.0
+  return x.1
+";
+    assert_eq!(
+        check(&landing_on(", d.10: ev lin", ", d.10", body)),
+        Err("`prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it neither runs `prim yield_finish` nor returns in `f`".to_string())
+    );
+    // 最初の引数の状態なら、同じ本体を受ける
+    let first = body.replace("yield_status(d.10)", "yield_status(ev.0)");
+    assert_eq!(
+        check(&landing_on(", d.10: ev lin", ", d.10", &first)),
+        Ok(())
+    );
 }
 
 const P2: &str = "layout P { P(obj, obj) }\n";
 
-/// `x` を分解して token `r` にし、`c` で分かれた行き先の b1 と b2 で、それぞれ `left` と `right` が使う
-/// (docs/spec/lir.md の「verifier」)。
+/// `x`を分解してtoken `r`にし、`c`で分かれた行き先のb1とb2で、それぞれ`left`と`right`が使う
+/// (docs/spec/lir.mdの「verifier」)。
 fn token_paths(left: &str, right: &str) -> String {
     format!(
         "{BOOL}{P2}fn f(x.0: obj, c.1: enum) -> obj {{
@@ -3661,7 +4406,7 @@ fn a_lin_child_of_a_par_is_consumed_once() {
 }
 
 /// 起こし直す閉包を親に渡し、evidence は借りる。
-const CHILD_ABORT: &str = "fn g(e.0: obj, c.1: tobj poly) -> obj poly {\n  let u.2: unit = prim child_abort(e.0, c.1)\n  decref e.0\n  let d.3: obj poly = prim dummy()\n  return d.3\n}\n";
+const CHILD_ABORT: &str = "fn main() -> unit {\n  return ()\n}\nfn g(e.0: fev, c.1: tobj poly) -> obj poly {\n  let u.2: unit = prim child_abort(e.0, c.1)\n  decref e.0\n  let d.3: obj poly = prim dummy()\n  return d.3\n}\n";
 
 #[test]
 fn child_abort_borrows_the_evidence() {
@@ -3669,19 +4414,19 @@ fn child_abort_borrows_the_evidence() {
 }
 
 #[test]
-fn child_abort_takes_an_obj_evidence_and_a_closure() {
+fn child_abort_takes_a_fork_evidence_and_a_closure() {
     let arity = CHILD_ABORT.replace("(e.0, c.1)", "(e.0)");
     assert_eq!(
         check(&arity),
         Err("`prim child_abort` takes 2 arguments but is given 1 in `g`".to_string())
     );
     let evidence = CHILD_ABORT
-        .replace("e.0: obj", "e.0: int")
+        .replace("e.0: fev", "e.0: int")
         .replace("  decref e.0\n", "");
     assert_eq!(
         check(&evidence),
         Err(
-            "argument 0 of `prim child_abort` is `e.0` (int), but the primitive takes obj in `g`"
+            "argument 0 of `prim child_abort` is `e.0` (int), but the primitive takes fev in `g`"
                 .to_string()
         )
     );
@@ -3701,7 +4446,7 @@ fn forking(main: &str, fork: bool, clause: bool, reperform: bool) -> String {
             "main"
         };
         text.push_str(&format!(
-            "{clause}fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {{
+            "{clause}fn fork$Fail.fail(ev.0: fev, a.1: tobj poly) -> obj poly {{
   let c.2: tobj poly = closure {target}(a.1)
   let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
@@ -3714,9 +4459,7 @@ fn forking(main: &str, fork: bool, clause: bool, reperform: bool) -> String {
     if reperform {
         text.push_str(
             "uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
-  let ev.2: obj = prim ev_lookup[Fail]()
-  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
-  tail clause Fail.fail c.3(ev.2, a.0)
+  tail clause Fail.fail(a.0)
 }
 ",
         );
@@ -3823,7 +4566,7 @@ fn borrowed_parameters_are_accepted_from_the_borrow_pass_on() {
 #[test]
 fn a_borrowed_parameter_is_reference_counted() {
     let text = "fn f(x.0: obj, borrowed n.1: int) -> int {\n  return n.1\n}\n";
-    let message = "`n.1` (int) is a borrowed parameter, but only obj and tobj can be in `f`";
+    let message = "`n.1` (int) is a borrowed parameter, but only obj, tobj, ev, cev, fev, rev and evv can be in `f`";
     assert_eq!(check_borrowed(text), Err(message.to_string()));
     assert_eq!(check(text), Err(message.to_string()));
 }
@@ -4057,5 +4800,358 @@ b1(borrowed u.2: tobj):
     assert_eq!(
         check(&text),
         Err("`x.1` is passed to b1 after its owner `s.0` was given up in `f`".to_string())
+    );
+}
+
+// 文脈のRepr (docs/spec/lir.mdの「値の表現」と「verifier」)
+
+/// 文脈のReprの変数は、引数か、そのReprを返す行の基本操作が束縛する。呼び出し、戻らない束縛、複数の値の`let`、フィール
+/// ドはどれも束縛せず、ランタイムは文脈の引数を持つ関数に入らない。
+#[test]
+fn an_evidence_is_bound_only_by_what_makes_one() {
+    let made = &format!(
+        "{ENTRY}fn f(h.0: rev, s.1: tobj poly) -> tobj poly {{
+  let e.2: ev lin = prim ev_renew(h.0, s.1)
+  let w.3: evv = prim ev_take_evv(e.2)
+  let u.4: unit = prim evv_set(w.3)
+  let t.5: tobj poly = prim ev_last_state(e.2)
+  let u.6: unit = drop e.2
+  return t.5
+}}
+"
+    );
+    assert_eq!(check_lowered(made), Ok(()));
+    let called = "fn f() -> unit {
+  let e.0: ev lin = call g()
+  let u.1: unit = drop e.0
+  return ()
+}
+fn g() -> obj {
+  let d.0: obj = prim dummy()
+  return d.0
+}
+";
+    assert_eq!(
+        check_lowered(called),
+        Err("`e.0` is ev, but it is not bound by a primitive that returns ev in `f`".to_string())
+    );
+    let other_role = made.replace("let e.2: ev lin", "let e.2: cev");
+    assert_eq!(
+        check_lowered(&other_role),
+        Err("`e.2` is cev, but it is not bound by a primitive that returns cev in `f`".to_string())
+    );
+    let never = "effect Fail { never fail(unit) -> never }
+fn f() -> unit {
+  let w.0: evv = clause Fail.fail(())
+  let u.1: unit = prim evv_set(w.0)
+  return ()
+}
+";
+    assert_eq!(
+        check_lowered(never),
+        Err("`w.0` is evv, but it is not bound by a primitive that returns evv in `f`".to_string())
+    );
+    let many = "fn f() -> int {
+  let (n.0: int, w.1: evv) = call g()
+  let u.2: unit = prim evv_set(w.1)
+  return n.0
+}
+fn g() -> (int, obj) {
+  let d.0: obj = prim dummy()
+  return (1, d.0)
+}
+";
+    assert_eq!(
+        check_flattened(many),
+        Err("`w.1` is evv, but it is not bound by a primitive that returns evv in `f`".to_string())
+    );
+    let entered = "fn entry$main(w.0: evv) -> unit {
+  let u.1: unit = prim evv_set(w.0)
+  return ()
+}
+";
+    assert_eq!(
+        check_lowered(entered),
+        Err(
+            "`entry$main` is entered by the run time, but its parameter 0 is evv in `entry$main`"
+                .to_string()
+        )
+    );
+}
+
+/// 戻らない束縛は、使う所に制御が届かないので、どの値の位置にも渡せる。ただし文脈の位置には渡せない。ランタイムはそこで
+/// evidenceを確かめずに読むためである。
+#[test]
+fn a_never_binding_does_not_pass_as_an_evidence() {
+    let base = "effect Fail { never fail(unit) -> never }
+fn f() -> int {
+  let x.0: obj = clause Fail.fail(())
+  POSITION
+}
+";
+    let value = base.replace(
+        "POSITION",
+        "let n.1: int = extern Std.String.byte_length(x.0)\n  return n.1",
+    );
+    assert_eq!(check_scopes(&value), Ok(()));
+    let evidence = base.replace(
+        "POSITION",
+        "let n.1: int = prim yield_status(x.0)\n  return n.1",
+    );
+    assert_eq!(
+        check_scopes(&evidence),
+        Err(
+            "argument 0 of `prim yield_status` is `x.0` (obj), but the primitive takes ev in `f`"
+                .to_string()
+        )
+    );
+    let list = base.replace("POSITION", "let u.1: unit = prim evv_set(x.0)\n  return 0");
+    assert_eq!(
+        check_scopes(&list),
+        Err(
+            "argument 0 of `prim evv_set` is `x.0` (obj), but the primitive takes evv in `f`"
+                .to_string()
+        )
+    );
+}
+
+/// 文脈のReprは自分とだけ互換なので、evidenceは値の位置 (`apply`、フィールド、結果) に渡らない。配置、操作、関数の結果
+/// も文脈のReprを持たない。
+#[test]
+fn an_evidence_does_not_pass_as_a_value() {
+    let apply = format!(
+        "{ENTRY}fn f(c.0: tobj, e.1: cev) -> tobj poly {{
+  let r.2: tobj poly = apply c.0(e.1)
+  return r.2
+}}
+"
+    );
+    assert_eq!(
+        check_scopes(&apply),
+        Err("argument 0 of an apply is `e.1` (cev), but an apply takes tobj in `f`".to_string())
+    );
+    let field = format!(
+        "{BOX}{ENTRY}fn f(h.0: rev) -> obj {{
+  let b.1: obj = con Box #0(h.0)
+  return b.1
+}}
+"
+    );
+    assert_eq!(
+        check_scopes(&field),
+        Err(
+            "argument 0 of a con of `Box` #0 is `h.0` (rev), but the layout has tobj in `f`"
+                .to_string()
+        )
+    );
+    let returned = format!("{ENTRY}fn f(w.0: evv) -> tobj {{\n  return w.0\n}}\n");
+    assert_eq!(
+        check_scopes(&returned),
+        Err("`w.0` (evv) is returned from a function that returns tobj in `f`".to_string())
+    );
+    let layout = "layout Holder { Holder(ev) }\nfn f() -> unit {\n  return ()\n}\n";
+    assert_eq!(
+        check_lowered(layout),
+        Err("the layout `Holder` has a field of ev in `Holder`".to_string())
+    );
+    let operation = "effect Pass { pass(evv) -> unit }\nfn f() -> unit {\n  return ()\n}\n";
+    assert_eq!(
+        check_lowered(operation),
+        Err("the operation `Pass.pass` takes evv in `Pass`".to_string())
+    );
+    let result = "fn f(h.0: rev) -> rev {\n  return h.0\n}\n";
+    assert_eq!(
+        check_lowered(result),
+        Err("the function returns rev in `f`".to_string())
+    );
+}
+
+/// 持ち主の`ev`は線形である。共有されず、どの道でも1回だけ消費され、着地の印が持てる唯一のReprで、`prompt$`が受けるもの
+/// である。
+#[test]
+fn the_owner_of_an_evidence_is_linear() {
+    let owner = |body: &str| {
+        format!(
+            "{LAND}fn f(b.0: tobj, w.1: evv) -> tobj poly {{
+  let ev.2: ev lin = evidence Land((), w.1) [&land$entry]
+  let x.4: tobj poly = yields apply b.0(()) prompt ev.2
+{body}}}
+{PROMPT}"
+        )
+    };
+    let once = owner("  let r.5: tobj poly = call prompt$(ev.2, x.4)\n  return r.5\n");
+    assert_eq!(check(&once), Ok(()));
+    let shared = owner(
+        "  dup ev.2\n  let r.5: tobj poly = call prompt$(ev.2, x.4)\n  let u.6: unit = drop ev.2\n  return r.5\n",
+    );
+    assert_eq!(
+        check(&shared),
+        Err("`ev.2` (lin) is duplicated, but only unr can be in `f`".to_string())
+    );
+    let twice = owner(
+        "  let r.5: tobj poly = call prompt$(ev.2, x.4)\n  let r.6: tobj poly = call prompt$(ev.2, r.5)\n  return r.6\n",
+    );
+    assert_eq!(
+        check(&twice),
+        Err("`ev.2` is used after it was moved in `f`".to_string())
+    );
+    let clause_marker = format!(
+        "{ENTRY}fn f(b.0: tobj, e.1: cev) -> tobj poly {{
+  let x.2: tobj poly = yields apply b.0(()) prompt e.1
+  let r.3: tobj poly = call prompt$(e.1, x.2)
+  return r.3
+}}
+{PROMPT}"
+    );
+    assert_eq!(
+        check(&clause_marker),
+        Err("`e.1` is the prompt marker of an apply, but it is cev, not ev in `f`".to_string())
+    );
+    let clause_owner = format!(
+        "{ENTRY}fn f(e.0: cev, x.1: tobj poly) -> tobj poly {{
+  let r.2: tobj poly = call prompt$(e.0, x.1)
+  return r.2
+}}
+{PROMPT}"
+    );
+    assert_eq!(
+        check(&clause_owner),
+        Err("argument 0 of `prompt$` is `e.0` (cev), but the function takes ev in `f`".to_string())
+    );
+    let unr = format!(
+        "{ENTRY}fn f(ev.0: ev, x.1: tobj poly) -> tobj poly {{
+  let r.2: tobj poly = call prompt$(ev.0, x.1)
+  return r.2
+}}
+{PROMPT}"
+    );
+    assert_eq!(
+        check(&unr),
+        Err("`ev.0` is ev, but its mark is unr, not lin in `f`".to_string())
+    );
+}
+
+/// クロージャは`resume$`が新しくする退いたevidenceを捕獲できるが、実行中のevidence、節やforkのevidence、リストは捕獲で
+/// きない (docs/spec/core-ir.mdの「EP が作る補助の関数」)。
+#[test]
+fn a_closure_captures_only_a_retired_evidence() {
+    let capture = |repr: &str| {
+        format!(
+            "{ENTRY}fn k(h.0: {repr}, x.1: tobj) -> tobj {{
+  return x.1
+}}
+fn f(h.0: {repr}) -> tobj {{
+  let c.1: tobj = closure k(h.0)
+  return c.1
+}}
+"
+        )
+    };
+    assert_eq!(check_scopes(&capture("rev")), Ok(()));
+    for (repr, name) in [
+        ("ev lin", "ev"),
+        ("cev", "cev"),
+        ("fev", "fev"),
+        ("evv", "evv"),
+    ] {
+        assert_eq!(
+            check_scopes(&capture(repr)),
+            Err(format!(
+                "a closure of `k` captures `h.0` ({name}), but only a retired evidence can be captured in `f`"
+            )),
+            "{repr}"
+        );
+    }
+}
+
+/// 規則Fは、forkするかどうかによらずどのプログラムでも成り立つ。forkの名前の関数はその操作の節で、evidenceと引数を受け、
+/// evidenceを`fev`で受ける。`fev`を受けるのはforkの名前の関数だけである。
+#[test]
+fn a_fork_entry_is_checked_under_its_name() {
+    let program = |fork: &str| {
+        format!(
+            "effect Fail {{ never fail(tobj poly) -> never }}
+fn main() -> unit {{
+  return ()
+}}
+{fork}"
+        )
+    };
+    let entry = "clause Fail.fail fn fork$Fail.fail(ev.0: fev, a.1: tobj poly) -> obj poly {
+  let c.2: tobj poly = closure reperform$Fail.fail(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
+  decref ev.0
+  let d.4: obj poly = prim dummy()
+  return d.4
+}
+uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
+  tail clause Fail.fail(a.0)
+}
+";
+    assert_eq!(check(&program(entry)), Ok(()));
+    let unmarked = entry.replacen("clause Fail.fail fn fork$", "fn fork$", 1);
+    assert_eq!(
+        check(&program(&unmarked)),
+        Err("the fork entry is not a clause of `Fail.fail` in `fork$Fail.fail`".to_string())
+    );
+    let extra = entry
+        .replace(
+            "a.1: tobj poly) -> obj poly",
+            "a.1: tobj poly, b.5: tobj) -> obj poly",
+        )
+        .replace("  decref ev.0\n", "  decref ev.0\n  decref b.5\n");
+    assert_eq!(
+        check(&program(&extra)),
+        Err("the fork entry has 3 parameters, but it takes the evidence and 1 arguments of the operation in `fork$Fail.fail`".to_string())
+    );
+    let clause_evidence = entry.replace("ev.0: fev", "ev.0: cev");
+    assert_eq!(
+        check(&program(&clause_evidence)),
+        Err("the fork entry takes its evidence as cev, not fev in `fork$Fail.fail`".to_string())
+    );
+    let renamed = entry.replace("fn fork$Fail.fail(", "fn g(");
+    assert_eq!(
+        check(&program(&renamed)),
+        Err("`g` takes a fork evidence, but its name is not `fork$Fail.fail` in `g`".to_string())
+    );
+}
+
+#[test]
+fn a_fork_entry_does_not_go_into_a_handler_table() {
+    let program = |entry: &str| {
+        format!(
+            "effect Land {{ land(tobj) -> tobj }}
+fn entry$main() -> unit {{
+  return ()
+}}
+clause Land.land fn fork$Land.land(ev.0: fev, a.1: tobj) -> tobj {{
+  let u.2: unit = prim child_abort(ev.0, a.1)
+  decref ev.0
+  return ()
+}}
+clause Land.land fn g(ev.0: cev, a.1: tobj) -> tobj {{
+  decref ev.0
+  return a.1
+}}
+fn f(b.0: tobj, w.1: evv) -> tobj poly {{
+  let ev.2: ev lin = evidence Land((), w.1) [&{entry}]
+  let x.4: tobj poly = yields apply b.0(()) prompt ev.2
+  let r.5: tobj poly = call prompt$(ev.2, x.4)
+  return r.5
+}}
+yields fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {{
+  let u.2: unit = drop ev.0
+  return x.1
+}}
+"
+        )
+    };
+    assert_eq!(check(&program("g")), Ok(()));
+    assert_eq!(
+        check(&program("fork$Land.land")),
+        Err(
+            "entry 0 of an evidence of `Land` is `fork$Land.land`, which takes a fork evidence in `f`"
+                .to_string()
+        )
     );
 }

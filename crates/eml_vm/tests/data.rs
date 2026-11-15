@@ -40,13 +40,15 @@ fn main() -> unit {
   let d.1: tobj = con Option #1(s.0)
   switch d.1 List { #0 -> b1, #1(x.2: obj, y.3: obj) -> b2 }
 b1:
+  decref d.1
   return ()
 b2:
+  decref d.1
   return ()
 }
 ";
     assert_eq!(
-        run_unverified(text).1,
+        run_lir(text).1,
         Err(RuntimeError::Fault {
             fault: RunFault::Internal(
                 "a switch case binds a different number of fields than the value has"
@@ -250,11 +252,12 @@ layout Box { Box(tobj) }
 fn main() -> unit {
   let s.0: obj = extern \"Prelude.Show Int.show\"(1)
   unpack s.0 Box #0(a.1: obj)
+  decref s.0
   return ()
 }
 ";
     assert_eq!(
-        run_unverified(text).1,
+        run_lir(text).1,
         Err(RuntimeError::Fault {
             fault: RunFault::Internal(
                 "an unpack names a tag and number of fields the value does not have"

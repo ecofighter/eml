@@ -12,9 +12,7 @@ pub enum Form {
     Par,
     AsyncRow,
     BlockingC,
-    Prim,
-    Clause,
-    Prompt,
+    ChildAbort,
 }
 
 impl Form {
@@ -23,9 +21,7 @@ impl Form {
             Form::Par => "par",
             Form::AsyncRow => "async row",
             Form::BlockingC => "blocking c",
-            Form::Prim => "prim",
-            Form::Clause => "clause",
-            Form::Prompt => "prompt",
+            Form::ChildAbort => "child abort",
         }
     }
 }
@@ -55,18 +51,16 @@ pub fn unsupported(program: &Program) -> Vec<Unsupported> {
 }
 
 fn each_form(function: &LirFn, note: &mut impl FnMut(Form, Option<&'static str>)) {
-    if function.clause.is_some() {
-        note(Form::Clause, None);
-    }
     for block in &function.blocks {
         for stmt in &block.stmts {
             match stmt {
                 Stmt::Let { var: _, rhs } => match rhs {
                     Rhs::Call(call) => call_form(call, note),
                     Rhs::Extern { ext, .. } => extern_form(*ext, note),
-                    Rhs::Prim(Prim::EmptyMutArray, _) => {}
-                    Rhs::Prim(..) => note(Form::Prim, None),
-                    Rhs::MakeClosure(..)
+                    Rhs::Prim(Prim::ChildAbort, _) => note(Form::ChildAbort, None),
+                    Rhs::Prim(..)
+                    | Rhs::Evidence { .. }
+                    | Rhs::MakeClosure(..)
                     | Rhs::ConstString(_)
                     | Rhs::Con { .. }
                     | Rhs::Drop(_)
@@ -90,13 +84,7 @@ fn each_form(function: &LirFn, note: &mut impl FnMut(Form, Option<&'static str>)
 
 fn call_form(call: &Call, note: &mut impl FnMut(Form, Option<&'static str>)) {
     match call {
-        Call::Direct(..) => {}
-        Call::Apply { prompt, .. } => {
-            if prompt.is_some() {
-                note(Form::Prompt, None);
-            }
-        }
-        Call::Clause { .. } => note(Form::Clause, None),
+        Call::Direct(..) | Call::Apply { .. } | Call::Clause { .. } => {}
         Call::Par { .. } => note(Form::Par, None),
     }
 }

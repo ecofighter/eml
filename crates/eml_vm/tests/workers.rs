@@ -95,7 +95,7 @@ effect Prelude.Panic { never panicked(obj) -> never }
 
 /// `par` の右の子の中断に要る関数と、左の子の `one`。エントリより後ろに置く。
 const FORKS: &str = "\
-clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
+clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: fev, a.1: obj) -> obj poly {
   let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
   let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
@@ -368,7 +368,10 @@ fn twice(p.0: unit) -> tobj {{
 }}
 {FORKS}"
     );
-    let (_, result) = run_program(&parse(&text), limits(2));
+    let config = RunConfig::default()
+        .with_debug_heap(true)
+        .with_control(limits(2));
+    let (_, result) = crate::common::execute_unverified(&parse(&text), &config);
     let error = result.unwrap_err();
     assert!(
         matches!(

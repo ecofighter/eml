@@ -448,7 +448,7 @@ fn a_yields_mark_on_anything_but_apply_is_an_error() {
 fn a_clause_call_takes_no_mask() {
     assert_eq!(
         parse_error(
-            "effect State { get(unit) -> tobj }\nfn f(c.0: tobj, e.1: obj) -> tobj {\n  let t.2: tobj = mask [State] clause State.get c.0(e.1, ())\n  return t.2\n}\n"
+            "effect State { get(unit) -> tobj }\nfn f() -> tobj {\n  let t.2: tobj = mask [State] clause State.get(())\n  return t.2\n}\n"
         )
         .to_string(),
         "line 3: a mask is only on call, apply, resume and par"
@@ -501,11 +501,9 @@ effect State { get(unit) -> tobj, put(tobj) -> unit }
 effect Fail { never fail(tobj) -> never }
 yields fn f(s.0: tobj, o.1: tobj, c.2: tobj, k.3: tobj) -> tobj {
   let w.4: tobj = prim evv_get()
-  let e.5: obj = prim ev_new[State](s.0, w.4)
-  let u.6: unit = prim ev_set_clause[State.get](e.5, &g)
+  let e.5: obj = evidence State(s.0, w.4) [&g, closure g(o.1)]
   let m.7: tobj = prim evv_mask[State*2](w.4)
-  let a.8: tobj = prim ev_clause[State.get](e.5)
-  let r.9: tobj = clause State.get a.8(e.5, ())
+  let r.9: tobj = clause State.get(())
   let t.10: tobj = mask [State] yields apply c.2(r.9)
   let p.11: tobj = perform State.get(())
   let q.12: tobj = perform never Fail.fail(p.11)

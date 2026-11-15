@@ -285,12 +285,34 @@ impl<M: Mode> Machine<M> {
     pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, CompileError> {
         self.refuse_after_panic();
         let entry = self.code.load(program, linked)?;
+        self.attach_region();
+        Ok(Loaded { entry })
+    }
+
+    /// verifierを通さずにプログラムを追記する。ほかは`load`と同じである (`CodeBase::load_unverified`)。
+    ///
+    /// # Safety
+    ///
+    /// `CodeBase::load_unverified`と同じである。
+    #[cfg(feature = "testing")]
+    pub unsafe fn load_unverified(
+        &mut self,
+        program: &Program,
+        linked: &Linked,
+    ) -> Result<Loaded, CompileError> {
+        self.refuse_after_panic();
+        // SAFETY: 呼ぶ側が`CodeBase::load_unverified`の約束を引き継ぐ
+        let entry = unsafe { self.code.load_unverified(program, linked) }?;
+        self.attach_region();
+        Ok(Loaded { entry })
+    }
+
+    fn attach_region(&mut self) {
         if let Some(region) = &self.code.region {
             // 入力の境目で、Ctx の持つ語には触れずに塊を付け替えるだけなので、`heap_mut` の前提を崩さない。新しい塊は
             // 前の塊の子孫である (docs/spec/object-model.md の「凍結した領域」)
             unsafe { self.ctx.heap_mut() }.attach(Arc::clone(region));
         }
-        Ok(Loaded { entry })
     }
 
     /// エントリの関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
@@ -860,7 +882,7 @@ fn run_scheduled<M: Mode, P: Policy>(
     // メインのworkerの`Ctx`はworker 0を作る前に作る。検査モードでは作るときにページを1枚取り、確保量に数えるので、
     // その課金がプログラムの確保とどう前後するかをスレッドの速さで決めないためである。決定的な方針では柔らかい上限の
     // 旗の地点が確保量で決まる (docs/spec/vm.mdの「メインのworker」「タスクとスケジュール」)
-    let main_ctx = Ctx::<M>::for_worker(Arc::clone(&control), start.host.clone(), run.main());
+    let main_ctx = code.worker_ctx(Arc::clone(&control), start.host.clone(), run.main());
     let (worker_ctx, worker_task, worker_counts) = (&mut *ctx, &mut *task, &mut *counts);
     let (joined, main) = thread::scope(|scope| {
         // 呼んだスレッドの panic でも `END` を立ててすべての worker を起こし、scope が worker 0 を join できるようにする
@@ -1439,6 +1461,22 @@ impl AnyMachine {
         }
     }
 
+    /// # Safety
+    ///
+    /// `CodeBase::load_unverified`と同じである。
+    #[cfg(feature = "testing")]
+    pub unsafe fn load_unverified(
+        &mut self,
+        program: &Program,
+        linked: &Linked,
+    ) -> Result<Loaded, CompileError> {
+        // SAFETY: 呼ぶ側が`CodeBase::load_unverified`の約束を引き継ぐ
+        match self {
+            AnyMachine::Fast(machine) => unsafe { machine.load_unverified(program, linked) },
+            AnyMachine::Checked(machine) => unsafe { machine.load_unverified(program, linked) },
+        }
+    }
+
     pub fn run(&mut self, entry: u32) -> Result<Finished, RuntimeError> {
         match self {
             AnyMachine::Fast(machine) => machine.run(entry),
@@ -1523,31 +1561,29 @@ fn check_leaks(ctx: &mut Ctx<Checked>) -> Result<(), RuntimeError> {
 }
 
 /// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。REPLは`Machine::load`の誤りをこれで報告する。
+/// verifierの誤りは破った規則を残す。配置の規則の誤りは関数を名指さないので、エントリの関数の名前を付ける。
 pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
-    let (what, function) = match error {
-        CompileError::TooManySlots { function } => {
-            ("a function needs more than 65535 slots", function)
+    let entry = || program.function(program.entry).name.clone();
+    let (fault, function) = match error {
+        CompileError::Invalid(error) => {
+            let function = if program.functions.iter().any(|f| f.name == error.function) {
+                error.function
+            } else {
+                entry()
+            };
+            (RunFault::Invalid(error.message), function)
         }
-        CompileError::Freeze(_) => (
-            "the constants cannot be frozen",
-            program.function(program.entry).name.clone(),
-        ),
-        CompileError::Mismatch { function } => {
-            ("a function with a known name has other code", function)
+        CompileError::Freeze(_) => (RunFault::Internal(error.what()), entry()),
+        CompileError::TooManySlots { ref function }
+        | CompileError::Mismatch { ref function }
+        | CompileError::MultiValueEntry { ref function }
+        | CompileError::MissingFork { ref function }
+        | CompileError::MissingEntry { ref function } => {
+            (RunFault::Internal(error.what()), function.clone())
         }
-        CompileError::MultiValueEntry { function } => {
-            ("an entry function returns more than one value", function)
-        }
-        CompileError::MissingFork { function } => {
-            ("a program that may fork lacks a fork function", function)
-        }
-        CompileError::MissingEntry { function } => (
-            "a program that runs Async tasks lacks a runtime entry",
-            function,
-        ),
     };
     RuntimeError::Fault {
-        fault: RunFault::Internal(what),
+        fault,
         function,
         at: None,
     }

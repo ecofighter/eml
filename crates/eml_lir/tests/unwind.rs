@@ -1,8 +1,8 @@
 //! 巻き戻しの点 (`eml_lir::unwind::points`)。入力は所有の段の verifier を通る、Perceus の後の LIR のテキストである
 //! (docs/spec/vm.md の「巻き戻しの表」)。
 
-use eml_lir::unwind::{UnwindPoint, Unwinds, points};
-use eml_lir::{BlockId, VarId, parse, verify};
+use eml_lir::unwind::{UnwindPoint, Unwinds, points, verified_for};
+use eml_lir::{BlockId, FnIdx, VarId, parse, verify};
 
 /// `name` の関数の巻き戻しの表。入力が所有の段の verifier を通ることも確かめる。
 fn unwinds_of(text: &str, name: &str) -> Unwinds {
@@ -114,15 +114,15 @@ b1:
 #[test]
 fn effectful_extern_and_yield_abort_are_points() {
     let text = "\
-fn f(s.0: obj, t.1: obj, e.2: obj, c.3: tobj) -> obj {
-  let u.5: unit = extern Prelude.println(s.0)
-  let w.6: unit = prim yield_abort(e.2, c.3)
-  return t.1
-}
 fn g(t.0: obj) -> obj {
   let z.1: obj = extern Prelude.exit(1)
   decref t.0
   return z.1
+}
+fn f(s.0: obj, t.1: obj, e.2: cev, c.3: tobj) -> obj {
+  let u.5: unit = extern Prelude.println(s.0)
+  let w.6: unit = prim yield_abort(e.2, c.3)
+  return t.1
 }
 ";
     assert_eq!(
@@ -170,21 +170,37 @@ fn f(n.0: int, s.1: obj) -> obj {
 #[test]
 fn landing_is_the_prompt_variable() {
     let text = "\
-yields fn f(b.0: tobj, ev.1: obj) -> obj {
+effect Land { land(unit) -> tobj }
+fn entry$main() -> unit {
+  return ()
+}
+yields fn f(b.0: tobj, w.5: evv) -> tobj {
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
   let x.2: tobj = yields apply b.0(()) prompt ev.1
-  decref x.2
-  return ev.1
+  let r.3: tobj = call prompt$(ev.1, x.2)
+  return r.3
+}
+yields fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {
+  let u.2: unit = drop ev.0
+  return x.1
+}
+internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
+  decref e.0
+  return ()
 }
 ";
-    assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], Some(1))]);
+    assert_eq!(
+        points_of(text, "f"),
+        [point(0, 1, &[(1, 1)], Some(1)), point(0, 2, &[], None)]
+    );
 }
 
 #[test]
 fn clause_call_is_a_point() {
     let text = "\
 effect Ask { ask(unit) -> tobj }
-fn f(c.0: tobj, e.1: obj, k.2: obj) -> obj {
-  let x.3: tobj = clause Ask.ask c.0(e.1, ())
+fn f(k.2: obj) -> obj {
+  let x.3: tobj = clause Ask.ask(())
   decref x.3
   return k.2
 }
@@ -192,7 +208,8 @@ fn f(c.0: tobj, e.1: obj, k.2: obj) -> obj {
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
 }
 
-/// 所有の段の verifier が拒む関数は、地点の代わりにその誤りを返す。VM は、その関数を表のない関数として扱う。
+/// 所有の段のverifierが拒む関数は、地点の代わりにその誤りを返す。VMは、確かめない読み込みでだけ、その関数を表の
+/// ない関数として読む。
 #[test]
 fn unverified_lir_has_no_points() {
     let program = parse("fn f(a.0: obj) -> unit {\n  return ()\n}\n")
@@ -205,6 +222,50 @@ fn unverified_lir_has_no_points() {
         error.to_string(),
         "`a.0` is still owned at the end of the function in `f`"
     );
+}
+
+/// `verified_for`は`walked`の関数だけをたどり、その表を`program.functions`の欄に返す。外した関数の本体の誤りは
+/// 見ない (docs/spec/lir.mdの「verifier」)。
+#[test]
+fn verified_for_walks_only_the_selected_functions() {
+    let program = parse(
+        "fn f(a.0: obj) -> unit {\n  return ()\n}\nfn g(a.0: obj) -> unit {\n  decref a.0\n  return ()\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        verified_for(&program, |FnIdx(i)| i == 1),
+        Ok(vec![
+            None,
+            Some(Unwinds {
+                entry: vec![(VarId(0), 1)],
+                points: Vec::new(),
+            }),
+        ])
+    );
+    assert_eq!(
+        verified_for(&program, |_| true).map_err(|error| error.to_string()),
+        Err("`a.0` is still owned at the end of the function in `f`".to_string())
+    );
+}
+
+/// `verified_for`は、たどらない関数にもプログラム全体の規則を当てる。`g`の引数のReprは操作と違う。
+#[test]
+fn verified_for_applies_the_program_rules_to_every_function() {
+    let program = parse(
+        "\
+effect E { op(unit) -> unit }
+fn main() -> unit {
+  return ()
+}
+internal clause E.op fn g(e.0: cev, x.1: float) -> unit {
+  decref e.0
+  return ()
+}
+",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let error = verified_for(&program, |FnIdx(i)| i == 0).unwrap_err();
+    assert_eq!(error.function, "g", "{error}");
 }
 
 #[test]
@@ -285,7 +346,7 @@ fn f(a.0: tobj, b.1: tobj, s.2: obj) -> obj {
   decref t.3
   return s.2
 }
-fn g(e.0: obj, c.1: tobj poly) -> obj poly {
+fn g(e.0: fev, c.1: tobj poly) -> obj poly {
   let u.2: unit = prim child_abort(e.0, c.1)
   decref e.0
   let d.3: obj poly = prim dummy()

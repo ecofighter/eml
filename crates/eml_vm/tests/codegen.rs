@@ -1,6 +1,6 @@
 //! コード生成の形を逆アセンブラの出力で固定する (docs/spec/vm.md の「命令とフレーム」)。
 
-use crate::common::{compile, disasm, disasm_unverified};
+use crate::common::{compile, disasm};
 
 #[test]
 fn a_call_passes_its_arguments_by_slot() {
@@ -59,7 +59,7 @@ fn main() -> unit {
 /// 生きている値を上書きする (docs/spec/vm.md の「スロットの割り当て」)。
 #[test]
 fn a_dead_call_result_takes_a_slot_of_its_own() {
-    insta::assert_snapshot!(disasm_unverified("\
+    insta::assert_snapshot!(disasm("\
 fn main() -> unit {
   let k.0: int = extern \"Prelude.Num Int.+\"(1, 2)
   let r.1: int = call one()
@@ -487,31 +487,50 @@ b3:
 #[test]
 fn an_unwind_point_shows_its_owned_slots_and_landing() {
     insta::assert_snapshot!(disasm("\
+effect Land { land(unit) -> tobj }
 fn main() -> unit {
   return ()
 }
-yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
+fn land(b.0: tobj, w.7: evv, s.2: obj) -> unit {
+  let ev.1: ev lin = evidence Land((), w.7) [&land$entry]
   dup s.2
   let x.3: tobj = yields apply b.0(()) prompt ev.1
-  decref x.3
-  decref ev.1
+  let r.6: obj = call prompt$(ev.1, x.3)
+  decref r.6
   let t.4: obj = extern \"Prelude.++\"(s.2, s.2)
   let u.5: unit = extern Prelude.println(t.4)
   return u.5
+}
+yields fn prompt$(ev.0: ev lin, x.1: tobj) -> tobj {
+  let u.2: unit = drop ev.0
+  return x.1
+}
+internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
+  decref e.0
+  return ()
 }
 "), @"
     fn main (arity 0, frame 1)
          3  load_imm s0, 0
          4  ret s0
-    fn land (arity 3, frame 4) entry unwind [s0, s1, s2]
-         5  dup s2
-         6  load_imm s3, 0
-         7  apply s0 = s0(s3) unwind [s1, s2*2] land s1
-         8  decref s0
-         9  decref s1
-        10  extern s0 = Prelude.++(s2, s2)
-        11  extern s0 = Prelude.println(s0)
-        12  ret s0
+    fn land (arity 3, frame 4) entry unwind [s0, s2, s1]
+         5  load_imm s3, 0
+         6  evidence s1, E0(s3, s1) [&land$entry]
+         7  dup s2
+         8  load_imm s3, 0
+         9  apply s0 = s0(s3) unwind [s1, s2*2] land s1
+        10  call s0 = prompt$(s1, s0) unwind [s2*2]
+        11  decref s0
+        12  extern s0 = Prelude.++(s2, s2)
+        13  extern s0 = Prelude.println(s0)
+        14  ret s0
+    fn prompt$ (arity 2, frame 2) entry unwind [s0, s1]
+        15  decref s0
+        16  ret s1
+    fn land$entry (arity 2, frame 3) entry unwind [s0]
+        17  decref s0
+        18  load_imm s2, 0
+        19  ret s2
     ");
 }
 
@@ -640,16 +659,17 @@ fn main(a.0: float, b.1: float) -> enum {
 /// (docs/spec/vm.md の「基本操作と extern」)。
 #[test]
 fn array_rows_use_dedicated_ops() {
-    let text = disasm_unverified(
+    let text = disasm(
         "\
-fn main(a.0: obj, m.1: obj) -> unit {
+fn main(a.0: obj, m.1: obj lin) -> obj lin {
   let n.2: int = extern Std.Array.length(a.0)
   let x.3: tobj = extern Std.Array.get(a.0, n.2)
   let k.4: int = extern Std.MutArray.length(m.1)
   let y.5: tobj = extern Std.MutArray.read(m.1, k.4)
   let b.6: obj = extern Std.Array.set(a.0, n.2, x.3)
-  let c.7: obj = extern Std.MutArray.write(m.1, k.4, y.5)
-  return ()
+  decref b.6
+  let c.7: obj lin = extern Std.MutArray.write(m.1, k.4, y.5)
+  return c.7
 }
 ",
     );
@@ -666,7 +686,7 @@ fn main(a.0: obj, m.1: obj) -> unit {
 /// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn an_apply_carries_only_its_callee_and_argument_slots() {
-    insta::assert_snapshot!(disasm_unverified("\
+    insta::assert_snapshot!(disasm("\
 fn main(f.0: tobj, x.1: tobj) -> tobj {
   dup f.0
   let a.2: tobj = apply f.0(x.1, #2)

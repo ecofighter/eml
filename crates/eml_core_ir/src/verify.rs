@@ -22,6 +22,7 @@
 use crate::liveness;
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_extern::RuntimeEntry;
 use eml_lir::check::{
     BlockShape, Context, Dominators, FnSummary, Site, Tables, TermShape, shape, with_tables,
 };
@@ -50,6 +51,27 @@ enum Level {
 }
 
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
+    eml_lir::check::no_context_reprs(
+        &program.layouts,
+        &program.structs,
+        &program.effects,
+        &program.c_functions,
+        program
+            .functions
+            .iter()
+            .enumerate()
+            .map(|(index, function)| {
+                let params = function.params().iter().map(|&param| function.repr(param));
+                let name = function.name.as_str();
+                (
+                    name,
+                    params.collect(),
+                    vec![function.ret],
+                    index == program.entry.0 as usize
+                        || RuntimeEntry::ALL.iter().any(|entry| entry.name() == name),
+                )
+            }),
+    )?;
     // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
     for function in &program.functions {
         clause_function(program, function, level)
@@ -63,6 +85,11 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         name: &function.name,
         clause: function.clause,
         params: function.params().len(),
+        takes_fork: function
+            .params()
+            .iter()
+            .any(|&param| function.repr(param) == Repr::Fev),
+        landed: None,
     });
     with_tables(
         &program.layouts,
@@ -161,7 +188,6 @@ impl<'a> Checker<'a> {
 
     fn run(mut self) -> Result<(), String> {
         let function = self.function;
-        self.clause_values()?;
         for (index, block) in function.blocks.iter().enumerate() {
             let index = index as u32;
             self.cx.at = Site::entry(index);
@@ -171,39 +197,6 @@ impl<'a> Checker<'a> {
             self.check_block(index, block)?;
         }
         Ok(())
-    }
-
-    /// `clause` の印の関数の値の使いを確かめる (`Context::clause_values`)。
-    fn clause_values(&self) -> Result<(), String> {
-        let blocks = &self.function.blocks;
-        let closures = blocks
-            .iter()
-            .flat_map(|block| &block.stmts)
-            .filter_map(|stmt| match stmt {
-                Stmt::Let {
-                    var,
-                    rhs: Rhs::MakeClosure(target, _),
-                } => Some((*var, *target)),
-                _ => None,
-            });
-        self.cx.clause_values(closures, |check| {
-            for block in blocks {
-                for stmt in &block.stmts {
-                    match stmt {
-                        Stmt::Let {
-                            var: _,
-                            rhs: Rhs::Prim(Prim::EvSetClause { .. }, args),
-                        } => args
-                            .iter()
-                            .enumerate()
-                            .filter(|&(index, _)| index != 1)
-                            .for_each(|(_, &atom)| check(atom)),
-                        _ => stmt.for_each_atom(&mut *check),
-                    }
-                }
-                block.term.for_each_atom(&mut *check);
-            }
-        })
     }
 
     fn check_block(&mut self, index: u32, block: &Block) -> Result<(), String> {
@@ -233,9 +226,6 @@ impl<'a> Checker<'a> {
                     Rhs::MakeClosure(target, args) => {
                         self.cx.note_closure(*var, *target, args.len());
                     }
-                    Rhs::Prim(Prim::EvNew(effect), _) => {
-                        self.cx.note_evidence(*var, *effect);
-                    }
                     Rhs::Extern {
                         ext,
                         args: _,
@@ -245,6 +235,7 @@ impl<'a> Checker<'a> {
                             .note_never(*var, self.program.row(*ext).ret == OpRet::Never);
                     }
                     Rhs::Prim(_, _)
+                    | Rhs::Evidence { .. }
                     | Rhs::ConstString(_)
                     | Rhs::Con { ctor: _, args: _ }
                     | Rhs::Drop(_) => {}
@@ -305,6 +296,7 @@ impl<'a> Checker<'a> {
 
     fn define_all(&mut self, vars: &[VarId], site: Site) -> Result<(), String> {
         for &var in vars {
+            self.cx.context_binding(var, None)?;
             self.cx.define(var, site)?;
         }
         Ok(())
@@ -330,6 +322,14 @@ impl<'a> Checker<'a> {
     }
 
     fn check_rhs(&self, var: VarId, rhs: &Rhs) -> Result<(), String> {
+        self.cx.context_binding(
+            var,
+            match rhs {
+                Rhs::Prim(prim, _) => Some(prim.row().ret),
+                Rhs::Evidence { .. } => Some(Repr::Ev),
+                _ => None,
+            },
+        )?;
         match rhs {
             Rhs::Call { call, mask } => {
                 self.check_mask(call, mask)?;
@@ -338,6 +338,7 @@ impl<'a> Checker<'a> {
             }
             Rhs::MakeClosure(index, args) => {
                 self.cx.closure_arity(*index, args.len())?;
+                self.cx.context_captures(*index, args)?;
                 let target = self.cx.function(*index)?;
                 self.cx.check_built(
                     var,
@@ -361,6 +362,17 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 self.cx.check_prim(var, prim, args)?
+            }
+            Rhs::Evidence {
+                effect,
+                state: _,
+                outer: _,
+                entries,
+            } => {
+                if self.level == Level::Translated {
+                    return Err("an evidence is made before the evidence pass".to_string());
+                }
+                self.cx.check_evidence(*effect, entries)?;
             }
             Rhs::ConstString(index) => self.cx.const_string(*index)?,
             Rhs::Con { ctor, args } => self.cx.check_con(var, *ctor, args)?,
@@ -439,12 +451,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
-            Call::Clause {
-                effect,
-                op,
-                callee: _,
-                args,
-            } => {
+            Call::Clause { effect, op, args } => {
                 if self.level == Level::Translated {
                     return Err("a clause call is used before the evidence pass".to_string());
                 }
@@ -456,10 +463,9 @@ impl<'a> Checker<'a> {
                         info.operations.len()
                     ));
                 };
-                let takes = 1 + operation.params.len();
-                if args.len() != takes {
+                if args.len() != operation.params.len() {
                     return Err(format!(
-                        "a clause of `{}` is given {} arguments, but it takes {takes} (the evidence and {} arguments of the operation)",
+                        "a clause of `{}` is given {} arguments, but the operation takes {}",
                         operation_text(&self.program.effects, *effect, *op),
                         args.len(),
                         operation.params.len()
@@ -477,8 +483,8 @@ impl<'a> Checker<'a> {
         self.use_all(|f| call.for_each_atom(f))
     }
 
-    /// 着地の印 `prompt v` の検査。印は EP だけが出し、末尾の位置の呼び出しには付かず、`v` は呼び出しの後も
-    /// 生きている `obj` の変数でなければならない (docs/spec/lir.md の「着地の印」)。
+    /// 着地の印`prompt v`の検査。印はEPだけが出し、末尾の位置の呼び出しには付かず、`v`は呼び出しの後も
+    /// 生きている`ev`の変数、つまりフレーム自身のevidenceでなければならない (docs/spec/lir.mdの「着地の印」)。
     fn check_prompt(&self, call: &Call) -> Result<(), String> {
         let Some(marker) = call.prompt() else {
             return Ok(());
@@ -497,9 +503,9 @@ impl<'a> Checker<'a> {
             ));
         }
         let repr = self.function.repr(marker);
-        if repr != Repr::Obj {
+        if repr != Repr::Ev {
             return Err(format!(
-                "`{}` is the prompt marker of an apply, but it is {}, not obj",
+                "`{}` is the prompt marker of an apply, but it is {}, not ev",
                 self.cx.name(marker),
                 repr.name()
             ));

@@ -301,7 +301,7 @@ fn ep_float() {
         allocations: 9,
         reuses: 0,
         peak_objects: 8,
-        peak_stack: 44,
+        peak_stack: 42,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,

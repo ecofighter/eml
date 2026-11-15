@@ -107,6 +107,28 @@ fn entry$main() -> unit {
     assert_eq!(native(text), ("7\n".to_string(), Ok(Some(3))));
 }
 
+#[test]
+fn exit_inside_an_over_application_releases_the_last_argument() {
+    // `f`は引数を1つ取るので、`apply &f(a.0, s.1)`は`eml$apply$2`へ行く。その`n < m`の腕は`f`を`a.0`に適用し、
+    // `exit`が始めた中断を見る。その冷たいブロックは最後の引数`s.1`を1回手放す。文字列が漏れればcensusが誤りにする。
+    // 最後の引数を文字列にするのは、小さな整数の箱は即値で、censusに見えないからである
+    let text = "\
+fn f(x.0: tobj) -> tobj {
+  let z.1: unit = extern Prelude.exit(3)
+  return x.0
+}
+fn entry$main() -> unit {
+  let a.0: tobj = box 1
+  let s.1: obj = extern \"Prelude.Show Int.show\"(2)
+  let r.2: tobj = apply &f(a.0, s.1)
+  decref r.2
+  return ()
+}
+";
+    agree(text);
+    assert_eq!(native(text), (String::new(), Ok(Some(3))));
+}
+
 /// runを致命的な誤りで終えるテスト。`eml_fatal`のlongjmpが飛び越えたフレームにはAddressSanitizerのスタックの印が
 /// 残るので、そのジョブは`fatal::`を飛ばす (docs/implementation/testing.md の「`eml_native` の検証」)。
 mod fatal {

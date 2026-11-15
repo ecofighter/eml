@@ -4,9 +4,11 @@
 #![cfg(not(miri))]
 use std::sync::Arc;
 
-use eml_nrt::image::{ACTION_CONTINUE, FnRow, Image, Options, SiteRow, Slice, Start, Str};
+use eml_nrt::image::{
+    ACTION_CONTINUE, FnRow, Image, NO_EFFECT, Options, SiteRow, Slice, Start, Str,
+};
 use eml_nrt::{Finished, HostRef, RunConfig, RuntimeError, Thunk, eml_nrt_safepoint};
-use eml_rt::{Buffering, Control, Ctx, Fast, StdHost};
+use eml_rt::{Buffering, Control, Ctx, Fast, StdHost, Word};
 
 fn host() -> HostRef {
     HostRef::new(Arc::new(StdHost::new(
@@ -39,6 +41,8 @@ fn run_f(sites: &[SiteRow], thunk: Thunk, argv: &mut [u64]) -> Result<Finished, 
         files: Slice::new(&files),
         data: Slice::new(&[]),
         paps: Slice::new(&[]),
+        panic_effect: NO_EFFECT,
+        io_effect: NO_EFFECT,
     };
     let start = Start {
         thunk,
@@ -116,7 +120,8 @@ mod fatal {
     unsafe extern "C" fn divide_by_zero(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
         unsafe {
             let _ = (*ctx).set_fault(Fault::Arith(ArithFault::DivisionByZero));
-            eml_nrt_failed(ctx, *argv as i64, *argv.add(1) as i64, 0);
+            let mut out = [Word::from_bits(0); 4];
+            eml_nrt_failed(ctx, *argv as i64, *argv.add(1) as i64, 0, out.as_mut_ptr());
         }
     }
 
@@ -161,7 +166,8 @@ mod fatal {
             park_panic(&mut *ctx, message);
             *argv.add(1) = fault_word(ctx);
             *argv.add(4) = mortal_objects(ctx);
-            eml_nrt_failed(ctx, *argv as i64, 0, 0);
+            let mut out = [Word::from_bits(0); 4];
+            eml_nrt_failed(ctx, *argv as i64, 0, 0, out.as_mut_ptr());
         }
     }
 
@@ -194,7 +200,8 @@ mod fatal {
 
     /// 何も置かずに失敗を上げる。
     unsafe extern "C" fn raise_nothing(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
-        unsafe { eml_nrt_failed(ctx, *argv as i64, 0, 0) };
+        let mut out = [Word::from_bits(0); 4];
+        unsafe { eml_nrt_failed(ctx, *argv as i64, 0, 0, out.as_mut_ptr()) };
     }
 
     #[test]

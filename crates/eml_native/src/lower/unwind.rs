@@ -1,28 +1,32 @@
 //! 巻き戻しの地点の後のコード、地点の後始末、仮の値、`eml$raise`、関数の位置の行 (docs/spec/native.md の
 //! 「巻き戻しの地点」)。
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{Block, InstBuilder, Signature, Value, types};
+use cranelift_codegen::ir::{Block, BlockArg, InstBuilder, Signature, TrapCode, Value, types};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::Module;
 use eml_extern::Purity;
 use eml_lir::unwind::{UnwindPoint, Unwinds};
-use eml_lir::{BlockId, Loc, Repr, VarId};
+use eml_lir::{BlockId, Loc, Prim, Repr, VarId};
 use eml_nrt::Kind;
 use eml_nrt::image::{
     ARITH_DIVISION_BY_ZERO, ARITH_INTEGER_OVERFLOW, NO_FILE, PURITY_EFFECTFUL, PURITY_PANICS,
-    PURITY_PURE, SiteRow,
+    PURITY_PURE, RAISE_IO, RAISE_PANIC, SiteRow,
 };
 
 use super::Imports;
 use super::function::FnLower;
+use super::{apply, effects};
 use crate::abi::tail_signature;
 use crate::mem;
 
 /// 巻き戻しの地点の命令の後に出すもの。`site`は関数自身の位置の行 (`FnRow.sites`) の添字である。
 #[derive(Debug, Clone, Copy)]
 pub(super) enum After {
-    /// 末尾でない呼び出し。呼ばれた側が中断を始めたかを`yielding.target`で確かめる。
+    /// 着地の印のない地点の、末尾でない呼び出し。呼ばれた側が中断を始めたかを`abort`のバイトで確かめる。
     Call,
+    /// 着地の印を持つ地点の、末尾でない呼び出し。確かめは`Call`と同じである。`result`は呼び出しが束縛する変数で、
+    /// 続きはそれを、熱い道では呼び出しの結果に、中断がここに着地したときはダミーに束縛し直す。
+    Land { result: VarId },
     /// `faults`の行の呼び出し。faultの語を確かめる。
     Faults { site: u32, purity: Purity },
     /// 失敗するインラインの行。熱いコードはない。行を展開したコードが失敗の条件で`overflow`か`zero`へ分岐し、
@@ -54,19 +58,79 @@ impl<'a> From<&'a UnwindPoint> for Point<'a> {
     }
 }
 
+/// `abort`のバイトをロードし、立っていれば新しい冷たいブロックへ、そうでなければ`hot_args`を持って新しい熱いブロックへ
+/// 分岐する。熱いブロックは`hot_args`の型の引数を持つ。どちらのブロックも選ばずに`(cold, hot)`を返す。呼び出しの後の
+/// 巻き戻しの確かめは、どれもこの関数が出す (docs/spec/native.mdの「巻き戻しの地点」)。
+pub(super) fn if_aborting(
+    b: &mut FunctionBuilder,
+    ctx: Value,
+    hot_args: &[Value],
+) -> (Block, Block) {
+    let aborting = mem::yield_abort(b, ctx);
+    let cold = b.create_block();
+    b.set_cold_block(cold);
+    let hot = b.create_block();
+    for &value in hot_args {
+        let ty = b.func.dfg.value_type(value);
+        b.append_block_param(hot, ty);
+    }
+    let args: Vec<BlockArg> = hot_args.iter().copied().map(BlockArg::Value).collect();
+    b.ins().brif(aborting, cold, &[], hot, &args);
+    (cold, hot)
+}
+
 /// `eml$raise(ctx, function, site, purity)`のシグネチャ。
 pub(super) fn raise_signature() -> Signature {
     tail_signature(&[Kind::I64, Kind::I64, Kind::I64], &[])
 }
 
-/// `eml$raise`の本体。サービスに渡して戻る。
+/// `eml$raise`の本体。どのプログラムでも同じコードである。失敗の扱いはどれもサービスが決め、捕まえるハンドラがあれば、
+/// サービスが`out`に書いた類で`Panic`か`IO`の節を呼ぶ。節のシグネチャは決まっていて、`load`がプログラムの`Prelude`の
+/// 操作の形を確かめる。節は中断を始めて戻るので、戻ったときに`abort`のバイトが立っていなければtrapする。ほかの類では
+/// 何も呼ばずに戻る (docs/spec/native.mdの「externの失敗」)。
 pub(super) fn define_raise<M: Module>(mut b: FunctionBuilder, module: &mut M, imports: &Imports) {
     let entry = b.create_block();
     b.append_block_params_for_function_params(entry);
     b.switch_to_block(entry);
-    let args = b.block_params(entry).to_vec();
+    let params = b.block_params(entry).to_vec();
+    let ctx = params[0];
+    // `eml_nrt_failed`は節と引数を4語まで書く
+    let (out, address) = mem::out_words(&mut b, 4);
     let failed = module.declare_func_in_func(imports.entry("eml_nrt_failed"), b.func);
-    b.ins().call(failed, &args);
+    let mut args = params;
+    args.push(address);
+    let call = b.ins().call(failed, &args);
+    let class = b.inst_results(call)[0];
+    let done = b.create_block();
+    let returned = b.create_block();
+    b.set_cold_block(returned);
+    // 節の引数は`ev`の後に、`Panic`では文言、`IO`では種類と文言である
+    for (raise, operands) in [(RAISE_PANIC, 2), (RAISE_IO, 3)] {
+        let arm = b.create_block();
+        let next = b.create_block();
+        let value = b.ins().iconst(types::I64, raise);
+        let here = b.ins().icmp(IntCC::Equal, class, value);
+        b.ins().brif(here, arm, &[], next, &[]);
+        b.switch_to_block(arm);
+        let clause = mem::load_out(&mut b, out, 0);
+        let args: Vec<Value> = (1..=operands)
+            .map(|i| mem::load_out(&mut b, out, i))
+            .collect();
+        let meta = mem::load_meta(&mut b, clause);
+        let sig = apply::uniform(operands);
+        apply::call_closure_code(&mut b, ctx, clause, meta, sig, &args, false);
+        let (cold, hot) = if_aborting(&mut b, ctx, &[]);
+        b.switch_to_block(cold);
+        b.ins().jump(done, &[]);
+        b.switch_to_block(hot);
+        b.ins().jump(returned, &[]);
+        b.switch_to_block(next);
+    }
+    b.ins().jump(done, &[]);
+    // 節は戻らない操作の節なので、中断を始めずに戻ることはない
+    b.switch_to_block(returned);
+    b.ins().trap(TrapCode::unwrap_user(1));
+    b.switch_to_block(done);
     b.ins().return_(&[]);
     b.seal_all_blocks();
     b.finalize(module.target_config());
@@ -120,14 +184,20 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
     pub fn after_unwind_point(&mut self, point: &Point, after: After) {
         match after {
             After::Call => {
-                let target = mem::yield_target(&mut self.b, self.ctx);
-                let unit = self.b.ins().iconst(types::I64, mem::UNIT);
-                let aborting = self.b.ins().icmp(IntCC::NotEqual, target, unit);
-                let cleanup = self.cold_block();
-                let hot = self.b.create_block();
-                self.b.ins().brif(aborting, cleanup, &[], hot, &[]);
+                let (cleanup, hot) = if_aborting(&mut self.b, self.ctx, &[]);
                 self.fill_cleanup(cleanup, point);
                 self.b.switch_to_block(hot);
+            }
+            After::Land { result } => {
+                let marker = point
+                    .landing
+                    .expect("a landing point carries its prompt marker");
+                let value = self.var(result);
+                let (cold, hot) = if_aborting(&mut self.b, self.ctx, &[value]);
+                self.fill_landing(cold, hot, marker, point);
+                self.b.switch_to_block(hot);
+                let value = self.b.block_params(hot)[0];
+                self.bind(result, value);
             }
             After::Faults { site, purity } => {
                 let fault = mem::fault(&mut self.b, self.ctx);
@@ -207,13 +277,40 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
         self.b.ins().jump(cleanup, &[]);
     }
 
-    /// 地点の後始末。持っている参照を数だけ手放し、tokenを捨て、関数の結果の仮の値を返す。
+    /// 着地の印`marker`を持つ地点の冷たいブロック。`target`を印と比べ、等しければ中断はここで終わるので、
+    /// `eml_nrt_landed`が返すダミーを持って熱いブロックへ戻る。そうでなければ、中断が外すhandlerの状態を取り出して
+    /// 手放してから、地点の後始末へ進む。VMと同じ順である (docs/spec/native.mdの「巻き戻しの地点」)。
+    fn fill_landing(&mut self, cold: Block, hot: Block, marker: VarId, point: &Point) {
+        self.b.switch_to_block(cold);
+        let target = mem::yield_target(&mut self.b, self.ctx);
+        let ev = self.var(marker);
+        let here = self.b.ins().icmp(IntCC::Equal, target, ev);
+        let land = self.cold_block();
+        let other = self.cold_block();
+        self.b.ins().brif(here, land, &[], other, &[]);
+
+        self.b.switch_to_block(land);
+        let dummy = self
+            .call_entry("eml_nrt_landed", &[])
+            .expect("`eml_nrt_landed` returns a word");
+        self.b.ins().jump(hot, &[dummy.into()]);
+
+        self.b.switch_to_block(other);
+        let state = self
+            .call_entry(&effects::entry(&Prim::EvLastState), &[ev])
+            .expect("`ev_last_state` returns a word");
+        self.call_entry("eml_rt_decref", &[state]);
+        self.cleanup(point);
+    }
+
+    /// 地点の後始末を`block`に置く。
     pub(super) fn fill_cleanup(&mut self, block: Block, point: &Point) {
-        assert!(
-            point.landing.is_none(),
-            "the native lowering has no landing"
-        );
         self.b.switch_to_block(block);
+        self.cleanup(point);
+    }
+
+    /// 地点の後始末。持っている参照を数だけ手放し、tokenを捨て、関数の結果の仮の値を返す。
+    fn cleanup(&mut self, point: &Point) {
         for &(var, count) in point.owned {
             let word = self.var(var);
             for _ in 0..count {
@@ -238,7 +335,14 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
 pub(super) fn placeholder(b: &mut FunctionBuilder, repr: Repr) -> Value {
     match repr {
         Repr::Float => b.ins().f64const(0.0),
-        Repr::Obj | Repr::TObj | Repr::Unit => b.ins().iconst(types::I64, mem::UNIT),
+        Repr::Obj
+        | Repr::TObj
+        | Repr::Unit
+        | Repr::Ev
+        | Repr::Cev
+        | Repr::Fev
+        | Repr::Rev
+        | Repr::Evv => b.ins().iconst(types::I64, mem::UNIT),
         Repr::Int | Repr::Enum => b.ins().iconst(types::I64, 0),
         Repr::Token => b.ins().iconst(types::I64, mem::EMPTY_TOKEN),
         Repr::Struct(_) => unreachable!("flattening leaves no struct value"),
