@@ -253,12 +253,8 @@ fn a_clause_call_is_a_yield_point_unless_it_is_in_tail_position() {
         "\
 effect State { get(unit) -> tobj }
 yields fn f() -> tobj {
-  let e.1: obj = prim ev_lookup[State]()
-  let c.0: tobj = prim ev_clause[State.get](e.1)
-  let v.2: tobj = clause State.get c.0(e.1, ())
-  let e.4: obj = prim ev_lookup[State]()
-  let c.5: tobj = prim ev_clause[State.get](e.4)
-  let w.3: tobj = clause State.get c.5(e.4, ())
+  let v.2: tobj = clause State.get(())
+  let w.3: tobj = clause State.get(())
   return w.3
 }
 ",
@@ -267,27 +263,21 @@ yields fn f() -> tobj {
     insta::assert_snapshot!(shown(&program), @"
     effect State { get(unit) -> tobj }
     yields fn f() -> tobj {
-      let e.1: obj = prim ev_lookup[State]()
-      let c.0: tobj = prim ev_clause[State.get](e.1)
-      let v.2: tobj = clause State.get c.0(e.1, ())
-      let y.6: int = prim yielding()
-      switch y.6 { 0 -> b2, _ -> b1 }
+      let v.2: tobj = clause State.get(())
+      let y.4: int = prim yielding()
+      switch y.4 { 0 -> b2, _ -> b1 }
     b1:
-      let k.7: tobj poly = prim yield_cont_take()
-      let k.8: tobj poly = closure compose$(k.7, &f$k0)
-      let u.9: unit = prim yield_cont_set(k.8)
-      let d.10: obj poly = prim dummy()
-      return d.10
+      let k.5: tobj poly = prim yield_cont_take()
+      let k.6: tobj poly = closure compose$(k.5, &f$k0)
+      let u.7: unit = prim yield_cont_set(k.6)
+      let d.8: obj poly = prim dummy()
+      return d.8
     b2:
-      let e.4: obj = prim ev_lookup[State]()
-      let c.5: tobj = prim ev_clause[State.get](e.4)
-      let w.3: tobj = clause State.get c.5(e.4, ())
+      let w.3: tobj = clause State.get(())
       return w.3
     }
     internal yields uniform from 0 fn f$k0(v.0: tobj) -> tobj {
-      let e.2: obj = prim ev_lookup[State]()
-      let c.3: tobj = prim ev_clause[State.get](e.2)
-      let w.1: tobj = clause State.get c.3(e.2, ())
+      let w.1: tobj = clause State.get(())
       return w.1
     }
     yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
@@ -350,15 +340,9 @@ fn keep(v.0: tobj lin, n.1: int, w.2: tobj) -> tobj lin {
   return v.0
 }
 yields fn f() -> tobj lin {
-  let e.3: obj = prim ev_lookup[Src]()
-  let s.0: tobj = prim ev_clause[Src.take](e.3)
-  let v.4: tobj lin = clause Src.take s.0(e.3, ())
-  let e.8: obj = prim ev_lookup[Ask]()
-  let a.1: tobj = prim ev_clause[Ask.ask](e.8)
-  let n.5: int = clause Ask.ask a.1(e.8, ())
-  let e.9: obj = prim ev_lookup[Get]()
-  let g.2: tobj = prim ev_clause[Get.get](e.9)
-  let w.6: tobj = clause Get.get g.2(e.9, ())
+  let v.4: tobj lin = clause Src.take(())
+  let n.5: int = clause Ask.ask(())
+  let w.6: tobj = clause Get.get(())
   let r.7: tobj lin = call keep(v.4, n.5, w.6)
   return r.7
 }

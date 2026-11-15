@@ -240,15 +240,12 @@ fn a_prim_result_is_rebound_to_its_row_repr() {
 fn a_clause_call_uses_the_reprs_of_its_operation() {
     // `put` の `int` の引数へ `tobj` の n.2 を `unbox` して渡す。`get` の結果は末尾の位置でも操作の `int` で受け直し、
     // `box` して返す
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nyields fn f(n.2: tobj) -> tobj {\n  let e.1: obj = prim ev_lookup[Counter]()\n  let c.0: tobj = prim ev_clause[Counter.put](e.1)\n  let u.3: unit = clause Counter.put c.0(e.1, n.2)\n  let c.4: tobj = prim ev_clause[Counter.get](e.1)\n  let m.5: tobj = clause Counter.get c.4(e.1, ())\n  return m.5\n}\n";
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nyields fn f(n.2: tobj) -> tobj {\n  let u.3: unit = clause Counter.put(n.2)\n  let m.5: tobj = clause Counter.get(())\n  return m.5\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
     yields fn f(n.2: tobj) -> tobj {
-      let e.1: obj = prim ev_lookup[Counter]()
-      let c.0: tobj = prim ev_clause[Counter.put](e.1)
       let n.6: int = unbox n.2
-      let u.3: unit = clause Counter.put c.0(e.1, n.6)
-      let c.4: tobj = prim ev_clause[Counter.get](e.1)
-      let m.7: int = clause Counter.get c.4(e.1, ())
+      let u.3: unit = clause Counter.put(n.6)
+      let m.7: int = clause Counter.get(())
       let m.5: tobj = box m.7
       return m.5
     }
@@ -306,12 +303,10 @@ fn a_clause_function_keeps_its_captures_uniform() {
 #[test]
 fn a_never_clause_call_is_not_rebound() {
     // `never` の操作の節の呼び出しは戻らないので、`int` の束縛を受け直さず、`return` にも変換を入れない
-    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(s.2: obj) -> int {\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.0: tobj = prim ev_clause[Fail.fail](e.1)\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
+    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(s.2: obj) -> int {\n  let r.3: int = clause Fail.fail(s.2)\n  return r.3\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
     yields fn f(s.2: obj) -> int {
-      let e.1: obj = prim ev_lookup[Fail]()
-      let c.0: tobj = prim ev_clause[Fail.fail](e.1)
-      let r.3: int = clause Fail.fail c.0(e.1, s.2)
+      let r.3: int = clause Fail.fail(s.2)
       return r.3
     }
     ");
@@ -321,22 +316,18 @@ fn a_never_clause_call_is_not_rebound() {
 fn the_uses_of_a_never_clause_binder_are_not_converted() {
     // `int` の束縛を `tobj` の位置 (一様な `apply` の引数と `tobj` の `ret` の `return`) へ渡しても `box` しない。使いには制御が
     // 届かないからである
-    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(s.2: obj, k.3: tobj) -> tobj {\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.0: tobj = prim ev_clause[Fail.fail](e.1)\n  let r.4: int = clause Fail.fail c.0(e.1, s.2)\n  let t.5: tobj = apply k.3(r.4)\n  return t.5\n}\nyields fn g(s.2: obj) -> tobj {\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.0: tobj = prim ev_clause[Fail.fail](e.1)\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
+    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(s.2: obj, k.3: tobj) -> tobj {\n  let r.4: int = clause Fail.fail(s.2)\n  let t.5: tobj = apply k.3(r.4)\n  return t.5\n}\nyields fn g(s.2: obj) -> tobj {\n  let r.3: int = clause Fail.fail(s.2)\n  return r.3\n}\n";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "f"), @"
     yields fn f(s.2: obj, k.3: tobj) -> tobj {
-      let e.1: obj = prim ev_lookup[Fail]()
-      let c.0: tobj = prim ev_clause[Fail.fail](e.1)
-      let r.4: int = clause Fail.fail c.0(e.1, s.2)
+      let r.4: int = clause Fail.fail(s.2)
       let t.5: tobj = apply k.3(r.4)
       return t.5
     }
     ");
     insta::assert_snapshot!(function(&shown, "g"), @"
     yields fn g(s.2: obj) -> tobj {
-      let e.1: obj = prim ev_lookup[Fail]()
-      let c.0: tobj = prim ev_clause[Fail.fail](e.1)
-      let r.3: int = clause Fail.fail c.0(e.1, s.2)
+      let r.3: int = clause Fail.fail(s.2)
       return r.3
     }
     ");

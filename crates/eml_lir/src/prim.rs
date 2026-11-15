@@ -3,9 +3,8 @@
 
 use crate::{Mark, MaskItem, Repr};
 
-/// 基本操作の種類と即値。エフェクトと操作は `Program.effects` の番号である。`EvSetClause` と `EvClause` は、
-/// テキストの形で操作の名前をエフェクトで修飾するために、操作だけでなくエフェクトも持つ。`RootGet` と `RootSet` の
-/// 即値は根の番号である。
+/// 基本操作の種類と即値。エフェクトと操作は`Program.effects`の番号である。`EvSetClause`は、テキストの形で操作の名前を
+/// エフェクトで修飾するために、操作だけでなくエフェクトも持つ。`RootGet`と`RootSet`の即値は根の番号である。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Prim {
     EvvGet,
@@ -19,11 +18,6 @@ pub enum Prim {
         op: u32,
     },
     EvRenew,
-    EvLookup(u32),
-    EvClause {
-        effect: u32,
-        op: u32,
-    },
     EvEvv,
     EvTakeEvv,
     EvTakeState,
@@ -42,6 +36,41 @@ pub enum Prim {
     EmptyMutArray,
     /// `par` の子を中断し、親で起こし直す閉包を渡す。戻らない (docs/spec/lir.md の「基本操作」)。
     ChildAbort,
+}
+
+/// 命令が自分の意味の一部として走らせる`Ctx`の操作で、それ自身は基本操作でない。`clause E.op`は`ev_lookup`、続いて
+/// `ev_clause`を走らせる (docs/spec/lir.mdの「節の呼び出し」)。ネイティブのコードはそれぞれをエントリ
+/// `eml_rt_<Step::name()>`で呼び、エントリは`Ctx`のメソッドと同じ引数を持つshimである。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Step {
+    EvLookup,
+    EvClause,
+}
+
+impl Step {
+    pub const ALL: [Step; 2] = [Step::EvLookup, Step::EvClause];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Step::EvLookup => "ev_lookup",
+            Step::EvClause => "ev_clause",
+        }
+    }
+
+    /// `ctx`の後にエントリが受けるオペランドの数。
+    pub fn operands(self) -> usize {
+        match self {
+            Step::EvLookup => 1,
+            Step::EvClause => 2,
+        }
+    }
+
+    /// エントリが語を1つ返すか。
+    pub fn returns(self) -> bool {
+        match self {
+            Step::EvLookup | Step::EvClause => true,
+        }
+    }
 }
 
 /// 基本操作の引数と結果の Repr。引数と結果は、直接の呼び出しと同じく互換の位置である。
@@ -97,8 +126,6 @@ kinds! {
     Prim::EvNew(_) => "ev_new", Prim::EvNew(0);
     Prim::EvSetClause { .. } => "ev_set_clause", Prim::EvSetClause { effect: 0, op: 0 };
     Prim::EvRenew => "ev_renew", Prim::EvRenew;
-    Prim::EvLookup(_) => "ev_lookup", Prim::EvLookup(0);
-    Prim::EvClause { .. } => "ev_clause", Prim::EvClause { effect: 0, op: 0 };
     Prim::EvEvv => "ev_evv", Prim::EvEvv;
     Prim::EvTakeEvv => "ev_take_evv", Prim::EvTakeEvv;
     Prim::EvTakeState => "ev_take_state", Prim::EvTakeState;
@@ -126,13 +153,11 @@ impl Prim {
     pub fn immediates(&self) -> Immediates<'_> {
         match self {
             Prim::EvvMask(items) => Immediates::Mask(items),
-            Prim::EvNew(effect) | Prim::EvLookup(effect) => Immediates::Effect(*effect),
-            Prim::EvSetClause { effect, op } | Prim::EvClause { effect, op } => {
-                Immediates::Operation {
-                    effect: *effect,
-                    op: *op,
-                }
-            }
+            Prim::EvNew(effect) => Immediates::Effect(*effect),
+            Prim::EvSetClause { effect, op } => Immediates::Operation {
+                effect: *effect,
+                op: *op,
+            },
             Prim::RootGet(root) | Prim::RootSet(root) => Immediates::Root(*root),
             Prim::EvvGet
             | Prim::EvvSet
@@ -174,8 +199,6 @@ impl Prim {
             Prim::EvNew(_) => (&[TObj, TObj], &[false, false], Obj, &[Poly, Unr], Unr),
             Prim::EvSetClause { .. } => (&[Obj, TObj], &[true, false], Unit, &[Unr, Unr], Unr),
             Prim::EvRenew => (&[Obj, TObj], &[true, false], Obj, &[Unr, Poly], Unr),
-            Prim::EvLookup(_) => (&[], NONE, Obj, NO_MARKS, Unr),
-            Prim::EvClause { .. } => (&[Obj], &[true], TObj, &[Unr], Unr),
             Prim::EvEvv => (&[Obj], &[true], TObj, &[Unr], Unr),
             Prim::EvTakeEvv => (&[Obj], &[true], TObj, &[Unr], Unr),
             Prim::EvTakeState => (&[Obj], &[true], TObj, &[Unr], Poly),
@@ -256,7 +279,7 @@ mod tests {
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
         use Mark::{Lin, Poly, Unr};
-        let table: [(&str, &[Mark], Mark); 25] = [
+        let table: [(&str, &[Mark], Mark); 23] = [
             ("evv_get", &[], Unr),
             ("evv_set", &[Unr], Unr),
             ("evv_push", &[Unr, Unr], Unr),
@@ -264,8 +287,6 @@ mod tests {
             ("ev_new", &[Poly, Unr], Unr),
             ("ev_set_clause", &[Unr, Unr], Unr),
             ("ev_renew", &[Unr, Poly], Unr),
-            ("ev_lookup", &[], Unr),
-            ("ev_clause", &[Unr], Unr),
             ("ev_evv", &[Unr], Unr),
             ("ev_take_evv", &[Unr], Unr),
             ("ev_take_state", &[Unr], Poly),

@@ -6,7 +6,7 @@
 use crate::builder::FnBuilder;
 use crate::{Call, Program, Rhs, Stmt, Term};
 use eml_extern::{Extern, ExternEffect};
-use eml_lir::{Atom, FnIdx, Mark, Prim, Repr, VarId, VarInfo};
+use eml_lir::{Atom, FnIdx, Mark, Prim, Repr, VarInfo};
 
 use super::{captured_mark, dummy};
 
@@ -108,24 +108,7 @@ fn reperform_fn(program: &Program, effect: u32, op: u32) -> crate::CoreFn {
             at: None,
         },
         Some(ExternEffect::Io) => unreachable!("`IO` is not never-only, so it has no fork entry"),
-        None => {
-            let evidence = prim(&mut b, "ev", Repr::Obj, Prim::EvLookup(effect), Vec::new());
-            let entry = prim(
-                &mut b,
-                "c",
-                Repr::TObj,
-                Prim::EvClause { effect, op },
-                vec![Atom::Var(evidence)],
-            );
-            let mut clause_args = vec![Atom::Var(evidence)];
-            clause_args.extend(args);
-            Rhs::call(Call::Clause {
-                effect,
-                op,
-                callee: Atom::Var(entry),
-                args: clause_args,
-            })
-        }
+        None => Rhs::call(Call::Clause { effect, op, args }),
     };
     let result = b.bind(result, rhs);
     b.terminate(Term::Return(Atom::Var(result)));
@@ -138,9 +121,4 @@ fn reperform_fn(program: &Program, effect: u32, op: u32) -> crate::CoreFn {
     );
     function.split = Some(operation.params.len() as u32);
     function
-}
-
-fn prim(b: &mut FnBuilder, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) -> VarId {
-    let mark = prim.row().ret_mark;
-    b.bind(VarInfo::new(name, repr, mark), Rhs::Prim(prim, args))
 }

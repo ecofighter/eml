@@ -13,6 +13,8 @@ use eml_lir::{
 use eml_nrt::Kind;
 use eml_nrt::image::ACTION_CONTINUE;
 
+use super::consts::Datum;
+use super::effects::step_entry;
 use super::function::FnLower;
 use super::rc::{self, Step};
 use super::unwind::{self, After, Point};
@@ -523,28 +525,31 @@ impl<M: Module> FnLower<'_, '_, M> {
         self.b.ins().return_call(helper, &dispatch.values);
     }
 
-    /// 節の呼び出し`call`。`bound`は、`block`の`position`番目の文で束縛する変数で、`None`なら末尾の位置である。節の
-    /// クロージャのコードを操作のシグネチャで呼ぶ。戻る操作の呼び出しの後には`Call`の確かめが続き、末尾の位置では末尾
-    /// 呼び出しで、その結果は呼ぶ側の結果と等しくなければならない。`never`の操作の節は束縛のReprの値を返さないので、
-    /// どちらの位置でも末尾でなく呼び、その後に`abort`のバイトを確かめる。冷たい側は地点の後始末で、熱い側はtrapする。
-    /// 節が中断を始めずに戻ったからである。ブロックの残りは前のブロックのないブロックで続け、変数を仮の値に束縛する
-    /// (docs/spec/native.mdの「関数の値」)。
+    /// 節の呼び出し`call`。`bound`は、`block`の`position`番目の文で束縛する変数で、`None`なら末尾の位置である。
+    /// `ev_lookup`と`ev_clause`のエントリでevidenceと節のクロージャを読み、クロージャのコードを操作のシグネチャで呼ぶ。
+    /// 戻る操作の呼び出しの後には`Call`の確かめが続き、末尾の位置では末尾呼び出しで、その結果は呼ぶ側の結果と等しく
+    /// なければならない。`never`の操作の節は束縛のReprの値を返さないので、どちらの位置でも末尾でなく呼び、その後に
+    /// `abort`のバイトを確かめる。冷たい側は地点の後始末で、熱い側はtrapする。節が中断を始めずに戻ったからである。
+    /// ブロックの残りは前のブロックのないブロックで続け、変数を仮の値に束縛する (docs/spec/native.mdの「関数の値」)。
     pub(super) fn clause(&mut self, call: &Call, bound: Option<(BlockId, usize, &[VarId])>) {
-        let Call::Clause {
-            effect,
-            op,
-            callee,
-            args,
-        } = call
-        else {
+        let Call::Clause { effect, op, args } = call else {
             unreachable!("`{call:?}` is not a clause call")
         };
         let program = self.callees.program;
         let operation = &program.effects[*effect as usize].operations[*op as usize];
         let sig = clause_signature(program, *effect, *op);
-        let clo = self.atom(*callee, Repr::TObj);
-        let reprs = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
-        let values = self.atoms(args, reprs);
+        // `ev_lookup`は`dup`したevidenceを返し、その参照は節の先頭の引数になる。`ev_clause`はevidenceを借り、エントリを
+        // `dup`して返す
+        let number = self.datum_word(Datum::Effect(*effect), types::I64);
+        let ev = self
+            .step(eml_lir::Step::EvLookup, &[number])
+            .expect("`ev_lookup` returns the evidence");
+        let index = self.b.ins().iconst(types::I64, i64::from(*op));
+        let clo = self
+            .step(eml_lir::Step::EvClause, &[ev, index])
+            .expect("`ev_clause` returns the entry");
+        let mut values = vec![ev];
+        values.extend(self.atoms(args, operation.params.iter().copied()));
         let meta = mem::load_meta(&mut self.b, clo);
         if operation.ret == OpRet::Never {
             call_closure_code(&mut self.b, self.ctx, clo, meta, sig, &values, false);
@@ -602,6 +607,14 @@ impl<M: Module> FnLower<'_, '_, M> {
                 call_closure_code(&mut self.b, self.ctx, clo, meta, sig, &values, true);
             }
         }
+    }
+
+    /// 命令が走らせる`Ctx`の操作`step`のエントリの呼び出し。語を返すのは、`Step::returns`が真のstepだけである。
+    fn step(&mut self, step: eml_lir::Step, operands: &[Value]) -> Option<Value> {
+        debug_assert_eq!(operands.len(), step.operands());
+        let result = self.call_entry(&step_entry(step), operands);
+        debug_assert_eq!(result.is_some(), step.returns());
+        result
     }
 
     /// 呼ぶ値のタグを読み、引数の数と比べて分ける。

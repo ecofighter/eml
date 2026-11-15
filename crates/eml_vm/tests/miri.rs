@@ -138,13 +138,9 @@ fn main() -> unit {
   let u.4: unit = prim ev_set_clause[Counter.put](e.2, &put)
   let w.5: tobj = prim evv_push(w.0, e.2)
   let u.6: unit = prim evv_set(w.5)
-  let e.7: obj = prim ev_lookup[Counter]()
-  let c.8: tobj = prim ev_clause[Counter.put](e.7)
   let f.9: tobj = box 5
-  let u.10: unit = clause Counter.put c.8(e.7, f.9)
-  let e.11: obj = prim ev_lookup[Counter]()
-  let c.12: tobj = prim ev_clause[Counter.get](e.11)
-  let r.13: tobj = clause Counter.get c.12(e.11, ())
+  let u.10: unit = clause Counter.put(f.9)
+  let r.13: tobj = clause Counter.get(())
   let u.14: unit = prim evv_set(w.0)
   let n.15: int = unbox r.13
   decref r.13
@@ -496,9 +492,7 @@ internal clause Fail.fail fn fail$entry(ev.0: obj, a.1: int) -> obj poly {
   return d.2
 }
 uniform from 1 fn reperform$Fail.fail(a.0: int, u.1: unit) -> tobj poly {
-  let ev.2: obj = prim ev_lookup[Fail]()
-  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
-  tail clause Fail.fail c.3(ev.2, a.0)
+  tail clause Fail.fail(a.0)
 }
 fn spin(n.0: int) -> unit {
   switch n.0 { 0 -> b1, _ -> b2 }

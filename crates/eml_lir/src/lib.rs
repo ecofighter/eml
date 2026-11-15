@@ -32,7 +32,7 @@ pub use flatten::flatten;
 pub use perceus::perceus;
 pub use pipeline::{Pass, passes_until};
 pub use pretty::{pretty, pretty_with_positions};
-pub use prim::{Immediates, Prim, PrimRow};
+pub use prim::{Immediates, Prim, PrimRow, Step};
 pub use reuse::reuse;
 pub use text::parse;
 pub use verify::{verify, verify_borrowed, verify_flattened, verify_lowered, verify_scopes};
@@ -626,13 +626,12 @@ pub enum Call {
         /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
         prompt: Option<VarId>,
     },
-    /// 操作の in-place のエントリのクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
-    /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
-    /// (docs/spec/lir.md の「節の呼び出し」)。
+    /// `effect`の操作`op`をする。`evv`から`effect`の最初のevidenceを探し、その操作のエントリを読み、evidenceと`args`で
+    /// 呼ぶ。`args`は操作の引数で、引数と結果のReprは操作の表の`params`と`ret`から取る。`mask`は持たない
+    /// (docs/spec/lir.mdの「節の呼び出し」)。
     Clause {
         effect: u32,
         op: u32,
-        callee: Atom,
         args: Vec<Atom>,
     },
     /// `par` の fork と join。`left` と `right` の関数値に `()` を適用する子を作り、両方の値を `pair` の構築子で組にして
@@ -657,7 +656,12 @@ impl Call {
     /// 呼び出しが使う値。関数値の呼び出しでは、呼ばれる値が先に来る。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
-            Call::Direct(_, args) => args.iter().for_each(|&atom| f(atom)),
+            Call::Direct(_, args)
+            | Call::Clause {
+                effect: _,
+                op: _,
+                args,
+            } => args.iter().for_each(|&atom| f(atom)),
             Call::Par {
                 left,
                 right,
@@ -672,12 +676,6 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
-            }
-            | Call::Clause {
-                effect: _,
-                op: _,
-                callee,
-                args,
             } => {
                 f(*callee);
                 args.iter().for_each(|&atom| f(atom));
@@ -685,8 +683,8 @@ impl Call {
         }
     }
 
-    /// 値の使いのうち消費。呼ばれる関数の貸された位置の、直接の呼び出しの引数を除くすべての値である。`apply`、
-    /// `clause`、`par`は、呼ぶ値と引数を消費する。
+    /// 値の使いのうち消費。呼ばれる関数の貸された位置の、直接の呼び出しの引数を除くすべての値である。`apply`と`par`は
+    /// 呼ぶ値と引数を、`clause`は引数を消費する。
     pub fn for_each_consumed(&self, lends: &Lends, f: impl FnMut(Atom)) {
         match self {
             Call::Direct(callee, args) => each_marked(args, lends.call(*callee), false, f),
@@ -703,7 +701,12 @@ impl Call {
 
     pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
-            Call::Direct(_, args) => args.iter_mut().for_each(f),
+            Call::Direct(_, args)
+            | Call::Clause {
+                effect: _,
+                op: _,
+                args,
+            } => args.iter_mut().for_each(f),
             Call::Par {
                 left,
                 right,
@@ -718,12 +721,6 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
-            }
-            | Call::Clause {
-                effect: _,
-                op: _,
-                callee,
-                args,
             } => {
                 f(callee);
                 args.iter_mut().for_each(f);

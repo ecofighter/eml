@@ -1439,14 +1439,6 @@ fn step<R: Exec>(
             let w = unsafe { ctx.ev_renew(task.get(ev), task.get(state)) }?;
             task.set(dst, w);
         }
-        Op::EvLookup { dst, effect } => {
-            let w = unsafe { ctx.ev_lookup(effect) }?;
-            task.set(dst, w);
-        }
-        Op::EvClause { dst, ev, op } => {
-            let w = unsafe { ctx.ev_clause(task.get(ev), op.into()) }?;
-            task.set(dst, w);
-        }
         Op::EvEvv { dst, ev } => {
             let w = unsafe { ctx.ev_evv(task.get(ev)) }?;
             task.set(dst, w);
@@ -1541,7 +1533,9 @@ fn apply_call<R: Exec>(
     Ok(())
 }
 
-/// `clause` の命令。オペランドは [呼ばれる値, n, 引数…] である。
+/// `clause`の命令。オペランドは[エフェクト, 操作, n, 引数…]である。`evv`からエフェクトの最初のevidenceを探して操作の
+/// エントリを読み、evidenceと引数でエントリを呼ぶ。`ev_lookup`が`dup`して返すevidenceの参照は呼び出しの先頭の引数に
+/// なり、`ev_clause`はevidenceを借りて、エントリを`dup`して返す (docs/spec/vm.mdの「呼び出しと戻り」)。
 fn clause_call<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1550,7 +1544,16 @@ fn clause_call<R: Exec>(
     at: u32,
     target: apply::Target,
 ) -> Result<(), RunFault> {
-    let callee = load_call::<R>(code, task, at);
+    let o = &code.tables.operands[at as usize..];
+    let (effect, op, n) = (o[0] as u16, o[1] as usize, o[2] as usize);
+    let ev = unsafe { ctx.ev_lookup(effect) }?;
+    let callee = unsafe { ctx.ev_clause(ev, op) }?;
+    task.scratch.clear();
+    task.scratch.push(ev);
+    for &slot in &o[3..3 + n] {
+        let w = task.get(slot as Slot);
+        task.scratch.push(w);
+    }
     apply::apply_clause::<R>(code, ctx, task, callee, target)?;
     safepoint::<R>(code, ctx, task, sched)?;
     Ok(())

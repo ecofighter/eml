@@ -37,9 +37,7 @@ clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: int) -> obj poly {
   return d.4
 }
 uniform from 1 fn reperform$Fail.fail(a.0: int, u.1: unit) -> tobj poly {
-  let ev.2: obj = prim ev_lookup[Fail]()
-  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
-  tail clause Fail.fail c.3(ev.2, a.0)
+  tail clause Fail.fail(a.0)
 }
 yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
   let w.3: tobj = prim ev_take_evv(ev.0)
@@ -109,15 +107,11 @@ fn two(p.0: unit) -> tobj {
   return n.1
 }
 fn fail7(p.0: unit) -> tobj {
-  let ev.1: obj = prim ev_lookup[Fail]()
-  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
-  let t.3: tobj = clause Fail.fail c.2(ev.1, 7)
+  let t.3: tobj = clause Fail.fail(7)
   return t.3
 }
 fn fail8(p.0: unit) -> tobj {
-  let ev.1: obj = prim ev_lookup[Fail]()
-  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
-  let t.3: tobj = clause Fail.fail c.2(ev.1, 8)
+  let t.3: tobj = clause Fail.fail(8)
   return t.3
 }
 fn with_outer(f.0: tobj) -> tobj {

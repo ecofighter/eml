@@ -445,16 +445,10 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => {
+            Call::Clause { effect, op, args } => {
                 if self.level == Level::Translated {
                     return Err("a clause call is used before the evidence pass".to_string());
                 }
-                self.cx.clause_callee(*effect, *op, *callee)?;
                 let info = self.cx.effect(*effect)?;
                 let Some(operation) = info.operations.get(*op as usize) else {
                     return Err(format!(
@@ -463,10 +457,9 @@ impl<'a> Checker<'a> {
                         info.operations.len()
                     ));
                 };
-                let takes = 1 + operation.params.len();
-                if args.len() != takes {
+                if args.len() != operation.params.len() {
                     return Err(format!(
-                        "a clause of `{}` is given {} arguments, but it takes {takes} (the evidence and {} arguments of the operation)",
+                        "a clause of `{}` is given {} arguments, but the operation takes {}",
                         operation_text(&self.program.effects, *effect, *op),
                         args.len(),
                         operation.params.len()

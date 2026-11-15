@@ -491,13 +491,12 @@ pub enum Call {
     /// 継続を再開する。`state` は再開した handler の次の状態で、値は handle 式の値である。translate だけが出し、EP が
     /// `apply` に置き換える (docs/spec/core-ir.md の「再開と状態」)。
     Resume { k: Atom, arg: Atom, state: Atom },
-    /// 操作の in-place のエントリのクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
-    /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
-    /// (docs/spec/lir.md の「節の呼び出し」)。
+    /// `effect`の操作`op`をする。`evv`から`effect`の最初のevidenceを探し、その操作のエントリを読み、evidenceと`args`で
+    /// 呼ぶ。`args`は操作の引数で、引数と結果のReprは操作の表の`params`と`ret`から取る。`mask`は持たない
+    /// (docs/spec/lir.mdの「節の呼び出し」)。
     Clause {
         effect: u32,
         op: u32,
-        callee: Atom,
         args: Vec<Atom>,
     },
     /// `par` の fork と join。`left` と `right` の関数値に `()` を適用する子を作り、両方の値を `pair` の構築子で組にして
@@ -528,18 +527,17 @@ impl Call {
                 op: _,
                 resumable: _,
                 args,
+            }
+            | Call::Clause {
+                effect: _,
+                op: _,
+                args,
             } => args.iter().for_each(|&atom| f(atom)),
             Call::Apply {
                 callee,
                 args,
                 yields: _,
                 prompt: _,
-            }
-            | Call::Clause {
-                effect: _,
-                op: _,
-                callee,
-                args,
             } => {
                 f(*callee);
                 args.iter().for_each(|&atom| f(atom));
@@ -581,18 +579,17 @@ impl Call {
                 op: _,
                 resumable: _,
                 args,
+            }
+            | Call::Clause {
+                effect: _,
+                op: _,
+                args,
             } => args.iter_mut().for_each(&mut f),
             Call::Apply {
                 callee,
                 args,
                 yields: _,
                 prompt: _,
-            }
-            | Call::Clause {
-                effect: _,
-                op: _,
-                callee,
-                args,
             } => {
                 f(callee);
                 args.iter_mut().for_each(&mut f);

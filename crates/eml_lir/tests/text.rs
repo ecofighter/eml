@@ -1380,7 +1380,7 @@ fn a_never_operation_returns_never() {
 #[test]
 fn prims_and_clauses_round_trip() {
     let program = round_trip(
-        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nyields fn f(s.0: tobj) -> tobj {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)\n  let m.4: tobj = prim evv_mask[State*2](w.1)\n  let c.5: tobj = prim ev_clause[State.get](e.2)\n  let r.6: tobj = clause State.get c.5(e.2, ())\n  return r.6\n}\ninternal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\n",
+        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nyields fn f(s.0: tobj) -> tobj {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)\n  let m.4: tobj = prim evv_mask[State*2](w.1)\n  let r.6: tobj = clause State.get(())\n  return r.6\n}\ninternal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\n",
     );
     let f = &program.functions[0];
     assert_eq!(f.clause, None);
@@ -1416,14 +1416,13 @@ fn prims_and_clauses_round_trip() {
         }
     );
     assert_eq!(
-        f.blocks[0].stmts[5],
+        f.blocks[0].stmts[4],
         Stmt::Let {
             var: VarId(6),
             rhs: Rhs::Call(Call::Clause {
                 effect: 0,
                 op: 0,
-                callee: v(5),
-                args: vec![v(2), Atom::Unit],
+                args: vec![Atom::Unit],
             }),
         }
     );
@@ -1432,10 +1431,43 @@ fn prims_and_clauses_round_trip() {
     assert_eq!(g.clause, Some((0, 0)));
 }
 
+/// 節の呼び出しは操作を名前で書き、操作の引数だけを持つ。evidenceとエントリは実行が`evv`から読む
+/// (docs/spec/lir.mdの「節の呼び出し」)。
+#[test]
+fn a_clause_names_its_operation_and_arguments() {
+    let program = round_trip(
+        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(s.0: tobj) -> tobj {\n  let u.1: unit = clause State.put(s.0)\n  tail clause State.get(())\n}\n",
+    );
+    let f = &program.functions[0];
+    assert_eq!(
+        f.blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(1),
+            rhs: Rhs::Call(Call::Clause {
+                effect: 0,
+                op: 1,
+                args: vec![v(0)],
+            }),
+        }
+    );
+    assert_eq!(
+        f.blocks[0].term,
+        Term::TailCall(Call::Clause {
+            effect: 0,
+            op: 0,
+            args: vec![Atom::Unit],
+        })
+    );
+    let error = parse_error(
+        "effect State { get(unit) -> tobj }\nfn f(c.0: tobj) -> tobj {\n  tail clause State.get c.0(())\n}\n",
+    );
+    assert_eq!(error.line, 3);
+}
+
 #[test]
 fn every_prim_round_trips() {
     round_trip(
-        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(w.0: tobj, e.1: obj, s.2: tobj, c.3: tobj) -> unit {\n  let v.20: tobj = prim evv_get()\n  let x.21: tobj = prim evv_mask[State, #4](w.0)\n  let y.22: unit = prim ev_set_clause[State.get](e.1, c.3)\n  let z.23: tobj = prim ev_take_state(e.1)\n  let a.4: unit = prim evv_set(w.0)\n  let b.5: tobj = prim evv_push(w.0, e.1)\n  let d.6: obj = prim ev_renew(e.1, s.2)\n  let g.7: obj = prim ev_lookup[State]()\n  let h.8: tobj = prim ev_evv(e.1)\n  let i.9: unit = prim ev_set_state(e.1, s.2)\n  let j.10: int = prim yielding()\n  let k.11: int = prim yield_status(e.1)\n  let l.12: unit = prim yield_to(e.1, c.3, s.2)\n  let m.13: unit = prim yield_abort(e.1, c.3)\n  let n.14: tobj = prim yield_cont_take()\n  let o.15: unit = prim yield_cont_set(n.14)\n  let p.16: tobj = prim yield_finish()\n  let q.17: obj = prim dummy()\n  let r.18: tobj = prim ev_clause[State.#7](e.1)\n  let t.19: obj = prim ev_new[#3](s.2, w.0)\n  tail clause State.put c.3(e.1, s.2)\n}\n",
+        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(w.0: tobj, e.1: obj, s.2: tobj, c.3: tobj) -> unit {\n  let v.20: tobj = prim evv_get()\n  let x.21: tobj = prim evv_mask[State, #4](w.0)\n  let y.22: unit = prim ev_set_clause[State.get](e.1, c.3)\n  let z.23: tobj = prim ev_take_state(e.1)\n  let a.4: unit = prim evv_set(w.0)\n  let b.5: tobj = prim evv_push(w.0, e.1)\n  let d.6: obj = prim ev_renew(e.1, s.2)\n  let h.8: tobj = prim ev_evv(e.1)\n  let i.9: unit = prim ev_set_state(e.1, s.2)\n  let j.10: int = prim yielding()\n  let k.11: int = prim yield_status(e.1)\n  let l.12: unit = prim yield_to(e.1, c.3, s.2)\n  let m.13: unit = prim yield_abort(e.1, c.3)\n  let n.14: tobj = prim yield_cont_take()\n  let o.15: unit = prim yield_cont_set(n.14)\n  let p.16: tobj = prim yield_finish()\n  let q.17: obj = prim dummy()\n  let r.18: unit = prim ev_set_clause[State.#7](e.1, c.3)\n  let t.19: obj = prim ev_new[#3](s.2, w.0)\n  tail clause State.put(s.2)\n}\n",
     );
 }
 
@@ -1452,15 +1484,15 @@ fn a_prim_has_the_immediates_of_its_kind() {
         "line 3: `evv_get` takes no immediate"
     );
     assert_eq!(
-        prim("ev_lookup()"),
-        "line 3: `ev_lookup` needs an immediate `[Effect]`"
+        prim("ev_new(w.0, w.0)"),
+        "line 3: `ev_new` needs an immediate `[Effect]`"
     );
     assert_eq!(
-        prim("ev_lookup[State, State]()"),
-        "line 3: `ev_lookup` takes one effect"
+        prim("ev_new[State, State](w.0, w.0)"),
+        "line 3: `ev_new` takes one effect"
     );
     assert_eq!(
-        prim("ev_clause[State](w.0)"),
+        prim("ev_set_clause[State](w.0, w.0)"),
         "line 3: expected `Effect.operation`, found `State`"
     );
     assert_eq!(
@@ -1483,14 +1515,14 @@ fn an_evv_mask_masks_some_effect() {
 #[test]
 fn an_operation_of_an_unknown_effect_is_written_by_number() {
     let error = parse_error(
-        "effect State { get(unit) -> tobj }\nfn f(e.0: obj) -> tobj {\n  let c.1: tobj = prim ev_clause[#3.get](e.0)\n  return c.1\n}\n",
+        "effect State { get(unit) -> tobj }\nfn f(e.0: obj, c.1: tobj) -> unit {\n  let u.2: unit = prim ev_set_clause[#3.get](e.0, c.1)\n  return u.2\n}\n",
     );
     assert_eq!(
         error.to_string(),
         "line 3: an operation of the unknown effect #3 is written `#N`"
     );
     round_trip(
-        "effect State { get(unit) -> tobj }\nfn f(e.0: obj) -> tobj {\n  let c.1: tobj = prim ev_clause[#3.#0](e.0)\n  return c.1\n}\n",
+        "effect State { get(unit) -> tobj }\nfn f(e.0: obj, c.1: tobj) -> unit {\n  let u.2: unit = prim ev_set_clause[#3.#0](e.0, c.1)\n  return u.2\n}\n",
     );
 }
 

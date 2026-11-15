@@ -113,23 +113,17 @@ fn the_uses_of_a_never_binder_are_not_compared() {
 layout Option { None, Some(tobj) }
 effect Fail { never fail(tobj) -> never }
 fn f() -> tobj {
-  let e.1: obj = prim ev_lookup[Fail]()
-  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let t.2: int = clause Fail.fail(())
   return t.2
 }
 fn g() -> tobj {
-  let e.1: obj = prim ev_lookup[Fail]()
-  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let t.2: int = clause Fail.fail(())
   jump b1(t.2)
 b1(a.3: tobj):
   return a.3
 }
 fn h() -> tobj {
-  let e.1: obj = prim ev_lookup[Fail]()
-  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let t.2: int = clause Fail.fail(())
   let r.3: tobj = call k(t.2)
   return r.3
 }
@@ -137,9 +131,7 @@ fn k(x.0: tobj) -> tobj {
   return x.0
 }
 fn m() -> tobj {
-  let e.1: obj = prim ev_lookup[Fail]()
-  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let t.2: int = clause Fail.fail(())
   let c.3: tobj = closure n(t.2)
   return c.3
 }
@@ -147,16 +139,12 @@ fn n(a.0: tobj, b.1: unit) -> tobj {
   return a.0
 }
 fn p() -> tobj {
-  let e.1: obj = prim ev_lookup[Fail]()
-  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let t.2: int = clause Fail.fail(())
   let r.3: tobj = apply &k(t.2)
   return r.3
 }
 fn q() -> tobj {
-  let e.1: obj = prim ev_lookup[Fail]()
-  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
-  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let t.2: int = clause Fail.fail(())
   let d.3: tobj = con Option #1(t.2)
   return d.3
 }
@@ -450,7 +438,7 @@ fn a_mask_on_handle_or_perform_is_rejected() {
 #[test]
 fn a_mask_on_a_clause_is_rejected() {
     let mut program = read(&format!(
-        "{COUNTER}fn f(c.0: tobj, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+        "{COUNTER}fn f() -> int {{\n  let t.2: int = clause Counter.get(())\n  return t.2\n}}\n"
     ));
     let Stmt::Let {
         var: _,
@@ -598,8 +586,7 @@ yields fn f(s.0: tobj) -> tobj {
   let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
   let u.7: unit = prim ev_set_clause[State.put](e.2, &p)
   let m.4: tobj = prim evv_mask[State*2](w.1)
-  let c.5: tobj = prim ev_clause[State.get](e.2)
-  let r.6: tobj = clause State.get c.5(e.2, ())
+  let r.6: tobj = clause State.get(())
   return r.6
 }
 internal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {
@@ -620,10 +607,10 @@ fn prims_and_clauses_are_accepted_after_the_evidence_pass() {
     assert_eq!(check_evidence(EVIDENCE_EXAMPLE), Ok(()));
 }
 
-/// EPの段は、エントリの規則と`callee`の規則を、LIRのverifierと同じ部品で確かめる。ここでは規則の中身でなく、
-/// Core IRのverifierが部品に文を渡していることを確かめる。
+/// EPの段は、エントリの規則を、LIRのverifierと同じ部品で確かめる。ここでは規則の中身でなく、Core IRのverifierが
+/// 部品に文を渡していることを確かめる。
 #[test]
-fn the_evidence_level_checks_entries_and_clause_callees() {
+fn the_evidence_level_checks_entries() {
     let clauses = "internal clause Counter.get fn get(e.0: obj, u.1: unit) -> int {\n  return 0\n}\ninternal clause Counter.put fn put(e.0: obj, n.1: int) -> unit {\n  return ()\n}\n";
     assert_eq!(
         check_evidence(&format!(
@@ -633,12 +620,6 @@ fn the_evidence_level_checks_entries_and_clause_callees() {
             "the `Counter.put` entry of `e.1` is not filled before `e.1` is used in `f`"
                 .to_string()
         )
-    );
-    assert_eq!(
-        check_evidence(&format!(
-            "{COUNTER}fn f(c.0: tobj) -> unit {{\n  let e.1: obj = prim ev_lookup[Counter]()\n  let u.2: unit = clause Counter.put c.0(e.1, 1)\n  return u.2\n}}\n{clauses}"
-        )),
-        Err("a clause of `Counter.put` calls `c.0` (tobj), which `ev_clause[Counter.put]` did not bind in this function in `f`".to_string())
     );
 }
 
@@ -686,7 +667,7 @@ fn the_translated_level_rejects_prims_and_clauses() {
     );
     assert_eq!(
         check_translated(&format!(
-            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+            "{COUNTER}fn f() -> int {{\n  let t.2: int = clause Counter.get(())\n  return t.2\n}}\n"
         )),
         Err("a clause call is used before the evidence pass in `f`".to_string())
     );
@@ -717,18 +698,19 @@ fn a_prim_takes_its_arguments() {
 #[test]
 fn a_prim_names_known_effects_and_operations() {
     assert_eq!(
-        check_evidence("fn f() -> obj {\n  let e.0: obj = prim ev_lookup[#2]()\n  return e.0\n}\n"),
+        check_evidence(
+            "fn f(w.0: tobj) -> obj {\n  let e.1: obj = prim ev_new[#2]((), w.0)\n  return e.1\n}\n"
+        ),
         Err(
-            "`prim ev_lookup[#2]` names effect 2, which is not in the effect table in `f`"
-                .to_string()
+            "`prim ev_new[#2]` names effect 2, which is not in the effect table in `f`".to_string()
         )
     );
     assert_eq!(
         check_evidence(&format!(
-            "{STATE}fn f(e.0: obj) -> tobj {{\n  let c.1: tobj = prim ev_clause[State.#2](e.0)\n  return c.1\n}}\n"
+            "{STATE}fn f(w.0: tobj, c.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[State]((), w.0)\n  let u.3: unit = prim ev_set_clause[State.#2](e.2, c.1)\n  return u.3\n}}\n"
         )),
         Err(
-            "`prim ev_clause[State.#2]` names operation 2 of `State`, which has 2 operations in `f`"
+            "`prim ev_set_clause[State.#2]` names operation 2 of `State`, which has 2 operations in `f`"
                 .to_string()
         )
     );
@@ -788,15 +770,18 @@ fn a_clause_function_names_a_known_effect() {
 fn a_clause_call_names_an_operation_and_takes_its_arguments() {
     assert_eq!(
         check_evidence(&format!(
-            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.#5 c.0(e.1, 1)\n  return u.2\n}}\n"
+            "{COUNTER}fn f() -> unit {{\n  let u.2: unit = clause Counter.#5(1)\n  return u.2\n}}\n"
         )),
         Err("a clause names operation 5 of `Counter`, which has 2 operations in `f`".to_string())
     );
     assert_eq!(
         check_evidence(&format!(
-            "{COUNTER}fn f() -> unit {{\n  let e.1: obj = prim ev_lookup[Counter]()\n  let c.0: tobj = prim ev_clause[Counter.put](e.1)\n  let u.2: unit = clause Counter.put c.0(e.1)\n  return u.2\n}}\n"
+            "{COUNTER}fn f() -> unit {{\n  let u.2: unit = clause Counter.put()\n  return u.2\n}}\n"
         )),
-        Err("a clause of `Counter.put` is given 1 arguments, but it takes 2 (the evidence and 1 arguments of the operation) in `f`".to_string())
+        Err(
+            "a clause of `Counter.put` is given 0 arguments, but the operation takes 1 in `f`"
+                .to_string()
+        )
     );
 }
 
@@ -804,7 +789,7 @@ fn a_clause_call_names_an_operation_and_takes_its_arguments() {
 fn the_evidence_level_does_not_compare_boundaries() {
     // box の挿入の前なので、Repr の食い違いは box の挿入が変換で埋める
     let text = format!(
-        "{COUNTER}fn f(n.1: tobj) -> tobj {{\n  let e.2: obj = prim ev_lookup[Counter]()\n  let c.0: tobj = prim ev_clause[Counter.put](e.2)\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+        "{COUNTER}fn f(n.1: tobj) -> tobj {{\n  let u.3: unit = clause Counter.put(n.1)\n  return u.3\n}}\n"
     );
     assert_eq!(check_evidence(&text), Ok(()));
 }

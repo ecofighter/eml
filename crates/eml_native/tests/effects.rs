@@ -1,5 +1,5 @@
 //! エフェクトの基本操作のテスト (docs/spec/native.md の「エフェクト」)。
-use eml_lir::{Prim, Repr};
+use eml_lir::{Prim, Repr, Step};
 use eml_native::Arg;
 use eml_nrt::image::{DATUM_EFFECT, DATUM_FN, DATUM_MASK, DatumRow, MaskRow};
 use eml_nrt::{RunFault, RuntimeError};
@@ -10,18 +10,19 @@ use crate::common::native::{
     program, visit, visit_each,
 };
 
-/// 即値の数。`evv_mask`は項目の列の長さ、`ev_new`は操作の数、`ev_set_clause`、`ev_lookup`、`ev_clause`、`root_get`、
-/// `root_set`は番号である。
+/// 即値の数。`evv_mask`は項目の列の長さ、`ev_new`は操作の数、`ev_set_clause`、`root_get`、`root_set`は番号である。
 fn immediates(prim: &Prim) -> usize {
     match prim.name() {
         "evv_mask" | "ev_new" => 2,
-        "ev_set_clause" | "ev_lookup" | "ev_clause" | "root_get" | "root_set" => 1,
+        "ev_set_clause" | "root_get" | "root_set" => 1,
         _ => 0,
     }
 }
 
 /// 呼ぶ基本操作のエントリは、記号が`eml_rt_`に基本操作の名前を続けたもので、引数は即値と行の引数を並べたものである。
-/// 表を持たず、基本操作の表から導く。インラインの2つと、`empty_mut_array`、`child_abort`にはエントリがない。
+/// 表を持たず、基本操作の表から導く。インラインの2つと、`empty_mut_array`、`child_abort`にはエントリがない。命令が
+/// 走らせる`Ctx`の操作のエントリも、記号が`eml_rt_`にstepの名前を続けたもので、stepのオペランドを受け、stepが返す
+/// ときに語を返す。
 #[test]
 fn every_prim_entry_is_named_after_its_prim() {
     const NO_ENTRY: [&str; 4] = ["yielding", "yield_status", "empty_mut_array", "child_abort"];
@@ -41,15 +42,25 @@ fn every_prim_entry_is_named_after_its_prim() {
         );
         assert_eq!(entry.result.is_none(), row.ret == Repr::Unit, "{symbol}");
     }
+    for step in Step::ALL {
+        let symbol = format!("eml_rt_{}", step.name());
+        let entry = eml_nrt::entries()
+            .find(|e| e.symbol == symbol)
+            .unwrap_or_else(|| panic!("no entry {symbol}"));
+        assert_eq!(entry.params.len(), step.operands(), "{symbol}");
+        assert_eq!(entry.result.is_some(), step.returns(), "{symbol}");
+    }
 }
 
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
 /// `Counter`のエントリの関数。evidenceのエントリは、どれも`ev_new`の直後に入れる (docs/spec/lir.mdの「verifier」)。
+/// `get`は状態を取り出して返すので、`clause Counter.get`でどのevidenceが見つかったかが分かる。
 const COUNTER_ENTRIES: &str = "\
 internal clause Counter.get fn get$entry(e.0: obj, u.1: unit) -> tobj {
+  let s.2: tobj = prim ev_take_state(e.0)
   decref e.0
-  return ()
+  return s.2
 }
 internal clause Counter.put fn put$entry(e.0: obj, x.1: tobj) -> unit {
   decref e.0
@@ -58,11 +69,12 @@ internal clause Counter.put fn put$entry(e.0: obj, x.1: tobj) -> unit {
 }
 ";
 
-/// `Other`のエントリの関数。
+/// `Other`のエントリの関数。`Counter`の`get`と同じく状態を取り出して返す。
 const OTHER_ENTRY: &str = "\
 internal clause Other.ask fn ask$entry(e.0: obj, u.1: unit) -> tobj {
+  let s.2: tobj = prim ev_take_state(e.0)
   decref e.0
-  return ()
+  return s.2
 }
 ";
 
@@ -211,7 +223,7 @@ fn main() -> unit {{
     ));
 }
 
-/// handlerを設ける基本操作と、evidenceを探して読み書きする基本操作を、VMと同じに走らせる。
+/// handlerを設ける基本操作と、節の呼び出しと、evidenceを読み書きする基本操作を、VMと同じに走らせる。
 #[test]
 fn a_handler_is_installed_and_found() {
     agree(&format!(
@@ -224,27 +236,23 @@ fn main() -> unit {{
   let e.2: obj = prim ev_new[Counter](s.1, w.0)
   let u.4: unit = prim ev_set_clause[Counter.get](e.2, &get)
   let u.6: unit = prim ev_set_clause[Counter.put](e.2, &put)
+  dup e.2
   let w.7: tobj = prim evv_push(w.0, e.2)
   let u.8: unit = prim evv_set(w.7)
-  let f.9: obj = prim ev_lookup[Counter]()
-  let c.10: tobj = prim ev_clause[Counter.put](f.9)
-  dup f.9
   let p.5: tobj = box 20
-  let q.21: unit = clause Counter.put c.10(f.9, p.5)
-  let y.19: tobj = prim ev_clause[Counter.get](f.9)
-  dup f.9
-  let q.26: tobj = clause Counter.get y.19(f.9, ())
-  let o.11: tobj = prim ev_evv(f.9)
+  let q.21: unit = clause Counter.put(p.5)
+  let q.26: tobj = clause Counter.get(())
+  let o.11: tobj = prim ev_evv(e.2)
   decref o.11
-  let o.25: tobj = prim ev_take_evv(f.9)
+  let o.25: tobj = prim ev_take_evv(e.2)
   decref o.25
-  let t.12: tobj = prim ev_take_state(f.9)
+  let t.12: tobj = prim ev_take_state(e.2)
   let s.13: tobj = box 6
-  let u.14: unit = prim ev_set_state(f.9, s.13)
+  let u.14: unit = prim ev_set_state(e.2, s.13)
   let s.15: tobj = box 7
-  let r.16: obj = prim ev_renew(f.9, s.15)
-  let v.17: tobj = prim ev_take_state(f.9)
-  decref f.9
+  let r.16: obj = prim ev_renew(e.2, s.15)
+  let v.17: tobj = prim ev_take_state(e.2)
+  decref e.2
   let x.18: tobj = prim ev_take_state(r.16)
   decref r.16
   let u.20: unit = prim evv_set(w.0)
@@ -297,15 +305,11 @@ fn main() -> unit {{
   let w.8: tobj = prim evv_push(w.6, o.7)
   dup w.8
   let u.9: unit = prim evv_set(w.8)
-  let e.10: obj = prim ev_lookup[Counter]()
-  let s.11: tobj = prim ev_take_state(e.10)
-  decref e.10
+  let s.11: tobj = clause Counter.get(())
   let m.12: tobj = prim evv_mask[Counter](w.8)
   decref w.8
   let u.13: unit = prim evv_set(m.12)
-  let e.14: obj = prim ev_lookup[Counter]()
-  let s.15: tobj = prim ev_take_state(e.14)
-  decref e.14
+  let s.15: tobj = clause Counter.get(())
   let u.16: unit = prim evv_set(w.0)
   let p.17: unit = call show_boxed(s.11)
   tail call show_boxed(s.15)
@@ -345,12 +349,8 @@ fn main() -> unit {{
   let m.13: tobj = prim evv_mask[Counter, Other](w.12)
   decref w.12
   let u.14: unit = prim evv_set(m.13)
-  let e.15: obj = prim ev_lookup[Counter]()
-  let s.16: tobj = prim ev_take_state(e.15)
-  decref e.15
-  let f.17: obj = prim ev_lookup[Other]()
-  let s.18: tobj = prim ev_take_state(f.17)
-  decref f.17
+  let s.16: tobj = clause Counter.get(())
+  let s.18: tobj = clause Other.ask(())
   let u.19: unit = prim evv_set(w.0)
   let p.20: unit = call show_boxed(s.16)
   tail call show_boxed(s.18)
@@ -423,7 +423,7 @@ fn f(w.0: tobj) -> tobj {
     );
 }
 
-/// 2つのエフェクトを両方の順に宣言したプログラム。`f`は`A`のevidenceの状態を読む。
+/// 2つのエフェクトを両方の順に宣言したプログラム。`f`は`A`の節の呼び出しで、`A`のevidenceの状態を読む。
 fn two_effects(first: &str, second: &str) -> String {
     format!(
         "effect {first} {{ {}(unit) -> tobj }}
@@ -442,17 +442,16 @@ fn f() -> int {{
   let u.91: unit = prim ev_set_clause[B.b](b.5, &b$entry)
   let w.6: tobj = prim evv_push(w.3, b.5)
   let u.7: unit = prim evv_set(w.6)
-  let e.8: obj = prim ev_lookup[A]()
-  let t.9: tobj = prim ev_take_state(e.8)
-  decref e.8
+  let t.9: tobj = clause A.a(())
   let u.10: unit = prim evv_set(w.0)
   let n.11: int = unbox t.9
   decref t.9
   return n.11
 }}
 internal clause A.a fn a$entry(e.0: obj, u.1: unit) -> tobj {{
+  let s.2: tobj = prim ev_take_state(e.0)
   decref e.0
-  return ()
+  return s.2
 }}
 internal clause B.b fn b$entry(e.0: obj, u.1: unit) -> tobj {{
   decref e.0
@@ -591,7 +590,7 @@ fn main() -> unit {
     assert_eq!(result, Err(format!("{ROOT_MISUSE} in `<native code>`")));
 }
 
-/// `Counter`のhandlerを1つ入れて`evv`に積み、`ev_lookup`で見つけたevidenceの`get`の節を`clause`で呼んで、結果を表示する
+/// `Counter`のhandlerを1つ入れて`evv`に積み、そのevidenceの`get`の節を`clause`で呼んで、結果を表示する
 /// `main`。`clause`は入れた節の値`value`を受け取り、節の関数`get`はプログラムの残り`rest`が定義する。`put`の
 /// エントリには捕獲を持つクロージャを入れる。静的な行を作らないので、静的なクロージャの行は`get`のエントリのもの
 /// だけになる。
@@ -610,9 +609,7 @@ fn main() -> unit {{
   let u.12: unit = prim ev_set_clause[Counter.put](e.2, p.11)
   let w.4: tobj = prim evv_push(w.0, e.2)
   let u.5: unit = prim evv_set(w.4)
-  let f.6: obj = prim ev_lookup[Counter]()
-  let c.7: tobj = prim ev_clause[Counter.get](f.6)
-  let r.8: tobj = clause Counter.get c.7(f.6, ())
+  let r.8: tobj = clause Counter.get(())
   let u.9: unit = prim evv_set(w.0)
   tail call show_boxed(r.8)
 }}
@@ -644,7 +641,7 @@ fn an_in_place_clause_returns_its_value() {
     agree(&run_get("&get", GET));
 }
 
-/// underの節は、動く間`evv`を自分のhandlerの`evv`にする。だから中の`ev_lookup`は、自分のhandler (状態2) でなく
+/// underの節は、動く間`evv`を自分のhandlerの`evv`にする。だから中の節の呼び出しは、自分のhandler (状態2) でなく
 /// 外側のhandler (状態1) を見つける。
 #[test]
 fn an_under_clause_runs_with_its_handlers_evv() {
@@ -666,9 +663,7 @@ fn main() -> unit {{
   let u.92: unit = prim ev_set_clause[Counter.put](b.5, &put$entry)
   let w.7: tobj = prim evv_push(w.3, b.5)
   let u.8: unit = prim evv_set(w.7)
-  let f.9: obj = prim ev_lookup[Counter]()
-  let c.10: tobj = prim ev_clause[Counter.get](f.9)
-  let r.11: tobj = clause Counter.get c.10(f.9, ())
+  let r.11: tobj = clause Counter.get(())
   let u.12: unit = prim evv_set(w.0)
   tail call show_boxed(r.11)
 }}
@@ -677,11 +672,7 @@ internal clause Counter.get fn under(e.0: obj, u.1: unit) -> tobj {{
   let o.3: tobj = prim ev_evv(e.0)
   let u.4: unit = prim evv_set(o.3)
   decref e.0
-  let f.5: obj = prim ev_lookup[Counter]()
-  let s.6: tobj = prim ev_take_state(f.5)
-  dup s.6
-  let u.7: unit = prim ev_set_state(f.5, s.6)
-  decref f.5
+  let s.6: tobj = clause Counter.get(())
   let u.8: unit = prim evv_set(w.2)
   return s.6
 }}
@@ -712,9 +703,7 @@ fn main() -> unit {{
   return u.11
 }}
 fn ask() -> tobj {{
-  let e.1: obj = prim ev_lookup[Counter]()
-  let c.0: tobj = prim ev_clause[Counter.get](e.1)
-  tail clause Counter.get c.0(e.1, ())
+  tail clause Counter.get(())
 }}
 internal clause Counter.get fn captured(n.0: tobj, e.1: obj, u.2: unit) -> tobj {{
   decref e.1
@@ -740,9 +729,7 @@ fn main() -> unit {
   let u.4: unit = prim ev_set_clause[Scale.scale](e.3, m.2)
   let w.5: tobj = prim evv_push(w.0, e.3)
   let u.6: unit = prim evv_set(w.5)
-  let f.7: obj = prim ev_lookup[Scale]()
-  let c.8: tobj = prim ev_clause[Scale.scale](f.7)
-  let x.9: float = clause Scale.scale c.8(f.7, 4.0)
+  let x.9: float = clause Scale.scale(4.0)
   let u.10: unit = prim evv_set(w.0)
   let s.11: obj = extern \"Prelude.Show Float.show\"(x.9)
   let u.12: unit = extern Prelude.println(s.11)
@@ -757,6 +744,47 @@ internal clause Scale.scale fn times(k.0: tobj, e.1: obj, x.2: float) -> float {
 }
 ",
     );
+}
+
+/// 節の呼び出しは`evv`からevidenceを探す。`Counter`のevidenceを2つ積み、その後に`Other`のevidenceを積む。
+/// `clause Counter.get`は`Other`を飛ばして内側の`Counter` (状態2) を見つけ、`clause Other.ask`は`Other` (状態3) を
+/// 見つける。ネイティブのコードはVMと同じに走る (docs/spec/lir.mdの「節の呼び出し」)。
+#[test]
+fn a_clause_finds_its_evidence() {
+    let text = format!(
+        "{COUNTER}\
+effect Other {{ ask(unit) -> tobj }}
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  dup w.0
+  dup w.0
+  dup w.0
+  let s.1: tobj = box 1
+  let c.2: obj = prim ev_new[Counter](s.1, w.0)
+  let u.90: unit = prim ev_set_clause[Counter.get](c.2, &get$entry)
+  let u.91: unit = prim ev_set_clause[Counter.put](c.2, &put$entry)
+  let w.3: tobj = prim evv_push(w.0, c.2)
+  let s.4: tobj = box 2
+  let d.5: obj = prim ev_new[Counter](s.4, w.0)
+  let u.92: unit = prim ev_set_clause[Counter.get](d.5, &get$entry)
+  let u.93: unit = prim ev_set_clause[Counter.put](d.5, &put$entry)
+  let w.6: tobj = prim evv_push(w.3, d.5)
+  let s.7: tobj = box 3
+  let o.8: obj = prim ev_new[Other](s.7, w.0)
+  let u.94: unit = prim ev_set_clause[Other.ask](o.8, &ask$entry)
+  let w.9: tobj = prim evv_push(w.6, o.8)
+  let u.10: unit = prim evv_set(w.9)
+  let a.11: tobj = clause Counter.get(())
+  let b.12: tobj = clause Other.ask(())
+  let u.13: unit = prim evv_set(w.0)
+  let p.14: unit = call show_boxed(a.11)
+  tail call show_boxed(b.12)
+}}
+{SHOW_BOXED}{SHOW}{COUNTER_ENTRIES}{OTHER_ENTRY}"
+    );
+    agree(&text);
+    assert_eq!(native(&text).0, "2\n3\n");
 }
 
 /// 節のクロージャのタグは0で、`apply`で呼ばれることはない。静的なクロージャの`DATUM_FN`の行の`bits`も0である。
@@ -823,7 +851,7 @@ fn exits(text: &str) {
 fn a_tail_never_clause_in_a_float_function() {
     exits(&run_fail(
         "let x.11: float",
-        "fn fail() -> float {\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.0: tobj = prim ev_clause[Fail.fail](e.1)\n  tail clause Fail.fail c.0(e.1, ())\n}\n",
+        "fn fail() -> float {\n  tail clause Fail.fail(())\n}\n",
     ));
 }
 
@@ -832,7 +860,7 @@ fn a_tail_never_clause_in_a_float_function() {
 fn a_tail_never_clause_in_a_function_returning_two_leaves() {
     exits(&run_fail(
         "let (x.11: float, n.12: int)",
-        "fn fail() -> (float, int) {\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.0: tobj = prim ev_clause[Fail.fail](e.1)\n  tail clause Fail.fail c.0(e.1, ())\n}\n",
+        "fn fail() -> (float, int) {\n  tail clause Fail.fail(())\n}\n",
     ));
 }
 
@@ -844,10 +872,8 @@ fn a_never_clause_bound_to_a_float() {
         "let x.11: float",
         "\
 fn fail() -> float {
-  let e.1: obj = prim ev_lookup[Fail]()
-  let c.0: tobj = prim ev_clause[Fail.fail](e.1)
   let s.2: obj = extern \"Prelude.Show Int.show\"(6)
-  let x.3: float = clause Fail.fail c.0(e.1, ())
+  let x.3: float = clause Fail.fail(())
   let u.4: unit = extern Prelude.println(s.2)
   let y.5: float = extern \"Prelude.Num Float.+\"(x.3, 1.0)
   return y.5
@@ -885,9 +911,7 @@ fn main() -> unit {{
   return ()
 }}
 fn f() -> float {{
-  let e.0: obj = prim ev_lookup[Counter]()
-  let c.1: tobj = prim ev_clause[Counter.get](e.0)
-  tail clause Counter.get c.1(e.0, ())
+  tail clause Counter.get(())
 }}
 "
     ));
@@ -967,27 +991,6 @@ internal clause Counter.get fn g(e.0: obj, u.1: unit) -> tobj {{
 "
     ));
     let rule = "the `Counter.put` entry of `e.1` is not filled before `e.1` is used";
-    let expected = format!("invalid LIR at the native load: {rule} in `f`");
-    assert!(message.contains(&expected), "{message}");
-}
-
-/// 節の呼び出しは、クロージャを確かめずに操作のシグネチャで呼ぶので、同じ操作の`ev_clause`が読んでいない`callee`は、
-/// どのビルドでも読み込みのverifierが断る (docs/spec/lir.md の「verifier」)。
-#[test]
-fn release_check_a_clause_callee_not_read_from_its_entry_panics() {
-    let message = load_panic(&format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  return ()
-}}
-fn f(c.0: tobj) -> unit {{
-  let e.1: obj = prim ev_lookup[Counter]()
-  let u.2: unit = clause Counter.put c.0(e.1, ())
-  return u.2
-}}
-"
-    ));
-    let rule = "a clause of `Counter.put` calls `c.0` (tobj), which `ev_clause[Counter.put]` did not bind in this function";
     let expected = format!("invalid LIR at the native load: {rule} in `f`");
     assert!(message.contains(&expected), "{message}");
 }
@@ -1158,10 +1161,8 @@ fn f2(x.0: obj) -> int {{
 fn f3(x.0: obj) -> int {{
   unpack x.0 P #0(s.1: obj, n.2: int)
   let r.3: token = release x.0 P #0(s.1, _)
-  let ev.4: obj = prim ev_lookup[Fail]()
-  let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
   let m.6: obj = extern \"Prelude.Show Int.show\"(n.2)
-  let k.7: int = clause Fail.fail c.5(ev.4, m.6)
+  let k.7: int = clause Fail.fail(m.6)
   let d.8: obj = con P #0(s.1, k.7) reuse r.3 in place
   decref d.8
   return k.7
@@ -1318,9 +1319,7 @@ yields fn inner(s.0: tobj) -> tobj {
 }
 yields fn fail(u.0: tobj) -> tobj {
   decref u.0
-  let e.1: obj = prim ev_lookup[Fail]()
-  let c.2: tobj = prim ev_clause[Fail.fail](e.1)
-  tail clause Fail.fail c.2(e.1, ())
+  tail clause Fail.fail(())
 }
 internal clause Fail.fail fn fail$entry(e.0: obj, u.1: unit) -> obj {
   let u.2: unit = prim yield_abort(e.0, ())
@@ -1350,8 +1349,8 @@ fn prompt$(ev.0: obj, x.1: tobj) -> tobj {
             "prim ev_new[Fail](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[Fail.fail](ev.2, &fail$entry)",
         )
         .replace(
-            "  decref u.0\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.2: tobj = prim ev_clause[Fail.fail](e.1)\n  tail clause Fail.fail c.2(e.1, ())",
-            "  decref u.0\n  let w.3: tobj = prim evv_get()\n  let m.4: tobj = prim evv_mask[Fail](w.3)\n  decref w.3\n  let u.5: unit = prim evv_set(m.4)\n  let e.1: obj = prim ev_lookup[Fail]()\n  let c.2: tobj = prim ev_clause[Fail.fail](e.1)\n  tail clause Fail.fail c.2(e.1, ())",
+            "  decref u.0\n  tail clause Fail.fail(())",
+            "  decref u.0\n  let w.3: tobj = prim evv_get()\n  let m.4: tobj = prim evv_mask[Fail](w.3)\n  decref w.3\n  let u.5: unit = prim evv_set(m.4)\n  tail clause Fail.fail(())",
         );
     assert!(same.contains("ev_new[Fail](s.0") && same.contains("evv_mask[Fail]"));
     let (finished, record) = visit_each(&same, &["make", "probe"], state_released, None);
@@ -1411,21 +1410,17 @@ fn run(b.0: tobj) -> obj {{
 }}
 yields fn in_place(u.0: tobj) -> tobj {{
   decref u.0
-  let ev.1: obj = prim ev_lookup[Fail]()
-  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
   let s.3: obj = const \"in place\"
   let t.4: obj = extern \"Prelude.Show Int.show\"(4)
-  let x.5: int = clause Fail.fail c.2(ev.1, s.3)
+  let x.5: int = clause Fail.fail(s.3)
   let u.6: unit = extern Prelude.println(t.4)
   let b.7: tobj = box x.5
   return b.7
 }}
 yields fn in_tail(u.0: tobj) -> tobj {{
   decref u.0
-  let ev.1: obj = prim ev_lookup[Fail]()
-  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
   let s.3: obj = const \"tail\"
-  tail clause Fail.fail c.2(ev.1, s.3)
+  tail clause Fail.fail(s.3)
 }}
 {FAIL_ABORTS}{PROMPT}"
     );

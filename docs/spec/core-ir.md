@@ -135,7 +135,7 @@
 
 | 変数 | 印 | 理由 |
 |---|---|---|
-| evidence、`evv`、`ev_clause` が返すエントリのクロージャ、`unit` と `int` の一時変数 (`prompt$` の `s`、つまり `yield_status` の `int` を含む) | `unr` | Perceus か基本操作が `dup` する、実行系の中で共有する入れ物である。操作の節は `Unr` の値しか捕まえない ([エフェクトと handler](effects.md) の「handler の意味」) |
+| evidence、`evv`、`unit`と`int`の一時変数 (`prompt$`の`s`、つまり`yield_status`の`int`を含む) | `unr` | Perceusか基本操作が`dup`する、実行系の中で共有する入れ物である。操作の節は`Unr`の値しか捕まえない ([エフェクトと handler](effects.md)の「handler の意味」) |
 | 状態 (`ev_take_state`)、κ、`closure resume$`・`closure rewind$`・`closure mask$[..]` で作る継続、handle の箇所の `x = apply body(())`、補助の関数 (`id$`、`compose$`、`prompt$`、`resume$`、`rewind$`、`mask$[..]`) の `ret`、`x`、`k`、`r`、`v` (値) と `resume$` の `s` (状態) と戻り値 | `poly` | `FileIn` を持ちうる。in-place のエントリの状態は、translate がその状態の変数に付けた印を残す (`poly` より正確で、渡せる) |
 | ダミー (`prim dummy()`) | `poly` | 戻り値の印が `lin` の関数からも返す |
 | EP が作るクロージャ (`f$kN`、作り直す `compose$`、`yielding_entry` の `g`) | 捕まえた値の印の結び | `FileIn` を持つクロージャが `lin` になり、ヘッダの `lin` ビットが正しく立つ |
@@ -981,7 +981,7 @@ translate の `let r = handle E(init, body) { c_0, .., c_n } return ret` を、�
 
 - `resume$(ev, ret, κ, v, s)` は、`ev2 = ev_renew(ev, s)` で新しい evidence を作り、今の `evv` の先頭に `ev2` を足して `evv` にする。その後 `x = apply κ(v) prompt ev2` を呼び、`prompt$(ev2, ret, x)` を末尾で呼ぶ。着地の印の evidence は新しい `ev2` で、再開した計算の中の `ev2` 宛ての中断がこの `apply` に着地する。deep handler の再接続と、スコープの外での再開に当たる。`ev2` の外側の `evv` は再開した時点の `evv` なので、handle が返った後の再開も、ほかの handler の中での再開も、その場の文脈の上につながる
 - `rewind$` は、外側のフレームの yield で handler の外へ出たときに `prompt$` が取り出した状態で、`resume$` を呼ぶ
-- 再開した計算の中の操作は、`ev_lookup` で `ev2` を見つける。古い `ev` を持ったまま止まっているフレームはない。`ev` を持つのは、`prompt$` (止まるときは `rewind$` が `ev` の写す部分だけを使う)、`resume$` のクロージャ (同じ)、yield を始めるエントリ (止まらない)、in-place の節 (本体に yield の地点がないので止まらない) だけだからである
+- 再開した計算の中の操作は、節の呼び出しが探して`ev2`を見つける。古い`ev`を持ったまま止まっているフレームはない。`ev`を持つのは、`prompt$` (止まるときは`rewind$`が`ev`の写す部分だけを使う)、`resume$`のクロージャ (同じ)、yieldを始めるエントリ (止まらない)、in-placeの節 (本体にyieldの地点がないので止まらない) だけだからである
 - handler の実行中にその handler 自身の継続を再開する形も、deep handler の意味 ([エフェクトと handler](effects.md) の「handler の意味」) のとおりに動く。次のプログラムでは、`k r 100` の再開が状態 100 の新しい evidence を作り、外側の実行の evidence (状態 1) は変わらないので、101 を表示する (`tests/ui/run/effects/resume_inside_own_handler.em`)
 
   ```haskell
@@ -1016,12 +1016,10 @@ translate の `let r = handle E(init, body) { c_0, .., c_n } return ret` を、�
 
 #### `perform` と節の3つの形
 
-translate の `let r = perform E.op(a_1, .., a_n)` を、次の形にする。`yields` の関数の中で末尾でなければ、再開する操作の `Call::Clause` は yield の地点になる。`never` の操作の `Call::Clause` はならない (上の「yield の地点」)。
+translateの`let r = perform E.op(a_1, .., a_n)`を、次の形にする。節の呼び出しがevidenceを探してエントリを読むので ([LIR](lir.md)の「節の呼び出し」)、EPはそのための基本操作を出さない。`yields`の関数の中で末尾でなければ、再開する操作の`Call::Clause`はyieldの地点になる。`never`の操作の`Call::Clause`はならない (上の「yield の地点」)。
 
 ```
-  let ev = prim ev_lookup[E]()
-  let c = prim ev_clause[E.op](ev)
-  let r = clause E.op c(ev, a_1, .., a_n)
+  let r = clause E.op(a_1, .., a_n)
 ```
 
 in-place のエントリは、translate が作った節の関数 g から、EP が節ごとに作る。節は次の3つの形に分かれ、EP は Core IR の形から決める。
@@ -1108,7 +1106,7 @@ b_fast:
   - 閉包の印は、EP が作るほかの閉包と同じく `a_i` の印の結びである (上の「EP が足す変数の印」)
   - `ev` の持ち主はエントリである。`clause` の呼び出しはオペランドをすべて消費するので、エントリは evidence を所有して受け取る。`child_abort` は `ev` を借りるだけなので、Perceus は `ev` の `decref` を `child_abort` の後に置き、そこへは実行が届かない。`ev` は `child_abort` の巻き戻しの地点が持つ値になり、子のフレームを巻き戻すときに手放される ([LIR](lir.md) の「巻き戻しの地点」)
 - `reperform$E.op` は、操作の引数 `a_1, .., a_k` (操作の表の Repr と印) と、最後に `u` (`unit`) を受ける。戻り値は `tobj` (`poly`) である。`split` は `u` の手前 (k) にある。操作の引数は閉包の捕獲なので型どおりの Repr のままで、実行系が閉包に `()` を適用するので、`u` と結果が一様である ([LIR](lir.md) の「関数の ABI」)。値として参照する関数の規則 ([LIR](lir.md) の「verifier」) をそのまま満たすので、box の挿入は変種 `<f>$uniform` を作らない
-  - 本体は `ev_lookup[E]`、`ev_clause[E.op]`、`clause` で操作を起こす。普通の `perform` と同じく、今の `evv` の最初の `E` の evidence で起こす
+  - 本体は`clause E.op(a_1, .., a_k)`で操作を起こす。普通の`perform`と同じく、今の`evv`の最初の`E`のevidenceで起こす
   - `Prelude.Panic` は `extern Prelude.panic(a_1)` で起こし直す。位置は持たない。`try_panic` がなければ、`panic` と同じく実行時エラーになる
 - 実行系は、親の文脈で `reperform$E.op` を呼ぶ前に、子の操作が届いた handler の evidence が `evv` の最初の `E` の evidence になるように `evv` を整える。`reperform$` は深さを受け取らず、整えた `evv` の最初の `E` の evidence で起こす。fork と join の手順と、子の evidence の作り方は VM の側が決める ([VM](vm.md) の「`par` の fork と join」)
 - `Std.Async.compute` の仕事も同じ fork evidence で中断する。仕事の操作は、仕事が終わった後で、出したタスクの `take_job` が同じ `reperform$E.op` で起こし直す ([VM](vm.md) の「`compute` の仕事」)

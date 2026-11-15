@@ -118,7 +118,7 @@ base + 0 .. base + frame_size: スロット
 ### 命令の形
 
 - 命令は `Copy` の `enum Op` で、大きさが 8 バイトであることをコンパイル時に assert する。命令の列を密に保ち、1回の読み込みで命令を取れるようにするためである。スロットは `u16`、命令の位置 (`Pc`) と表の添字は `u32` である。オペランドは次の3つの形のどれかに収める
-  - 固定のスロット: `Move { dst, src }`、`IntAdd { dst, a, b }` のように `u16` を3つまで持つ。`EvLookup { dst, effect }` と `EvClause { dst, ev, op }` は、エフェクトと操作の番号も `u16` で持つ
+  - 固定のスロット: `Move { dst, src }`、`IntAdd { dst, a, b }`のように`u16`を3つまで持つ
   - スロットと即値: `LoadRaw { dst, value: i32 }` (生の `int`、`float`、`enum` の値)、`LoadImm { dst, value: i32 }` (即値の語)、`LoadConst { dst, index: u32 }`、`BoxConst { dst, index: u32 }`、`Goto { target: u32 }`
   - スロットと表の添字: `Call { dst, at: u32 }` のように、長さの変わるオペランドを `operands[at..]` に置く。関数の番号、行の番号、引数のスロットの並びは表の側にある
   - スロットを2つと表の添字は 8 バイトに収まらない。そのため、token を定義する `release` (`ReleaseReuse { src, at }`) と token を受ける `con` (`ConReuse { dst, at }`) は、token のスロットを `operands[at]` に置く (「reuse」)
@@ -159,7 +159,7 @@ base + 0 .. base + frame_size: スロット
   - 数が合わない道 (`apply_other`): 足りなければ、新しいクロージャを作って `dst` に書く。余れば、`ApplyRest` のフレームを積んで残りの引数を移してから、先頭の分の引数で関数に入る。関数の見出しの戻り先は `ApplyRest` で、結果は `ApplyRest` のフレームのスロット 0 に書く。`ApplyRest` は、スロット 0 の結果に残りの引数を適用する。この適用は `ApplyRest` のフレームの見出しを引き継ぐ末尾の適用で、引数を作業用の領域に通す。部分適用はふつうのプログラムにも現れるので、この道を `#[cold]` にはしない
   - クロージャの中身を取り出すときは、先に `meta` を読んで `lin` ビットを覚えておく。そのうえで、`is_last` なら値を読んでから `free_block` し、そうでなければ参照の値を `dup` してから `decref` する
   - 新しいクロージャの `lin` ビットは元のクロージャのものを写し、元が即値なら立てない。捕まえた値と引数は、関数の引数の Repr で並べる (「データとクロージャ」)
-- **`clause`** `Clause { dst, at }`: 呼ばれる値と、evidence を先頭にした引数を `apply` と同じに並べる。引数の Repr は、evidence が `obj`、残りが操作の表の `params` で、エントリの関数の引数と同じ Repr なので比べない。引数の数はいつもエントリの関数の引数の数と等しく、違えば内部の誤りにする。部分適用で生の `int` をクロージャに入れることもない
+- **`clause`** `Clause { dst, at }`: 節の呼び出しは自分でevidenceを探す。オペランドは[エフェクト, 操作, n, 引数…]で、エフェクトはマシンの番号である。エフェクトで`Ctx::ev_lookup`を、evidenceと操作で`Ctx::ev_clause`を走らせ、読んだエントリのクロージャを、evidenceを先頭に引数を後ろに並べて`apply`と同じに呼ぶ。`ev_lookup`はevidenceを`dup`し、その参照がエントリの最初の引数になる。引数のReprは操作の表の`params`で、エントリの関数の引数と同じReprなので比べない。引数の数はいつもエントリの関数の引数の数と等しく、違えば内部の誤りにする。部分適用で生の`int`をクロージャに入れることもない
 - **末尾の位置の `apply` と `clause`** (`TailApply`、`TailClause`): 今のフレームの見出しを引き継ぎ、引数は作業用の領域を通す。足りなければ、作ったクロージャを戻りと同じに返す。余れば、`ApplyRest` のフレームが今のフレームの位置と見出しを受け継ぐ
 - **末尾呼び出しの結果**: 末尾の位置の呼び出しは、結果の Repr が関数の `rets` と互換なときだけ `tail` になる ([LIR](lir.md) の「末尾の位置の呼び出し」)。そのため、`TailCall`、`TailApply`、`TailClause` は結果を変えずに見出しを引き継ぎ、結果を変えるフレームはない
 - **安全点**: 呼び出し (末尾呼び出し、`apply`、`clause`、`ApplyRest`の適用を含む)、戻り、自己末尾呼び出しのジャンプで、フレームを移した後に`Ctx::poll(深さ)`を呼び、続けて方針に切り替えるかを尋ねる (「タスクとスケジュール」)。中断の巻き戻しでフレームを外すときは呼ばない (「巻き戻し」)
@@ -320,7 +320,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
   - ほかの誤り (書き出しの誤り、ヒープの誤り、止めたこと) は、実行時エラー (`RunFault::Extern`) にする
 - 届けるときは、`ctx.ev_find` でそのエフェクトの evidence を探す
   - なければ、ほかの extern の誤りと同じ実行時エラー (`RunFault::Extern`) にする。文言と位置の表示は、ほかの実行時エラーと同じである
-  - あれば、引数の文字列を作り、`ev_clause[op]` で節のエントリを得て、`clause` の呼び出しと同じ形で `(ev, 引数…)` を渡して呼ぶ。見出しの結果のスロットは命令の行き先で、戻り先は命令の次の命令である。evidence がないときは引数の文字列を作らない
+  - あれば、引数の文字列を作り、`Ctx::ev_clause`で節のエントリを得て、`clause`の呼び出しと同じ形で`(ev, 引数…)`を渡して呼ぶ。見出しの結果のスロットは命令の行き先で、戻り先は命令の次の命令である。evidenceがないときは引数の文字列を作らない
 - `fail_io kind s` の `Op::Extern` は、文字列 `s` を `Ctx::copy_string` で写して手放し、`Fault::Raised { kind, message }` を返す。`kind` は `IOErrorKind` のタグそのままである。届け先は、上の `try_io` が捕まえる誤りと同じく、行の `purity` が `Effectful` のとき `IO` で、evidence がなければ実行時エラー (`RunFault::Extern`) である。宛先には何も書かない
 - `panic s` の `Op::Extern` は、`exit` と同じく VM が自分で実行する。`s` をそのまま `panicked` の引数にして、上と同じく `Panic` に届ける。evidence がなければ、`Ctx::copy_string` で `s` の中身を写して `s` を手放し、`RunFault::Panicked` の実行時エラーにする。表示は `panicked: {message}` で、位置は `panic` の呼び出しの位置である
 - エントリは `never` の節のエントリなので、`yield_abort` で巻き戻しを始め、戻らない。誤りを返した命令のフレームはエントリの呼び出し元になり、その命令の地点の表の行で片付く。巻き戻しが `try_io` か `try_panic` の `prompt$` の前の `apply` に着地する (上の「巻き戻し」)。命令の行き先には何も書かない
@@ -1162,7 +1162,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 
 `RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の23で、`peak_objects` と `peak_stack` 以外が仕事の回数である。
 
-- `evidence_steps`: `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。今有効な handler の数で決まり、呼び出しの深さにはよらない。検査モードの `evv_mask` は、合う evidence が足りずに誤りを返したときは数えない ([オブジェクトモデル](object-model.md) の「速いモードと検査モード」)。出どころは `Ctx` の `CtxStats` である
+- `evidence_steps`: 節の呼び出しの`ev_lookup`、中断の届け先を探す`ev_find`、`evv_mask`がたどった`evv`の節点の数。今有効なhandlerの数で決まり、呼び出しの深さにはよらない。検査モードの`evv_mask`は、合うevidenceが足りずに誤りを返したときは数えない ([オブジェクトモデル](object-model.md)の「速いモードと検査モード」)。出どころは`Ctx`の`CtxStats`である
 - `yields`: `yield_to` を実行した回数。すぐに再開する操作は yield しないので数えない。中断 (`yield_abort` と `exit`) は yield でないので数えない。出どころは `CtxStats` である
 - `yield_frames`: `yield_cont_set` を実行した回数。yield が handler まで戻る間に、継続 κ に足したフレームの数である。再開する操作では、操作と handler の間のフレームの数に比例する。これは方式の性質である。中断は κ を組み立てないので、数に入らない。出どころは `CtxStats` である
 - `unwound_frames`: 中断の巻き戻しで外したフレームの数 (「巻き戻し」)。`ApplyRest` のフレームも数え、着地したフレームは数えない。中断の仕事が呼び出しの深さに比例することを、スケーリングのテストで確かめるために数える。VM が数える

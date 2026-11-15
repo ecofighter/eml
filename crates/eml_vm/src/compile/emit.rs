@@ -702,7 +702,6 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
 
     fn prim(&mut self, prim: &eml_lir::Prim, dst: Slot, a: &[Slot]) -> Op {
         use eml_lir::Prim;
-        let op_index = |o: u32| u16::try_from(o).expect("operations fit in 16 bits");
         match prim {
             Prim::EvvGet => Op::EvvGet { dst },
             Prim::EvvSet => Op::EvvSet { dst, l: a[0] },
@@ -748,15 +747,6 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 ev: a[0],
                 state: a[1],
             },
-            Prim::EvLookup(e) => Op::EvLookup {
-                dst,
-                effect: self.effect(*e),
-            },
-            Prim::EvClause { effect: _, op } => Op::EvClause {
-                dst,
-                ev: a[0],
-                op: op_index(*op),
-            },
             Prim::EvEvv => Op::EvEvv { dst, ev: a[0] },
             Prim::EvTakeEvv => Op::EvTakeEvv { dst, ev: a[0] },
             Prim::EvTakeState => Op::EvTakeState { dst, ev: a[0] },
@@ -796,27 +786,20 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         }
     }
 
-    /// `clause` のオペランド [呼ばれる値, n, 引数…]。引数は操作の表の Repr で、先頭の evidence は `obj` である
-    /// (docs/spec/lir.md の「節の呼び出し」)。
+    /// `clause`のオペランド[エフェクト, 操作, n, 引数…]。エフェクトはマシンの番号で、引数は操作の表のReprである
+    /// (docs/spec/lir.mdの「節の呼び出し」)。
     fn clause_operands(&mut self, call: &Call) -> u32 {
-        let Call::Clause {
-            effect,
-            op,
-            callee,
-            args,
-        } = call
-        else {
+        let Call::Clause { effect, op, args } = call else {
             unreachable!("clause operands are made for a clause")
         };
         let operation = eml_lir::operation(&self.program.effects, *effect, *op);
-        let reprs = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
-        let callee = self.atom(*callee, Repr::TObj);
         let slots: Vec<Slot> = args
             .iter()
-            .zip(reprs)
-            .map(|(&arg, repr)| self.atom(arg, repr))
+            .zip(&operation.params)
+            .map(|(&arg, &repr)| self.atom(arg, repr))
             .collect();
-        self.out.slot_list([u32::from(callee)], &slots)
+        let number = self.effect(*effect).into();
+        self.out.slot_list([number, *op], &slots)
     }
 
     /// `apply` のオペランド [呼ばれる値, n, 引数…]。verifier を通った IR では引数はどれも一様な語である

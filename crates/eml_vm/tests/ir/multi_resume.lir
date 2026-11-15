@@ -45,9 +45,7 @@ internal yields fn main$handle1(p.0: unit) -> tobj {
   tail call prompt$(ev.3, &main$handle0$return, x.7)
 }
 internal yields fn main$handle0(p.0: unit) -> tobj {
-  let ev.2: obj = prim ev_lookup[Choose]()
-  let c.3: tobj = prim ev_clause[Choose.choose](ev.2)
-  let t.1: int = clause Choose.choose c.3(ev.2, ())
+  let t.1: int = clause Choose.choose(())
   let t.4: tobj = box t.1
   return t.4
 }

@@ -330,13 +330,13 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 ### evidence を探す
 
-- `ev_lookup[E]` は、`evv` を先頭からたどり、エフェクトの番号が E の最初の evidence を返す。費用は今有効な handler の数に比例し、呼び出しの深さにはよらない
+- 節の呼び出し`clause E.op`は、`evv`を先頭からたどり、エフェクトの番号がEの最初のevidenceを使う。費用は今有効なhandlerの数に比例し、呼び出しの深さにはよらない
 - `evv_mask[items](w)` は、`items` の各項目 (エフェクト、残す数 n、飛ばす数 m) について、w の先頭から合う evidence を数え、n 個を残して続く m 個を除いたリストを作る。項目のないエフェクトの evidence は残す。除く位置までの節点を写し、残りは共有する。evidence の物体は写さない
 - `evv` は書き換えないので、探す場所ごとにキャッシュを置いても結果は変わらない ([ロードマップ](../future/roadmap.md) の「処理系」)
 
 ### 基本操作
 
-右辺 `Rhs::Prim(Prim, Vec<Atom>)` は基本操作である。`Prim` は基本操作の種類と、その即値 (エフェクトの番号、操作、`mask` の項目の並び) を持つ。テキストの形は `prim ev_lookup[State]()`、`prim ev_clause[State.get](ev.2)`、`prim evv_mask[State*2, Yield@1](w.3)` のように、即値を `[…]` に書く。`evv_mask` の項目は Core IR の呼び出しの `mask` と同じ型 (`eml_lir::MaskItem`) で、書き方も同じである ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」)。
+右辺`Rhs::Prim(Prim, Vec<Atom>)`は基本操作である。`Prim`は基本操作の種類と、その即値 (エフェクトの番号、操作、`mask`の項目の並び) を持つ。テキストの形は`prim ev_new[State](s.1, w.0)`、`prim ev_set_clause[State.get](ev.2, &g)`、`prim evv_mask[State*2, Yield@1](w.3)`のように、即値を`[…]`に書く。`evv_mask`の項目はCore IRの呼び出しの`mask`と同じ型 (`eml_lir::MaskItem`) で、書き方も同じである ([テスト戦略](../implementation/testing.md)の「Core IR のテキストの形」)。
 
 - 引数と結果の Repr は、次の表で決まる。引数と結果は、直接の呼び出しの引数と結果と同じく互換の位置で、合わなければ box の挿入が変換を入れる。状態とクロージャの引数には、translate が決めた Repr の値 (`State Int` の状態なら `int`、状態のない handler なら `()`) が来るためである
 - 引数は、表の借用の列が「借用」のものを読み、ほかを消費する。結果は所有した参照である
@@ -357,8 +357,6 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 | `ev_new[E]` | `tobj` (状態)、`tobj` (外側の `evv`) | なし | `obj` | 新しいエントリの表 (欄は空) と、それを指す新しい evidence |
 | `ev_set_clause[E.op]` | `obj`、`tobj` | evidence | `unit` | エントリの表の欄に入れる。handle の場所だけが、本体を始める前に使う |
 | `ev_renew` | `obj`、`tobj` (状態) | 元の evidence | `obj` | 元の evidence と同じエントリの表を指し、状態を引数に、外側の `evv` を今の `evv` にした新しい evidence |
-| `ev_lookup[E]` | なし | | `obj` | 上の「evidence を探す」 |
-| `ev_clause[E.op]` | `obj` | evidence | `tobj` | エントリの欄を読む |
 | `ev_evv` | `obj` | evidence | `tobj` | 外側の `evv` を読む |
 | `ev_take_evv` | `obj` | evidence | `tobj` | 外側の `evv` を取り出し、欄を `()` にする。`prompt$` のエントリで使う ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」) |
 | `ev_take_state` | `obj` | evidence | `tobj` | 状態を取り出し、欄を `()` にする |
@@ -376,7 +374,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 | `empty_mut_array` | なし | | `obj` | 長さ 0 の `MutArray` の不死の物体。`var` の配列の変数を取り出した後の状態で、translate が `take` の節に出す ([Core IR](core-ir.md) の「`var` の変換」)。VM は凍結した領域の定数の語を返す ([VM](vm.md) の「`CodeBase` と `FnEntry`」) |
 | `child_abort` | `obj`、`tobj` (起こし直しの閉包) | evidence | `unit` | `par` の子を中断し、操作の引数を捕まえた起こし直しの閉包を親に渡す。戻らない |
 
-- 表は、引数と結果の Kind の印も持つ (`PrimRow::param_marks`、`ret_mark`)。evidence と `evv` の位置は `unr`、状態、κ、節の本体の位置は `poly` である。`ev_set_clause` のエントリのクロージャは、`ev_clause` が `dup` して返すので `unr` である。`empty_mut_array` の結果は `MutArray` の値なので `lin` である。`child_abort` の起こし直しの閉包は操作の引数を捕まえるので `poly` である。V2 が `prim` の引数と結果をこの列と比べる (下の「verifier」)
+- 表は、引数と結果のKindの印も持つ (`PrimRow::param_marks`、`ret_mark`)。evidenceと`evv`の位置は`unr`、状態、κ、節の本体の位置は`poly`である。`ev_set_clause`に渡すエントリのクロージャは、節の呼び出しが読むときに`dup`するので`unr`である。`empty_mut_array`の結果は`MutArray`の値なので`lin`である。`child_abort`の起こし直しの閉包は操作の引数を捕まえるので`poly`である。V2が`prim`の引数と結果をこの列と比べる (下の「verifier」)
 
   | 基本操作 | 引数の印 | 結果の印 |
   |---|---|---|
@@ -385,7 +383,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   | `ev_new[E]` | `poly` (状態)、`unr` | `unr` |
   | `ev_set_clause` | `unr`、`unr` | `unr` |
   | `ev_renew` | `unr`、`poly` | `unr` |
-  | `ev_lookup` / `ev_clause` / `ev_evv` / `ev_take_evv` | なし / `unr` / `unr` / `unr` | `unr` |
+  | `ev_evv` / `ev_take_evv` | `unr` / `unr` | `unr` |
   | `ev_take_state` / `ev_set_state` | `unr` / `unr`、`poly` | `poly` / `unr` |
   | `yielding` / `yield_status` | なし / `unr` | `unr` |
   | `yield_to` / `yield_abort` | `unr`、`poly`、`poly` / `unr`、`poly` | `unr` |
@@ -395,14 +393,14 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   | `empty_mut_array` | なし | `lin` |
   | `child_abort` | `unr`、`poly` | `unr` |
 
-- `ev_set_clause` と `ev_clause` の即値は、操作をエフェクトで修飾して書く (`ev_clause[State.get]`)。テキストの形で操作の名前をエフェクトで修飾するためである
+- `ev_set_clause`の即値は、操作をエフェクトで修飾して書く (`ev_set_clause[State.get]`)。テキストの形で操作の名前をエフェクトで修飾するためである
 - `yielding` と `yield_status` の結果を `int` にするのは、リテラルの `switch` で分けるためである。`Bool` で分けると、EP が配置の表に `Prelude.Bool` を足すことになり、translate の後のパスは配置の表を変えないという規則 ([Core IR](core-ir.md) の「translate の配置」) を崩す
 
 ### 節の呼び出し
 
-- `Call::Clause { effect, op, callee, args }` は、操作の ABI を知っている呼び出しである。テキストの形は `clause State.get c.3(ev.2, ())` である
-- `callee`はin-placeのエントリのクロージャ、`args`の先頭はevidence (`obj`)、残りは操作の引数である。引数と結果のReprは、操作の表の`params`と`ret`から取る (上の「エフェクトの位置」)。`callee`は、同じ関数の中で`ev_clause[E.op]`が読んだ値である (下の「verifier」)
-- `apply` と同じく関数の値を呼ぶ。VM とネイティブでは、操作の ABI を知っている間接呼び出しになる ([VM](vm.md) の「呼び出しと戻り」)
+- `Call::Clause { effect, op, args }`は操作をする。`evv`からエフェクトの最初のevidenceを探し、その操作のエントリを読み、evidenceと`args`で呼ぶ。テキストの形は`clause State.get(())`である
+- `args`は操作の引数である。引数と結果のReprは、操作の表の`params`と`ret`から取る (上の「エフェクトの位置」)
+- 実行系は、探すことと読むことを`Ctx`の操作`ev_lookup`と`ev_clause`として走らせる (`eml_lir::Step`)。`ev_lookup`は見つけたevidenceを`dup`し、その参照がエントリの最初の引数になる。`ev_clause`はevidenceを借り、エントリを`dup`する。エントリは関数の値で、VMとネイティブのコードは、操作のABIを知っている間接呼び出しで呼ぶ ([VM](vm.md)の「呼び出しと戻り」)
 - `mask` は持たない
 - 操作の Repr を `perform` の境界に通すために、この呼び出しを置く。box の挿入、縮約、verifier にその規則がある。Perceus には規則を足さない
 
@@ -786,7 +784,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `closure` の引数: ``argument 0 of a closure of `g` is `n.1` (int), but the function takes tobj``
   - `apply` のオペランド: ``the callee of an apply is `n.1` (int), but an apply takes tobj``、``argument 0 of an apply is `n.1` (int), but an apply takes tobj``
   - `par` の子と結果: ``argument 0 of a par is `n.0` (int), but a par takes tobj`` (右の子は `argument 1`)、`` `t.2` (int) is bound to a par, which returns obj ``
-  - `clause` のオペランド: ``the callee of a clause of `Counter.get` is `c.0` (int), but a clause takes tobj``、``argument 0 of a clause of `Counter.get` is `e.1` (int), but a clause takes obj``、``argument 1 of a clause of `Counter.put` is `n.1` (tobj), but the operation takes int``
+  - `clause`のオペランド: ``argument 0 of a clause of `Counter.put` is `n.1` (tobj), but the operation takes int``
   - `prim` のオペランド: ``argument 0 of `prim ev_new[State]` is `n.0` (int), but the primitive takes tobj``
   - `extern` の引数と結果: ``argument 0 of `Prelude.Num Int.+` is `s.0` (obj), but the extern takes int``、``argument 1 of `Prelude.Num Int.+` is (), but the extern takes int``、`` `t.1` (obj) is bound to `Prelude.Ord Int.<`, which returns enum ``。引数の数を確かめた後で、引数を左から、最後に束縛する変数を比べる
   - `apply` の結果: `` `t.0` (int) is bound to an apply, which returns tobj ``
@@ -802,12 +800,11 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 - 引き継ぐ検査は次のとおりである。2つの IR のすべての段で走る。直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数と、`extern Std.Par.par` を拒むこと (`` `Std.Par.par` is not an extern instruction ``。`Extern::Par` の行は std の宣言を型検査に結ぶためだけにあり、translate は呼び出しを `par` にする。[Core IR](core-ir.md) の「`par` の呼び出し」)、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`。Core IR のエフェクトの命令の検査は [Core IR](core-ir.md) の「verifier」にある
 - 基本操作と`clause`の検査は次のとおりである。Core IRのEPの段と、LIRの6つの段のすべてで走る
   - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask` の項目は、呼び出しの `mask` と同じく空でなく、番号の真に昇順に並び (同じエフェクトの項目が2つない)、どの項目も1つ以上の evidence を飛ばす (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``、``an item of `prim evv_mask[State*0]` skips no handler``)
-  - `clause` の操作がエフェクトの表にあり、引数の数が「1 + 操作の引数の数」である
+  - `clause`の操作がエフェクトの表にあり、引数の数が操作の引数の数と同じである
   - `ev_set_clause[E.op]`に渡す値は、`&g`か、同じ関数の中の`closure g(..)`で束縛した変数で、gは`E.op`の`clause`の印を持つ。evidenceは、同じ関数の中の`ev_new[E]`で束縛した変数である。関数の引数、呼び出しの結果、ブロックの引数のように、同じ関数の中で関数が読めない値は拒み、同じ関数が作っていないevidenceも拒む (``the `Counter.get` entry is given `c.3` (tobj), which is neither `&g` nor a closure made in this function``、`` `prim ev_set_clause[Counter.get]` is given `e.1` (obj), which is not an evidence made by `ev_new` in this function``)。節の呼び出しは、エントリのクロージャを確かめずに操作のシグネチャで呼ぶので、エントリに入るものを、入れる所で決める
   - `clause`の印の関数gの`closure g(..)`は、ちょうど「gの引数の数 - 1 - 操作の引数の数」個の値を捕獲する (``a closure of `g`, a clause of `Counter.get`, has 2 arguments, but the clause captures 1``)。`&g`を`ev_set_clause`に渡せるのは、この数が0のときだけである (`` `&g` is put into the `Counter.get` entry, but the clause has captures``)
   - `ev_new[E]`が束縛するevidenceのエントリは、どれも、その`ev_new`のブロックの中で、evidenceのほかの最初の使いより前、ブロックの終わりより前に、ちょうど1回入れる。`dup`、`decref`、`release`、`drop_token`と着地の印は使いに数えない。その使いの後や別のブロックの`ev_set_clause`は拒む (``the `State.put` entry of `e.2` is not filled before `e.2` is used``、``the `State.get` entry of `e.2` is filled twice``、``an entry of `e.2` is filled after `e.2` is used``)。入れていないエントリは即値を持ち、節の呼び出しはそれをクロージャとして読むためである
-  - `clause E.op`の`callee`は、同じ関数の中の`prim ev_clause[E.op](v)`で束縛した変数で、vは同じ関数の中の`ev_lookup[E]`か`ev_new[E]`で束縛した変数である。関数の引数、呼び出しの結果、別の操作のエントリを`callee`にした呼び出しは拒む (``a clause of `Counter.get` calls `c.0` (tobj), which `ev_clause[Counter.get]` did not bind in this function``、``a clause of `Counter.get` calls `c.3`, read from `e.1` (obj), which is not an evidence of `Counter` found or made in this function``)
-  - これらの規則で、節の呼び出しが呼ぶクロージャは、handleが同じ操作のエントリに入れたものになり、そのコードは操作のシグネチャを持つ。`evv`がevidenceだけを持つことと、実行系が`par`の子のために作るevidenceのエントリは、verifierが確かめない。この2つは実行の前提に残る (下の「実行の前提」)
+  - これらの規則と、節の呼び出しが自分の操作のエントリを読むことで、節の呼び出しが呼ぶクロージャは、handleが同じ操作のエントリに入れたものになり、そのコードは操作のシグネチャを持つ。`evv`がevidenceだけを持つことと、実行系が`par`の子のために作るevidenceのエントリは、verifierが確かめない。この2つは実行の前提に残る (下の「実行の前提」)
   - どちらの読み込みも、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムを断る。ネイティブの読み込みは`eml_lir::unwind::verified`でプログラム全体をたどってpanicする。VMの読み込みは`eml_lir::unwind::verified_for`で、プログラム全体の規則をすべての関数に当て、変換する関数 (debugのビルドではすべての関数) だけをたどり、`CompileError::Invalid`を返す。すでにある関数を飛ばすのは、名前が同じ関数は同じコードであるという約束による ([VM](vm.md)の「追記」)
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける
 - `par`の検査は次のとおりである。Core IRの2つの段と、LIRの6つの段のすべてで走る
@@ -835,7 +832,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - Core IR の2つの段と LIR のエントリの段: `jump` の実引数と行き先の引数、`return` の値と関数の `ret_mark`
   - LIR の境界の段: 上に加えて、直接の呼び出しの引数と仮引数、結果と戻り値の印、`closure` の引数と、クロージャにする関数の捕まえる引数、`tail` の結果と呼び出し元の `ret_mark`、`apply` の位置 (いつも `poly` なので、実際には何も拒まない)、`par` の子と結果 (`apply` と同じく `poly` の位置で、何も拒まない)、`extern`、`prim`、`clause` の引数と結果とそれぞれの表の列 (extern の行、基本操作の表、操作の表)、`clause` の印の付いた関数の引数と戻り値と操作の表の列
   - `perform`、`handle`、`resume` (EP の前の Core IR にだけある) の受け渡しは比べない。EP がそれらを `clause` と基本操作に置き換えた後の段で比べる
-  - `clause` の呼ばれる側 (`ev_clause` が返すエントリのクロージャ) は `unr` でなければならない。`clause` の呼び出しの引数 0 の evidence と、`clause` の印の付いた関数の evidence の引数も、`unr` として比べる
+  - `clause`の印の付いた関数のevidenceの引数は、`unr`として比べる
   - `never` の操作の `clause` の結果を束縛する変数は、Repr と同じく、どの使いでも V2 と作る所の検査の対象にしない。使いには制御が届かないためである (上の「`never` の操作」)。Core IR の変換の段では、`never` の操作の `perform` の結果を束縛する変数も同じ理由で対象にしない
   - 定数はどの印とも合う
   - `par` の子は `poly` の受け手なので、`Lin` の値を捕まえた `lin` の閉包も渡せる。`par` は子を消費するので、Perceus はほかの呼び出しと同じく、後でまた使う子を `dup` する。`lin` の子は1回だけ使うので、RC の命令が付かない。`lin` の子を `par` の後でまた使うと、`dup` を入れれば V1 が、入れなければ所有の検査が拒む。結果は `poly` なので、`unr`、`poly`、`lin` のどの印の変数にも束ねられる
@@ -845,7 +842,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - V1: `` `x.1` (lin) is duplicated, but only unr can be ``、`` `x.1` (poly) is released, but only unr can be ``
   - `jump` と `return`: ``a jump to b2 passes `x.1` (lin) to `p.3` (unr) ``、`` `x.1` (lin) is returned from a function that returns unr ``
   - 直接の呼び出しの引数: ``argument 0 of `g` is `x.1` (lin), but the function takes unr``。`closure` の引数も同じ形である (``argument 0 of a closure of `g` ``)
-  - `extern`、`prim`、`clause` の引数: ``argument 0 of `Std.FileIn.open` is `x.1` (lin), but the extern takes unr``、``argument 1 of a clause of `Counter.put` is `x.1` (lin), but the operation takes unr``、``the callee of a clause of `Counter.get` is `c.0` (lin), but a clause takes unr``
+  - `extern`、`prim`、`clause`の引数: ``argument 0 of `Std.FileIn.open` is `x.1` (lin), but the extern takes unr``、``argument 0 of a clause of `Counter.put` is `x.1` (lin), but the operation takes unr``
   - 結果: `` `t.0` (unr) is bound to `Std.FileIn.open`, which returns lin ``。`prim`、`clause`、呼び出しも同じ形である
   - `clause` の印の関数: ``parameter 2 of `g$entry`, a clause of `Counter.put`, is `x.2` (unr), but the operation takes lin``、`` `g$entry`, a clause of `Counter.get`, returns lin, but the operation returns unr ``
   - 作る所: `` `p.2` (unr) is bound to a con of `(,)` #0, whose arguments join to lin ``、`` `c.1` (unr) is bound to a closure of `k`, whose captures join to poly ``

@@ -453,8 +453,7 @@ impl<'a> Flattener<'a> {
                     *arg = self.single(*arg);
                 }
             }
-            Call::Clause { callee, args, .. } => {
-                *callee = self.single(*callee);
+            Call::Clause { args, .. } => {
                 for arg in args.iter_mut() {
                     *arg = self.single(*arg);
                 }

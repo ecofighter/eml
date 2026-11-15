@@ -83,7 +83,6 @@ fn tail_call(
         Call::Clause {
             effect,
             op,
-            callee: _,
             args: _,
         } => {
             let operation = operation(effects, *effect, *op);

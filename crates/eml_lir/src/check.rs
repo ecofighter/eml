@@ -415,17 +415,10 @@ pub struct Context<'a> {
     /// あること、その関数が`E.op`の`clause`の印を持つことを確かめるのに使う。
     closures: FxHashMap<VarId, (FnIdx, usize)>,
     /// `ev_new[E]`で束縛した変数の、エフェクトの番号。`ev_set_clause`のevidenceが同じ関数の中の`ev_new`で作った
-    /// ものであること、そのエフェクトの操作のエントリであることと、節の呼び出しの`callee`を読んだevidenceを
-    /// 確かめるのに使う。
+    /// ものであることと、そのエフェクトの操作のエントリであることを確かめるのに使う。
     evidences: FxHashMap<VarId, u32>,
-    /// `ev_lookup[E]`で束縛した変数の、エフェクトの番号。節の呼び出しの`callee`が`E`のevidenceから読んだもので
-    /// あることを確かめるのに使う。
-    found: FxHashMap<VarId, u32>,
     /// `ev_renew`で束縛した変数。`ev_new`で束縛した変数と同じくevidenceで、着地の印はこの2つのどちらかである。
     renewed: FxHashSet<VarId>,
-    /// `ev_clause[E.op](v)`で束縛した変数の`(E, op)`と`v`。`clause E.op`の`callee`が同じ操作のエントリから
-    /// 読んだものであることを確かめるのに使う。
-    entries: FxHashMap<VarId, (u32, u32, Atom)>,
     /// 今のブロックの`ev_new`のevidenceのうち、まだほかに使っていないものと、それまでに入れたエントリ。
     filling: Vec<Filling>,
     /// エントリの規則の最初の違反。文ごとの検査の誤りを先に出すため、関数の文をたどり終えてから出す。
@@ -451,9 +444,7 @@ impl<'a> Context<'a> {
             never: vec![false; vars.len()],
             closures: FxHashMap::default(),
             evidences: FxHashMap::default(),
-            found: FxHashMap::default(),
             renewed: FxHashSet::default(),
-            entries: FxHashMap::default(),
             filling: Vec::new(),
             unfilled: None,
             dominators,
@@ -746,14 +737,8 @@ impl<'a> Context<'a> {
                     });
                 }
             }
-            Some((var, &Prim::EvLookup(effect), _)) => {
-                self.found.insert(var, effect);
-            }
             Some((var, &Prim::EvRenew, _)) => {
                 self.renewed.insert(var);
-            }
-            Some((var, &Prim::EvClause { effect, op }, &[from])) => {
-                self.entries.insert(var, (effect, op, from));
             }
             Some((_, &Prim::EvSetClause { effect: _, op }, &[Atom::Var(evidence), _])) => {
                 self.fill_entry(evidence, op);
@@ -850,52 +835,6 @@ impl<'a> Context<'a> {
         Err(format!(
             "the prompt marker `{}` is not an evidence made by `ev_new` or `ev_renew` in this function",
             self.name(marker)
-        ))
-    }
-
-    /// `clause E.op`の`callee`は、同じ関数の中の`ev_clause[E.op](v)`で束縛した変数で、vは同じ関数の中の
-    /// `ev_lookup[E]`か`ev_new[E]`で束縛した変数である。エントリの規則と合わせて、節の呼び出しが呼ぶクロージャは、
-    /// handleが同じ操作のエントリに入れたものになる (docs/spec/lir.mdの「verifier」)。表にない操作は、この後の
-    /// 検査が断る。
-    pub fn clause_callee(&self, effect: u32, op: u32, callee: Atom) -> Result<(), String> {
-        let effects = self.tables.effects;
-        let Some(info) = effects.get(effect as usize) else {
-            return Ok(());
-        };
-        if op as usize >= info.operations.len() {
-            return Ok(());
-        }
-        let entry = operation_text(effects, effect, op);
-        let read = match callee {
-            Atom::Var(var) => self
-                .entries
-                .get(&var)
-                .filter(|&&(read_effect, read_op, _)| (read_effect, read_op) == (effect, op))
-                .map(|&(_, _, from)| (var, from)),
-            _ => None,
-        };
-        let Some((callee, from)) = read else {
-            return Err(format!(
-                "a clause of `{entry}` calls {}, which `ev_clause[{entry}]` did not bind in this function",
-                self.typed_atom_text(callee)
-            ));
-        };
-        let evidence = match from {
-            Atom::Var(var) => self
-                .found
-                .get(&var)
-                .or_else(|| self.evidences.get(&var))
-                .copied(),
-            _ => None,
-        };
-        if evidence == Some(effect) {
-            return Ok(());
-        }
-        Err(format!(
-            "a clause of `{entry}` calls `{}`, read from {}, which is not an evidence of `{}` found or made in this function",
-            self.name(callee),
-            self.typed_atom_text(from),
-            info.name
         ))
     }
 

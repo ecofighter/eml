@@ -308,14 +308,8 @@ impl Parser<'_> {
             }
             "clause" => {
                 let (effect, op) = self.reader.operation_ref()?;
-                let callee = self.reader.atom(state)?;
                 let args = self.reader.list('(', ')', |p| p.atom(state))?;
-                Ok(Call::Clause {
-                    effect,
-                    op,
-                    callee,
-                    args,
-                })
+                Ok(Call::Clause { effect, op, args })
             }
             "par" => {
                 let pair = self.reader.ctor()?;

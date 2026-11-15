@@ -961,13 +961,14 @@ fn f(n.0: int, borrowed s.1: obj) -> obj lin {
 
 #[test]
 fn an_effect_lookup() {
-    // エフェクトの番号は、データの記号`e:Counter`からロード1つで読んでエントリに渡す。エフェクトの番号を持つ即値はない
-    // (docs/spec/native.mdの「エフェクト」)。エントリの結果が文の値である
+    // 節の呼び出しは、エフェクトの番号をデータの記号`e:Counter`からロード1つで読んで`ev_lookup`のエントリに渡す。
+    // エフェクトの番号を持つ即値はない (docs/spec/native.mdの「エフェクト」)。`ev_clause`のエントリが読んだクロージャの
+    // コードを、evidenceと操作の引数で呼ぶ (docs/spec/native.mdの「関数の値」)
     let text = "\
 effect Counter { get(unit) -> tobj }
-fn f() -> obj {
-  let e.0: obj = prim ev_lookup[Counter]()
-  return e.0
+fn f() -> tobj {
+  let r.0: tobj = clause Counter.get(())
+  return r.0
 }
 ";
     insta::assert_snapshot!(clif(text, "f"), @"
@@ -976,9 +977,12 @@ fn f() -> obj {
         sig0 = (i64) -> i64 tail
         sig1 = (i64, i64, i64) -> i64 c
         sig2 = (i64, i64) -> i64 c
+        sig3 = (i64, i64, i64) -> i64 c
+        sig4 = (i64, i64, i64, i64) -> i64 tail
         fn0 = colocated %f:f sig0
         fn1 = %eml_nrt_safepoint sig1
         fn2 = %eml_rt_ev_lookup sig2
+        fn3 = %eml_rt_ev_clause sig3
 
     block0(v0: i64):
         v1 = load.i64 notrap aligned v0+40
@@ -1007,7 +1011,33 @@ fn f() -> obj {
         v15 = symbol_value.i64 gv0
         v16 = load.i64 notrap aligned v15
         v17 = call fn2(v0, v16)
-        return v17
+        v18 = iconst.i64 0
+        v19 = call fn3(v0, v17, v18)  ; v18 = 0
+        v20 = iconst.i64 1
+        v21 = load.i32 notrap aligned v19+4
+        v22 = iconst.i32 16
+        v23 = ushr v21, v22  ; v22 = 16
+        v24 = iconst.i32 255
+        v25 = band v23, v24  ; v24 = 255
+        v26 = iconst.i32 255
+        v27 = icmp eq v25, v26  ; v26 = 255
+        v28 = iconst.i64 8
+        v29 = iconst.i64 16
+        v30 = select v27, v29, v28  ; v29 = 16, v28 = 8
+        v31 = iadd v19, v30
+        v32 = load.i64 notrap aligned v31
+        v33 = iconst.i64 1
+        v34 = sshr v32, v33  ; v33 = 1
+        v35 = call_indirect sig4, v34(v0, v19, v17, v20)  ; v20 = 1
+        v36 = load.i8 notrap aligned v0+24
+        brif v36, block4, block5
+
+    block4 cold:
+        v37 = iconst.i64 1
+        return v37  ; v37 = 1
+
+    block5:
+        return v35
     }
     ");
 }

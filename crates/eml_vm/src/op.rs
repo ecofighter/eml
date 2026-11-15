@@ -91,12 +91,12 @@ pub enum Op {
     TailApply {
         at: u32,
     },
-    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。引数は操作の ABI の Repr である。
+    /// `operands[at..]`は[エフェクト, 操作, 引数の数, 引数のスロット…]。引数は操作のABIのReprである。
     Clause {
         dst: Slot,
         at: u32,
     },
-    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。
+    /// `operands[at..]`は`Clause`と同じである。
     TailClause {
         at: u32,
     },
@@ -443,15 +443,6 @@ pub enum Op {
         dst: Slot,
         ev: Slot,
         state: Slot,
-    },
-    EvLookup {
-        dst: Slot,
-        effect: u16,
-    },
-    EvClause {
-        dst: Slot,
-        ev: Slot,
-        op: u16,
     },
     EvEvv {
         dst: Slot,

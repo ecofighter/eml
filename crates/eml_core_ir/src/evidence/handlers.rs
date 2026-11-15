@@ -658,25 +658,11 @@ impl Out<'_> {
         });
     }
 
-    /// 今の `evv` から evidence を探し、そのエントリを節の呼び出しで呼ぶ。
+    /// 節の呼び出しは、今の`evv`からevidenceを探し、そのエントリを呼ぶ (docs/spec/core-ir.mdの「`perform` と節の3つの形」)。
     fn perform(&mut self, result: VarId, effect: u32, op: u32, args: Vec<Atom>) {
-        let evidence = self.prim("ev", Repr::Obj, Prim::EvLookup(effect), Vec::new());
-        let entry = self.prim(
-            "c",
-            Repr::TObj,
-            Prim::EvClause { effect, op },
-            vec![Atom::Var(evidence)],
-        );
-        let mut clause_args = vec![Atom::Var(evidence)];
-        clause_args.extend(args);
         self.stmts.push(Stmt::Let {
             var: result,
-            rhs: Rhs::call(Call::Clause {
-                effect,
-                op,
-                callee: Atom::Var(entry),
-                args: clause_args,
-            }),
+            rhs: Rhs::call(Call::Clause { effect, op, args }),
         });
     }
 

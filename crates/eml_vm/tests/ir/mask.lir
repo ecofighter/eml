@@ -2,9 +2,7 @@ effect Prelude.IO { never io_failed(enum, obj) -> never }
 effect Ask { ask(unit) -> obj }
 effect Yield { yield(unit) -> unit }
 yields fn asker(p.0: unit) -> unit {
-  let ev.3: obj = prim ev_lookup[Ask]()
-  let c.4: tobj = prim ev_clause[Ask.ask](ev.3)
-  let t.1: obj = clause Ask.ask c.4(ev.3, ())
+  let t.1: obj = clause Ask.ask(())
   let y.5: int = prim yielding()
   switch y.5 { 0 -> b2, _ -> b1 }
 b1:
@@ -68,9 +66,7 @@ yields fn "resumer<e>"(body.0: tobj poly, after.1: tobj) -> unit {
   tail call prompt$(ev.6, &"resumer<e>$handle1$return", x.10)
 }
 yields fn yielder(p.0: unit) -> unit {
-  let ev.3: obj = prim ev_lookup[Yield]()
-  let c.4: tobj = prim ev_clause[Yield.yield](ev.3)
-  let t.1: unit = clause Yield.yield c.4(ev.3, ())
+  let t.1: unit = clause Yield.yield(())
   let y.5: int = prim yielding()
   switch y.5 { 0 -> b2, _ -> b1 }
 b1:

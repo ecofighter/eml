@@ -215,15 +215,9 @@ impl<'p> Printer<'p> {
                 yields,
                 prompt,
             } => w.apply(vars, (callee, args), *yields, *prompt),
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => format!(
-                "clause {} {}({})",
+            Call::Clause { effect, op, args } => format!(
+                "clause {}({})",
                 operation_text(&self.program.effects, *effect, *op),
-                w.atom(vars, callee),
                 w.atoms(vars, args)
             ),
             Call::Par {

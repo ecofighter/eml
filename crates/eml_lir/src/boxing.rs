@@ -603,16 +603,9 @@ impl Converter<'_> {
                 }
                 Some(Repr::TObj)
             }
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => {
+            Call::Clause { effect, op, args } => {
                 let operation = operation(self.effects, *effect, *op);
-                *callee = self.convert(*callee, Repr::TObj, out);
-                let expected = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
-                for (arg, param) in args.iter_mut().zip(expected) {
+                for (arg, &param) in args.iter_mut().zip(&operation.params) {
                     *arg = self.convert(*arg, param, out);
                 }
                 match operation.ret {

@@ -61,7 +61,7 @@ pub fn operation_text(effects: &[EffectInfo], effect: u32, op: u32) -> String {
     )
 }
 
-/// 基本操作の名前と、`[…]` に書いた即値 (`ev_clause[State.get]`)。
+/// 基本操作の名前と、`[…]`に書いた即値 (`ev_set_clause[State.get]`)。
 pub fn prim_text(effects: &[EffectInfo], prim: &Prim) -> String {
     let name = prim.name();
     match prim.immediates() {
@@ -1288,20 +1288,14 @@ impl<'t> Reader<'t> {
             Immediates::Effect(_) => {
                 let (line, word) = one(immediates, "Effect", "effect")?;
                 let effect = self.effect_ref(&word, line)?;
-                Ok(if matches!(kind, Prim::EvNew(_)) {
-                    Prim::EvNew(effect)
-                } else {
-                    Prim::EvLookup(effect)
-                })
+                debug_assert!(matches!(kind, Prim::EvNew(_)));
+                Ok(Prim::EvNew(effect))
             }
             Immediates::Operation { .. } => {
                 let (line, word) = one(immediates, "Effect.operation", "operation")?;
                 let (effect, op) = self.operation_word(&word, line)?;
-                Ok(if matches!(kind, Prim::EvSetClause { .. }) {
-                    Prim::EvSetClause { effect, op }
-                } else {
-                    Prim::EvClause { effect, op }
-                })
+                debug_assert!(matches!(kind, Prim::EvSetClause { .. }));
+                Ok(Prim::EvSetClause { effect, op })
             }
             Immediates::Root(_) => {
                 let (line, word) = one(immediates, "Root", "root")?;

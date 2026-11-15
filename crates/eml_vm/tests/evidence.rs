@@ -10,10 +10,12 @@ use crate::common::run_lir;
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
 /// `Counter`のエントリの関数。evidenceのエントリは、どれも`ev_new`の直後に入れる (docs/spec/lir.mdの「verifier」)。
+/// `get`は状態を取り出して返すので、`clause Counter.get`でどのevidenceが見つかったかが分かる。
 const COUNTER_ENTRIES: &str = "\
 internal clause Counter.get fn get$entry(e.0: obj, u.1: unit) -> tobj {
+  let s.2: tobj = prim ev_take_state(e.0)
   decref e.0
-  return ()
+  return s.2
 }
 internal clause Counter.put fn put$entry(e.0: obj, x.1: tobj) -> unit {
   decref e.0
@@ -126,15 +128,11 @@ fn main() -> unit {{
   let w.8: tobj = prim evv_push(w.6, o.7)
   dup w.8
   let u.9: unit = prim evv_set(w.8)
-  let e.10: obj = prim ev_lookup[Counter]()
-  let s.11: tobj = prim ev_take_state(e.10)
-  decref e.10
+  let s.11: tobj = clause Counter.get(())
   let m.12: tobj = prim evv_mask[Counter](w.8)
   decref w.8
   let u.13: unit = prim evv_set(m.12)
-  let e.14: obj = prim ev_lookup[Counter]()
-  let s.15: tobj = prim ev_take_state(e.14)
-  decref e.14
+  let s.15: tobj = clause Counter.get(())
   let u.16: unit = prim evv_set(w.0)
   let n.17: int = unbox s.11
   decref s.11
@@ -188,15 +186,11 @@ fn main() -> unit {{
   decref w.9
   dup m.10
   let u.11: unit = prim evv_set(m.10)
-  let e.12: obj = prim ev_lookup[Counter]()
-  let s.13: tobj = prim ev_take_state(e.12)
-  decref e.12
+  let s.13: tobj = clause Counter.get(())
   let m.14: tobj = prim evv_mask[Counter](m.10)
   decref m.10
   let u.15: unit = prim evv_set(m.14)
-  let e.16: obj = prim ev_lookup[Counter]()
-  let s.17: tobj = prim ev_take_state(e.16)
-  decref e.16
+  let s.17: tobj = clause Counter.get(())
   let u.18: unit = prim evv_set(w.0)
   let n.19: int = unbox s.13
   decref s.13
@@ -215,9 +209,9 @@ fn main() -> unit {{
     assert_eq!(output, "3\n1\n");
 }
 
-/// handler の下で継続を再開するときの形。`ev_renew` はエントリの表を共有し、状態を差し替え、今の `evv` を外側の `evv`
-/// にした evidence を作る (docs/spec/object-model.md の「evidence の3つの物体」)。元の evidence の外側の `evv` は空なので、
-/// `ev_evv` が元の外側を返せば `ev_lookup` は evidence を見つけられない。
+/// handlerの下で継続を再開するときの形。`ev_renew`はエントリの表を共有し、状態を差し替え、今の`evv`を外側の`evv`に
+/// したevidenceを作る (docs/spec/object-model.mdの「evidence の3つの物体」)。元のevidenceの外側の`evv`は空なので、
+/// `ev_evv`が元の外側を返せば節の呼び出しはevidenceを見つけられない。
 #[test]
 fn a_renewed_evidence_has_its_own_state_and_the_current_evv_outside() {
     let text = format!(
@@ -237,9 +231,7 @@ fn main() -> unit {{
   decref e.2
   let o.8: tobj = prim ev_evv(r.7)
   let u.9: unit = prim evv_set(o.8)
-  let f.10: obj = prim ev_lookup[Counter]()
-  let a.11: tobj = prim ev_take_state(f.10)
-  decref f.10
+  let a.11: tobj = clause Counter.get(())
   let b.12: tobj = prim ev_take_state(r.7)
   decref r.7
   let u.13: unit = prim evv_set(())
@@ -363,14 +355,15 @@ fn main() -> unit {{
     assert_eq!(run_lir(&text).1, Err(heap_fault(HeapError::YieldMisuse)));
 }
 
-/// 今の `evv` に `Counter` の evidence がなければ、操作の evidence を探せない。`ev_lookup` は検査モードで `NoHandler` を返す。
+/// 今の`evv`に`Counter`のevidenceがなければ、節の呼び出しは操作のevidenceを探せない。`ev_lookup`は検査モードで
+/// `NoHandler`を返す。
 #[test]
 fn a_lookup_without_evidence_is_an_error() {
     let text = format!(
         "{COUNTER}\
 fn main() -> unit {{
-  let e.0: obj = prim ev_lookup[Counter]()
-  decref e.0
+  let s.0: tobj = clause Counter.get(())
+  decref s.0
   return ()
 }}
 "

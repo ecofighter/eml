@@ -194,15 +194,9 @@ impl<'p> Printer<'p> {
                 w.atom(vars, k),
                 w.atoms(vars, &[*arg, *state])
             ),
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => format!(
-                "clause {} {}({})",
+            Call::Clause { effect, op, args } => format!(
+                "clause {}({})",
                 operation_text(&self.program.effects, *effect, *op),
-                w.atom(vars, callee),
                 w.atoms(vars, args)
             ),
             Call::Par {

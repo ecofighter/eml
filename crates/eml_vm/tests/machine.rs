@@ -148,19 +148,16 @@ fn effects_are_renumbered_by_name() {
     let first = "\
 effect A { a(unit) -> unit }
 fn f(p.0: unit) -> unit {
-  let ev.1: obj = prim ev_lookup[A]()
-  decref ev.1
-  return ()
+  let r.1: unit = clause A.a(())
+  return r.1
 }
 ";
     let second = "\
 effect B { b(unit) -> unit }
 effect A { a(unit) -> unit }
 fn g(p.0: unit) -> unit {
-  let ev.1: obj = prim ev_lookup[A]()
-  decref ev.1
-  let ev.2: obj = prim ev_lookup[B]()
-  decref ev.2
+  let r.1: unit = clause A.a(())
+  let r.2: unit = clause B.b(())
   let w.3: tobj = prim evv_get()
   let w.4: tobj = prim evv_mask[B, A@1](w.3)
   decref w.3
@@ -178,8 +175,8 @@ fn g(p.0: unit) -> unit {
         .unwrap();
     let text = disassemble(machine.code());
     let g = &text[text.find("fn g").unwrap()..];
-    assert!(g.contains("ev_lookup s0, E0"), "{g}");
-    assert!(g.contains("ev_lookup s0, E1"), "{g}");
+    assert!(g.contains("= E0.op0("), "{g}");
+    assert!(g.contains("= E1.op0("), "{g}");
     assert!(g.contains("evv_mask s1, [0@1, 1]"), "{g}");
 }
 
@@ -394,9 +391,7 @@ clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {
   return d.4
 }
 uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
-  let ev.2: obj = prim ev_lookup[Fail]()
-  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
-  tail clause Fail.fail c.3(ev.2, a.0)
+  tail clause Fail.fail(a.0)
 }
 ";
     assert!(parse(second).may_fork());

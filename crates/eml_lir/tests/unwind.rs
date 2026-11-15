@@ -198,14 +198,12 @@ fn clause_call_is_a_point() {
     let text = "\
 effect Ask { ask(unit) -> tobj }
 fn f(k.2: obj) -> obj {
-  let e.1: obj = prim ev_lookup[Ask]()
-  let c.0: tobj = prim ev_clause[Ask.ask](e.1)
-  let x.3: tobj = clause Ask.ask c.0(e.1, ())
+  let x.3: tobj = clause Ask.ask(())
   decref x.3
   return k.2
 }
 ";
-    assert_eq!(points_of(text, "f"), [point(0, 2, &[(2, 1)], None)]);
+    assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
 }
 
 /// 所有の段のverifierが拒む関数は、地点の代わりにその誤りを返す。VMは、確かめない読み込みでだけ、その関数を表の

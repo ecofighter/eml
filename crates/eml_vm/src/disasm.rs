@@ -228,10 +228,12 @@ impl<'a> View<'a> {
             Op::Apply { dst, at } => format!("apply s{dst} = {}", self.apply(ops(at))),
             Op::TailApply { at } => format!("tail_apply {}", self.apply(ops(at))),
             Op::Clause { dst, at } => {
-                format!("clause s{dst} = s{}({})", ops(at)[0], args(at, 2))
+                let o = ops(at);
+                format!("clause s{dst} = E{}.op{}({})", o[0], o[1], args(at, 3))
             }
             Op::TailClause { at } => {
-                format!("tail_clause s{}({})", ops(at)[0], args(at, 2))
+                let o = ops(at);
+                format!("tail_clause E{}.op{}({})", o[0], o[1], args(at, 3))
             }
             Op::TailSelf { at } => {
                 format!("tail_self {}({})", ops(at)[0] - origin, args(at, 2))
@@ -353,8 +355,6 @@ impl<'a> View<'a> {
                 format!("ev_set_clause s{dst}, s{}, op{}, s{}", o[0], o[1], o[2])
             }
             Op::EvRenew { dst, ev, state } => bin("ev_renew", dst, ev, state),
-            Op::EvLookup { dst, effect } => format!("ev_lookup s{dst}, E{effect}"),
-            Op::EvClause { dst, ev, op } => format!("ev_clause s{dst}, s{ev}, op{op}"),
             Op::EvEvv { dst, ev } => format!("ev_evv s{dst}, s{ev}"),
             Op::EvTakeEvv { dst, ev } => format!("ev_take_evv s{dst}, s{ev}"),
             Op::EvTakeState { dst, ev } => format!("ev_take_state s{dst}, s{ev}"),

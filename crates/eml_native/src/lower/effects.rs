@@ -4,16 +4,21 @@
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{InstBuilder, Value, types};
 use cranelift_module::Module;
-use eml_lir::{Atom, BlockId, Prim, VarId};
+use eml_lir::{Atom, BlockId, Prim, Step, VarId};
 
 use super::consts::Datum;
 use super::function::FnLower;
 use super::unwind::{After, Point};
 use crate::mem;
 
-/// `prim`のエントリの記号。下ろしがエフェクトのエントリの名前を綴るのは、ここだけである。
+/// `prim`のエントリの記号。下ろしがエフェクトのエントリの名前を綴るのは、ここと`step_entry`だけである。
 pub(super) fn entry(prim: &Prim) -> String {
     format!("eml_rt_{}", prim.name())
+}
+
+/// 命令が走らせる`Ctx`の操作`step`のエントリの記号 (docs/spec/native.mdの「関数の値」)。
+pub(super) fn step_entry(step: Step) -> String {
+    format!("eml_rt_{}", step.name())
 }
 
 impl<M: Module> FnLower<'_, '_, M> {
@@ -95,12 +100,7 @@ impl<M: Module> FnLower<'_, '_, M> {
                 let number = self.datum_word(Datum::Effect(effect), types::I64);
                 (0, vec![number, constant(self, operations)])
             }
-            &Prim::EvLookup(effect) => {
-                (0, vec![self.datum_word(Datum::Effect(effect), types::I64)])
-            }
-            &Prim::EvSetClause { op, .. } | &Prim::EvClause { op, .. } => {
-                (1, vec![constant(self, op as usize)])
-            }
+            &Prim::EvSetClause { op, .. } => (1, vec![constant(self, op as usize)]),
             &Prim::RootGet(root) | &Prim::RootSet(root) => (0, vec![constant(self, root as usize)]),
             _ => (0, Vec::new()),
         }

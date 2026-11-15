@@ -234,9 +234,7 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "not positive"
-      let ev.4: obj = prim ev_lookup[Fail]()
-      let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
-      let t.3: int = clause Fail.fail c.5(ev.4, s.2)
+      let t.3: int = clause Fail.fail(s.2)
       return t.3
     b2:
       return n.0
@@ -249,9 +247,7 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "not positive"
-      let ev.4: obj = prim ev_lookup[Fail]()
-      let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
-      tail clause Fail.fail c.5(ev.4, s.2)
+      tail clause Fail.fail(s.2)
     b2:
       return n.0
     }
@@ -271,9 +267,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "neg"
-      let ev.4: obj = prim ev_lookup[Fail]()
-      let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
-      let t.3: int = clause Fail.fail c.5(ev.4, s.2)
+      let t.3: int = clause Fail.fail(s.2)
       return t.3
     b2:
       return n.0
@@ -285,9 +279,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "neg"
-      let ev.4: obj = prim ev_lookup[Fail]()
-      let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
-      tail clause Fail.fail c.5(ev.4, s.2)
+      tail clause Fail.fail(s.2)
     b2:
       return n.0
     }

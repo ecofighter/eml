@@ -138,17 +138,7 @@ fn call(call: Call) -> eml_lir::Call {
             yields,
             prompt,
         },
-        Call::Clause {
-            effect,
-            op,
-            callee,
-            args,
-        } => eml_lir::Call::Clause {
-            effect,
-            op,
-            callee,
-            args,
-        },
+        Call::Clause { effect, op, args } => eml_lir::Call::Clause { effect, op, args },
         Call::Par {
             left,
             right,

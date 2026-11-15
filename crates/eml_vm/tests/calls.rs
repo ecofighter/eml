@@ -326,16 +326,24 @@ fn a_closure_with_many_captures_applies_in_order() {
     assert_eq!(run_lir(&text), (format!("{}\n", n - 1), Ok(())));
 }
 
-/// `clause` の引数の数は、いつもエントリの関数の引数の数と等しい。違う IR は verifier を通らないので、通さずに実行する。
+/// `clause`の引数の数は、いつもエントリの関数の引数の数と等しい。違うIRはverifierを通らないので、通さずに実行する。
+/// ここではエントリの関数が操作の引数を受けない。
 #[test]
 fn a_clause_with_the_wrong_number_of_arguments_is_an_internal_error() {
     let text = "\
 effect E { op(unit) -> unit }
 fn main() -> unit {
-  let r.0: unit = clause E.op &entry(())
-  return r.0
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  let e.1: obj = prim ev_new[E]((), w.0)
+  let u.2: unit = prim ev_set_clause[E.op](e.1, &entry)
+  let w.3: tobj = prim evv_push(w.0, e.1)
+  let u.4: unit = prim evv_set(w.3)
+  let r.5: unit = clause E.op(())
+  return r.5
 }
-internal clause E.op fn entry(e.0: obj, u.1: unit) -> unit {
+internal clause E.op fn entry(e.0: obj) -> unit {
+  decref e.0
   return ()
 }
 ";

@@ -1732,13 +1732,7 @@ impl<'a> Checker<'a> {
                 self.cx.direct_call(*target, args.len())?;
                 Some(self.function_at(*target)?.rets.clone())
             }
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => {
-                self.cx.clause_callee(*effect, *op, *callee)?;
+            Call::Clause { effect, op, args } => {
                 let info = self.cx.effect(*effect)?;
                 let Some(operation) = info.operations.get(*op as usize) else {
                     return Err(format!(
@@ -1747,10 +1741,9 @@ impl<'a> Checker<'a> {
                         info.operations.len()
                     ));
                 };
-                let takes = 1 + operation.params.len();
-                if args.len() != takes {
+                if args.len() != operation.params.len() {
                     return Err(format!(
-                        "{} is given {} arguments, but it takes {takes} (the evidence and {} arguments of the operation)",
+                        "{} is given {} arguments, but the operation takes {}",
                         self.call_text(call, false),
                         args.len(),
                         operation.params.len()
@@ -1964,54 +1957,22 @@ impl<'a> Checker<'a> {
                 uniform(&|| "argument 0".to_string(), *left)?;
                 uniform(&|| "argument 1".to_string(), *right)?;
             }
-            // 節の呼び出しは操作の ABI で呼ぶので、先頭の evidence は `obj`、残りは操作の表の Repr と比べる
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => {
+            // 節の呼び出しは操作のABIで呼ぶので、引数を操作の表のReprと印と比べる
+            Call::Clause { effect, op, args } => {
                 let operation = operation(&self.program.effects, *effect, *op);
                 let what = self.call_text(call, false);
-                // `callee`は`ev_clause`の束縛で、その結果は束縛の検査がtobjと比べ、ほかの`callee`は
-                // `Context::clause_callee`が断るので、ここには届かない。どちらかが変わったときの2つ目の守りとして残す
-                if !self.cx.passes(*callee, Repr::TObj) {
-                    return Err(format!(
-                        "the callee of {what} is {}, but a clause takes tobj",
-                        self.cx.typed_atom_text(*callee)
-                    ));
-                }
-                // 呼ばれるエントリのクロージャは `ev_clause` が `dup` して返すので `unr` である
-                // (docs/spec/lir.md の「Kind の印の検査」)
-                if !self.cx.mark_passes(*callee, Mark::Unr) {
-                    return Err(format!(
-                        "the callee of {what} is {}, but a clause takes unr",
-                        self.cx.marked_atom_text(*callee)
-                    ));
-                }
-                let expected = std::iter::once((Repr::Obj, Mark::Unr)).chain(
-                    operation
-                        .params
-                        .iter()
-                        .copied()
-                        .zip(operation.param_marks.iter().copied()),
-                );
-                for (index, (&arg, (repr, mark))) in args.iter().zip(expected).enumerate() {
-                    let taker = if index == 0 {
-                        "a clause"
-                    } else {
-                        "the operation"
-                    };
+                let expected = operation.params.iter().zip(&operation.param_marks);
+                for (index, (&arg, (&repr, &mark))) in args.iter().zip(expected).enumerate() {
                     if !self.cx.passes(arg, repr) {
                         return Err(format!(
-                            "argument {index} of {what} is {}, but {taker} takes {}",
+                            "argument {index} of {what} is {}, but the operation takes {}",
                             self.cx.typed_atom_text(arg),
                             repr.name()
                         ));
                     }
                     if !self.cx.mark_passes(arg, mark) {
                         return Err(format!(
-                            "argument {index} of {what} is {}, but {taker} takes {}",
+                            "argument {index} of {what} is {}, but the operation takes {}",
                             self.cx.marked_atom_text(arg),
                             mark.name()
                         ));
@@ -2145,7 +2106,6 @@ impl<'a> Checker<'a> {
             Call::Clause {
                 effect,
                 op,
-                callee: _,
                 args: _,
             } => (
                 "a",

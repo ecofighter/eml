@@ -551,24 +551,22 @@ fn a_tag_switch_without_a_layout_stops_perceus() {
 
 #[test]
 fn prims_read_borrowed_arguments_and_consume_the_rest() {
-    // `ev_clause` は evidence を借りるだけなので、`e.0` の所有は節の呼び出しまで残り、`dup e.0` は入らない。節の
-    // 呼び出しは引数を消費する (docs/spec/lir.md の「基本操作」)
+    // `ev_take_state`はevidenceを借りるだけなので、`e.0`の所有は`evv_push`まで残り、`dup e.0`は入らない。
+    // `evv_push`は引数を消費する (docs/spec/lir.mdの「基本操作」)
     let text = "\
-effect Counter { get(unit) -> int, put(int) -> unit }
-yields fn f() -> int {
-  let e.0: obj = prim ev_lookup[Counter]()
-  let c.1: tobj = prim ev_clause[Counter.get](e.0)
-  let m.2: int = clause Counter.get c.1(e.0, ())
-  return m.2
+fn f(e.0: obj, w.1: tobj) -> tobj {
+  let s.2: tobj = prim ev_take_state(e.0)
+  let v.3: tobj = prim evv_push(w.1, e.0)
+  let u.4: unit = prim evv_set(v.3)
+  return s.2
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @"
-    effect Counter { get(unit) -> int, put(int) -> unit }
-    yields fn f() -> int {
-      let e.0: obj = prim ev_lookup[Counter]()
-      let c.1: tobj = prim ev_clause[Counter.get](e.0)
-      let m.2: int = clause Counter.get c.1(e.0, ())
-      return m.2
+    fn f(e.0: obj, w.1: tobj) -> tobj {
+      let s.2: tobj = prim ev_take_state(e.0)
+      let v.3: tobj = prim evv_push(w.1, e.0)
+      let u.4: unit = prim evv_set(v.3)
+      return s.2
     }
     ");
 }
