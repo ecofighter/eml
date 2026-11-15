@@ -47,9 +47,9 @@ pub fn points(
     verify::unwind_points(program, wanted)
 }
 
-/// プログラム全体を所有の段で確かめ、関数ごとの巻き戻しの表を `program.functions` の順に返す。
-/// `eml_lir::verify` が拒むプログラムは、表の代わりにその誤りを返す。検査と表の記録は関数ごとに1回の走査で行う
-/// (docs/spec/lir.md の「verifier」)。
+/// プログラム全体を所有の段で確かめ、関数ごとの巻き戻しの表を`program.functions`の順に返す。
+/// `eml_lir::verify`が拒むプログラムは、表の代わりにその誤りを返す。検査と表の記録は関数ごとに1回の走査で行う
+/// (docs/spec/lir.mdの「verifier」)。
 pub fn verified(program: &Program) -> Result<Vec<Unwinds>, VerifyError> {
     verify::verified(program, |_| true).map(|unwinds| {
         unwinds

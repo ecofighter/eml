@@ -305,6 +305,7 @@ numeric_row mandelbrot mandelbrot mandelbrot 480
 # n が1つ増えると実時間が約9倍になり、300 ms に近い n がない。300 ms との比が最も小さい 9 にする
 numeric_row fannkuch-redux fannkuch_var fannkuch 9
 numeric_row sieve sieve_var sieve 3500000
+numeric_row nbody nbody nbody 140000 native
 numeric_row spectral-norm spectral_norm spectral_norm 510 native
 numeric_row mandelbrot mandelbrot mandelbrot 480 native
 numeric_row fannkuch-redux fannkuch_var fannkuch 9 native

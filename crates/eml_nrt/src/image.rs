@@ -229,7 +229,7 @@ pub const PURITY_EFFECTFUL: i64 = 2;
 pub const ENTRY_SITE: i64 = -1;
 
 /// `eml_nrt_failed`の結果の類。`RAISE_PANIC`では`out`に`[節, evidence, 文言]`を、`RAISE_IO`では
-/// `[節, evidence, 種類, 文言]`を書いてある。`eml$raise`はその節を呼ぶ (docs/spec/native.md の「externの失敗」)。
+/// `[節, evidence, 種類, 文言]`を書いてある。`eml$raise`はその節を呼ぶ (docs/spec/native.mdの「externの失敗」)。
 pub const RAISE_PANIC: i64 = 0;
 pub const RAISE_IO: i64 = 1;
 

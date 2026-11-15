@@ -415,7 +415,7 @@ fn value_references(program: &Program, function: &LirFn) -> Result<(), String> {
 /// 開いた後の段では、配置のフィールドに構造体は来ない。構造体の型を宣言したフィールドは `tobj` である
 /// (docs/spec/lir.md の「verifier」)。
 /// エフェクトの表の名前はどれも違う。実行系はエフェクトに名前で番号を振り、組み込みのエフェクトの操作の形も名前で引いて
-/// 確かめるので、同じ名前の2つ目のエフェクトは確かめを逃れる (docs/spec/lir.md の「verifier」)。
+/// 確かめるので、同じ名前の2つ目のエフェクトは確かめを逃れる (docs/spec/lir.mdの「verifier」)。
 fn distinct_effects(program: &Program) -> Result<(), VerifyError> {
     let mut seen = FxHashSet::default();
     for info in &program.effects {

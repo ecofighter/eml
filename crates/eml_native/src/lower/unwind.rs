@@ -60,7 +60,7 @@ impl<'a> From<&'a UnwindPoint> for Point<'a> {
 
 /// `abort`のバイトをロードし、立っていれば新しい冷たいブロックへ、そうでなければ`hot_args`を持って新しい熱いブロックへ
 /// 分岐する。熱いブロックは`hot_args`の型の引数を持つ。どちらのブロックも選ばずに`(cold, hot)`を返す。呼び出しの後の
-/// 巻き戻しの確かめは、どれもこの関数が出す (docs/spec/native.md の「巻き戻しの地点」)。
+/// 巻き戻しの確かめは、どれもこの関数が出す (docs/spec/native.mdの「巻き戻しの地点」)。
 pub(super) fn if_aborting(
     b: &mut FunctionBuilder,
     ctx: Value,
@@ -87,7 +87,7 @@ pub(super) fn raise_signature() -> Signature {
 /// `eml$raise`の本体。どのプログラムでも同じコードである。失敗の扱いはどれもサービスが決め、捕まえるハンドラがあれば、
 /// サービスが`out`に書いた類で`Panic`か`IO`の節を呼ぶ。節のシグネチャは決まっていて、`load`がプログラムの`Prelude`の
 /// 操作の形を確かめる。節は中断を始めて戻るので、戻ったときに`abort`のバイトが立っていなければtrapする。ほかの類では
-/// 何も呼ばずに戻る (docs/spec/native.md の「externの失敗」)。
+/// 何も呼ばずに戻る (docs/spec/native.mdの「externの失敗」)。
 pub(super) fn define_raise<M: Module>(mut b: FunctionBuilder, module: &mut M, imports: &Imports) {
     let entry = b.create_block();
     b.append_block_params_for_function_params(entry);
@@ -279,7 +279,7 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
 
     /// 着地の印`marker`を持つ地点の冷たいブロック。`target`を印と比べ、等しければ中断はここで終わるので、
     /// `eml_nrt_landed`が返すダミーを持って熱いブロックへ戻る。そうでなければ、中断が外すhandlerの状態を取り出して
-    /// 手放してから、地点の後始末へ進む。VMと同じ順である (docs/spec/native.md の「巻き戻しの地点」)。
+    /// 手放してから、地点の後始末へ進む。VMと同じ順である (docs/spec/native.mdの「巻き戻しの地点」)。
     fn fill_landing(&mut self, cold: Block, hot: Block, marker: VarId, point: &Point) {
         self.b.switch_to_block(cold);
         let target = mem::yield_target(&mut self.b, self.ctx);

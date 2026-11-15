@@ -1,4 +1,4 @@
-//! 生成したコードが冷たい道で呼ぶサービス (docs/spec/native.md の「安全点」、「巻き戻しの地点」、「externの失敗」)。
+//! 生成したコードが冷たい道で呼ぶサービス (docs/spec/native.mdの「安全点」、「巻き戻しの地点」、「externの失敗」)。
 #![allow(unsafe_code)]
 
 use eml_rt::{Ctx, Fast, Fault, Stop, Word};
@@ -48,7 +48,7 @@ crate::entries! {
     /// 置いた失敗を上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の地点の添字か`ENTRY_SITE`で、
     /// `purity`は失敗した行の純粋さ (`PURITY_*`) である。失敗を捕まえるハンドラがあれば、その節の引数を`out`に書いて
     /// 類 (`RAISE_PANIC`か`RAISE_IO`) を返す。書いた語の参照はどれも`out`を通して節へ移り、サービスは何も持たない。
-    /// なければ失敗をworkerの構造体に記録して、runを終える (docs/spec/native.md の「externの失敗」)。
+    /// なければ失敗をworkerの構造体に記録して、runを終える (docs/spec/native.mdの「externの失敗」)。
     ///
     /// # Safety
     /// `eml_nrt_safepoint`と同じ。さらに、`out`は書ける4語を指す。中断も中断でないyieldも進んでいない。
@@ -121,7 +121,7 @@ crate::entries! {
     }
 
     /// 着地の印が中断の宛先のevidenceである地点の冷たい側。ヒープのダミーを返し、着地したフレームはそれを印を持つ
-    /// `apply`の結果に束縛する (docs/spec/native.md の「巻き戻しの地点」)。
+    /// `apply`の結果に束縛する (docs/spec/native.mdの「巻き戻しの地点」)。
     ///
     /// # Safety
     /// `eml_nrt_safepoint`と同じ。
@@ -139,7 +139,7 @@ enum Class {
 
 /// `purity`の行の失敗`fault`を捕まえうるハンドラの類。VMの`failed`と同じ規則で、`Pure`の行の失敗はどちらも捕まえず、
 /// `try_io`は`Effectful`の行の失敗だけを捕まえる。エンジンのpanic (`panic`の行とCの関数の補助) はVMと同じく
-/// 純粋さによらず`Panic`である (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
+/// 純粋さによらず`Panic`である (docs/spec/vm.mdの「`IO` と `Panic` への中断」)。
 fn class(fault: &Fault, purity: i64) -> Option<Class> {
     let engine = *fault == Fault::Engine;
     if engine || (fault.panics() && purity != PURITY_PURE) {

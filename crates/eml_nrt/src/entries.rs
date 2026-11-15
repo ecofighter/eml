@@ -680,7 +680,7 @@ mod tests {
         let mut ctx = ctx();
         let c: *mut Ctx<Fast> = &mut *ctx;
         // SAFETY: 上と同じ。どの呼び出しも前提を満たす。`evv`は空から始まり、物体の参照は移る先に1つずつ渡し、
-        // 最後に手放す。節は`lin`でない閉包で、表の欄は新しい evidence のものなので`()`である
+        // 最後に手放す。節は`lin`でない閉包で、表の欄は新しいevidenceのものなので`()`である
         unsafe {
             let outer = evv_get(c);
             let ev = ev_new(c, 3, 1, Word::imm(7), outer);

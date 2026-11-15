@@ -13,14 +13,6 @@ b1:
   return ()
 b2:
   let t.2: unit = extern Prelude.println(t.1)
-  let y.9: int = prim yielding()
-  switch y.9 { 0 -> b4, _ -> b3 }
-b3:
-  let k.10: tobj poly = prim yield_cont_take()
-  let k.11: tobj poly = closure compose$(k.10, &asker$k1)
-  let u.12: unit = prim yield_cont_set(k.11)
-  return ()
-b4:
   return t.2
 }
 yields fn "masked@[Unit]<e>"(f.0: tobj poly) -> unit {
@@ -223,14 +215,6 @@ internal yields clause Yield.yield fn "resumer<e>$handle1$yield$entry"(after.0: 
 }
 internal yields fn asker$k0(t.0: obj) -> unit {
   let t.1: unit = extern Prelude.println(t.0)
-  let y.2: int = prim yielding()
-  switch y.2 { 0 -> b2, _ -> b1 }
-b1:
-  let k.3: tobj poly = prim yield_cont_take()
-  let k.4: tobj poly = closure compose$(k.3, &asker$k1)
-  let u.5: unit = prim yield_cont_set(k.4)
-  return ()
-b2:
   tail call asker$k1(t.1)
 }
 internal yields fn asker$k1(t.0: unit) -> unit {
@@ -292,8 +276,6 @@ b2:
 b3:
   let u.14: unit = drop ret.1
   let u.15: unit = drop x.2
-  let k.16: tobj poly = prim yield_cont_take()
-  let u.17: unit = drop k.16
   let c.18: tobj poly = prim yield_finish()
   let st.19: tobj poly = prim ev_last_state(ev.0)
   let u.29: unit = drop ev.0

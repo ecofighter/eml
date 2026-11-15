@@ -1,7 +1,7 @@
 //! externの失敗を`try_panic`と`try_io`に届けるテスト。実行のテストはどれもVMの検査モードとネイティブで同じプログラムを
 //! 流し、標準出力と結果の文が同じことを確かめる。ふつうに終わるrunは、censusがきれいなことも確かめる。捕まえない
 //! 失敗で終わるrunは、censusを取らない致命的な誤りの道で終わるので、そのテストでは、サービスが後に何も持たないことを
-//! 確かめない (docs/spec/native.md の「externの失敗」)。
+//! 確かめない (docs/spec/native.mdの「externの失敗」)。
 #![cfg(not(miri))]
 use eml_lir::{Prim, Rhs, Stmt};
 use eml_native::LoadError;

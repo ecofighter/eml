@@ -110,8 +110,8 @@ pub enum Immediates<'a> {
     Root(u32),
 }
 
-/// 種類ごとの型、名前、見本 (即値を空か 0 にしたもの) の並びから、`Prim::KINDS` と `Prim::name` の網羅的な `match` を
-/// 作る。並びから漏れた種類は `match` が網羅的でなくなるので、`Prim::KINDS` に入れ忘れることがない。
+/// 種類ごとの型、名前、見本 (即値を空か0にしたもの) の並びから、`Prim::KINDS`と`Prim::name`の網羅的な`match`を
+/// 作る。並びから漏れた種類は`match`が網羅的でなくなるので、`Prim::KINDS`に入れ忘れることがない。
 macro_rules! kinds {
     ($($kind:pat => $name:literal, $sample:expr;)*) => {
         impl Prim {

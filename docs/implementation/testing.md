@@ -735,7 +735,7 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ワークスペースの`cargo clippy --all-targets`は、各crateを既定のfeatureでしか検査しない。`eml_cli`と`eml_test_support`のfeatureや、featureで切り替えるコードを変えたときは、既定でない組み合わせのlibも検査する。組み合わせは、`eml_cli`のfeatureなし、`types`、`core`と、`eml_test_support`のfeatureなし、`hir`、`types`、`core`の7個に、`eml_cli`の`--no-default-features --features run` (lib、`tls`と`gui`なし) と`--no-default-features --features run,gui` (lib、`tls`なし)、`-p eml_io -p eml_rows -p eml_vm -p eml_nrt --all-targets` (`tls`と`gui`なし、テストも含む)、`-p eml_rows --all-targets --features tls`、`-p eml_rows --all-targets --features gui`、`-p eml_rows --all-targets --features tls,gui`、`-p eml_sched --all-targets` (`testing`なし、テストも含む) を足した14個である。前の7個は`cargo clippy -p <crate> --no-default-features [--features <feature>] -- -D warnings`で流す。テストとbinは`run`を前提にするので、`--all-targets`は付けない。上流のcrateのテストが下流のcrateを組み立てないことは、`cargo tree -p eml_hir -e normal,dev`と`cargo tree -p eml_types -e normal,dev`に下流の段階のcrateが出ないことで確かめる。
 
-各crateが宣言するfeatureは次のとおりである。成果物でないcrateがfeatureを宣言するのは、自分の`src/`か`tests/`にそのfeatureの`cfg`があるときだけで、中身がほかのcrateのfeatureだけのfeatureを宣言するのは成果物の`eml_cli`だけである。例外は`eml_test_support`の段階のfeatureだけである。`eml_vm`、`eml_nrt`、`eml_native`、`eml_clink`、`eml_cabi`、`eml_rt`、`eml_extern`はfeatureを宣言しない。
+各crateが宣言するfeatureは次のとおりである。成果物でないcrateがfeatureを宣言するのは、自分の`src/`か`tests/`にそのfeatureの`cfg`があるときだけで、中身がほかのcrateのfeatureだけのfeatureを宣言するのは成果物の`eml_cli`だけである。例外は`eml_test_support`の段階のfeatureだけである。`eml_nrt`、`eml_native`、`eml_clink`、`eml_cabi`、`eml_rt`、`eml_extern`はfeatureを宣言しない。
 
 | crate | feature | 中身 |
 |---|---|---|
@@ -749,6 +749,7 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 | `eml_io` | `tls` | `eml_tls` (テストのdriverの`tls.localhost`の終端器) |
 | `eml_gui` | `native` | AppKit、Qt 6、WinUI 3のbackend |
 | `eml_sched` | `testing` | `cells.rs`のテストの道具 (`eml_vm`と`eml_rows`のdev-dependencyだけが有効にする) |
+| `eml_vm` | `testing` | verifierを通さない読み込み`load_unverified` (`eml_vm`自身へのdev-dependencyだけが有効にする) |
 | `eml_test_support` | `hir`、`types`、`core`、`run` | 段階のcrateと、`eml_cli`の同じ段階 |
 
 `eml_rows`のfeatureを有効にするか外すかを要るテストは、`crates/eml_rows/tests/`に`cfg(feature = …)`か`cfg(not(feature = …))`の下で置く。`eml_rows`、`eml_sched`、`eml_nrt`、`eml_io`の`src/`にある`#[cfg(test)]`のモジュールは、エンジンのcrateも`eml_test_support`も名指さない。dev-dependencyの循環で、テストするcrateの2つ目のコピーがリンクされるためである。そのようなテストは`tests/`の結合テストにする。

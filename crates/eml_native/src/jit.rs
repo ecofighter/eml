@@ -649,7 +649,7 @@ fn internal(function: &str, what: &'static str) -> RuntimeError {
 
 /// プログラムの`Prelude.Panic`と`Prelude.IO`が、`eml$raise`の呼ぶ決まった形の操作をちょうど1つ持つことを、どのビルドでも
 /// 確かめる。`panicked`は`obj`を、`io_failed`は`enum`と`obj`を取り、どちらも戻らない。`eml$raise`はその節を決まった
-/// シグネチャで呼ぶので、形の違う節を呼べば未定義の動作になる (docs/spec/native.md の「externの失敗」)。
+/// シグネチャで呼ぶので、形の違う節を呼べば未定義の動作になる (docs/spec/native.mdの「externの失敗」)。
 fn prelude_shape(program: &Program) -> Result<(), LoadError> {
     let shapes = [
         (ExternEffect::Panic, &[Repr::Obj][..]),

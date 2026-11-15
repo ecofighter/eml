@@ -431,9 +431,10 @@ fn main() -> unit {{
 }
 
 /// `mask` 付きの呼び出しの中の操作は、呼び出しより外側の同じエフェクトの handler を、`mask` に並ぶ数だけ飛ばす。
-/// 呼び出しの中で設けた handler は飛ばさない (docs/spec/core-ir.md)。`ir/mask.lir` は、次のプログラムを Perceus
-/// まで通した IR である。EP が `mask` を `evv_mask` と `mask$` の包みに置き換えている
-/// (docs/spec/core-ir.md の「`mask` の包み」)。
+/// 呼び出しの中で設けたhandlerは飛ばさない (docs/spec/core-ir.md)。`ir/mask.lir`は、次のプログラムをPerceus
+/// まで通したIRを元に、今のEPが出さない形 (externの後のyieldの確かめと、`prompt$`の状態2の道での継続の取り出し)
+/// を手で除いたものである。最適化の今の形にはしないので、下の5つの`ask`の道がどれも残る。EPが`mask`を`evv_mask`と
+/// `mask$`の包みに置き換えている (docs/spec/core-ir.mdの「`mask` の包み」)。
 ///
 /// ```text
 /// effect Ask where
@@ -504,9 +505,10 @@ fn a_mask_skips_outer_handlers_only() {
     ");
 }
 
-/// `ir/multi_resume.lir` は、次のプログラムを Perceus まで通した IR である。`Choose` の節が `k` を2回再開し、
-/// 内側の `Ask` の handle の `prompt$` は、再開のたびに `return` の節を通って戻る。LIR のテキストにはコメントを
-/// 書けないので、IR の説明はここに書く。
+/// `ir/multi_resume.lir`は、次のプログラムをPerceusまで通したIRを元に、今のEPが出さない形 (externの後のyieldの
+/// 確かめと、`prompt$`の状態2の道での継続の取り出し) を手で除いたものである。今の最適化は使われない`Ask`のhandleを
+/// 消すが、このIRはそれを残す。`Choose`の節が`k`を2回再開し、内側の`Ask`のhandleの`prompt$`は、再開のたびに
+/// `return`の節を通って戻る。LIRのテキストにはコメントを書けないので、IRの説明はここに書く。
 ///
 /// ```text
 /// effect Choose where

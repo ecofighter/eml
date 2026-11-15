@@ -410,7 +410,7 @@ impl<M: Mode> Ctx<M> {
         lemma_word_kept(h1, h0, z, none, table);
     }
 
-    /// `fork_ev` の、モデルが合っている道。
+    /// `fork_ev`の、モデルが合っている道。
     pub(super) proof fn lemma_fork_ev_ok(
         &self,
         s0: Ctx<M>,
@@ -486,7 +486,7 @@ impl<M: Mode> Ctx<M> {
         assert(live(h1, tb));
         assert(live(h0, tb));
         lemma_moved_immortal(h4, h0, dt, z, none, table);
-        // 新しい evidence についての変化
+        // 新しいevidenceについての変化
         let e4 = |b: usize| -points(table, b) - points(state, b);
         lemma_moved_chain(h4, h3, h2, dt, ds, e4, x, x, x);
         assert(live(h2, eb));
@@ -505,7 +505,7 @@ impl<M: Mode> Ctx<M> {
         }
         self.lemma_holds_moved(s0, seq![], seq![], z, none);
         self.lemma_evv_kept(s0, z, none);
-        // 新しい evidence の形
+        // 新しいevidenceの形
         h4.lemma_readable_scanned(ev, EV_TABLE as int);
         h4.lemma_readable_scanned(ev, EV_STATE as int);
         h4.lemma_readable_scanned(ev, EV_OUTER as int);
@@ -513,7 +513,7 @@ impl<M: Mode> Ctx<M> {
         lemma_table_kept(h4, h0, z, none, table);
         lemma_unit_bits();
         assert(ev_ok(h4, ev));
-        // 呼ぶ側が新しい evidence の参照を1つ持つ
+        // 呼ぶ側が新しいevidenceの参照を1つ持つ
         self.lemma_fresh_holds(s0, ev);
     }
 }

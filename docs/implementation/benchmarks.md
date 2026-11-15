@@ -179,8 +179,8 @@ valgrindがarm64のmacOSで動かないので、callgrindは使わない。`inst
 bench/scripts.sh
 ```
 
-- 表は3つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ)、`https-get` (600 MiB の本文を https で取る) の6行である。数値計算の表は、VMのnbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行と、nbodyを除く同じプログラムの`(native)`の4行である。3つ目の表は、大きい入力で Rust の実装と比べる (下の「C/Rust との比べ方」)
-- 数値計算の表には、`(native)` とラベルを付けた4行 (spectral-norm、mandelbrot、fannkuch-redux、ふるい) が続く。同じプログラムを`EML_WORKERS=1`の`--native`で動かし、同じ Python の実装と比べる。大きさは同名の VM の行と同じにする。約 300 ms に合わせる決め方と下の大きさの決め直しの規則は、VM の行にだけ当てはまる。測る前の一致の確かめは、`compare.sh` が `EML_RUN_FLAGS=--native` を `run` の直後に足して行う
+- 表は3つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ)、`https-get` (600 MiB の本文を https で取る) の6行である。数値計算の表は、VMのnbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行と、同じプログラムの`(native)`の5行である。3つ目の表は、大きい入力で Rust の実装と比べる (下の「C/Rust との比べ方」)
+- 数値計算の表には、`(native)`とラベルを付けた5行 (nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるい) が続く。同じプログラムを`EML_WORKERS=1`の`--native`で動かし、同じPythonの実装と比べる。大きさは同名のVMの行と同じにする。約300 msに合わせる決め方と下の大きさの決め直しの規則は、VMの行にだけ当てはまる。測る前の一致の確かめは、`compare.sh`が`EML_RUN_FLAGS=--native`を`run`の直後に足して行う
 - スクリプトの入力は、`bench/scripts/gen.py` が種類 (アクセスログか CSV) と大きさごとに、種を固定して1つずつ作る。`target/bench-scripts/` に大きさを名前に入れて置き、すでにあれば作り直さない
 - 比べる Python の実装は、スクリプトが `bench/scripts/<名前>.py`、数値計算が `bench/numeric/<名前>.py` で、Python の標準ライブラリで普通に書いたものである。速さのために手で凝ったものにはしない。数値計算の実装は、浮動小数の演算を eml の実装と同じ順で行い、ビットまで同じ結果を出す
 - `https-get`の相手は`crates/eml_tls/examples/https_server.rs`で、`127.0.0.1`で待ち受け、`bench/scripts.sh`がrunのたびに作る証明書とTLS 1.3の`TLS13_AES_256_GCM_SHA384`だけで応える。両方のクライアントが同じ暗号を使うためである。本文は番号を振った16バイトの行の列で、`Content-Length`を付け、close_notifyの後に書く側を閉じる。chunkedにしないのは、chunkの解析でなく`Net`と`Tls`の読みの道を測るためである。名前の解決を測らないよう、URLは`https://127.0.0.1:PORT/`にする。`https_server CERT_PEM_PATH KEY_PEM_PATH MIB`で呼ぶとMIB MiBの本文を返すserverになり、ポートを標準出力の1行目に出し、`bench/scripts.sh`がsignalで止めるまで動く。`eml_tls`のfixturesは固定した時刻でしか有効でなく、現実の時刻では期限切れなので、使わない。`bench/scripts.sh`は、この行のrunのたびに、`/usr/bin/openssl` (LibreSSL)で2日有効のCAとleafを一時ディレクトリに作る。leafはSANに`IP:127.0.0.1`を持ち、CAとleafにsubject key identifierを、leafにauthority key identifierを付ける (なければPython 3.14の既定のcontextが鎖を拒む)。CAはemlとPythonのCAに、leafと鍵はserverに渡す。`bench/scripts.sh`はserverを組んで裏で起こし、比べと6回の計測で使い、最後に止めて一時ディレクトリを消す。serverのCPU時間を標準エラーに出す。両方の実装は状態、本文の長さ、最後の行を出す。emlの実装は`bench/scripts/https_get.em`にある。UIテストはテストのdriverで動き、本物のソケットに届かないためである。`bench/scripts/`には、stdのモジュールと大文字小文字を除いて同じ名前の`.em`を置かない。置くと`import Http`などがそのファイルを見つけてE1026になる (上の`bench/list.em`と同じ)。目標はほかの行と同じくPythonの1.5倍以下で、CIに上限は置かない
@@ -280,7 +280,7 @@ bench/scripts.sh
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.2.1 (26B131)
 - rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
-- コミット: 7fb967c
+- コミット: 5412e4a
 
 `rt_bench` の計測
 
@@ -371,43 +371,44 @@ eml / 参照の比 (1 MiB の2組は目標が2倍、続く4組は予算の行、
 - OS: macOS 27.2.1 (26B131)
 - rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
 - Python: Python 3.14.10
-- コミット: bab1816
+- コミット: 5412e4a
 - 入力: スクリプトの入力は bench/scripts/gen.py が作る。大きさは表の「大きさ」の欄にある
 
 スクリプト
 
 | 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
 |---|---:|---:|---:|---:|---:|---:|
-| `wc` | 9000 KiB | 0.30 | 0.03 | 10.0 | 36 | 78 |
+| `wc` | 9000 KiB | 0.32 | 0.03 | 10.7 | 36 | 77 |
 | `grep -n` | 70000 KiB | 0.25 | 0.27 | 0.9 | 16 | 16 |
 | `logstat` | 6700 KiB | 0.27 | 0.11 | 2.5 | 18 | 19 |
-| `logstat --whole` | 6700 KiB | 0.26 | 0.10 | 2.6 | 43 | 53 |
+| `logstat --whole` | 6700 KiB | 0.25 | 0.10 | 2.5 | 43 | 53 |
 | `csv2jsonl` | 2900 KiB | 0.30 | 0.19 | 1.6 | 28 | 51 |
-| `https-get` | 600 MiB | 0.26 | 0.31 | 0.8 | 754 | 883 |
+| `https-get` | 600 MiB | 0.25 | 0.28 | 0.9 | 754 | 883 |
 
 数値計算
 
 | 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
 |---|---:|---:|---:|---:|---:|---:|
-| nbody | 140000 | 0.33 | 0.65 | 0.5 | 17 | 14 |
-| spectral-norm | 510 | 0.34 | 0.94 | 0.4 | 16 | 14 |
-| mandelbrot | 480 | 0.22 | 0.33 | 0.7 | 16 | 14 |
-| fannkuch-redux | 9 | 0.62 | 0.26 | 2.4 | 17 | 14 |
-| sieve | 3500000 | 0.33 | 0.17 | 1.9 | 42 | 40 |
-| spectral-norm (native) | 510 | 0.05 | 0.89 | 0.1 | 18 | 14 |
-| mandelbrot (native) | 480 | 0.05 | 0.30 | 0.2 | 17 | 13 |
-| fannkuch-redux (native) | 9 | 0.16 | 0.25 | 0.6 | 19 | 14 |
-| sieve (native) | 3500000 | 0.09 | 0.17 | 0.5 | 44 | 40 |
+| nbody | 140000 | 0.34 | 0.66 | 0.5 | 16 | 14 |
+| spectral-norm | 510 | 0.34 | 0.92 | 0.4 | 16 | 14 |
+| mandelbrot | 480 | 0.22 | 0.31 | 0.7 | 16 | 13 |
+| fannkuch-redux | 9 | 0.59 | 0.24 | 2.5 | 17 | 14 |
+| sieve | 3500000 | 0.35 | 0.18 | 1.9 | 42 | 40 |
+| nbody (native) | 140000 | 0.11 | 0.65 | 0.2 | 18 | 14 |
+| spectral-norm (native) | 510 | 0.05 | 0.90 | 0.1 | 18 | 14 |
+| mandelbrot (native) | 480 | 0.05 | 0.30 | 0.2 | 17 | 14 |
+| fannkuch-redux (native) | 9 | 0.16 | 0.26 | 0.6 | 18 | 14 |
+| sieve (native) | 3500000 | 0.10 | 0.18 | 0.6 | 43 | 40 |
 
 C/Rust との比
 
 | 計測 | 大きさ | eml の実時間 (s) | Rust の実時間 (s) | eml の空 (s) | Rust の空 (s) | 比 (eml / Rust) |
 |---|---:|---:|---:|---:|---:|---:|
-| `wc` | 100000 KiB | 3.19 | 0.07 | 0.00 | 0.00 | 45.6 |
+| `wc` | 100000 KiB | 3.51 | 0.07 | 0.00 | 0.00 | 50.1 |
 | `grep -n` | 100000 KiB | 0.36 | 0.08 | 0.00 | 0.00 | 4.5 |
 | `logstat` | 100000 KiB | 3.81 | 0.24 | 0.00 | 0.00 | 15.9 |
-| `logstat --whole` | 100000 KiB | 3.61 | 0.23 | 0.00 | 0.00 | 15.7 |
-| `csv2jsonl` | 50000 KiB | 4.89 | 0.14 | 0.00 | 0.00 | 34.9 |
+| `logstat --whole` | 100000 KiB | 3.63 | 0.23 | 0.00 | 0.00 | 15.8 |
+| `csv2jsonl` | 50000 KiB | 4.98 | 0.14 | 0.00 | 0.00 | 35.6 |
 
 ## ネイティブの数値
 

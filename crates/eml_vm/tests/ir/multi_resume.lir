@@ -21,14 +21,6 @@ b1:
 b2:
   let t.2: obj = extern "Prelude.Show Int.show"(t.1)
   let t.3: unit = extern Prelude.println(t.2)
-  let y.14: int = prim yielding()
-  switch y.14 { 0 -> b4, _ -> b3 }
-b3:
-  let k.15: tobj poly = prim yield_cont_take()
-  let k.16: tobj poly = closure compose$(k.15, &main$k1)
-  let u.17: unit = prim yield_cont_set(k.16)
-  return ()
-b4:
   return t.3
 }
 internal yields fn main$handle1(p.0: unit) -> tobj {
@@ -127,8 +119,6 @@ b2:
 b3:
   let u.14: unit = drop ret.1
   let u.15: unit = drop x.2
-  let k.16: tobj poly = prim yield_cont_take()
-  let u.17: unit = drop k.16
   let c.18: tobj poly = prim yield_finish()
   let st.19: tobj poly = prim ev_last_state(ev.0)
   let u.29: unit = drop ev.0
@@ -160,14 +150,6 @@ internal yields fn main$k0(t.8: tobj) -> unit {
   decref t.8
   let t.1: obj = extern "Prelude.Show Int.show"(t.0)
   let t.2: unit = extern Prelude.println(t.1)
-  let y.3: int = prim yielding()
-  switch y.3 { 0 -> b2, _ -> b1 }
-b1:
-  let k.4: tobj poly = prim yield_cont_take()
-  let k.5: tobj poly = closure compose$(k.4, &main$k1)
-  let u.6: unit = prim yield_cont_set(k.5)
-  return ()
-b2:
   tail call main$k1(t.2)
 }
 internal yields fn main$k1(t.0: unit) -> unit {

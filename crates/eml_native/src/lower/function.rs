@@ -388,7 +388,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
     /// 最初の引数が印である`prompt$`の直接の呼び出しまで、ブロックは呼び出しもexternの行も`yield_to`も`yield_abort`も
     /// 下ろさず、印を待ったまま終わらない。呼び出しの後の確かめは`abort`のバイトしか読まないので、着地から`yield_finish`
     /// までの間に呼び出しの巻き戻しの地点を通ってはならないからである。LIRのverifierの規則だが、コードがそれに頼るので、
-    /// ここでどのビルドでも確かめる (docs/spec/native.md の「巻き戻しの地点」)。
+    /// ここでどのビルドでも確かめる (docs/spec/native.mdの「巻き戻しの地点」)。
     fn landing_after(&self, landed: Option<VarId>, step: Step) -> Option<VarId> {
         let Some(marker) = landed else {
             return match step {

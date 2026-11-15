@@ -1,4 +1,4 @@
-//! エフェクトの基本操作のテスト (docs/spec/native.md の「エフェクト」)。
+//! エフェクトの基本操作のテスト (docs/spec/native.mdの「エフェクト」)。
 use eml_lir::{Prim, Repr, Step};
 use eml_native::Arg;
 use eml_nrt::image::{DATUM_EFFECT, DATUM_FN, DATUM_MASK, DatumRow, MaskRow};
@@ -869,7 +869,7 @@ fn load_panic(text: &str) -> String {
 
 /// 末尾の節の呼び出しで、操作の結果が呼ぶ側の結果と違うものは、どのビルドでも読み込みで断る。読み込みはどのビルドでも
 /// verifierを走らせるので、そこで断る。互換のReprは同じKindを持つので、シグネチャの結果についての下ろしの`assert`が
-/// 先に働くことは今はなく、2つ目の守りとして残る (docs/spec/lir.md の「verifier」)。
+/// 先に働くことはなく、2つ目の守りとして残る (docs/spec/lir.mdの「verifier」)。
 #[test]
 fn release_check_a_tail_clause_result_mismatch_panics() {
     let message = load_panic(&format!(
@@ -1364,7 +1364,7 @@ yields fn in_tail(u.0: tobj) -> tobj {{
 
 /// 着地の印を持つ`apply`の後には`prompt$`の呼び出しが続かなければならない。`abort`のバイトだけを確かめる呼び出しの
 /// 後のコードはこれに頼るので、どのビルドでも読み込みのverifierが断る。下ろしの`assert`は2つ目の守りとして残る
-/// (docs/spec/native.md の「巻き戻しの地点」)。
+/// (docs/spec/native.mdの「巻き戻しの地点」)。
 #[test]
 fn release_check_a_marked_apply_not_followed_by_prompt_panics() {
     let message = load_panic(&format!(
@@ -1389,7 +1389,7 @@ fn f(w.2: evv) -> tobj {{
 }
 
 /// 読み込みは、関数ごとの検査だけでなく、プログラムの全体にかかる規則 (`clause`の印の関数のABI) もどのビルドでも
-/// 断る (docs/spec/lir.md の「verifier」)。
+/// 断る (docs/spec/lir.mdの「verifier」)。
 #[test]
 fn release_check_a_program_level_rule_is_refused() {
     let message = load_panic(&format!(

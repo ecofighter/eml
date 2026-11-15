@@ -404,7 +404,7 @@ fn prompt_drops_x_on_its_yield_paths_and_ret_on_abort() {
 fn prompt_calls_nothing_before_yield_finish() {
     // ネイティブのコードは呼び出しの後で`abort`のバイトだけを確かめるので、yieldと中断の道では、`prompt$`は
     // `yield_finish`がyieldの状態を消すまで、呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない。着地から
-    // `prompt$`の呼び出しまでの呼ぶ側と同じ規則である (docs/spec/core-ir.md の「handle と `prompt$`」)
+    // `prompt$`の呼び出しまでの呼ぶ側と同じ規則である (docs/spec/core-ir.mdの「handle と `prompt$`」)
     let mut program =
         program("effect State { get(unit) -> tobj }\nfn main() -> unit {\n  return ()\n}\n");
     Helpers::default().prompt(&mut program);

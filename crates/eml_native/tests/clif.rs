@@ -1329,7 +1329,7 @@ internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
 }
 
 /// `eml$raise`はプログラムによらない。サービスが`out`に書いた類で`Panic`か`IO`の節を決まったシグネチャで呼び、その後で
-/// `abort`のバイトが立っていなければtrapする。ほかの類では何も呼ばずに戻る (docs/spec/native.md の「externの失敗」)。
+/// `abort`のバイトが立っていなければtrapする。ほかの類では何も呼ばずに戻る (docs/spec/native.mdの「externの失敗」)。
 #[test]
 fn the_raise_helper() {
     let text = "fn main() -> unit {\n  return ()\n}\n";

@@ -402,7 +402,7 @@ pub(super) fn define_apply<M: Module>(
         b.switch_to_block(hot);
         // 1つの`apply`のうちyieldしうるのは最後の矢印だけなので、最後でない部分からyieldが戻ることはない。ここで
         // `target`がUnitでなければそういうyieldなので、そのダミーを関数の値として渡す代わりにtrapする
-        // (docs/spec/native.md の「関数の値」)
+        // (docs/spec/native.mdの「関数の値」)
         let target = mem::yield_target(&mut b, ctx);
         let yielding = b.ins().icmp_imm_u(IntCC::NotEqual, target, mem::UNIT);
         let misplaced = b.create_block();

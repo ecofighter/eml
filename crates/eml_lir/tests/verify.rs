@@ -1757,7 +1757,7 @@ fn scopes_reject_a_release() {
 
 #[test]
 fn an_effect_declared_twice_is_rejected() {
-    // テキストの形では読めないので、読んだ IR の表に同じ名前のエフェクトを足す
+    // テキストの形では読めないので、読んだIRの表に同じ名前のエフェクトを足す
     let mut program = read(
         "effect Prelude.Panic { never panicked(obj) -> never }\nfn f() -> unit {\n  return ()\n}\n",
     );
@@ -3137,7 +3137,7 @@ fn root_primitives_move_tobj_values() {
 // 着地の印 `prompt v`
 
 /// いちばん小さい`prompt$`。印の変数と、印の付いた`apply`の結果を受け取る。verifierは`apply`の直後にその呼び出しを
-/// 求める (docs/spec/lir.md の「着地の印」)。
+/// 求める (docs/spec/lir.mdの「着地の印」)。
 const PROMPT: &str = "yields fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {\n  let u.2: unit = drop ev.0\n  return x.1\n}\n";
 
 /// `Land`と、そのエントリの関数。着地の印のevidenceを`evidence`で作るテストが、エントリに使う。
@@ -3853,8 +3853,8 @@ b2:
 
 const P2: &str = "layout P { P(obj, obj) }\n";
 
-/// `x` を分解して token `r` にし、`c` で分かれた行き先の b1 と b2 で、それぞれ `left` と `right` が使う
-/// (docs/spec/lir.md の「verifier」)。
+/// `x`を分解してtoken `r`にし、`c`で分かれた行き先のb1とb2で、それぞれ`left`と`right`が使う
+/// (docs/spec/lir.mdの「verifier」)。
 fn token_paths(left: &str, right: &str) -> String {
     format!(
         "{BOOL}{P2}fn f(x.0: obj, c.1: enum) -> obj {{
