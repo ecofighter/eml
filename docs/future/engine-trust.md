@@ -26,6 +26,12 @@ VMの速いモードとネイティブのコードは、LIRについて前提に
 - プログラムの`extern "C"`の宣言が正しい。これはプログラムを書いた人がemlの言語の中でする約束で ([宣言](../spec/declarations.md)の「宣言する側の約束」)、RustのAPIは運ばない
 - `eml_rt`の信頼の一覧が成り立つ ([オブジェクトモデル](../spec/object-model.md)の「`unsafe` の核」)
 
+どちらの読み込みも、どのビルドでもverifierを走らせ、verifierが拒むプログラムを断る。VMの読み込みは誤りを返し、ネイティブの読み込みは`internal error: invalid LIR at the native load: <error>`でpanicする。読み込みは、[LIR](../spec/lir.md)の「verifier」の規則として、着地の印を持つ`apply`の後の形 ([LIR](../spec/lir.md)の「着地の印」)、`evv_mask`が空でないこと、yieldが進んでいる所に巻き戻しの地点がないことも、どのビルドでも確かめる。yieldが進んでいる所は、yieldしうる呼び出しからその確認までの間 ([LIR](../spec/lir.md)の「yieldの確認までの間」) と、着地が入る関数である。ネイティブの読み込みは、`Prelude`の操作の形 (`LoadError::Prelude`) と節のエントリのシグネチャも確かめる。ネイティブのコードについてP1が呼ぶ側に任せるのは、[LIR](../spec/lir.md)の「実行の前提」の一覧で、とくに次のことである。
+
+- エフェクトのエントリが速いモードで要る前提 (`Ctx`の操作の前提。[オブジェクトモデル](../spec/object-model.md)の「基本操作の契約」) は、実行の前提から従う
+- 関数と`apply`の`yields`の印が正しい
+- 値は退いたevidenceにだけ届く。`par`の`share`はこの不変条件に頼り、実行時にそれを確かめるものはない
+
 保証に入れないものは、次のとおりである。
 
 - テスト (`tests/`、`#[cfg(test)]`、`eml_test_support`)。テストの補助の関数が、それぞれのテストに代わって約束する
