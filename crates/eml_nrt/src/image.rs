@@ -152,7 +152,13 @@ pub struct Image {
     pub files: Slice<Str>,
     pub data: Slice<DatumRow>,
     pub paps: Slice<PapRow>,
+    /// 組み込みの`Panic`と`IO`のマシンの番号。プログラムのエフェクトの表になければ`NO_EFFECT`である。
+    pub panic_effect: u32,
+    pub io_effect: u32,
 }
+
+/// `Image.panic_effect`と`Image.io_effect`で、エフェクトがプログラムにないことを表す値。
+pub const NO_EFFECT: u32 = u32::MAX;
 
 // SAFETY: 安全なAPIはどれも`Image`のポインタの先を読み書きしない。読み書きするのは`unsafe fn`の`run`だけで、呼ぶ側が
 // 待っている間に、workerのスレッドから読む。workerが書くのは`DatumRow.slot`を通してだけで、書くのはrunごとに、その
@@ -221,6 +227,11 @@ pub const PURITY_EFFECTFUL: i64 = 2;
 /// `eml_nrt_failed`の`site`で、関数の入口を表す値。入口は地点の表に行を持たない。入口で失敗を上げるときは、これと
 /// `PURITY_EFFECTFUL`を渡す (docs/spec/native.md の「安全点」)。
 pub const ENTRY_SITE: i64 = -1;
+
+/// `eml_nrt_failed`の結果の類。`RAISE_PANIC`では`out`に`[節, evidence, 文言]`を、`RAISE_IO`では
+/// `[節, evidence, 種類, 文言]`を書いてある。`eml$raise`はその節を呼ぶ (docs/spec/native.md の「externの失敗」)。
+pub const RAISE_PANIC: i64 = 0;
+pub const RAISE_IO: i64 = 1;
 
 /// `eml_rt_fault_arith`の`kind`の語。算術の失敗の種類で、`eml_rt::ArithFault`のうち生成したコードが出すものである
 /// (docs/spec/native.md の「ヒープのエントリ」)。

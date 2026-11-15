@@ -9,6 +9,7 @@ mod data;
 mod effects;
 mod machine;
 mod placement;
+mod raise;
 mod rc;
 mod reuse;
 mod rows;

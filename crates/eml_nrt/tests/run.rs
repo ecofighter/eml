@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use eml_nrt::image::{
     Census, DATUM_BIG_INT, DATUM_EFFECT, DATUM_FLOAT, DATUM_MASK, DATUM_STRING, DatumRow, FnRow,
-    Image, MaskRow, NO_FILE, Options, SiteRow, Slice, Start, Str, mask_bytes,
+    Image, MaskRow, NO_EFFECT, NO_FILE, Options, SiteRow, Slice, Start, Str, mask_bytes,
 };
 use eml_nrt::run::{LIMIT_HEADROOM_BYTES, STACK_HARD_MARGIN, run};
 use eml_nrt::worker::park_panic;
@@ -29,6 +29,8 @@ fn empty() -> Image {
         files: Slice::new(&[]),
         data: Slice::new(&[]),
         paps: Slice::new(&[]),
+        panic_effect: NO_EFFECT,
+        io_effect: NO_EFFECT,
     }
 }
 

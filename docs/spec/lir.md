@@ -721,6 +721,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 所有の段 (`verify`) はPerceusとreuseの後にかけ、借用の段に加えて、RCの対象の所有の多重集合 (R6)、V1、tokenの規則、`release unboxed`の印、下の貸された引数の所有の規則を確かめる
   - エントリの段のほかの5つの段を、境界の段と呼ぶ。境界の検査 (下) は境界の段で走る
 - Kind の印の検査 (V1、V2、作る所の検査) は、下の「Kind の印の検査」にある。V2 と作る所の検査は Repr を比べる所と同じ所で、V1 は所有の段で走る
+- エフェクトの表の名前はどれも違う。この検査は6つの段のすべてで走る (`` the effect `E` is declared twice ``)。実行系はエフェクトに名前で番号を振り、ネイティブの読み込みは組み込みの`Panic`と`IO`の操作の形を名前で引いて確かめるので、同じ名前の2つ目のエフェクトはその確かめを逃れるためである ([ネイティブの実行系](native.md)の「関数の形」)
 - 着地の印 (上の「着地の印」) の検査は、6つの段のすべてで走る
   - 末尾呼び出しの印は、呼び出しの検査の最初に拒む (``a tail apply has a prompt marker, but a tail call leaves no frame to land on``)。エントリの段は `tail` そのものを拒むので、この文言はエントリの段のほかで出る
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数vが見えること、vのReprが`ev`であること、vが呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not ev ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)

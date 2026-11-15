@@ -1327,3 +1327,104 @@ internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
     }
     ");
 }
+
+/// `eml$raise`はプログラムによらない。サービスが`out`に書いた類で`Panic`か`IO`の節を決まったシグネチャで呼び、その後で
+/// `abort`のバイトが立っていなければtrapする。ほかの類では何も呼ばずに戻る (docs/spec/native.md の「externの失敗」)。
+#[test]
+fn the_raise_helper() {
+    let text = "fn main() -> unit {\n  return ()\n}\n";
+    insta::assert_snapshot!(clif(text, "eml$raise"), @"
+    function %eml$raise(i64, i64, i64, i64) tail {
+        ss0 = explicit_slot 32, align = 8
+        sig0 = (i64, i64, i64, i64, i64) -> i64 c
+        sig1 = (i64, i64, i64, i64) -> i64 tail
+        sig2 = (i64, i64, i64, i64, i64) -> i64 tail
+        fn0 = %eml_nrt_failed sig0
+
+    block0(v0: i64, v1: i64, v2: i64, v3: i64):
+        v4 = stack_addr.i64 ss0
+        v5 = call fn0(v0, v1, v2, v3, v4)
+        v6 = iconst.i64 0
+        v7 = icmp eq v5, v6  ; v6 = 0
+        brif v7, block3, block4
+
+    block3:
+        v8 = stack_addr.i64 ss0
+        v9 = load.i64 notrap v8
+        v10 = stack_addr.i64 ss0+8
+        v11 = load.i64 notrap v10
+        v12 = stack_addr.i64 ss0+16
+        v13 = load.i64 notrap v12
+        v14 = load.i32 notrap aligned v9+4
+        v15 = iconst.i32 16
+        v16 = ushr v14, v15  ; v15 = 16
+        v17 = iconst.i32 255
+        v18 = band v16, v17  ; v17 = 255
+        v19 = iconst.i32 255
+        v20 = icmp eq v18, v19  ; v19 = 255
+        v21 = iconst.i64 8
+        v22 = iconst.i64 16
+        v23 = select v20, v22, v21  ; v22 = 16, v21 = 8
+        v24 = iadd v9, v23
+        v25 = load.i64 notrap aligned v24
+        v26 = iconst.i64 1
+        v27 = sshr v25, v26  ; v26 = 1
+        v28 = call_indirect sig1, v27(v0, v9, v11, v13)
+        v29 = load.i8 notrap aligned v0+24
+        brif v29, block5, block6
+
+    block5 cold:
+        jump block1
+
+    block6:
+        jump block2
+
+    block4:
+        v30 = iconst.i64 1
+        v31 = icmp.i64 eq v5, v30  ; v30 = 1
+        brif v31, block7, block8
+
+    block7:
+        v32 = stack_addr.i64 ss0
+        v33 = load.i64 notrap v32
+        v34 = stack_addr.i64 ss0+8
+        v35 = load.i64 notrap v34
+        v36 = stack_addr.i64 ss0+16
+        v37 = load.i64 notrap v36
+        v38 = stack_addr.i64 ss0+24
+        v39 = load.i64 notrap v38
+        v40 = load.i32 notrap aligned v33+4
+        v41 = iconst.i32 16
+        v42 = ushr v40, v41  ; v41 = 16
+        v43 = iconst.i32 255
+        v44 = band v42, v43  ; v43 = 255
+        v45 = iconst.i32 255
+        v46 = icmp eq v44, v45  ; v45 = 255
+        v47 = iconst.i64 8
+        v48 = iconst.i64 16
+        v49 = select v46, v48, v47  ; v48 = 16, v47 = 8
+        v50 = iadd v33, v49
+        v51 = load.i64 notrap aligned v50
+        v52 = iconst.i64 1
+        v53 = sshr v51, v52  ; v52 = 1
+        v54 = call_indirect sig2, v53(v0, v33, v35, v37, v39)
+        v55 = load.i8 notrap aligned v0+24
+        brif v55, block9, block10
+
+    block9 cold:
+        jump block1
+
+    block10:
+        jump block2
+
+    block8:
+        jump block1
+
+    block2 cold:
+        trap user1
+
+    block1:
+        return
+    }
+    ");
+}

@@ -64,6 +64,13 @@ impl Worker {
         (address - row.code.addr() < row.size as usize).then_some(row)
     }
 
+    /// 組み込みの`Panic`と`IO`のマシンの番号 (`Image.panic_effect`、`Image.io_effect`)。
+    pub(crate) fn raise_effects(&self) -> (u32, u32) {
+        // SAFETY: `new`の約束
+        let image = unsafe { &*self.image };
+        (image.panic_effect, image.io_effect)
+    }
+
     /// `rest`個の引数を待つPAPのアダプタのコード。
     pub(crate) fn pap(&self, rest: u32) -> Option<*const u8> {
         // SAFETY: `new`の約束

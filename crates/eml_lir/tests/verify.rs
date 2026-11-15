@@ -1755,6 +1755,21 @@ fn scopes_reject_a_release() {
 }
 
 #[test]
+fn an_effect_declared_twice_is_rejected() {
+    // テキストの形では読めないので、読んだ IR の表に同じ名前のエフェクトを足す
+    let mut program = read(
+        "effect Prelude.Panic { never panicked(obj) -> never }\nfn f() -> unit {\n  return ()\n}\n",
+    );
+    let mut second = program.effects[0].clone();
+    second.operations[0].params.push(eml_lir::Repr::Obj);
+    program.effects.push(second);
+    assert_eq!(
+        verify(&program).map_err(|error| error.to_string()),
+        Err("the effect `Prelude.Panic` is declared twice in `Prelude.Panic`".to_string())
+    );
+}
+
+#[test]
 fn a_release_that_keeps_no_field_is_rejected() {
     // テキストの形では書けないので、読んだ IR の項目を消す
     let mut program = read(RELEASE);

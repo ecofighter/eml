@@ -558,12 +558,14 @@ mod tests {
 
     /// `paps`だけを持つ`Image`。
     fn image_with(paps: &[crate::image::PapRow]) -> crate::image::Image {
-        use crate::image::{Image, Slice};
+        use crate::image::{Image, NO_EFFECT, Slice};
         Image {
             functions: Slice::new(&[]),
             files: Slice::new(&[]),
             data: Slice::new(&[]),
             paps: Slice::new(paps),
+            panic_effect: NO_EFFECT,
+            io_effect: NO_EFFECT,
         }
     }
 

@@ -113,7 +113,8 @@
 
 ネイティブの実行系は、プログラムについての事実を`Image` (`eml_nrt::image`) からだけ得る。`Image`はJITのホストが作り、その表の記憶もJITのホストが持つ。ここの型はどれも`#[repr(C)]`である。
 
-- `Image { functions: Slice<FnRow>, files: Slice<Str>, data: Slice<DatumRow>, paps: Slice<PapRow> }`。`Str { ptr, len }`はUTF-8の文字列、`Slice<T> { ptr, len }`は配列で、空の配列はnullのポインタを持ちうる
+- `Image { functions: Slice<FnRow>, files: Slice<Str>, data: Slice<DatumRow>, paps: Slice<PapRow>, panic_effect: u32, io_effect: u32 }`。`Str { ptr, len }`はUTF-8の文字列、`Slice<T> { ptr, len }`は配列で、空の配列はnullのポインタを持ちうる
+- `panic_effect`と`io_effect`は`Prelude.Panic`と`Prelude.IO`のマシンの番号で、プログラムのエフェクトの表にそのエフェクトがなければ`NO_EFFECT` (`u32::MAX`) である。JITのホストがマシンの表から名前 (`ExternEffect::{Panic, Io}`の行の名前) で引いて書く。実行系がこれを読むのは`eml_nrt_failed`だけである (「externの失敗」)
 - `FnRow { name, code, size, sites, value }`は関数1つで、名前、コードの範囲`[code, code + size)`、その関数自身のfaultの地点 (文の順)、その関数の静的なクロージャを持つ`DATUM_FN`の行のslot (なければnull。「関数の値」) を持つ。地点は、関数のコードのアドレスと、その関数の`sites`の添字の組で表す。だからプログラムのほかの部分で変わる番号はコードに現れない
 - `SiteRow { file, line, column }`は地点のソースの位置である。`file`は`files`の添字で、`NO_FILE` (`u32::MAX`) は位置のない地点を表す
 - 実行系は、コードのアドレスから関数を、`code`の順に並べた行の二分探索で探す。並べるのはrunごとに1回で、探すのは冷たい道だけである。どの行の範囲にもないアドレスは、関数`<native code>`として報告する
@@ -156,6 +157,7 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 - `return`は葉を順に返し、`jump`は引数をブロックの引数として渡す。`int`の`switch`は、値をcaseと比べる (`cranelift_frontend::Switch`)。タグと文字列の`switch`は「データ」にある。`default`のない`switch`は、合うcaseがなければtrapする。検証したプログラムでは、これは起こらない。定数の`switch`は、VMと同じくコンパイルの時点で行き先を決める
 - 直接の呼び出しは呼ぶ先の関数の記号への`call`で、直接の末尾呼び出しは`return_call`である。`ctx`に続く各引数は、呼ぶ先の引数のReprで作る。複数の値を返す呼び出しは、結果の葉を順に変数に束縛する。呼ぶ先はどれもmoduleが`Linkage::Local`で定義する関数なので、Craneliftはそれを`colocated`にする。エントリはmoduleの外から取り込む記号なので、`colocated`にならない。末尾呼び出しは呼ぶ側のフレームを呼ぶ先のフレームに置き換える。だから末尾呼び出しの連鎖 (自分への末尾呼び出しを含む) は一定のスタックで動き、呼ぶ先は呼ぶ側より多くの引数をスタックで受けてよい。末尾でない呼び出しの後には「巻き戻しの地点」の`Call`の確かめを出す。末尾呼び出しの後には何も確かめない。呼ぶ先が戻ったときに、呼ぶ側の呼び手が確かめるからである
 - どの関数とthunkもmoduleの記号を持つ。その名前はLIRの名前と種類だけで決まり、読み込みの順やアドレスにはよらない。LIRの関数は`f:<名前>`、thunkは`eml$thunk$<引数>$<結果>`で、種類はそれぞれ`i` (`I64`) か`f` (`F64`) と書く。置いた失敗を上げる関数は`eml$raise`である (「巻き戻しの地点」)。関数の値のエントリは`c<k>:<名前>`、`apply`の補助の関数は`eml$apply$<m>`、PAPのアダプタは`eml$pap$<r>`である (「関数の値」)。moduleは、`eml_nrt::entries()`のすべてのエントリ、`eml$raise`、`eml$apply$<m>`を、プログラムの関数より前に決まった順で宣言する。関数の値のエントリは、データの記号と同じく本体が初めて使うときに宣言し、すべての本体の後で定義する。PAPのアダプタはコードが名指さず`Image.paps`だけが指すので、最後に宣言して定義する。moduleが定義する記号はどれもローカルのリンケージを持つので、直接の呼び出しは領域の中のPC相対の呼び出しになる。`NativeMachine::symbols()`は、マシンが定義したすべての関数 (`eml$raise`、関数の値のエントリ、`apply`の補助の関数、PAPのアダプタを含む) とthunkの名前とコードの範囲を返す。`Image.functions[i].{code, size}`と合わせて、コードのアドレスから名前を引ける
+- `load`はverifierとほかの確かめより前に、どのビルドでも、プログラムの`Prelude.Panic`が`obj`を取って戻らない (`never`) 操作をちょうど1つ持ち、`Prelude.IO`が`enum`と`obj`を取って戻らない操作をちょうど1つ持つことを確かめる。そうでなければ何も作らずに、そのエフェクトを名指す`LoadError::Prelude { effect }`を返す。プログラムのエフェクトの表にないエフェクトは確かめない。`eml$raise`はこれらの操作の節を決まったシグネチャで呼ぶからである (「externの失敗」)
 - マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、`eml_nrt::entries()`のすべてのエントリと、`Linked`がつないだCの関数とdtorを記号として登録し (「Cの関数の呼び出し」)、どの関数を定義するよりも前にプログラムのすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。`Linked`がプログラムの表に合わなければ`LoadError::LinkMismatch`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。ただし記号の宣言は領域を使わず、名前の重なりは下ろしの誤りなので、データの記号と関数の値のエントリの宣言が失敗したら、下ろしはpanicする。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`、`call`、`entry_of`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
 - `load`はプログラムを信頼する。プログラムは実行の前提を満たさなければならない ([LIR](lir.md)の「実行の前提」)。ネイティブのコードが実行時に確かめることは、VMの速いモードが確かめることを超えない ([オブジェクトモデル](object-model.md)の「受け入れる制約」) ので、満たさないプログラムの振る舞いは未定義である。verifierはこの前提の一部しか確かめない。`load`は安全な関数で、前提を約束するのは呼ぶ側である。`load`は、どのビルドでもプログラム全体に所有の段のverifierを走らせ、verifierが拒むプログラムを断る (`eml_lir::unwind::verified`)。拒むときは`internal error: invalid LIR at the native load: ...`でpanicする。VMと違ってネイティブには検査モードがない
 - マシンのworkerはそのmoduleと領域を共有し、プロセス全体のmoduleはない。マシンは、`close`でも`Drop`でも、終わるときに領域を`free_memory`で返す。どのrunもworkerのスレッドが終わってから戻るので、そのとき領域のコードを実行しているものはない
@@ -180,7 +182,7 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 - `eml_nrt_landed`は`services.rs`の表`SERVICES`にあり、ヒープのダミーを返すだけである。印を持つ`apply`の結果の語として、VMの着地と同じ値を渡すためである
 - `Never`の行の後のLIRの続きはどこからも届かない。下ろしは、前のブロックのない新しいブロックで続け、行の変数をそのReprの仮の値に束縛する。だからブロックの残りもふつうに下ろせる
 - `never`の操作の節の呼び出しは、末尾の位置でも末尾呼び出しにせず、その後に`unwind::if_aborting`の確かめが続き、熱い側はtrapする。続きは`Never`と同じく仮の値で下ろす (「関数の値」)
-- `eml$raise(ctx, function, site, purity)`は、moduleに1つある`tail`の関数で、結果を持たない。同じ引数で`eml_nrt_failed`を呼んで戻る (「externの失敗」)
+- `eml$raise(ctx, function, site, purity)`は、moduleに1つある`tail`の関数で、結果を持たない。同じ引数と4語の領域で`eml_nrt_failed`を呼び、サービスが返した節を呼んで戻る (「externの失敗」)
 - `abort`のバイトは、ちょうど中断の途中の間だけ0でない。検証した`YieldState::wf`により、`target`がUnitなら`abort`は偽で、それを立てるのは`yield_abort`と`exit_abort`だけだからである。呼ばれた側で中断が始まると (`exit`)、呼ばれた側は自分の後始末で仮の値を返し、呼んだ側はこの確かめで自分の後始末へ進む。だから中断は、フレームを1つずつ、ふつうに戻って抜ける
 - yieldは`abort`のバイトを立てないので、呼ばれた側がyieldした呼び出しは、呼ばれた側のダミーを持って熱い道で戻る。その後のLIR自身の`prim yielding()`が遅い道へ進む。yieldが戻るのは、LIRのyieldの地点、末尾呼び出し、着地の印を持つ`apply`を通るときだけだからである
 - この確かめは1つの不変条件に頼る。着地から`yield_finish`までの間に、呼び出しの巻き戻しの地点を通らないことである。着地の印を持つ`apply`のすぐ後には`prompt$`の呼び出しが続き、その間に呼び出しもexternの行も`yield_to`も`yield_abort`もない ([LIR](lir.md)の「着地の印」)。`prompt$`は、yieldと中断の道で`yield_finish`の前に、呼び出しもexternの行も`yield_to`も`yield_abort`も走らせない ([Core IR](core-ir.md)の「handle と `prompt$`」)。前半は、どのビルドでも読み込みのverifierと下ろしが確かめる。下ろしはブロックを下ろしながらverifierの規則をもう1度assertする。破ればverifierと同じ文でpanicする。後半はEPの単体テストが確かめる。releaseのビルドで違反したときの動きが定まらないのは、後半 (`prompt$`の本体を変えたとき) だけである。着地と`yield_finish`の間の呼び出しは中断が立ったまま走り、そこでの`yield_to`が中断を消すので、着地したフレームはダミーを値として続けてしまう
@@ -228,13 +230,19 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - `eml_x_c_handle_new(ctx, name: obj, dtor: dtor, ptr: i64) -> obj`は、VMも呼ぶ`eml_rows::ffi::handle_new`でハンドルの物体を作る。`ptr`がnullなら何も作らず、`Raise::NullHandle`の文言を`worker::park_panic`で置いて、仮の値としてUnitの語を返す。生成したコードは、呼び出しのすぐ後でfaultの語を確かめる。`ptr`と`dtor`については`handle_new`の約束を持つ`unsafe`のエントリで、生成したコードは、宣言した結果がそのハンドルの型である関数の呼び出しの結果と、その型のdtorかnullを渡す
 - 文言はVMも呼ぶ`Raise::text`が作るので、どちらのエンジンも同じpanicを上げる。生成したコードはそれを、Cの関数の行の純粋さで上げる。ほかの`Err`は、行のエントリと同じく内部の類で、`worker::record`で記録する
 
-行が`ctx`に置いた失敗は、生成したコードがサービス`eml_nrt_failed(ctx, function, site, purity) -> action`で上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の`FnRow.sites`の中の地点の添字 (関数の入口なら`ENTRY_SITE`)、`purity`は失敗した行の純粋さである。`purity`の語は`PURITY_PURE` (0)、`PURITY_PANICS` (1)、`PURITY_EFFECTFUL` (2) で、`eml_extern::Purity`の宣言の順である。3つの定数は`ACTION_*`と同じく`eml_nrt::image`にある。debugのビルドでは、サービスは`purity`がこのどれかであることと、`site`が`ENTRY_SITE`か32ビットに収まる添字であることを確かめる。
+行が`ctx`に置いた失敗は、生成したコードが`eml$raise`を通して、サービス`eml_nrt_failed(ctx, function, site, purity, out) -> class`で上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の`FnRow.sites`の中の地点の添字 (関数の入口なら`ENTRY_SITE`)、`purity`は失敗した行の純粋さである。`out`は書ける4語を指し、`eml$raise`のスタックの領域である。種類`ptr`のRustの型は`*const Word`なので、サービスは`*mut`にキャストして書く。`purity`の語は`PURITY_PURE` (0)、`PURITY_PANICS` (1)、`PURITY_EFFECTFUL` (2) で、`eml_extern::Purity`の宣言の順である。3つの定数は`ACTION_*`と同じく`eml_nrt::image`にある。debugのビルドでは、サービスは`purity`がこのどれかであることと、`site`が`ENTRY_SITE`か32ビットに収まる添字であることと、yieldが進んでいないことを確かめる。
 
-- サービスは置いたfaultを`ctx.take_fault()`で取り出す。だからサービスの後のfaultの語は0である
-- `Fault::Engine`は、中身をworkerの構造体が持つことを表す。サービスはメッセージの語をworkerの構造体から取り出し、文字列に写す (`copy_string`。語は手放す)。誤りは`RunFault::Panicked(text)`で、`panicked: <text>`と表示する。語は`park_panic`の約束により文字列なので、速いモードでは写すことは失敗しない。workerの構造体がメッセージを持たなければ、誤りは内部の誤り`a parked panic has no message`である
-- ほかのfaultは`RunFault::Extern(fault)`になる。何も置いていなければ、誤りは内部の誤り`a failure was raised with nothing parked`である
-- サービスは誤りを`At { function, site }`で`worker::record`により記録し、`FATAL_RECORDED`でrunを終える。だから誤りは地点の位置を持ち、地点が位置を持たなければ関数を名指す
-- 失敗を捕まえるハンドラはないので、上げた失敗はどれもrunを終える。サービスは`purity`を受けるが、結果はそれによらない
+サービスは次の順で動く。VMの`failed`と`abort_to`と同じ規則である ([VM](vm.md)の「`IO` と `Panic` への中断」)。
+
+1. 置いたfaultを`ctx.take_fault()`で取り出す。だからサービスの後のfaultの語は0である。何も置いていなければ、誤りは内部の誤り`a failure was raised with nothing parked`である
+2. `Fault::Engine`は、中身 (`panic`の行とCの関数の呼び出しの補助が置くメッセージ) をworkerの構造体が持つことを表す。その類は純粋さによらず`Panic`である。VMもこの2つでは`failed`を通さずに`Panic`へ中断する。workerの構造体がメッセージを持たなければ、誤りは内部の誤り`a parked panic has no message`である
+3. ほかのfaultは、`fault.panics()`が真で純粋さが`Pure`でなければ類`Panic`、`fault.io_error_kind()`が`Some`で純粋さが`Effectful`なら類`IO`で、そうでなければ類を持たず、捕まえられない
+4. 類がないとき、類のエフェクトの`Image`の番号が`NO_EFFECT`のとき (このときevidenceを探さない)、`ctx.ev_find`がそのエフェクトのevidenceを見つけないときは、誤りを`At { function, site }`で`worker::record`により記録し、`FATAL_RECORDED`でrunを終える。だから誤りは地点の位置を持ち、地点が位置を持たなければ関数を名指す。`Fault::Engine`では、メッセージの語をworkerの構造体から取り出して文字列に写し (`copy_string`。語は手放す)、誤りは`RunFault::Panicked(text)`で、`panicked: <text>`と表示する。語は`park_panic`の約束により文字列なので、速いモードでは写すことは失敗しない。ほかのfaultは`RunFault::Extern(fault)`になる
+5. 見つけたら、`ctx.ev_clause(ev, 0)`で節を取り、`out`に`[節, ev, 文言]` (`RAISE_PANIC`) か`[節, ev, 種類, 文言]` (`RAISE_IO`) を書いて類を返す。文言は、`Fault::Engine`ではworkerの構造体から取り出したメッセージの語、ほかではfaultの文の新しい文字列である。種類は`fault.io_error_kind()`の生の整数で、`enum`の葉の値であり、VMが渡すのと同じビットである。どの語も参照を1つ持ち (`ev_find`と`ev_clause`が`dup`する)、それは節のエントリへ移る。エントリは`clo`と`ev`と引数を消費する。サービスは何も持たず、workerの構造体にも何も残さない
+
+`RAISE_PANIC` (0) と`RAISE_IO` (1) は`eml_nrt::image`にある。`eml$raise`はどのプログラムでも同じコードで、何も決めない。サービスを呼び、`RAISE_PANIC`ならクロージャ`out[0]`を`(ctx, out[0], out[1], out[2])`とシグネチャ`uniform(2)`で、`RAISE_IO`なら`(ctx, out[0], out[1], out[2], out[3])`と`uniform(3)`で呼ぶ (どの葉も`I64`)。間接の呼び出しは、節の呼び出しと同じ補助`apply::call_closure_code`を通る (「関数の値」)。ほかの類では何も呼ばない。決まったシグネチャは、サービスが返しうるどの節のエントリのシグネチャとも同じである。`load`は`Prelude`の操作が決まった形と違うプログラムを断り (`LoadError::Prelude`。「関数の形」)、節のエントリのシグネチャは操作から決まるからである。節は戻らない操作の節なので、中断を始めて戻る。呼び出しの後で`eml$raise`は、呼び出しの巻き戻しの地点と同じ確かめ (`unwind::if_aborting`) で`abort`のバイトを読み、立っていなければtrap (`user1`) する。`eml$raise`が戻ると、地点は今までどおり後始末へ進み、中断はほかの中断と同じく`try_panic`か`try_io`のhandleに着地する (「巻き戻しの地点」)。
+
+サービスに入るのは、yieldも中断も進んでいないときだけである。節のエントリの`yield_abort`は、yieldが進んでいないことを前提にするからである。これは、後始末が行を走らせず、着地から`yield_finish`までの間に行がない (「巻き戻しの地点」) ので成り立つ。だから関数の入口 (`ENTRY_SITE`) で失敗を上げるときは、先に`ctx.yielding()`を確かめ、立っていれば上げずに続けなければならない。速いモードの`yield_abort`は、yieldの状態を手放さずに上書きするからである。
 
 ## 行の下ろし方
 

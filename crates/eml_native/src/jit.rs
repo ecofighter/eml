@@ -7,10 +7,12 @@ use std::collections::HashMap;
 use cranelift_jit::JITModule;
 use cranelift_module::ModuleError;
 use eml_cabi::Linked;
-use eml_lir::{Program, Repr};
+use eml_extern::ExternEffect;
+use eml_lir::{OpRet, Program, Repr};
 use eml_nrt::image::{
     DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
-    DATUM_STRING, DatumRow, FnRow, Image, MaskRow, Options, PapRow, SiteRow, Slice, Start, Str,
+    DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow, Slice,
+    Start, Str,
 };
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
@@ -45,6 +47,9 @@ pub enum LoadError {
     Module(String),
     /// `Linked`がつないだCの関数とハンドルの型の宣言が、プログラムの表と違う。
     LinkMismatch,
+    /// プログラムのエフェクトの表の`Prelude.Panic`か`Prelude.IO`が、`eml$raise`が呼ぶ決まった形の操作をちょうど1つ
+    /// 持たない。
+    Prelude { effect: String },
 }
 
 impl LoadError {
@@ -55,6 +60,9 @@ impl LoadError {
             LoadError::RegionFull => REGION_FULL,
             LoadError::Module(_) => UNBUILT,
             LoadError::LinkMismatch => "the linked C functions are not the program's",
+            LoadError::Prelude { .. } => {
+                "the program's Prelude effects do not have their fixed shape"
+            }
         }
     }
 }
@@ -107,13 +115,15 @@ struct Tables {
 
 impl Tables {
     /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードと待つ引数の数を持つ。`number`はプログラムの
-    /// エフェクトの添字をマシンの番号にする。
+    /// エフェクトの添字をマシンの番号にする。`raise_effects`は`Prelude.Panic`と`Prelude.IO`のマシンの番号か`NO_EFFECT`
+    /// である。
     fn new(
         functions: Vec<Function>,
         files: Vec<String>,
         data: Vec<(Datum, *mut u64, Static)>,
         paps: Vec<PapRow>,
         number: impl Fn(u32) -> u16,
+        raise_effects: (u32, u32),
     ) -> Tables {
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
         let mut rows: Vec<FnRow> = functions
@@ -171,6 +181,8 @@ impl Tables {
             files: Slice::new(&file_rows),
             data: Slice::new(&datum_rows),
             paps: Slice::new(&paps),
+            panic_effect: raise_effects.0,
+            io_effect: raise_effects.1,
         };
         Tables {
             functions,
@@ -244,6 +256,7 @@ impl NativeMachine {
         if std::mem::replace(&mut self.asked, true) {
             return Err(LoadError::Loaded);
         }
+        prelude_shape(program)?;
         if !linked.fits(&program.c_functions, &program.c_handles) {
             return Err(LoadError::LinkMismatch);
         }
@@ -376,12 +389,22 @@ impl NativeMachine {
             .collect();
         let effects = &self.effects;
         let number = |effect: u32| effects[&program.effects[effect as usize].name];
+        let machine_number = |effect: ExternEffect| {
+            effects
+                .get(effect.row().name)
+                .map_or(NO_EFFECT, |&number| u32::from(number))
+        };
+        let raise_effects = (
+            machine_number(ExternEffect::Panic),
+            machine_number(ExternEffect::Io),
+        );
         self.tables = Some(Tables::new(
             functions,
             program.files.clone(),
             data,
             paps,
             number,
+            raise_effects,
         ));
         Ok(Loaded {
             entry: program.entry.0,
@@ -622,6 +645,32 @@ fn internal(function: &str, what: &'static str) -> RuntimeError {
         function: function.to_string(),
         at: None,
     }
+}
+
+/// プログラムの`Prelude.Panic`と`Prelude.IO`が、`eml$raise`の呼ぶ決まった形の操作をちょうど1つ持つことを、どのビルドでも
+/// 確かめる。`panicked`は`obj`を、`io_failed`は`enum`と`obj`を取り、どちらも戻らない。`eml$raise`はその節を決まった
+/// シグネチャで呼ぶので、形の違う節を呼べば未定義の動作になる (docs/spec/native.md の「externの失敗」)。
+fn prelude_shape(program: &Program) -> Result<(), LoadError> {
+    let shapes = [
+        (ExternEffect::Panic, &[Repr::Obj][..]),
+        (ExternEffect::Io, &[Repr::Enum, Repr::Obj][..]),
+    ];
+    for (effect, params) in shapes {
+        let name = effect.row().name;
+        let Some(info) = program.effects.iter().find(|info| info.name == name) else {
+            continue;
+        };
+        let fits = matches!(
+            &info.operations[..],
+            [operation] if operation.params == params && operation.ret == OpRet::Never
+        );
+        if !fits {
+            return Err(LoadError::Prelude {
+                effect: name.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// `program`を新しいマシンで1回実行する。VMの`eml_vm::execute`に当たる。

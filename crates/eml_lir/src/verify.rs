@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::check::{
     self, BlockShape, Context, Dominators, FnSummary, Site, Tables, TermShape, boxed_scalars,
@@ -122,6 +122,7 @@ fn verify_at(
     walked: impl Fn(FnIdx) -> bool,
     record: bool,
 ) -> Result<Vec<Option<Unwinds>>, VerifyError> {
+    distinct_effects(program)?;
     if level >= Level::Flattened {
         no_struct_layouts(program)?;
     }
@@ -413,6 +414,21 @@ fn value_references(program: &Program, function: &LirFn) -> Result<(), String> {
 
 /// 開いた後の段では、配置のフィールドに構造体は来ない。構造体の型を宣言したフィールドは `tobj` である
 /// (docs/spec/lir.md の「verifier」)。
+/// エフェクトの表の名前はどれも違う。実行系はエフェクトに名前で番号を振り、組み込みのエフェクトの操作の形も名前で引いて
+/// 確かめるので、同じ名前の2つ目のエフェクトは確かめを逃れる (docs/spec/lir.md の「verifier」)。
+fn distinct_effects(program: &Program) -> Result<(), VerifyError> {
+    let mut seen = FxHashSet::default();
+    for info in &program.effects {
+        if !seen.insert(info.name.as_str()) {
+            return Err(VerifyError {
+                function: info.name.clone(),
+                message: format!("the effect `{}` is declared twice", info.name),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn no_struct_layouts(program: &Program) -> Result<(), VerifyError> {
     for layout in &program.layouts {
         for constructor in &layout.constructors {

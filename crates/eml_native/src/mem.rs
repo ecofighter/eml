@@ -2,7 +2,8 @@
 //! 生成したコードが頼る配置の事実を1か所で`eml_rt`に結び付ける。
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
-    GlobalValue, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, Type, Value, types,
+    GlobalValue, InstBuilder, MemFlagsData, StackSlot, StackSlotData, StackSlotKind, Type, Value,
+    types,
 };
 use cranelift_frontend::FunctionBuilder;
 use eml_lir::Shape;
@@ -113,6 +114,25 @@ pub fn spill(b: &mut FunctionBuilder, values: &[Value]) -> Value {
         b.ins().stack_store(types::I64, value, slot, offset);
     }
     b.ins().stack_addr(types::I64, slot, 0)
+}
+
+/// 書ける`words`語のスタックの領域と、そのアドレス。領域は今の関数のフレームにあり、関数が戻るまで生きる。サービスが
+/// 結果の語を書く先である。
+pub fn out_words(b: &mut FunctionBuilder, words: usize) -> (StackSlot, Value) {
+    let bytes = u32::try_from(words * layout::WORD_BYTES).expect("an out area fits in 4 GiB");
+    let slot = b.create_sized_stack_slot(StackSlotData::new(
+        StackSlotKind::ExplicitSlot,
+        bytes,
+        layout::WORD_BYTES.trailing_zeros() as u8,
+    ));
+    let address = b.ins().stack_addr(types::I64, slot, 0);
+    (slot, address)
+}
+
+/// `out_words`の領域の`index`番目の語。
+pub fn load_out(b: &mut FunctionBuilder, slot: StackSlot, index: usize) -> Value {
+    let offset = i32::try_from(index * layout::WORD_BYTES).expect("an out area fits in 2 GiB");
+    b.ins().stack_load(types::I64, types::I64, slot, offset)
 }
 
 /// 物体`obj`が`BigInt`なら0でない。ダミーは`BigInt`で、構造体の箱はいつも`Data`なので、構造体の箱を受ける所ではこれで

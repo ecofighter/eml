@@ -1,7 +1,7 @@
 //! 巻き戻しの地点の後のコード、地点の後始末、仮の値、`eml$raise`、関数の位置の行 (docs/spec/native.md の
 //! 「巻き戻しの地点」)。
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{Block, BlockArg, InstBuilder, Signature, Value, types};
+use cranelift_codegen::ir::{Block, BlockArg, InstBuilder, Signature, TrapCode, Value, types};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::Module;
 use eml_extern::Purity;
@@ -10,12 +10,12 @@ use eml_lir::{BlockId, Loc, Prim, Repr, VarId};
 use eml_nrt::Kind;
 use eml_nrt::image::{
     ARITH_DIVISION_BY_ZERO, ARITH_INTEGER_OVERFLOW, NO_FILE, PURITY_EFFECTFUL, PURITY_PANICS,
-    PURITY_PURE, SiteRow,
+    PURITY_PURE, RAISE_IO, RAISE_PANIC, SiteRow,
 };
 
 use super::Imports;
-use super::effects;
 use super::function::FnLower;
+use super::{apply, effects};
 use crate::abi::tail_signature;
 use crate::mem;
 
@@ -84,14 +84,53 @@ pub(super) fn raise_signature() -> Signature {
     tail_signature(&[Kind::I64, Kind::I64, Kind::I64], &[])
 }
 
-/// `eml$raise`の本体。サービスに渡して戻る。
+/// `eml$raise`の本体。どのプログラムでも同じコードである。失敗の扱いはどれもサービスが決め、捕まえるハンドラがあれば、
+/// サービスが`out`に書いた類で`Panic`か`IO`の節を呼ぶ。節のシグネチャは決まっていて、`load`がプログラムの`Prelude`の
+/// 操作の形を確かめる。節は中断を始めて戻るので、戻ったときに`abort`のバイトが立っていなければtrapする。ほかの類では
+/// 何も呼ばずに戻る (docs/spec/native.md の「externの失敗」)。
 pub(super) fn define_raise<M: Module>(mut b: FunctionBuilder, module: &mut M, imports: &Imports) {
     let entry = b.create_block();
     b.append_block_params_for_function_params(entry);
     b.switch_to_block(entry);
-    let args = b.block_params(entry).to_vec();
+    let params = b.block_params(entry).to_vec();
+    let ctx = params[0];
+    // `eml_nrt_failed`は節と引数を4語まで書く
+    let (out, address) = mem::out_words(&mut b, 4);
     let failed = module.declare_func_in_func(imports.entry("eml_nrt_failed"), b.func);
-    b.ins().call(failed, &args);
+    let mut args = params;
+    args.push(address);
+    let call = b.ins().call(failed, &args);
+    let class = b.inst_results(call)[0];
+    let done = b.create_block();
+    let returned = b.create_block();
+    b.set_cold_block(returned);
+    // 節の引数は`ev`の後に、`Panic`では文言、`IO`では種類と文言である
+    for (raise, operands) in [(RAISE_PANIC, 2), (RAISE_IO, 3)] {
+        let arm = b.create_block();
+        let next = b.create_block();
+        let value = b.ins().iconst(types::I64, raise);
+        let here = b.ins().icmp(IntCC::Equal, class, value);
+        b.ins().brif(here, arm, &[], next, &[]);
+        b.switch_to_block(arm);
+        let clause = mem::load_out(&mut b, out, 0);
+        let args: Vec<Value> = (1..=operands)
+            .map(|i| mem::load_out(&mut b, out, i))
+            .collect();
+        let meta = mem::load_meta(&mut b, clause);
+        let sig = apply::uniform(operands);
+        apply::call_closure_code(&mut b, ctx, clause, meta, sig, &args, false);
+        let (cold, hot) = if_aborting(&mut b, ctx, &[]);
+        b.switch_to_block(cold);
+        b.ins().jump(done, &[]);
+        b.switch_to_block(hot);
+        b.ins().jump(returned, &[]);
+        b.switch_to_block(next);
+    }
+    b.ins().jump(done, &[]);
+    // 節は戻らない操作の節なので、中断を始めずに戻ることはない
+    b.switch_to_block(returned);
+    b.ins().trap(TrapCode::unwrap_user(1));
+    b.switch_to_block(done);
     b.ins().return_(&[]);
     b.seal_all_blocks();
     b.finalize(module.target_config());
