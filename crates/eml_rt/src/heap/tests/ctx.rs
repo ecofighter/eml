@@ -1042,6 +1042,125 @@ fn evv_step_walks_a_list_head_first<M: Mode>() {
     assert_eq!(super::mortal(&mut ctx), 0);
 }
 
+/// エフェクト0、操作1つのevidenceを作り、エントリに節の本体を入れる。状態と外側のevvは`()`である。
+fn retirable<M: Mode>(ctx: &mut Ctx<M>) -> (Word, Word) {
+    unsafe {
+        let ev = ctx.ev_new(0, 1, UNIT, UNIT).unwrap();
+        let clause = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.ev_set_clause(ev, 0, clause).unwrap();
+        (ev, clause)
+    }
+}
+
+/// 一意なevidenceは、そのまま退く。RCの仕事はない (docs/spec/object-model.mdの「基本操作の契約」)。
+fn ev_retire_returns_a_unique_evidence_itself<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let (ev, clause) = retirable(&mut ctx);
+    unsafe {
+        let start = (ctx.heap().stats(), super::mortal(&mut ctx));
+        let retired = ctx.ev_retire(ev).unwrap();
+        assert_eq!(retired, ev);
+        assert_eq!((ctx.heap().stats(), super::mortal(&mut ctx)), start);
+        let got = ctx.ev_clause(retired, 0).unwrap();
+        assert_eq!(got, clause);
+        for w in [got, retired] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(&mut ctx), 0);
+}
+
+/// ほかにも参照のあるevidenceは、同じtagとエントリの表を持つ新しいevidenceに写して退く。呼ぶ側の参照は手放す。
+fn ev_retire_copies_a_shared_evidence<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let (ev, clause) = retirable(&mut ctx);
+    unsafe {
+        ctx.heap_mut().dup(ev).unwrap();
+        let retired = ctx.ev_retire(ev).unwrap();
+        assert_ne!(retired, ev);
+        assert_eq!(ctx.heap().field(retired, 0), ctx.heap().field(ev, 0));
+        assert_eq!(ctx.heap().field(retired, 1), Ok(UNIT));
+        assert_eq!(ctx.heap().field(retired, 2), Ok(UNIT));
+        assert_eq!(ctx.heap().meta(retired).unwrap().tag(), 1);
+        assert!(ctx.heap().is_unique(retired).unwrap());
+        // 元のevidenceは、残った参照1つで生きている
+        assert!(ctx.heap().is_unique(ev).unwrap());
+        let got = ctx.ev_clause(retired, 0).unwrap();
+        assert_eq!(got, clause);
+        for w in [got, retired, ev] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(&mut ctx), 0);
+}
+
+/// 状態か外側の`evv`が`()`でないevidenceは、どちらのモードでも退かない。何も変えずに`BadEvidence`を返す。状態が
+/// `lin`ビットを持つ物体でも、その物体は手放さない。
+fn ev_retire_refuses_a_state_or_an_outer_list<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let outer = push(&mut ctx, 1, 1);
+    unsafe {
+        let with_state = ctx.ev_new(0, 1, Word::imm(5), UNIT).unwrap();
+        let boxed = ctx.heap_mut().alloc_data(0, 1, 0, true);
+        let with_boxed = ctx.ev_new(0, 1, boxed, UNIT).unwrap();
+        let list = ctx.evv_get().unwrap();
+        let with_outer = ctx.ev_new(0, 1, UNIT, list).unwrap();
+        for (ev, state, outer_list) in [
+            (with_state, Word::imm(5), UNIT),
+            (with_boxed, boxed, UNIT),
+            (with_outer, UNIT, list),
+        ] {
+            let start = (ctx.heap().stats(), super::mortal(&mut ctx));
+            assert_eq!(ctx.ev_retire(ev).unwrap_err(), HeapError::BadEvidence);
+            assert_eq!((ctx.heap().stats(), super::mortal(&mut ctx)), start);
+            assert_eq!(ctx.heap().field(ev, 1), Ok(state));
+            assert_eq!(ctx.heap().field(ev, 2), Ok(outer_list));
+            if state == boxed {
+                // `lin`の状態は、evidenceが持ったまま生きている
+                assert!(ctx.heap().is_unique(boxed).unwrap());
+                assert_eq!(ctx.heap().field(boxed, 0), Ok(UNIT));
+            }
+            ctx.heap_mut().decref(ev).unwrap();
+        }
+        clear(&mut ctx);
+        ctx.heap_mut().decref(outer).unwrap();
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(&mut ctx), 0);
+}
+
+/// `evv_enter`はevidenceを借りる。節点は新しい参照を持ち、呼ぶ側は自分の参照を持ったままである。
+fn evv_enter_keeps_the_callers_reference<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let e0 = push(&mut ctx, 0, 1);
+    let (ev, clause) = retirable(&mut ctx);
+    unsafe {
+        let list = ctx.evv_get().unwrap();
+        let below = list;
+        let entered = ctx.evv_enter(list, ev).unwrap();
+        assert_eq!(ctx.heap().field(entered, 0), Ok(ev));
+        assert_eq!(ctx.heap().field(entered, 1), Ok(below));
+        assert_eq!(ctx.heap().meta(entered).unwrap().tag(), 1);
+        assert!(!ctx.heap().is_unique(ev).unwrap());
+        ctx.evv_set(entered).unwrap();
+        let found = ctx.ev_lookup(0).unwrap();
+        assert_eq!(found, ev);
+        ctx.heap_mut().decref(found).unwrap();
+        // 呼ぶ側の参照で、evidenceはリストを外した後も読める
+        clear(&mut ctx);
+        assert!(ctx.heap().is_unique(ev).unwrap());
+        let got = ctx.ev_clause(ev, 0).unwrap();
+        assert_eq!(got, clause);
+        for w in [got, ev, e0] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(&mut ctx), 0);
+}
+
 both_modes!(
     a_new_ctx_is_finished,
     an_engine_held_failure_is_parked_and_taken,
@@ -1087,6 +1206,10 @@ both_modes!(
     fork_ev_refuses_a_bad_effect_or_table,
     fork_of_refuses_an_object_that_is_not_a_fork_evidence,
     evv_step_walks_a_list_head_first,
+    ev_retire_returns_a_unique_evidence_itself,
+    ev_retire_copies_a_shared_evidence,
+    ev_retire_refuses_a_state_or_an_outer_list,
+    evv_enter_keeps_the_callers_reference,
 );
 
 // ネイティブのコードはこれらの位置で読むので、値を変えるのはコード生成器の読みと一緒のときだけである

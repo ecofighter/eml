@@ -2676,7 +2676,58 @@ impl<M: Mode> Ctx<M> {
         proof {
             m.lemma_fields();
         }
-        let node = self.heap.alloc_data(m.tag(), NODE_WORDS, 0, false);
+        unsafe { self.evv_link(l, e, m.tag(), Ghost(c)) }
+    }
+
+    /// `l`の先頭に`e`の節点を足したリストを返す。`l`と`e`の参照を1つずつ消費する。`evv_push`と`evv_enter`が、
+    /// それぞれの確かめと`e`の参照の用意の後に呼ぶ。`tag`は`e`のtagである。確保したばかりの節点に書くだけなので、
+    /// 失敗しない (docs/spec/object-model.mdの「基本操作の契約」)。
+    unsafe fn evv_link(&mut self, l: Word, e: Word, tag: u16, Ghost(c): Ghost<bool>) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(l),
+            old(self).heap_spec().word_in(e),
+            !M::CHECKED ==> c,
+            c ==> {
+                &&& old(self).held_ok()
+                &&& old(self).evv_wf(l)
+                &&& old(self).evv_seq(l).len() < old(self).evv_limit()
+                &&& old(self).ev_shape(e)
+                &&& old(self).holds_args(seq![l, e])
+                &&& tag == old(self).heap_spec().tag_of(e)
+            },
+        ensures
+            final(self).wf(),
+            r is Ok,
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            c ==> (r matches Ok(n) && {
+                &&& final(self).held_ok()
+                &&& final(self).holds(n)
+                &&& final(self).evv_wf(n)
+                &&& final(self).evv_seq(n) == seq![(old(self).ev_tag(e), e)] + old(self).evv_seq(l)
+                &&& final(self).evolved_by(
+                    *old(self),
+                    |b: usize| -points(l, b) - points(e, b),
+                    Set::empty(),
+                )
+                &&& !live(old(self).heap, n.bits_spec())
+                &&& final(self).ev_shape(e)
+                &&& final(self).heap_spec().tag_of(e) == old(self).heap_spec().tag_of(e)
+                &&& forall|i: int| #[trigger]
+                    final(self).heap_spec().scanned_word(e, i) == old(
+                        self,
+                    ).heap_spec().scanned_word(e, i)
+                &&& (final(self).heap_spec().rc_value(e) > 0) == (old(self).heap_spec().rc_value(e)
+                    > 0)
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost h0 = self.heap;
+        let node = self.heap.alloc_data(tag, NODE_WORDS, 0, false);
         let ghost h1 = self.heap;
         let ghost z = |b: usize| 0int;
         let ghost none = Set::<usize>::empty();
@@ -2723,6 +2774,96 @@ impl<M: Mode> Ctx<M> {
             }
         }
         Ok(node)
+    }
+
+    /// `l`の先頭にevidence `e`の節点を足したリストを返す。節点のtagは`e`のtagと同じにする。`l`は消費し、`e`は借りる。
+    /// 節点は`e`の新しい参照を持ち、呼ぶ側は自分の参照を持ったままである。`e`の形と欄は変わらない
+    /// (docs/spec/object-model.mdの「基本操作の契約」)。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`l`と`e`は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
+    /// 1つずつ持つ。速いモードでは、`l`は長さが上限より短い`evv`のリストで、`e`はevidenceである。検査モードは、何も変える
+    /// 前に`e`の形と`l`の長さと`e`の`dup`を確かめ、`e`の形か`l`の長さが違えば`BadEvidence`を返す。
+    pub unsafe fn evv_enter(&mut self, l: Word, e: Word) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(l),
+            old(self).heap_spec().word_in(e),
+            !M::CHECKED ==> old(self).evv_wf(l) && old(self).evv_seq(l).len() < old(
+                self,
+            ).evv_limit() && old(self).ev_shape(e) && old(self).holds_args(seq![l, e]),
+        ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).evv_wf(l) && old(self).evv_seq(l).len() < old(
+                self,
+            ).evv_limit() && old(self).ev_shape(e) && old(self).holds_args(seq![l, e]) ==> (
+            r matches Ok(n) && {
+                &&& final(self).held_ok()
+                &&& final(self).holds_args(seq![n, e])
+                &&& final(self).evv_wf(n)
+                &&& final(self).evv_seq(n) == seq![(old(self).ev_tag(e), e)] + old(self).evv_seq(l)
+                &&& final(self).evolved_by(*old(self), |b: usize| -points(l, b), Set::empty())
+                &&& final(self).ev_shape(e)
+                &&& final(self).ev_tag(e) == old(self).ev_tag(e)
+                &&& final(self).ev_table(e) == old(self).ev_table(e)
+                &&& final(self).ev_state(e) == old(self).ev_state(e)
+                &&& final(self).ev_outer(e) == old(self).ev_outer(e)
+                &&& (final(self).heap_spec().rc_value(e) > 0) == (old(self).heap_spec().rc_value(e)
+                    > 0)
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost h0 = self.heap;
+        let ghost c = s0.held_ok() && s0.evv_wf(l) && s0.evv_seq(l).len() < s0.max_evv
+            && s0.ev_shape(e) && s0.holds_args(seq![l, e]);
+        if M::CHECKED {
+            self.checked_ev(e)?;
+            self.checked_room(l)?;
+            self.heap.dup_check(e)?;
+        }
+        proof {
+            if c {
+                lemma_unextended(h0, e);
+            }
+        }
+        let m = (unsafe { self.heap.meta(e) })?;
+        proof {
+            m.lemma_fields();
+        }
+        (unsafe { self.heap.dup(e) })?;
+        let ghost s1 = *self;
+        proof {
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_entered_dup(s0, l, e);
+            }
+        }
+        let r = unsafe { self.evv_link(l, e, m.tag(), Ghost(c)) };
+        proof {
+            if c {
+                let n = r->Ok_0;
+                self.lemma_entered_ok(s0, s1, n, l, e);
+                assert(self.heap.scanned_word(e, EV_TABLE as int) == s1.heap.scanned_word(
+                    e,
+                    EV_TABLE as int,
+                ));
+                assert(self.heap.scanned_word(e, EV_STATE as int) == s1.heap.scanned_word(
+                    e,
+                    EV_STATE as int,
+                ));
+                assert(self.heap.scanned_word(e, EV_OUTER as int) == s1.heap.scanned_word(
+                    e,
+                    EV_OUTER as int,
+                ));
+            }
+        }
+        r
     }
 
     /// evidence の外側の `evv` を `dup` して返す。外側の `evv` がリストとして正しいことは EP の不変条件で、この操作は
@@ -3339,6 +3480,154 @@ impl<M: Mode> Ctx<M> {
             }
             if c {
                 self.lemma_ev_renew_ok(s0, h1, h2, h3, h4, h5, ev, t, l, e, state);
+            }
+        }
+        Ok(e)
+    }
+
+    /// evidence `ev`を退かせ、`ev`のtagとエントリの表を持ち、状態と外側の`evv`が`()`の局所のevidenceを返す。`ev`は
+    /// 消費する。一意な`ev`は、RCに触れずにそのまま返す。そうでなければ、表の参照を1つ多く持つ新しいevidenceを作り、
+    /// `ev`を手放す。どちらのモードも、初めに`ev`の状態と外側の`evv`が`()`かを確かめ、そうでなければ何も変えずに
+    /// `BadEvidence`を返す。確かめる前には何も手放さないので、この操作で`Lin`の値の後始末は起きない
+    /// (docs/spec/object-model.mdの「基本操作の契約」)。
+    ///
+    /// # Safety
+    /// `heap_mut`の前提を守っている。`ev`は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ
+    /// 持つ。速いモードでは、`ev`はevidenceである (検査モードは形を確かめ、違えば`BadEvidence`を返す)。写す道の検査
+    /// モードでは、`ev`の`decref`が誤り (`UnknownPage`、`UseAfterFree`、`WrongOwner`、`CountedImmortal`、
+    /// `ImmortalOverRelease`、`LinShared`、手放す連鎖の誤り) を返すと、表の`dup`と新しいevidenceの確保の後で`Err`を返す。
+    /// その後は`Ctx`を落とすことしかできない (docs/spec/object-model.mdの「検査モードの約束」)。
+    pub unsafe fn ev_retire(&mut self, ev: Word) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(ev),
+            !M::CHECKED ==> old(self).ev_shape(ev) && old(self).holds(ev),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> (r is Ok <==> old(self).ev_state(ev).bits_spec() == 1 && old(
+                self,
+            ).ev_outer(ev).bits_spec() == 1),
+            old(self).held_ok() && old(self).ev_shape(ev) && !(old(self).ev_state(ev).bits_spec()
+                == 1 && old(self).ev_outer(ev).bits_spec() == 1) ==> r == Err::<Word, HeapError>(
+                HeapError::BadEvidence,
+            ) && *final(self) == *old(self),
+            ({
+                &&& old(self).held_ok()
+                &&& old(self).ev_shape(ev)
+                &&& old(self).holds(ev)
+                &&& old(self).ev_state(ev).bits_spec() == 1
+                &&& old(self).ev_outer(ev).bits_spec() == 1
+            }) ==> {
+                &&& r is Ok || chain_err(r)
+                &&& r matches Ok(e) ==> {
+                    &&& final(self).held_ok()
+                    &&& final(self).holds(e)
+                    &&& final(self).ev_shape(e)
+                    &&& final(self).heap_spec().rc_value(e) > 0
+                    &&& final(self).ev_tag(e) == old(self).ev_tag(ev)
+                    &&& final(self).ev_table(e) == old(self).ev_table(ev)
+                    &&& final(self).ev_state(e).bits_spec() == 1
+                    &&& final(self).ev_outer(e).bits_spec() == 1
+                    &&& old(self).heap_spec().rc_value(ev) == 1 ==> e == ev && *final(self) == *old(
+                        self,
+                    )
+                    &&& final(self).evolved_by(
+                        *old(self),
+                        |b: usize| points(e, b) - points(ev, b),
+                        Set::empty(),
+                    )
+                }
+            },
+    {
+        let ghost s0 = *self;
+        let ghost h0 = self.heap;
+        let ghost c = s0.held_ok() && s0.ev_shape(ev);
+        let ghost k = c && s0.holds(ev) && s0.ev_state(ev).bits_spec() == 1 && s0.ev_outer(
+            ev,
+        ).bits_spec() == 1;
+        proof {
+            if c {
+                lemma_unextended(h0, ev);
+                h0.lemma_readable_scanned(ev, EV_TABLE as int);
+            }
+        }
+        let t = if M::CHECKED {
+            self.checked_ev(ev)?
+        } else {
+            (unsafe { self.heap.field(ev, EV_TABLE) })?
+        };
+        proof {
+            lemma_unextended(h0, ev);
+        }
+        let s = (unsafe { self.heap.field(ev, EV_STATE) })?;
+        let o = (unsafe { self.heap.field(ev, EV_OUTER) })?;
+        if s.bits() != 1 || o.bits() != 1 {
+            return Err(HeapError::BadEvidence);
+        }
+        let unique = (unsafe { self.heap.is_unique(ev) })?;
+        if unique {
+            proof {
+                if k {
+                    lemma_moved_refl(h0);
+                    lemma_moved_weaken(
+                        h0,
+                        h0,
+                        |b: usize| 0int,
+                        |b: usize| points(ev, b) - points(ev, b),
+                        Set::empty(),
+                        Set::empty(),
+                    );
+                }
+            }
+            return Ok(ev);
+        }
+        let m = (unsafe { self.heap.meta(ev) })?;
+        proof {
+            m.lemma_fields();
+        }
+        if M::CHECKED {
+            self.heap.dup_check(t)?;
+        }
+        (unsafe { self.heap.dup(t) })?;
+        let ghost h1 = self.heap;
+        let e = self.heap.alloc_data(m.tag(), EV_WORDS, 0, false);
+        let ghost h2 = self.heap;
+        proof {
+            lemma_words_trans(h2, h1, h0);
+            lemma_unextended(h2, e);
+            assert(h2.scanned_at(e, EV_TABLE as int));
+            if k {
+                Self::lemma_retire_copied(s0, h1, self.heap, ev, t, e);
+            }
+        }
+        let r = unsafe { self.heap.decref(ev) };
+        let ghost h3 = self.heap;
+        proof {
+            if M::CHECKED {
+                lemma_words_trans(h3, h2, h0);
+            }
+        }
+        if let Err(err) = r {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(err);
+        }
+        proof {
+            if k {
+                Self::lemma_retire_released(s0, h1, h2, self.heap, ev, t, e);
+            }
+        }
+        (unsafe { self.heap.set_field(e, EV_TABLE, t) })?;
+        proof {
+            if M::CHECKED {
+                lemma_words_trans(self.heap, h3, h0);
+                self.lemma_words_kept(s0);
+            }
+            if k {
+                self.lemma_ev_retire_ok(s0, h1, h2, h3, ev, t, e);
             }
         }
         Ok(e)

@@ -1014,6 +1014,7 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 | `evv_set(l)` | `evv_wf(l)` | `evv` を l にし、元の `evv` を手放す |
 | `switch_task(l, worker, depth_offset)` | 切り替えた後の文脈 (`evv` が l、worker が `worker`) で `held_ok()` | `evv` を l に、worker を `worker` に、今のタスクの深さの上限を `max_depth` から `depth_offset` を引いた値にし、元の `evv` を返す。RC に触れない (上の「タスクの切り替え」) |
 | `evv_push(l, e)` | `evv_wf(l)`、l の長さが `max_evv` より小さい、`ev_shape(e)` | e と同じ tag の新しい節点を返す。結果の `evv_seq` は、(tag, e) の後に `evv_seq(l)` を続けた列である |
+| `evv_enter(l, e)` | `evv_wf(l)`、lの長さが`max_evv`より小さい、`ev_shape(e)` | `evv_push`と同じだが、eは借りる。節点はeの新しい参照を持ち、呼ぶ側は自分の参照を持ったままである。eは`ev_shape`を満たしたままで、tag、エントリの表、状態、外側とrcの符号は変わらない。検査モードは、何も変える前にeの形とlの長さとeの`dup`を確かめる |
 | `evv_mask(items, w)` | `evv_wf(w)`、どの項目についても合う組が n + m 個以上ある (`mask_spec(items, evv_seq(w))` の長さに、各エフェクトの先の項目の m を足すと、`evv_seq(w)` の長さになる) | 結果の `evv_seq` は `mask_spec(items, evv_seq(w))` である。除いた最後の節点までに残す節点を写し、その後ろは元のリストを共有する |
 | `ev_new(effect, n_ops, state, outer)` | `evv_wf(outer)`、effect が 65535 より小さい | 欄が `n_ops` 個でどれも `()` のエントリの表と、それを指す tag が effect + 1 の evidence を作る |
 | `fork_ev(effect, table, depth)` | effectが65535より小さい、`table`がforkの表 (`lin`ビットのない不死のtag 0の`Data`で、エントリはどれも即値か、`lin`ビットを持たない不死の物体)、evidenceをほかのworkerに渡すなら`table`は凍結した領域にある | tagがeffect + 1のfork evidence `[table, 即値 depth, ()]`を作る。`table`は借り、evidenceの参照の分を検査モードだけが`dup`する (上の「evidence の3つの物体」)。検査モードは確保の前に、65535のeffectと、`lin`ビットのない不死のtag 0の`Data`でない`table`に`BadEvidence`を返す。`table`がほかのヒープのページの数える不死の物体なら、その`dup`が`CountedImmortal`を返す |
@@ -1021,6 +1022,7 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 | `evv_step(w)` | `evv_wf(w)` | wが`()`なら`None`を、そうでなければ (先頭の節点のtagから1を引いた値, 次の節点) を返す。次の節点の`evv_seq`は、`evv_seq(w)`から先頭の組を除いた列である。wは借り、RCに触れない。検査モードは、形の違う節点に`BadEvidence`を返す |
 | `ev_set_clause(ev, op, c)` | `ev_shape(ev)`、op がエントリの数より小さい、欄が `()`、エントリの表の rc が正、c が `lin` ビットを持たない | エントリの欄 op を c にする |
 | `ev_renew(ev, state)` | `ev_shape(ev)` | ev と同じエントリの表と tag を持ち、状態を state に、外側を今の `evv` にした新しい evidence を作る |
+| `ev_retire(ev)` | `ev_shape(ev)` | どちらのモードも、初めにevの状態と外側の`evv`が`()`かを確かめ、そうでなければ何も変えずに`BadEvidence`を返す。evが一意 (rcが1) なら、RCに触れずにそのまま返す。そうでなければ、evのtagとエントリの表を持ち、状態と外側を`()`にした新しい局所のevidenceを作り、evを手放す。新しいevidenceは表の参照を1つ多く持つ。どちらの道でも、結果は`ev_shape`を満たす局所のevidenceである。確かめる前には何も手放さないので、この操作で`Lin`の値の後始末は起きない。検査モードは、evidenceでない物体にも`BadEvidence`を返す。写す道の検査モードでは、evの`decref`が誤り (`UnknownPage`、`UseAfterFree`、`WrongOwner`、`CountedImmortal`、`ImmortalOverRelease`、`LinShared`、手放す連鎖の誤り) を返すと、表の`dup`と新しいevidenceの確保の後で`Err`を返す。その後は`Ctx`を落とすことしかできない |
 | `ev_lookup(effect)` | `evv` に tag が effect + 1 の組がある | `evv_seq(evv)` で tag が effect + 1 の最初の evidence を `dup` して返す |
 | `ev_clause(ev, op)` | `ev_shape(ev)`、op がエントリの数より小さい | エントリの欄 op を `dup` して返す |
 | `ev_evv(ev)` | `ev_shape(ev)` | 外側の `evv` を `dup` して返す |
