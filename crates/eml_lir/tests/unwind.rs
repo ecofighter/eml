@@ -180,7 +180,7 @@ yields fn f(b.0: tobj, w.5: evv) -> tobj {
   let r.3: tobj = call prompt$(ev.1, x.2)
   return r.3
 }
-fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {
+yields fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {
   let u.2: unit = drop ev.0
   return x.1
 }

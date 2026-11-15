@@ -3138,7 +3138,7 @@ fn root_primitives_move_tobj_values() {
 
 /// いちばん小さい`prompt$`。印の変数と、印の付いた`apply`の結果を受け取る。verifierは`apply`の直後にその呼び出しを
 /// 求める (docs/spec/lir.md の「着地の印」)。
-const PROMPT: &str = "fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {\n  let u.2: unit = drop ev.0\n  return x.1\n}\n";
+const PROMPT: &str = "yields fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {\n  let u.2: unit = drop ev.0\n  return x.1\n}\n";
 
 /// `Land`と、そのエントリの関数。着地の印のevidenceを`evidence`で作るテストが、エントリに使う。
 const LAND: &str = "\
@@ -3681,6 +3681,37 @@ fn a_landing_enters_a_function_that_finishes_first() {
     let ret = "  let st.6: tobj poly = prim ev_last_state(ev.0)\n";
     let on_zero = prompt_changed(ret, &format!("  let z.30: unit = call g()\n{ret}"));
     assert_eq!(check(&on_zero), Ok(()));
+}
+
+#[test]
+fn a_landing_enters_a_function_that_returns_in_flight_only_when_it_is_marked_yields() {
+    let call = "  tail call prompt$(ev.3, &return$, x.7)\n";
+    assert!(TRY_PANIC.contains(call));
+    let probe = TRY_PANIC
+        .replace("fn try_panic", "yields fn try_panic")
+        .replace(
+            call,
+            "  let r.8: tobj poly = call prompt$(ev.3, &return$, x.7)
+  let m.9: obj = const \"boom\"
+  let z.10: tobj = extern Prelude.panic(m.9)
+  decref z.10
+  return r.8
+",
+        );
+    // 印があれば、`prompt$`の呼び出しはyieldしうる呼び出しで、窓の規則がその後の行を拒む
+    assert_eq!(
+        check(&probe),
+        Err("`prompt$` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` in `try_panic`".to_string())
+    );
+    let unmarked = probe.replace("yields fn prompt$", "fn prompt$");
+    assert_eq!(
+        check(&unmarked),
+        Err("`prompt$` is entered at the apply with the prompt marker `ev.3`, but a path of it returns without `prim yield_finish`, and it is not marked `yields` in `try_panic`".to_string())
+    );
+    // どの道も`yield_finish`を走らせる相手は、yieldを飛ばしたまま戻らないので、印が要らない
+    let finishes = "  let c.6: tobj poly = prim yield_finish()\n  let u.8: unit = drop c.6\n  let u.9: unit = drop ev.0\n  return x.1\n";
+    let finishing = landing_on("", "", finishes).replace("yields fn prompt$", "fn prompt$");
+    assert_eq!(check(&finishing), Ok(()));
 }
 
 #[test]
@@ -5108,7 +5139,7 @@ fn f(b.0: tobj, w.1: evv) -> tobj poly {{
   let r.5: tobj poly = call prompt$(ev.2, x.4)
   return r.5
 }}
-fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {{
+yields fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {{
   let u.2: unit = drop ev.0
   return x.1
 }}

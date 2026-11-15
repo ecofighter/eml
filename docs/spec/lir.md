@@ -434,13 +434,14 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - 印は `apply` にだけ付く。EP が印を付ける2か所が、どちらも `apply` だからである
 - 印の付いた呼び出しの後、ブロックの次の呼び出し (呼び出しの`let`、複数の値の`let`、`tail`の呼び出し) は、最初の引数が印の変数vである`prompt$`の直接の呼び出しで、その間にexternの行も、ほかの巻き戻しの地点 (`prim yield_abort`、`prim child_abort`など。下の「巻き戻しの地点」) も`prim yield_to`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを確かめるので ([ネイティブの実行系](native.md)の「巻き戻しの地点」)、着地から`prompt$`の`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない。verifierがこの規則を確かめる
 - そこで呼ぶ関数には、yieldか中断を飛ばしたまま入る。そのエントリのブロックが最後の文で最初の引数の`prim yield_status`を読み、その値の`switch`で終わるなら、ブロックは巻き戻しの地点も`prim yield_to`も持たず、`0`のほかのどの行き先のブロックも、巻き戻しの地点と`prim yield_to`より前に`prim yield_finish`を走らせるか、それらを通らずに`return`で終わる。そうでなければ、エントリのブロック自身がそうする。ほかの所の`prim yield_status`はただの読み出しで、この規則に関わらない。verifierはこれも、関数の名前でなく形で確かめる (下の「verifier」)
+- `prim yield_finish`を走らせずに`return`で終わる道を持つ関数は、yieldを飛ばしたまま戻るので、`yields`の印を持たなければならない。呼ぶ側の窓の規則 (下の「yieldの確認までの間」) は、`yields`の関数の呼び出しにだけ働くからである。verifierはこれも確かめる。EPの`prompt$`はいつも`yields`の印を持つ
 
 ### yieldの確認までの間
 
 - 飛んでいるyieldは、巻き戻しの地点 (下の「巻き戻しの地点」) を通らない。yieldしうる呼び出し ([Core IR](core-ir.md)の「yield の地点」、`reuse::may_yield`) はyieldを飛ばしたまま戻り、フレームは`prim yielding()`の確認まで、確認のない呼び出しでは`return`まで走る ([Core IR](core-ir.md)の「yield の確認のない呼び出しの後」)
 - そのような呼び出しの後、確認までに、ブロックは巻き戻しの地点も`prim yield_to`も持たない。確認はブロックの最後の文で、ブロックは`switch y { 0 -> .., _ -> .. }`で終わり、遅い経路は巻き戻しの地点も`prim yield_to`も持たずに`return`で終わる。確認のない呼び出しの後には、巻き戻しの地点でも`prim yield_to`でもない文だけが続き、ブロックは`return`で終わる
 - 呼び出しと確認の間にあるのは、結果の変換とRCの命令である (下の「ダミーの値」)。RCの命令は物体を解放しうるが、ファイナライザは文脈を取らないので、失敗もyieldも始めない
-- verifierはこれを6つの段のすべてで確かめるので、どちらの読み込みも、これを破るプログラムを拒む。`yields`の印が誤っていることは確かめない (下の「実行の前提」)
+- verifierはこれを6つの段のすべてで確かめるので、どちらの読み込みも、これを破るプログラムを拒む。着地が入る関数の印 (上の「着地の印」) のほかは、`yields`の印が誤っていることは確かめない (下の「実行の前提」)
 
 ### エントリの関数の印
 
@@ -735,7 +736,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数vが見えること、vのReprが`ev`であること、vが呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not ev ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
   - 印のほかの検査の後に、印の付いた呼び出しに`prompt$`が続くことを確かめる (上の「着地の印」。`` the apply with the prompt marker `ev.1` is not followed by `prompt$` ``)
-  - 次に、その呼び出しが入る関数の形を確かめる (上の「着地の印」)。形は関数ごとの要約が持ち、verifierはプログラムのすべての関数についてそれを求める。そのためこの検査は呼ぶ相手の本体を読まず、`verified_for`がたどらない相手にも当たる (`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` ``、`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it neither runs `prim yield_finish` nor returns ``)
+  - 次に、その呼び出しが入る関数の形と`yields`の印を確かめる (上の「着地の印」)。形は関数ごとの要約が持ち、verifierはプログラムのすべての関数についてそれを求める。そのためこの検査は呼ぶ相手の本体を読まず、`verified_for`がたどらない相手にも当たる (`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` ``、`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it neither runs `prim yield_finish` nor returns ``、`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it returns without `prim yield_finish`, and it is not marked `yields` ``)
 - yieldしうる呼び出し (上の「yieldの確認までの間」) の検査は、6つの段のすべてで走る。印の付いた`apply`は着地の印の検査に任せ、続く`prompt$`の呼び出しは、`yields`の関数の中のyieldしうる呼び出しとして、この検査を受ける。文言は次の4つである
   - `` `g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` ``
   - `` `g` may yield, but its block ends with neither `prim yielding()` nor `return` ``
@@ -938,12 +939,12 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 
 ## 実行の前提
 
-プログラムは読み込みを通ってだけエンジンに届き、読み込みは最後の段のverifierが拒むプログラムを断る (上の「verifier」。例外は下の`eml_vm`のテストだけの確かめない読み込みである)。verifierは、所有、Repr、印、evidenceの役、すべてのevidenceのエントリ、forkのエントリ、yieldしうる呼び出しから確認までの間、着地が入る関数の形を確かめる。VMの速いモードとネイティブのコードは、渡されたプログラムについて、verifierが確かめられない次のことをなお前提にする。
+プログラムは読み込みを通ってだけエンジンに届き、読み込みは最後の段のverifierが拒むプログラムを断る (上の「verifier」。例外は下の`eml_vm`のテストだけの確かめない読み込みである)。verifierは、所有、Repr、印、evidenceの役、すべてのevidenceのエントリ、forkのエントリ、yieldしうる呼び出しから確認までの間、着地が入る関数の形と`yields`の印を確かめる。VMの速いモードとネイティブのコードは、渡されたプログラムについて、verifierが確かめられない次のことをなお前提にする。
 
 - どの`obj`と`tobj`の値も、作ったときの配置で読み、手放す。evidenceの状態もこれに含まれ、最後に入れた値として読む (取り出した後の状態は`()`である)
 - 実行時に`Lin`である値に付いた`poly`や`unr`の印は確かめない
 - 戻るときに`evv`が元に戻り、どの`clause E.op`と`evv_mask`のどの項目も、そのevidenceを見つける (上の「`evv` の不変条件」)
-- yieldの基本操作はEPが出す順に走り、関数と`apply`の`yields`の印は正しい
+- yieldの基本操作はEPが出す順に走り、関数と`apply`の`yields`の印は正しい。ただし、yieldを飛ばしたまま戻る、着地が入る関数が`yields`の印を持つことは、verifierが確かめる
 - externの行は、標準ライブラリのシグネチャの型の値を受け取る (上の「extern の行」)
 
 これらは、ソースのプログラムの型と、各パスの正しさから従う。

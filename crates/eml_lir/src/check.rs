@@ -459,8 +459,11 @@ pub struct FnSummary<'a> {
 /// 着地がyieldか中断を飛ばしたまま関数に入ったときの、その関数の形 (docs/spec/lir.mdの「着地の印」)。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Landed {
-    /// 巻き戻しの地点も`prim yield_to`も通らずに、`prim yield_finish`を走らせるか戻る。
+    /// どの道も、巻き戻しの地点も`prim yield_to`も通らずに、`prim yield_finish`を走らせる。
     Finishes,
+    /// `prim yield_finish`を走らせずに戻る道があり、どの道も巻き戻しの地点も`prim yield_to`も通らない。その道は
+    /// yieldを飛ばしたまま戻るので、関数は`yields`の印を持たなければならない。
+    Returns,
     /// `prim yield_finish`の前に、巻き戻しの地点か`prim yield_to`を通る。
     Crosses,
     /// `prim yield_finish`を走らせずに、`return`のほかで終わる道がある。

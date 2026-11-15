@@ -657,7 +657,7 @@ fn landed(function: &LirFn, c_functions: &[CFunction]) -> Landed {
             }
         }
         if matches!(block.term, Term::Return(_) | Term::ReturnMany(_)) {
-            Landed::Finishes
+            Landed::Returns
         } else {
             Landed::Open
         }
@@ -683,7 +683,7 @@ fn landed(function: &LirFn, c_functions: &[CFunction]) -> Landed {
             return Landed::Crosses;
         }
         // 行き先が範囲の外なら、関数の走査が拒む。ここでは終えない道として数える
-        return cases
+        let paths = cases
             .iter()
             .filter(|case| case.pattern != CasePattern::Int(0))
             .map(|case| case.target)
@@ -693,9 +693,16 @@ fn landed(function: &LirFn, c_functions: &[CFunction]) -> Landed {
                     .blocks
                     .get(target.0 as usize)
                     .map_or(Landed::Open, finishing)
-            })
-            .find(|&landed| landed != Landed::Finishes)
-            .unwrap_or(Landed::Finishes);
+            });
+        let mut landed = Landed::Finishes;
+        for path in paths {
+            match path {
+                Landed::Crosses | Landed::Open => return path,
+                Landed::Returns => landed = Landed::Returns,
+                Landed::Finishes => {}
+            }
+        }
+        return landed;
     }
     finishing(entry)
 }
@@ -2036,7 +2043,7 @@ impl<'a> Checker<'a> {
     /// 着地の印`v`を持つ`apply`の後、ブロックの次の呼び出しは、最初の引数が`v`である`prompt$`の直接の呼び出しで、
     /// その間にexternの行もほかの巻き戻しの地点も`yield_to`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを
     /// 確かめるので、着地から`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない。呼ぶ相手の側の
-    /// 半分は、相手の要約の`landed`で確かめる (docs/spec/lir.mdの「着地の印」)。
+    /// 半分は、相手の要約の`landed`と`yields`の印で確かめる (docs/spec/lir.mdの「着地の印」)。
     fn check_landing(&self, block: &Block, at: usize, marker: VarId) -> Result<(), String> {
         let refused = || {
             format!(
@@ -2070,10 +2077,11 @@ impl<'a> Checker<'a> {
                     .function(*target)
                     .ok()
                     .filter(|callee| callee.name == EP_PROMPT)
+                    .map(|callee| (callee, self.program.function(*target).yields))
             }
             _ => None,
         };
-        let Some(callee) = callee else {
+        let Some((callee, yields)) = callee else {
             return Err(refused());
         };
         // 呼ぶ相手はyieldか中断を飛ばしたまま入るので、その形を確かめる。形は要約が持ち、相手の本体は読まない
@@ -2088,6 +2096,12 @@ impl<'a> Checker<'a> {
             .expect("the LIR verifier finds the landed form of every function")
         {
             Landed::Finishes => Ok(()),
+            // 呼ぶ側の窓の規則は`yields`の呼び出しにだけ働くので、yieldを飛ばしたまま戻る相手には印が要る
+            Landed::Returns if yields => Ok(()),
+            Landed::Returns => Err(format!(
+                "{} a path of it returns without `prim yield_finish`, and it is not marked `yields`",
+                entered()
+            )),
             Landed::Crosses => Err(format!(
                 "{} it runs an unwind point or `prim yield_to` before `prim yield_finish`",
                 entered()

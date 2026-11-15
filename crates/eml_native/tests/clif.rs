@@ -1158,7 +1158,7 @@ effect Land { land(unit) -> tobj }
 yields fn g(u.0: tobj) -> tobj {
   return u.0
 }
-fn prompt$(ev.0: ev lin, x.1: tobj) -> tobj {
+yields fn prompt$(ev.0: ev lin, x.1: tobj) -> tobj {
   let u.2: unit = drop ev.0
   return x.1
 }
