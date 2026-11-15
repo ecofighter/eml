@@ -89,6 +89,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
             .params()
             .iter()
             .any(|&param| function.repr(param) == Repr::Fev),
+        landed: None,
     });
     with_tables(
         &program.layouts,

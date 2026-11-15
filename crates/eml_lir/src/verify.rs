@@ -28,8 +28,8 @@ use std::collections::BTreeMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::check::{
-    self, BlockShape, Context, Dominators, FnSummary, Site, Tables, TermShape, boxed_scalars,
-    clause_function, field_count, repr_names, shape,
+    self, BlockShape, Context, Dominators, FnSummary, Landed, Site, Tables, TermShape,
+    boxed_scalars, clause_function, field_count, repr_names, shape,
 };
 use crate::liveness;
 use crate::reuse;
@@ -39,7 +39,7 @@ use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, EP_PROMPT, FnIdx, Lends, LirFn, Mark, OpRet,
     Prim, Program, Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
 };
-use eml_extern::RuntimeEntry;
+use eml_extern::{CFunction, RuntimeEntry};
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
 pub fn verify(program: &Program) -> Result<(), VerifyError> {
@@ -609,6 +609,7 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
             .params()
             .iter()
             .any(|&param| function.repr(param) == Repr::Fev),
+        landed: Some(landed(function, &program.c_functions)),
     });
     check::with_tables(
         &program.layouts,
@@ -619,6 +620,84 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
         summaries,
         f,
     )
+}
+
+/// 飛んでいるyieldが通ってはならない文。巻き戻しの地点か`prim yield_to`である (docs/spec/lir.mdの
+/// 「yieldの確認までの間」「着地の印」)。
+fn crosses(stmt: &Stmt, c_functions: &[CFunction]) -> bool {
+    unwind::point(stmt, c_functions).is_some()
+        || matches!(
+            stmt,
+            Stmt::Let {
+                var: _,
+                rhs: Rhs::Prim(Prim::YieldTo, _)
+            }
+        )
+}
+
+/// 着地が入ったときの`function`の形 (docs/spec/lir.mdの「着地の印」)。エントリのブロックが最初の引数の
+/// `prim yield_status`を最後の文に持ち、その値の`switch`で終わるなら、ブロックは地点を通らず、`0`のほかの
+/// 行き先はどれも終えるブロックである。そうでなければ、エントリのブロックが終えるブロックである。関数の名前は
+/// 見ない。着地の検査が、呼ぶ相手の本体を読まずにこれを引く。
+fn landed(function: &LirFn, c_functions: &[CFunction]) -> Landed {
+    // 終えるブロックは、どの地点より前に`yield_finish`を走らせるか、地点を持たずに`return`で終わる
+    let finishing = |block: &Block| {
+        for stmt in &block.stmts {
+            if matches!(
+                stmt,
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Prim(Prim::YieldFinish, _)
+                }
+            ) {
+                return Landed::Finishes;
+            }
+            if crosses(stmt, c_functions) {
+                return Landed::Crosses;
+            }
+        }
+        if matches!(block.term, Term::Return(_) | Term::ReturnMany(_)) {
+            Landed::Finishes
+        } else {
+            Landed::Open
+        }
+    };
+    let entry = &function.blocks[BlockId::ENTRY.0 as usize];
+    if let Some(Stmt::Let {
+        var: status,
+        rhs: Rhs::Prim(Prim::YieldStatus, args),
+    }) = entry.stmts.last()
+        && let Term::Switch {
+            scrutinee,
+            layout: None,
+            cases,
+            default,
+        } = &entry.term
+        && *scrutinee == Atom::Var(*status)
+        && entry
+            .params
+            .first()
+            .is_some_and(|&first| args.first() == Some(&Atom::Var(first)))
+    {
+        if entry.stmts.iter().any(|stmt| crosses(stmt, c_functions)) {
+            return Landed::Crosses;
+        }
+        // 行き先が範囲の外なら、関数の走査が拒む。ここでは終えない道として数える
+        return cases
+            .iter()
+            .filter(|case| case.pattern != CasePattern::Int(0))
+            .map(|case| case.target)
+            .chain(*default)
+            .map(|target| {
+                function
+                    .blocks
+                    .get(target.0 as usize)
+                    .map_or(Landed::Open, finishing)
+            })
+            .find(|&landed| landed != Landed::Finishes)
+            .unwrap_or(Landed::Finishes);
+    }
+    finishing(entry)
 }
 
 /// 辺の規則の検査 (`shape`) に渡す、ブロックの形。
@@ -1955,9 +2034,9 @@ impl<'a> Checker<'a> {
     }
 
     /// 着地の印`v`を持つ`apply`の後、ブロックの次の呼び出しは、最初の引数が`v`である`prompt$`の直接の呼び出しで、
-    /// その間にexternの行も`yield_to`も`yield_abort`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを
-    /// 確かめるので、着地から`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない
-    /// (docs/spec/lir.md の「着地の印」)。
+    /// その間にexternの行もほかの巻き戻しの地点も`yield_to`もない。ネイティブのコードは呼び出しの後で`abort`のバイトだけを
+    /// 確かめるので、着地から`yield_finish`までの間に呼び出しの巻き戻しの地点を通ってはならない。呼ぶ相手の側の
+    /// 半分は、相手の要約の`landed`で確かめる (docs/spec/lir.mdの「着地の印」)。
     fn check_landing(&self, block: &Block, at: usize, marker: VarId) -> Result<(), String> {
         let refused = || {
             format!(
@@ -1975,26 +2054,48 @@ impl<'a> Checker<'a> {
                 | Stmt::LetMany { vars: _, call } => Some(Some(call)),
                 Stmt::Let {
                     var: _,
-                    rhs: Rhs::Extern { .. } | Rhs::Prim(Prim::YieldTo | Prim::YieldAbort, _),
+                    rhs: Rhs::Extern { .. },
                 } => Some(None),
+                // 窓は呼ぶ相手の側と同じ`crosses`で閉じる。`prim child_abort`も巻き戻しの地点である
+                _ if crosses(stmt, &self.program.c_functions) => Some(None),
                 _ => None,
             })
             .chain(match &block.term {
                 Term::TailCall(call) => Some(Some(call)),
                 _ => None,
             });
-        match calls.next() {
-            Some(Some(Call::Direct(target, args)))
-                if self
-                    .program
-                    .functions
-                    .get(target.0 as usize)
-                    .is_some_and(|callee| callee.name == EP_PROMPT)
-                    && args.first() == Some(&Atom::Var(marker)) =>
-            {
-                Ok(())
+        let callee = match calls.next() {
+            Some(Some(Call::Direct(target, args))) if args.first() == Some(&Atom::Var(marker)) => {
+                self.cx
+                    .function(*target)
+                    .ok()
+                    .filter(|callee| callee.name == EP_PROMPT)
             }
-            _ => Err(refused()),
+            _ => None,
+        };
+        let Some(callee) = callee else {
+            return Err(refused());
+        };
+        // 呼ぶ相手はyieldか中断を飛ばしたまま入るので、その形を確かめる。形は要約が持ち、相手の本体は読まない
+        let entered = || {
+            format!(
+                "`{EP_PROMPT}` is entered at the apply with the prompt marker `{}`, but",
+                self.cx.name(marker)
+            )
+        };
+        match callee
+            .landed
+            .expect("the LIR verifier finds the landed form of every function")
+        {
+            Landed::Finishes => Ok(()),
+            Landed::Crosses => Err(format!(
+                "{} it runs an unwind point or `prim yield_to` before `prim yield_finish`",
+                entered()
+            )),
+            Landed::Open => Err(format!(
+                "{} a path of it neither runs `prim yield_finish` nor returns",
+                entered()
+            )),
         }
     }
 
@@ -2003,16 +2104,7 @@ impl<'a> Checker<'a> {
     /// 確認は、ブロックの最後の文で、`switch y { 0 -> .., _ -> .. }`の遅い経路は地点を通らずに`return`する
     /// (docs/spec/lir.mdの「yieldの確認までの間」)。
     fn check_yield_window(&self, block: &Block, at: usize, call: &Call) -> Result<(), String> {
-        let crosses = |stmt: &Stmt| {
-            unwind::point(stmt, &self.program.c_functions).is_some()
-                || matches!(
-                    stmt,
-                    Stmt::Let {
-                        var: _,
-                        rhs: Rhs::Prim(Prim::YieldTo, _)
-                    }
-                )
-        };
+        let crosses = |stmt: &Stmt| crosses(stmt, &self.program.c_functions);
         let returns = |term: &Term| matches!(term, Term::Return(_) | Term::ReturnMany(_));
         let what = self.call_text(call, false);
         let rest = &block.stmts[at + 1..];

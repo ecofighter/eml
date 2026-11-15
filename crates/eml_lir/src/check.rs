@@ -451,6 +451,20 @@ pub struct FnSummary<'a> {
     pub params: usize,
     /// 引数に`fev`がある。
     pub takes_fork: bool,
+    /// 着地が入ったときの形。LIRのverifierが本体から1回だけ求め、着地の検査が引く。Core IRのverifierは着地を
+    /// 確かめないので`None`にする。
+    pub landed: Option<Landed>,
+}
+
+/// 着地がyieldか中断を飛ばしたまま関数に入ったときの、その関数の形 (docs/spec/lir.mdの「着地の印」)。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Landed {
+    /// 巻き戻しの地点も`prim yield_to`も通らずに、`prim yield_finish`を走らせるか戻る。
+    Finishes,
+    /// `prim yield_finish`の前に、巻き戻しの地点か`prim yield_to`を通る。
+    Crosses,
+    /// `prim yield_finish`を走らせずに、`return`のほかで終わる道がある。
+    Open,
 }
 
 /// verifier を始めるときに1回だけ求める、プログラム全体の表。

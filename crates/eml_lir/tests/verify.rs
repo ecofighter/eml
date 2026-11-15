@@ -1,10 +1,11 @@
 //! LIR のテキストで書いた LIR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/lir.md)。
 //! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
+use eml_lir::unwind::verified_for;
+use eml_lir::{FnIdx, VarId, verify_borrowed};
 use eml_lir::{
     Prim, Program, Rhs, Stmt, parse, verify, verify_flattened, verify_lowered, verify_scopes,
 };
-use eml_lir::{VarId, verify_borrowed};
 
 use crate::common::ENTRY;
 
@@ -3433,6 +3434,29 @@ fn an_extern_row_between_a_prompted_apply_and_prompt_is_refused() {
     );
 }
 
+#[test]
+fn a_child_abort_between_a_prompted_apply_and_prompt_is_refused() {
+    // `prim child_abort`も巻き戻しの地点なので、着地と`prompt$`の間に置けない
+    let text = between_landing_and_prompt(
+        "let q.41: tobj = box 1\n  let u.42: unit = prim child_abort(e.40, q.41)\n  decref e.40",
+    )
+    .replace(
+        "fn try_panic(f.0: tobj, c.1: tobj)",
+        "fn try_panic(f.0: tobj, c.1: tobj, e.40: fev)",
+    )
+    .replace(
+        "  let r.1: tobj = call try_panic(&boom, c.0)\n",
+        "  decref c.0\n  let r.1: tobj = box 0\n",
+    );
+    assert_eq!(
+        check(&text),
+        Err(
+            "the apply with the prompt marker `ev.3` is not followed by `prompt$` in `try_panic`"
+                .to_string()
+        )
+    );
+}
+
 // yieldの確認までの間
 
 /// yieldしうる`g`を呼ぶ`yields`の関数`f`。`body`は`g`の呼び出しの結果`n.1`の後に続く文で、`f`は`int`を返す
@@ -3610,6 +3634,190 @@ fn yield_point_switch_must_have_exactly_the_case_zero_and_a_default() {
     assert_eq!(check(&yield_point(extra)), Err(refused.to_string()));
     let no_default = "  let y.3: int = prim yielding()\n  switch y.3 { 0 -> b1, 1 -> b2 }\nb1:\n  return n.1\nb2:\n  return n.1\n";
     assert_eq!(check(&yield_point(no_default)), Err(refused.to_string()));
+}
+
+// 着地が入る関数
+
+/// `TRY_PANIC`の`prompt$`の`from`を`to`に替える。
+fn prompt_changed(from: &str, to: &str) -> String {
+    assert!(TRY_PANIC.contains(from));
+    TRY_PANIC.replace(from, to)
+}
+
+/// 印`ev.1`の`apply`の後に、引数`params`と本体`body`の`prompt$`を呼ぶ関数`f`。`f`は`params`を受け、そのまま
+/// `prompt$`に渡す (`args`)。
+fn landing_on(params: &str, args: &str, body: &str) -> String {
+    format!(
+        "{LAND}fn f(b.0: tobj, w.5: evv{params}) -> tobj {{
+  let ev.1: ev lin = evidence Land((), w.5) [&land$entry]
+  let x.2: tobj = yields apply b.0(()) prompt ev.1
+  let r.3: tobj = call prompt$(ev.1, x.2{args})
+  return r.3
+}}
+yields fn prompt$(ev.0: ev lin, x.1: tobj poly{params}) -> tobj poly {{
+{body}}}
+fn g() -> unit {{
+  return ()
+}}
+"
+    )
+}
+
+fn crossing_before_finish(function: &str) -> Result<(), String> {
+    Err(format!(
+        "`prompt$` is entered at the apply with the prompt marker `ev.3`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` in `{function}`"
+    ))
+}
+
+#[test]
+fn a_landing_enters_a_function_that_finishes_first() {
+    assert_eq!(check(TRY_PANIC), Ok(()));
+    // 状態を読まずに`yield_finish`を走らせれば、その後は呼び出しも走らせてよい
+    let finishes = "  let c.6: tobj poly = prim yield_finish()\n  let u.7: unit = call g()\n  let u.8: unit = drop c.6\n  let u.9: unit = drop ev.0\n  return x.1\n";
+    assert_eq!(check(&landing_on("", "", finishes)), Ok(()));
+    let returns = "  let u.9: unit = drop ev.0\n  return x.1\n";
+    assert_eq!(check(&landing_on("", "", returns)), Ok(()));
+    // 状態`0`の行き先は再開の道で、yieldも中断も飛んでいないので、規則に関わらない
+    let ret = "  let st.6: tobj poly = prim ev_last_state(ev.0)\n";
+    let on_zero = prompt_changed(ret, &format!("  let z.30: unit = call g()\n{ret}"));
+    assert_eq!(check(&on_zero), Ok(()));
+}
+
+#[test]
+fn a_landing_enters_a_call_before_the_status_is_refused() {
+    let status = "  let s.5: int = prim yield_status(ev.0)\n";
+    let text = prompt_changed(status, &format!("  let z.30: unit = call g()\n{status}"));
+    assert_eq!(check(&text), crossing_before_finish("try_panic"));
+}
+
+#[test]
+fn a_landing_enters_a_row_before_yield_finish_is_refused() {
+    let drop = "  let u.8: unit = drop x.2\n";
+    let text = prompt_changed(
+        drop,
+        &format!("{drop}  let z.30: int = extern \"Prelude.Num Int.+\"(1, 2)\n"),
+    );
+    assert_eq!(check(&text), crossing_before_finish("try_panic"));
+}
+
+#[test]
+fn a_landing_enters_yield_to_on_the_default_path_is_refused() {
+    let body = "  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  decref e.10
+  decref c.11
+  decref k.12
+  let u.6: unit = drop ev.0
+  return x.1
+b2:
+  let u.7: unit = prim yield_to(e.10, c.11, k.12)
+  let u.8: unit = drop ev.0
+  return x.1
+";
+    let text = landing_on(
+        ", e.10: cev, c.11: tobj, k.12: tobj",
+        ", e.10, c.11, k.12",
+        body,
+    );
+    assert_eq!(
+        check(&text),
+        Err("`prompt$` is entered at the apply with the prompt marker `ev.1`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_landing_enters_a_path_that_neither_finishes_nor_returns_is_refused() {
+    let body = "  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  let u.6: unit = drop ev.0
+  return x.1
+b2:
+  let u.7: unit = drop ev.0
+  jump b3()
+b3:
+  return x.1
+";
+    let open = Err("`prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it neither runs `prim yield_finish` nor returns in `f`".to_string());
+    assert_eq!(check(&landing_on("", "", body)), open);
+    // 状態の読み出しがエントリのブロックの最後の文でなければ、エントリのブロック自身が終えなければならない
+    let not_last = "  let s.5: int = prim yield_status(ev.0)
+  let u.6: unit = drop ev.0
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  return x.1
+b2:
+  return x.1
+";
+    assert_eq!(check(&landing_on("", "", not_last)), open);
+}
+
+#[test]
+fn a_landing_enters_a_bad_function_at_every_level_and_unwalked() {
+    let bad = "  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  let u.6: unit = drop ev.0
+  return x.1
+b2:
+  let u.7: unit = call g()
+  let u.8: unit = drop ev.0
+  return x.1
+";
+    let message = "`prompt$` is entered at the apply with the prompt marker `ev.1`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` in `f`";
+    let before_perceus = |body: &str| landing_on("", "", body).replace("  decref e.0\n", "");
+    let good = bad.replace("  let u.7: unit = call g()\n", "");
+    type Level = fn(&str) -> Result<(), String>;
+    let levels: [Level; 4] = [
+        check_scopes,
+        check_lowered,
+        |text| verify_flattened(&read(text)).map_err(|error| error.to_string()),
+        |text| verify_borrowed(&read(text)).map_err(|error| error.to_string()),
+    ];
+    for level in levels {
+        assert_eq!(level(&before_perceus(&good)), Ok(()));
+        assert_eq!(level(&before_perceus(bad)), Err(message.to_string()));
+    }
+    // 呼ぶ相手をたどらない`verified_for` (VMの追記で、すでに読んだ`prompt$`) でも、要約の形で拒む
+    let program = read(&landing_on("", "", bad));
+    let f = program
+        .functions
+        .iter()
+        .position(|function| function.name == "f")
+        .expect("`f` is in the program");
+    assert_eq!(
+        verified_for(&program, |FnIdx(index)| index as usize == f)
+            .map(drop)
+            .map_err(|error| error.to_string()),
+        Err(message.to_string())
+    );
+}
+
+#[test]
+fn a_landing_enters_a_status_of_another_evidence_is_refused() {
+    // 2つ目の引数の状態を読むのはただの読み出しなので、エントリのブロックが自分で終えなければならず、その`switch`を拒む
+    let body = "  let s.5: int = prim yield_status(d.10)
+  switch s.5 { 0 -> b1, _ -> b2 }
+b1:
+  let u.6: unit = drop d.10
+  let u.7: unit = drop ev.0
+  return x.1
+b2:
+  let u.8: unit = drop d.10
+  let u.9: unit = drop ev.0
+  return x.1
+";
+    assert_eq!(
+        check(&landing_on(", d.10: ev lin", ", d.10", body)),
+        Err("`prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it neither runs `prim yield_finish` nor returns in `f`".to_string())
+    );
+    // 最初の引数の状態なら、同じ本体を受ける
+    let first = body.replace("yield_status(d.10)", "yield_status(ev.0)");
+    assert_eq!(
+        check(&landing_on(", d.10: ev lin", ", d.10", &first)),
+        Ok(())
+    );
 }
 
 const P2: &str = "layout P { P(obj, obj) }\n";
