@@ -413,6 +413,13 @@ impl NativeMachine {
 
     /// 読み込んだプログラムの入口を実行する。入口は引数を取らない。
     pub fn run(&mut self, loaded: Loaded, options: Options) -> Result<Finished, RuntimeError> {
+        let (thunk, code, results, counted) = self.prepare(loaded)?;
+        let mut argv = vec![0u64; results];
+        self.enter(thunk, code, &mut argv, counted, options)
+    }
+
+    /// 入口を呼ぶ準備をする。入口のthunkを定義し、thunk、コードのアドレス、結果の数、結果を数えるかどうかを返す。
+    fn prepare(&mut self, loaded: Loaded) -> Result<(Thunk, *const u8, usize, bool), RuntimeError> {
         let tables = self.tables.as_ref().expect("a program is loaded");
         let entry = &tables.functions[loaded.entry as usize];
         let (name, rets, code, counted) = (
@@ -428,8 +435,7 @@ impl NativeMachine {
         let thunk = self
             .thunk(&[], &rets)
             .map_err(|what| internal(&name, what))?;
-        let mut argv = vec![0u64; rets.len()];
-        self.enter(thunk, code, &mut argv, counted, options)
+        Ok((thunk, code, rets.len(), counted))
     }
 
     /// コード生成器のテストのために、読み込んだ関数`name`を`args`で呼び、結果を返す。どの引数も`int`、`float`、`enum`に
@@ -686,7 +692,12 @@ pub fn execute(
     let loaded = machine
         .load(program, linked)
         .map_err(|error| internal(&program.function(program.entry).name, error.what()))?;
-    let finished = machine.run(loaded, options);
+    // ロードには入口のthunkのコンパイルを含める。`run --load-only`の計測で、実行の分にコンパイルが残らないためである
+    let finished = if config.load_only {
+        machine.prepare(loaded).map(|_| Finished::not_run())
+    } else {
+        machine.run(loaded, options)
+    };
     machine.close();
     finished
 }
