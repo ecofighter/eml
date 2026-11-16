@@ -19,6 +19,7 @@ pub type Built<T> = Result<T, Box<ModuleError>>;
 pub fn isa(pic: bool) -> Option<OwnedTargetIsa> {
     let mut flags = settings::builder();
     flags.set("opt_level", "speed").ok()?;
+    flags.set("enable_verifier", verifier()).ok()?;
     flags
         .set("is_pic", if pic { "true" } else { "false" })
         .ok()?;
@@ -29,6 +30,16 @@ pub fn isa(pic: bool) -> Option<OwnedTargetIsa> {
         .ok()?
         .finish(settings::Flags::new(flags))
         .ok()
+}
+
+/// Craneliftのverifierは、debug assertionsを持つビルドでだけ走らせる (docs/spec/native.md の「`eml_enter`」)。
+/// verifierはCLIFの形が正しいことを確かめるもので、メモリ安全の境界ではなく、生成したコードはこれに頼らない。
+fn verifier() -> &'static str {
+    if cfg!(debug_assertions) {
+        "true"
+    } else {
+        "false"
+    }
 }
 
 /// 1つのJITのmoduleのコードとデータをすべて置く領域の大きさ。aarch64の`bl`の届く範囲なので、moduleの中の呼び出しに
