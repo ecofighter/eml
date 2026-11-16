@@ -35,7 +35,7 @@ median() {
   printf '%s\n' "$@" | sort -n | sed -n "$(( (runs + 1) / 2 ))p"
 }
 
-# `$1` が `eml run` の引数 (`--native` か空)、`$2` がファイルのとき、命令の数と実時間の中央値を空白で区切って出す
+# `$1` が空白で区切った `eml run` の引数 (空、`--native`、`--load-only`、`--native --load-only`。語に分けるため引用符なしで展開する)、`$2` がファイルのとき、命令の数と実時間の中央値を空白で区切って出す
 measure() {
   local mode="$1" file="$2"
   local name report count elapsed
