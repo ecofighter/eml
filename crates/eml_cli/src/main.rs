@@ -35,6 +35,9 @@ enum Command {
         /// Run in checked mode and print the run's counters on stderr after it finishes
         #[arg(long)]
         stats: bool,
+        /// Check, compile and load the program, then exit with 0 without running `main` (not with `--stats`)
+        #[arg(long, conflicts_with = "stats")]
+        load_only: bool,
         /// How many worker threads run `par` children: 1 or more (default: `EML_WORKERS`, else the number of available CPUs)
         #[arg(long, value_name = "N", value_parser = parse_workers)]
         workers: Option<usize>,
@@ -90,6 +93,7 @@ fn main() -> ExitCode {
         Command::Run {
             debug_heap,
             stats,
+            load_only,
             workers,
             link,
             gui,
@@ -130,6 +134,7 @@ fn main() -> ExitCode {
             };
             let mut config = RunConfig::default()
                 .with_debug_heap(debug_heap || stats)
+                .with_load_only(load_only)
                 .with_sched(Sched::Normal)
                 .with_clock(Clock::Real)
                 .with_control(Arc::clone(&control));

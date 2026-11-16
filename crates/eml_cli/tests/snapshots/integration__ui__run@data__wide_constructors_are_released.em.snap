@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/data/wide_constructors_are_released.em
+---
+--- stdout ---
+first 1000
+last 1064
+ends 1000 1032 1064
+first 2000
+last 3064
+ends 4000 4032 4064
+first 1000
+last 1255
+ends 1000 1128 1255
+first 2000
+last 3255
+ends 4000 4128 4255
+--- stderr ---

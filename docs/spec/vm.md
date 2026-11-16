@@ -1157,6 +1157,12 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - `eml check` はつながず、ライブラリを開かない
 - `eml repl` の `Repl` は1つの `Linker` を持ち、入力ごとに、`Machine::load` の前にその入力のプログラムをつなぐ。KEY は確かめない。上書きはセッションの間 `Linker` が持ち、後の入力の `link` の item にも効く。つなげない入力は `Outcome::Unlinked` で、`load` を呼ばないので `Machine` は変わらない ([REPL の端末](repl.md) の「C の関数」)
 
+### `--load-only`
+
+- `eml run --load-only`は`RunConfig::load_only`を立てる。検査、コンパイル、C関数のつなぎ、読み込みはフラグがないときと同じに進み、診断、`link error`、`--native`の断り (E0004) はそのまま終了コード1で終わる
+- `eml_vm::execute`と`eml_native::execute`は、読み込んだ後でエントリを実行せずに`Finished::not_run()`を返す。`main`のコードは1つも動かず、終了コードは0である。`Finished::not_run()`の数はすべて0で、`exit`はない
+- `--stats`とは同時に使えない (使い方の誤り、終了コード2)。起きなかったrunの数を出すことになるためである
+
 ## `RunStats`
 
 `Machine::run`、`run_shown`、`eml_vm::execute`は、成功すると`Finished { stats, exit, preemptions, workers, placed, placed_tasks, pinned_tasks, placed_jobs }`を返す。`stats`は下の`RunStats`で、`exit`は`exit`で終わったときの終了コード (`Option<i64>`。終わりの欄から読む。「`exit`」)、`preemptions`は`Seeded`の`tick`が始めた切り替えの数、`workers`はそのrunが始めに作ったworkerの数 (メインのworkerは数えない)、`placed`はほかのworkerに置いた`par`の右の子の数、`placed_tasks`はほかのworkerに置いた`Async`のタスクの数、`pinned_tasks`は固定して始めたタスクの数 (「`Async`のタスク」)、`placed_jobs`はほかのworkerに置いた`compute`の仕事の数 (どれも「タスクとスケジュール」) である。

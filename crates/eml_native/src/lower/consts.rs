@@ -1,6 +1,7 @@
-//! 読み込み時の値のデータの記号。値ごとに、中身だけで名前の決まる書けるデータの物を1つ持ち、生成したコードは
-//! そこから語を1回のロードで読むか、マスクならそのアドレスを取る。だからコードは、プログラムのほかの部分で変わる番号を
-//! 持たない (docs/spec/native.mdの「値と定数」)。
+//! 読み込み時の値と`release`の`keep`のバイトのデータの記号。値ごとに、中身だけで名前の決まる書けるデータの物を1つ持ち、
+//! 生成したコードはそこから語を1回のロードで読むか、マスクならそのアドレスを取る。`keep`のバイトは、コンパイルの時点で
+//! 中身を決めた読み取り専用の物で、生成したコードはそのアドレスだけを取る。だからコードは、プログラムのほかの部分で変わる
+//! 番号を持たない (docs/spec/native.mdの「値と定数」)。
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::{GlobalValue, Type, Value, types};
@@ -15,7 +16,7 @@ use super::names;
 use crate::abi::Built;
 use crate::mem;
 
-/// 中身で表した読み込み時の値1つ。
+/// 中身で表したデータの物1つ。`Keep`のほかは読み込み時の値である。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Datum {
     String(String),
@@ -31,6 +32,8 @@ pub enum Datum {
     Effect(u32),
     /// `evv_mask`の項目。LIRの順で、エフェクトは`Program.effects`の添字である。
     Mask(Vec<MaskItem>),
+    /// `release`の走査する語ごとの`keep`のバイト。残す語は1、ほかは0である (docs/spec/native.mdの「データ」)。
+    Keep(Vec<bool>),
 }
 
 impl Datum {
@@ -44,19 +47,27 @@ impl Datum {
             Datum::EmptyMutArray => names::EMPTY_MUT_ARRAY.to_string(),
             Datum::Effect(effect) => names::effect(&effect_text(&program.effects, *effect)),
             Datum::Mask(items) => names::mask(&mask_text(&program.effects, items)),
+            Datum::Keep(keep) => names::keep(keep),
         }
     }
 
-    /// データの物のバイト数。1語か、マスクの項目である。
+    /// データの物のバイト数。1語か、マスクの項目か、`keep`のバイトを8バイトの倍数に切り上げた数である。`keep`は1語以上
+    /// なので、走査する語のない`release`にもnullでないアドレスを渡せる。
     pub fn bytes(&self) -> usize {
         match self {
             Datum::Mask(items) => mask_bytes(items.len()),
+            Datum::Keep(keep) => keep.len().div_ceil(8).max(1) * 8,
             _ => 8,
         }
     }
+
+    /// ローダーが値を書く物か。`keep`のバイトだけは、moduleが中身を定義し、ローダーは書かない。
+    fn loaded(&self) -> bool {
+        !matches!(self, Datum::Keep(_))
+    }
 }
 
-/// moduleが宣言した読み込み時の値。同じ中身の値は記号1つを共有する。
+/// moduleが宣言したデータの物。同じ中身の物は記号1つを共有する。
 #[derive(Default)]
 pub struct Data {
     ids: HashMap<Datum, DataId>,
@@ -87,24 +98,44 @@ impl Data {
         if let Some(&id) = self.ids.get(&datum) {
             return id;
         }
-        // 名前の接頭辞は種類ごとに違い、関数の`f:`やクロージャのエントリの`c<k>:`とも重ならないので、宣言が食い違うことはない
+        // 名前の接頭辞は種類ごとに違い、関数の`f:`やクロージャのエントリの`c<k>:`とも重ならないので、宣言が食い違うことはない。
+        // 書かない物を書けない物として宣言するので、JITはそれを読み取り専用のページに置く
         let id = module
-            .declare_data(&datum.symbol(program), Linkage::Local, true, false)
+            .declare_data(
+                &datum.symbol(program),
+                Linkage::Local,
+                datum.loaded(),
+                false,
+            )
             .unwrap_or_else(|error| panic!("a data symbol cannot be declared: {error}"));
         self.ids.insert(datum.clone(), id);
         self.declared.push((datum, id));
         id
     }
 
-    /// 宣言したどの記号も、0で埋めた、値のバイト数の、8バイトにそろえた物として定義し、値と記号を返す。
+    /// 宣言したどの記号も、8バイトにそろえた、そのバイト数の物として定義する。読み込み時の値は0で埋め、`keep`のバイトは
+    /// 中身を0を足したバイトで書く。ローダーが書く読み込み時の値と、その記号を返す。
     pub fn define<M: Module>(self, module: &mut M) -> Built<Vec<(Datum, DataId)>> {
         for (datum, id) in &self.declared {
             let mut description = DataDescription::new();
-            description.define_zeroinit(datum.bytes());
+            match datum {
+                Datum::Keep(keep) => {
+                    let mut bytes = vec![0u8; datum.bytes()];
+                    for (byte, &kept) in bytes.iter_mut().zip(keep) {
+                        *byte = u8::from(kept);
+                    }
+                    description.define(bytes.into_boxed_slice());
+                }
+                _ => description.define_zeroinit(datum.bytes()),
+            }
             description.set_align(8);
             module.define_data(*id, &description)?;
         }
-        Ok(self.declared)
+        Ok(self
+            .declared
+            .into_iter()
+            .filter(|(datum, _)| datum.loaded())
+            .collect())
     }
 }
 

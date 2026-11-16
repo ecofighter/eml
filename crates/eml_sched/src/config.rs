@@ -118,6 +118,24 @@ pub struct Finished {
     pub holds_raised: u64,
     pub holds_lowered: u64,
 }
+impl Finished {
+    /// `load_only`の実行の結果。`main`を実行していないので、数はすべて0で`exit`はない。
+    pub fn not_run() -> Finished {
+        Finished {
+            stats: RunStats::default(),
+            exit: None,
+            preemptions: 0,
+            workers: 0,
+            placed: 0,
+            placed_tasks: 0,
+            pinned_tasks: 0,
+            placed_jobs: 0,
+            holds_raised: 0,
+            holds_lowered: 0,
+        }
+    }
+}
+
 /// スケジュールの方針の選び方。`RunConfig::with_sched` で選ぶ。`eml run` と `eml repl` はいつも `Normal` で動く。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sched {
@@ -156,6 +174,8 @@ pub enum Seat {
 #[non_exhaustive]
 pub struct RunConfig {
     pub debug_heap: bool,
+    /// 読み込みまでして`main`を実行せずに戻る。実行系の`execute`が見る (docs/spec/vm.mdの「`--load-only`」)。
+    pub load_only: bool,
     /// 止める理由のビットは `Control::clear` でしか下りないので、1つの `Control` は1回の実行にだけ使う。終わりの欄は
     /// 実行の始めに開くので、使い回しの妨げにならない。`clone` した設定は同じ `Control` を指す。
     pub control: Arc<Control>,
@@ -186,6 +206,7 @@ impl Default for RunConfig {
     fn default() -> RunConfig {
         RunConfig {
             debug_heap: false,
+            load_only: false,
             control: Arc::new(Control::new(Limits::default())),
             sched: Sched::Sequential,
             clock: Clock::Virtual,
@@ -201,6 +222,11 @@ impl Default for RunConfig {
 impl RunConfig {
     pub fn with_debug_heap(mut self, debug_heap: bool) -> RunConfig {
         self.debug_heap = debug_heap;
+        self
+    }
+
+    pub fn with_load_only(mut self, load_only: bool) -> RunConfig {
+        self.load_only = load_only;
         self
     }
 

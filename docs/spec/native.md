@@ -20,7 +20,7 @@
 ### 記述子の表
 
 - `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`const NAME = "接頭辞";`の形では、エントリの記号は接頭辞に関数の識別子を続けたものになり、`const NAME;`の形では識別子そのものになる。`Entry`の欄は、`symbol` (記号)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
-- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum`、文脈のRepr`ev`、`cev`、`fev`、`rev`、`evv` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`と文脈のReprのRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`と、ハンドルの型のdtor`dtor`も受ける。どちらも`Kind`は`I64`である。`ptr`のRustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。`dtor`のRustの型は`Option<eml_rows::ffi::Dtor>`である (「エントリのABI」)。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
+- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum`、文脈のRepr`ev`、`cev`、`fev`、`rev`、`evv` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`と文脈のReprのRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに、指す先を各エントリが自分の前提で決めるポインタ`ptr` (語の並び、`evv_mask`の項目、`eml_rt_release`のバイト) と、ハンドルの型のdtor`dtor`も受ける。どちらも`Kind`は`I64`である。`ptr`のRustの型は`*const Word`なので、それを通して読む語はprovenanceを保ち、ほかのものを読むエントリはキャストする。`dtor`のRustの型は`Option<eml_rows::ffi::Dtor>`である (「エントリのABI」)。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
 - エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は7つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`effects.rs`の`EFFECTS`、`closures.rs`の`CLOSURES`、`c.rs`の`C`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
 - 生成したコードは、エントリを記号で取り込み、呼び出しの型を行だけから作る。宣言が1つなので、関数と呼び出しの型が食い違うことはない
 - エントリに`#[no_mangle]`は付けない。JITはアドレスを記号の名前で登録する
@@ -45,7 +45,7 @@
 
 ### ヒープのエントリ
 
-ヒープのエントリは、`eml_rt`のヒープの操作1つずつの薄い包みである (`eml_nrt/src/heap.rs`の表`HEAP`)。workerの構造体に触れないので、生きている`Ctx`を持つコードならどこからでも呼べる。語の引数と結果は`Word`である (物体は`obj`、即値も取りうる所は`tobj`、reuseのtokenは`token`。空のtokenは0の語)。`tag`、`scanned`、`raw`はふつうの整数で、`lin`は真なら0でない値である。どれも`shim`で、`Err`は致命的な誤りでrunを終える。
+ヒープのエントリは、`eml_nrt/src/heap.rs`の表`HEAP`にある。`eml_rt_release`のほかは、`eml_rt`のヒープの操作1つずつの薄い包みである。workerの構造体に触れないので、生きている`Ctx`を持つコードならどこからでも呼べる。語の引数と結果は`Word`である (物体は`obj`、即値も取りうる所は`tobj`、reuseのtokenは`token`。空のtokenは0の語)。`tag`、`scanned`、`raw`はふつうの整数で、`lin`は真なら0でない値である。どれも`shim`で、`Err`は致命的な誤りでrunを終える。
 
 | 記号 | 引数 -> 結果 | 包む操作 |
 |---|---|---|
@@ -56,6 +56,7 @@
 | `eml_rt_decref` | `w` -> なし | `Heap::decref` |
 | `eml_rt_is_last` | `w` -> 0か1 | `Heap::is_last` |
 | `eml_rt_free_block` | `w` -> なし | `Heap::free_block` |
+| `eml_rt_release` | `x, keep, n` -> なし | `Heap::is_last`、`Heap::scanned`、`Heap::decref`、`Heap::free_block`、`Heap::dup`の列 |
 | `eml_rt_con_at` | `token, tag, scanned, raw, lin` -> 語 | `Heap::con_at` (語の数は`scanned + raw`) |
 | `eml_rt_drop_token` | `token` -> なし | `Heap::drop_token` |
 | `eml_rt_fault_arith` | `kind` -> なし | `Ctx::set_fault(Fault::Arith(..))` |
@@ -63,7 +64,9 @@
 | `eml_rt_unboxed_ptr` | `w` -> 番地 | `Heap::unboxed_ptr` |
 | `eml_rt_unboxed_ptr_mut` | `w` -> 番地 | `Heap::unboxed_ptr_mut` |
 
-- どのエントリも、包む関数の前提をそのまま持ち、生成したコードがそれを守る。`eml_rt_con_at`の`scanned`は、`Data`の`meta`が数の語を要しない範囲にある (`eml_rt_alloc_data`は数の語を持つ物体も作れる)。debugのビルドでは、`tag`が16ビットに収まることと、`scanned`、`raw`が負でないこと、`eml_rt_con_at`の`scanned`が上の範囲にあることを確かめる
+- `eml_rt_release`のほかのどのエントリも、包む関数の前提をそのまま持ち、生成したコードがそれを守る。`eml_rt_con_at`の`scanned`は、`Data`の`meta`が数の語を要しない範囲にある (`eml_rt_alloc_data`は数の語を持つ物体も作れる)。debugのビルドでは、`tag`が16ビットに収まることと、`scanned`、`raw`が負でないこと、`eml_rt_con_at`の`scanned`が上の範囲にあることを確かめる
+- `eml_rt_release`は、操作1つの包みではなく、ほかのエントリが包むヒープの操作の列で、VMの`release`と同じ操作を同じ順に呼ぶ。`is_last(x)`なら、走査する語`i`を小さい順に見て、`keep[i]`が0のものに`decref(scanned(x, i))`を行い、その後に`free_block(x)`を行う。そうでなければ、`i`を小さい順に見て、`keep[i]`が0でないものに`dup(scanned(x, i))`を行い、その後に`decref(x)`を行う。子は`Heap::scanned`で読む。これは走査する語の番号で読むので、走査する語が数の語の後ろに並ぶ構築子 (255個以上) でも正しい位置を読む。`n`は構築子の形の走査する語の数である。生成したコードは`n`を`keep`の並びの長さとして作るので、物の大きさと`n`は作り方で一致する。`keep`はmoduleのデータの物`k:` (「値と定数」) のアドレスで、走査する語ごとに1バイトを持つ。バイトは、`release`が変数に束縛する欄なら1、ほかは0である。速いモードはtagを読まないので、エントリはtagを受け取らない。「残さない子を手放してから`free_block`」の順は、Verusの事前条件の連なりではなく、[オブジェクトモデル](object-model.md)の「核の操作」のモデルの前提 (残さない子は呼ぶ側の参照と数える) に頼る。VMの`release_fields`も同じ前提に頼る。ネイティブのコードは今`share`を呼ばないので、このエントリの共有の数の状態に届くのは`eml_nrt`の単体テストだけである
+- `eml_rt_release`は`n`を`usize::try_from`で変え、失敗は致命的な誤り (`WrongLayout`) にする。`keep`はバイト (`&[u8]`) として読むので、どのバイトの値でも未定義の振る舞いにはならない。debugのビルドでは、`x`が走査する語を`n`個持つ`Data`の物体であることと、`keep`のどのバイトも0か1であることを確かめる。エントリは自分の前提を自分のdocコメントのSafetyに書き、実行系のcrateの関数を名指して済ませない。どの欄も`decref(x)`より前、呼ぶ側の参照が`x`を生かしている間に読み、残す子は箱を手放す前に`dup`する
 - `eml_rt_con_at`と`eml_rt_drop_token`が受けるtokenは、生成したコードが一意な箱の語をそのまま移した語か、空の語である。速いモードのtokenは箱の語なので、これは`Heap::into_token`が返す語と同じである ([オブジェクトモデル](object-model.md)の「検査モードの token」)
 - `eml_rt_fault_arith`だけは、失敗を`Ctx`に置いて戻る。生成したコードは、呼び出しの後で無条件に`eml$raise`へ進み、faultの語は確かめない。`kind`は`eml_nrt::image`の`ARITH_DIVISION_BY_ZERO` (0) か`ARITH_INTEGER_OVERFLOW` (1) で、ほかの値は内部の誤りである
 - `eml_rt_text_payload`、`eml_rt_unboxed_ptr`、`eml_rt_unboxed_ptr_mut`は、利用者のCの関数に貸す位置を、来歴を公開した番地 (`expose_provenance`) で返す。VMが橋渡しのslotに入れる番地と同じである ([VM](vm.md)の「C の関数の命令」)。どれも借りた物体を`Heap`から1度読むだけで、確保も解放もせず、参照の数も変えない
@@ -73,7 +76,7 @@
 - `eml_enter(ctx, thunk, entry, argv) -> u64`。thunkが戻れば0を返し、結果は`argv[0..]`にある。`eml_fatal`で切られたら、その符号とsiteを`(code << 32) | site`にして返す。符号は0でない。Rustの包み`enter`は、これを`Result<(), Fatal>`に直す
 - `Thunk`は既定の規約の関数`unsafe extern "C" fn(ctx, entry, argv)`である。thunkは`argv`から引数を読み、`entry`を呼び、結果を`argv`に書き戻す。stubはthunkをCの規約で呼び、emlのコードの規約については何も知らない
 - thunkは`eml_native`が作る (`thunk::define_thunk`)。引数の数ごとでなく、引数の種類と結果の種類の並びごとに1つである。emlの関数のCraneliftのシグネチャは`tail (ctx, 葉...) -> 葉...`で、`tail`の呼び出し規約を使い、最初が`ctx`の語、続くそれぞれの葉が`i64`か`f64`で、結果も葉である。Rustからemlの関数に入るのはthunkを通してだけである。thunkは引数iを`argv[i]`から読み、関数を間接に呼び、結果jを`argv[j]`に書く。`tail`の規約を書くのは`abi::tail_signature`だけ、importを宣言するのは`abi::declare_import`だけである。Cの関数のimportのシグネチャは`eml_clink::c_signature`が作る
-- emlのコード、adapter、moduleの補助の関数、thunkは、どれも1つの関数`abi::isa`のフラグでコンパイルする。`opt_level`は`speed`である。`preserve_frame_pointers`を立てるのは、生成したコードからRustの呼び出し元までフレームポインタの鎖をたどれるようにするためである (下のフレームの記録)。stack probeはinline (`enable_probestack`と`probestack_strategy=inline`) にし、1ページより大きいフレームがガードページに順に触れるようにする。Windowsはスタックをガードページ1枚ずつ伸ばすので、これが要る。`is_pic`はAOTだけが立てる。JITでは、ローダーはPC相対のアドレスの参照を、x86-64でもaarch64でも±2 GiBの中でだけ解決する。1つのmoduleのコードとデータはすべて、`abi::JIT_REGION_BYTES` (128 MiB) の1つの予約した領域 (cranelift-jitの`ArenaMemoryProvider`) に置き、`abi::jit_builder`がその領域を`isa(false)`のISAと一緒に作る。だから`is_pic=false`が出すデータの記号と関数へのPC相対の参照は、いつも届く。128 MiBはaarch64の`bl`の届く範囲なので、moduleの中の呼び出しにveneerは要らない。Windowsは予約の全体をコミットするので、領域をこれより大きくしない。領域が尽きたら、読み込みは誤りで失敗する。import (`eml_nrt`のエントリ、libcall、Cの関数) は絶対アドレスで参照するので、領域の近くになくてよい。関数ごとにフラグを上書きする手も、大きさで`opt_level`を下げるしきい値もない。VMが使うCの橋渡しの関数は`eml_clink`が作るもので、emlのコードではなく、自分のmoduleとフラグを持つ ([コンパイラの構成](../implementation/architecture.md)の「`eml_clink`の内部」)。そのコードは記号を名指さず、受け取ったアドレスを通してCの関数を呼ぶので、領域の規則は要らない ([VM](vm.md)の「橋渡しの関数」)
+- emlのコード、adapter、moduleの補助の関数、thunkは、どれも1つの関数`abi::isa`のフラグでコンパイルする。`opt_level`は`speed`である。`preserve_frame_pointers`を立てるのは、生成したコードからRustの呼び出し元までフレームポインタの鎖をたどれるようにするためである (下のフレームの記録)。stack probeはinline (`enable_probestack`と`probestack_strategy=inline`) にし、1ページより大きいフレームがガードページに順に触れるようにする。Windowsはスタックをガードページ1枚ずつ伸ばすので、これが要る。Craneliftのverifier (`enable_verifier`) は、debug assertionsを持つビルドでだけ走らせる。devのプロファイルはdebug assertionsを持つので、どのテストもCIのどのジョブも、すべての関数を確かめる。Core IRとLIRのverifierと同じ規則である。verifierはCLIFの形が正しいことを確かめるもので、メモリ安全の境界ではなく、生成したコードはこれに頼らない。`eml_clink`のCの橋渡しの関数も同じ規則に従う。`is_pic`はAOTだけが立てる。JITでは、ローダーはPC相対のアドレスの参照を、x86-64でもaarch64でも±2 GiBの中でだけ解決する。1つのmoduleのコードとデータはすべて、`abi::JIT_REGION_BYTES` (128 MiB) の1つの予約した領域 (cranelift-jitの`ArenaMemoryProvider`) に置き、`abi::jit_builder`がその領域を`isa(false)`のISAと一緒に作る。だから`is_pic=false`が出すデータの記号と関数へのPC相対の参照は、いつも届く。128 MiBはaarch64の`bl`の届く範囲なので、moduleの中の呼び出しにveneerは要らない。Windowsは予約の全体をコミットするので、領域をこれより大きくしない。領域が尽きたら、読み込みは誤りで失敗する。import (`eml_nrt`のエントリ、libcall、Cの関数) は絶対アドレスで参照するので、領域の近くになくてよい。関数ごとにフラグを上書きする手も、大きさで`opt_level`を下げるしきい値もない。VMが使うCの橋渡しの関数は`eml_clink`が作るもので、emlのコードではなく、自分のmoduleとフラグを持つ ([コンパイラの構成](../implementation/architecture.md)の「`eml_clink`の内部」)。そのコードは記号を名指さず、受け取ったアドレスを通してCの関数を呼ぶので、領域の規則は要らない ([VM](vm.md)の「橋渡しの関数」)
 - stubにも生成したコードにも、どの対象でも巻き戻しの情報を登録しない。Rustのpanicがそれらをまたいで巻き戻ることはない。`shim`がエントリの中で捕まえるためである (上の「包みの本体」)
 - `JmpBuf`はstub自身のフレームの一部で、`prev`、`ctx`と、呼ばれる側が保存するレジスタを持つ。stubは入るとき、呼ばれる側が保存するレジスタをすべてここに保存し、`buf.prev = ctx.jmp`、`ctx.jmp = &buf` (`CTX_JMP`の位置の欄) とつないでからthunkを呼ぶ。ふつうに戻るときとlongjmpの側では、`ctx.jmp`を`prev`に戻す。入れ子の`eml_enter`はそれぞれ自分のバッファを持ち、`prev`でつながる。asmの中のずれはすべて、`JmpBuf`の`size_of`と`offset_of!`、`CTX_JMP`から求めた`const`のオペランドで、asmの文字列に配置の数を書かない
 - 保存するレジスタはABIごとに決まる。AAPCS64ではx19〜x28、x29、x30、d8〜d15、SysV x86_64ではrbx、rbp、r12〜r15、Win64ではrbx、rbp、rdi、rsi、r12〜r15と、xmm6〜xmm15の128ビット全部である。制御のレジスタ (FPCR、x86-64のMXCSR) は保存しない。生成したコードも`eml_rt`もそれを変えないためである
@@ -322,6 +325,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - 生成したコードは、値を記号のPC相対のアドレスとロード1つで読む。マスクの項目は記号のアドレスだけを使い、ロードしない。だから関数のコードは自分の使う値だけを名指し、プログラムのほかの部分で変わる番号を持たない
 - finalizeの後、JITのホストは記号ごとに`DatumRow`を1つ`Image.data`に置き、記号のアドレスをその`slot`にする (「`Image`」)。実行系はrunごとに、最初のエントリの前に、物体を凍結した領域の不死の物体として作り、その語をslotに書く。エフェクトの番号とマスクの項目は物体にせず、そのままslotに書く。空の`MutArray`は、VMが定数にするのと同じ`eml_rows::constants::empty_mut_array`で作る。slotはマシンの領域とともに生きる
 - 物体は不死なので、インラインの`dup`と`decref`は0の数の枝を通り、何も呼ばない (「RC」)
+- `release`の`keep`のバイト (「データ」) は、moduleがバイトで中身を定義し、ローダーがロードのときに書かない、ただ1つのデータの物である。名前は`k:`の後ろに、走査する語ごとに、残す語なら`1`、ほかは`0`の数字を並べたものである。moduleはこれを書けない物として宣言し、バイトの並びに0を足して8バイトの倍数かつ8バイト以上にしたもので定義する。だから、生の欄だけの構築子のtokenを作る`release`が渡す空の並びの`k:`も、有効なアドレスを持つ。JITは書けない物を、finalizeのときに読み取り専用にするページに置く。ローダーはこれに書かず、`Image.data`にも行を置かない。名前は並びだけで決まり、同じ並びの`release`は記号1つを共有する
 - マシンがテストのために残すCLIFの文 (`NativeMachine::clif`) は、関数もデータの記号も記号の名前で書く。だから関数の文は、moduleの中の宣言の順によらない
 
 ## データ
@@ -331,11 +335,11 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - タグの`switch`では、`enum`のタグは値そのもの、`obj`のタグはヘッダの`meta`の語の16ビットのタグで、ロード1つとマスクで読む。`tobj`のタグは、即値の語ならその値、そうでなければヘッダのタグである。コードはタグを32ビットの値として`cranelift_frontend::Switch`で比べる。だから`Switch`が64ビットの値に足す、32ビットに収まるかの比較と分岐はない。範囲の外の値は、飛び先の表の`default`へ進む
 - 文字列の`switch`では、コードはscrutineeを、caseの順に各caseの文字列の定数と、`eml_x_StrEq`を呼んで比べる。このエントリは両方の文字列を借りる。最初に等しかったcaseへ進み、どれも等しくなければ`default`へ進む。リテラルの`switch`はいつも`default`を持つ ([LIR](lir.md)の「ブロックの列」)
 - `reuse`のある`con`は、まずtokenが空かを確かめる。空のtokenは0の語なので、分岐1つである。`in place`で空でないtokenなら、tokenの語をそのまま箱にする。速いモードのtokenは箱の語で、`Heap::reuse_in_place`は速いモードでは何も書かない ([オブジェクトモデル](object-model.md)の「検査モードの token」) ので、これはレジスタの移しで、呼び出しはない。`in place`でなければ`eml_rt_con_at(ctx, token, tag, scanned, raw, lin)`を呼び、ヘッダを書き直す。そのうえで、`reuse`が書かない印を付けていない欄だけを書く。箱は中身を消さないので、飛ばした欄には元の語が残っている。空のtokenなら`con`と同じに確保し、書かない印の欄も含めてどの欄も書く
-- `release x`は、即値を確かめずに`x`の数を読む。欄のある構築子の値はいつも箱だからである。数が1なら、`release`が残さない走査する欄の子をインラインの`decref`で手放し、`eml_rt_free_block`で箱を空ける。ほかの数では`eml_rt_is_last`を呼ぶ。最後の参照 (共有の数-1) なら同じ道を通る。そうでなければ、残す欄の子をインラインで`dup`し、`x`をインラインの`decref`で手放す。残す欄は、`unpack`、caseの欄、構造体の`unbox`がもう束縛した変数である ([LIR](lir.md)の「構造の規則」のR5)
-- tokenを作る`release`は、数が1のときだけ一意な道を通る。残さない子を手放し、箱の語をそのままtokenにする。`Heap::into_token`も速いモードでは何も書かないので、これもレジスタの移しで、呼び出しはない。ほかの数では上と同じく`eml_rt_is_last`を通り、tokenは空の語である
+- `release x`は、即値を確かめずに`x`の数を読む。欄のある構築子の値はいつも箱だからである。生成したコードは一意な道だけを持つ。数が1なら、`release`が残さない走査する欄の子をインラインの`decref`で手放し、`eml_rt_free_block`で箱を空ける。ほかの数では、冷たいブロックで`eml_rt_release(ctx, x, keep, n)`を1回呼ぶ。`keep`はその`release`の残す並びの`k:`の物のアドレスで、`n`はその並びの長さ、つまり走査する語の数である (「ヒープのエントリ」「値と定数」)。生の欄だけの構築子では並びは空で、`n`は0である。`release`は、tokenを作る形なら欄を何も残さなくてよい ([LIR](lir.md)の「verifier」)。`release`の下ろしは`eml_rt_is_last`を呼ばず、インラインの`dup`を展開しない。残す欄は、`unpack`、caseの欄、構造体の`unbox`がもう束縛した変数である ([LIR](lir.md)の「構造の規則」のR5)。debugのビルドでは、下ろしは`release`が書く欄の数が構築子の欄の数と等しいことを確かめる
+- tokenを作る`release`は、数が1のときだけ一意な道を通る。残さない子を手放し、箱の語をそのままtokenにする。`Heap::into_token`も速いモードでは何も書かないので、これもレジスタの移しで、呼び出しはない。ほかの数では上と同じ冷たいブロックで`eml_rt_release`を呼び、tokenは空の語である
 - `drop_token`は`eml_rt_drop_token`を呼ぶ。空のtokenでは何もしない
 - 構造体の`unbox`と`release unboxed`は、まず箱が`BigInt`かを、ロード1つと比較で確かめる。ダミーは`BigInt`で、構造体の箱はいつも`Data`である ([オブジェクトモデル](object-model.md)の「ダミーの値」)。ダミーなら、`unbox`は数える葉に箱の語を、生の葉にビット列0を束縛し、`release unboxed`は何もせずに空のtokenを定義する。そうでなければ、`unbox`は葉ごとにロード1つで、`release unboxed`はふつうの`release`である
-- 速い道の費用: 欄の読み書きは、決まったずれでのロードかストア1つである。割り当ては呼び出し1つと、欄ごとのストア1つである。`int`の`box`はシフト、シフト、比較、分岐、`or`で、`unbox`は確かめ、分岐、シフトである。タグの`switch`は、`enum`なら値そのもの、`obj`ならロード1つとマスクで、`tobj`ではその前に即値の確かめがあり、その後が`Switch`である。定数は、そのデータの記号からのロード1つである。`release`はロード1つと比較で、一意な道では捨てる子ごとにインラインの`decref`、その後に呼び出し1つ (`eml_rt_free_block`) か、呼び出しなし (箱がtokenになる) である。reuseの`con`は、tokenの確かめと、書かない印のない欄のストアで、その場のreuseなら呼び出しはなく、別の構築子なら呼び出し1つ (`eml_rt_con_at`) である
+- 速い道の費用: 欄の読み書きは、決まったずれでのロードかストア1つである。割り当ては呼び出し1つと、欄ごとのストア1つである。`int`の`box`はシフト、シフト、比較、分岐、`or`で、`unbox`は確かめ、分岐、シフトである。タグの`switch`は、`enum`なら値そのもの、`obj`ならロード1つとマスクで、`tobj`ではその前に即値の確かめがあり、その後が`Switch`である。定数は、そのデータの記号からのロード1つである。`release`はロード1つと比較で、一意な道では捨てる子ごとにインラインの`decref`、その後に呼び出し1つ (`eml_rt_free_block`) か、呼び出しなし (箱がtokenになる) である。一意でない道は、冷たいブロックの呼び出し1つ (`eml_rt_release`) である。reuseの`con`は、tokenの確かめと、書かない印のない欄のストアで、その場のreuseなら呼び出しはなく、別の構築子なら呼び出し1つ (`eml_rt_con_at`) である
 
 ## 関数の値
 

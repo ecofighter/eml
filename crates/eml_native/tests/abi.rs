@@ -920,3 +920,10 @@ fn an_import_gives_its_address() {
     assert_eq!(wide(), -5);
     release(m);
 }
+
+/// Craneliftのverifierは、Core IRとLIRのverifierと同じく、debug assertionsを持つビルドでだけ走る。
+#[test]
+fn the_verifier_runs_only_with_debug_assertions() {
+    let isa = eml_native::abi::isa(false).expect("the machine has an ISA");
+    assert_eq!(isa.flags().enable_verifier(), cfg!(debug_assertions));
+}

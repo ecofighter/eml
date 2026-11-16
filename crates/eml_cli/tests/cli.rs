@@ -1912,6 +1912,66 @@ fn native_rejects_with_e0004_and_exit_1() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `--load-only`は検査とコンパイルとロードをして、`main`を実行せずに終了コード0で終わる。
+#[test]
+fn load_only_loads_without_running_main() {
+    let dir = temp_project(
+        "load-only",
+        &[(
+            "a.em",
+            "main : Unit -> <IO> Unit\nmain () = println \"hello\"\n",
+        )],
+    );
+    let outputs = native_each(
+        &[
+            (&["run", "--load-only", "a.em"], &[]),
+            (&["run", "--load-only", "--debug-heap", "a.em"], &[]),
+            (&["run", "--native", "--load-only", "a.em"], &[]),
+        ],
+        &dir,
+    );
+    for output in outputs {
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// 誤りのあるファイルは、フラグがないときと同じに診断を出して終了コード1で終わる。
+#[test]
+fn load_only_still_reports_errors() {
+    let dir = temp_project("load-only-errors", &[("a.em", "main () = 1 +\n")]);
+    let outputs = native_each(
+        &[
+            (&["run", "--load-only", "a.em"], &[]),
+            (&["run", "--native", "--load-only", "a.em"], &[]),
+        ],
+        &dir,
+    );
+    for output in outputs {
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("[E0011]"),
+            "{output:?}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// ネイティブのコードが断るプログラムは、`--load-only`でもE0004で終了コード1になる。
+#[test]
+fn load_only_with_native_still_rejects_with_e0004() {
+    let dir = temp_project("load-only-rejects", &[("a.em", PAR)]);
+    let output = native(&["run", "--native", "--load-only", "a.em"], &dir, &[]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("[E0004]"), "{stderr}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn native_conflicts_with_debug_heap_and_stats() {
     let dir = temp_project("native-conflicts", &[("a.em", PAR)]);

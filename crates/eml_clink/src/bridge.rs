@@ -134,6 +134,17 @@ fn new_module() -> Result<JITModule, LinkError> {
     flags
         .set("opt_level", "speed")
         .map_err(|_| unsupported(NO_ISA))?;
+    // emlのコードと同じく、verifierはdebug assertionsを持つビルドでだけ走らせる (docs/spec/native.md の「`eml_enter`」)
+    flags
+        .set(
+            "enable_verifier",
+            if cfg!(debug_assertions) {
+                "true"
+            } else {
+                "false"
+            },
+        )
+        .map_err(|_| unsupported(NO_ISA))?;
     flags
         .set("is_pic", "false")
         .map_err(|_| unsupported(NO_ISA))?;

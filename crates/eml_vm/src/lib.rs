@@ -88,7 +88,11 @@ pub fn execute(
     let loaded = machine
         .load(program, linked)
         .map_err(|error| compile_error(program, error))?;
-    let finished = machine.run(loaded.entry)?;
+    let finished = if config.load_only {
+        Finished::not_run()
+    } else {
+        machine.run(loaded.entry)?
+    };
     machine.close()?;
     Ok(finished)
 }
