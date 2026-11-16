@@ -1,11 +1,13 @@
 -- nbody。Benchmarks Game の5つの天体を引数の回数 (既定は 1000) だけ進め、進める前と後のエネルギーを書く。
 -- ベクトルは `Vec3` の値で書く。計算の途中の `Vec3` は構造体なので確保しない。配列に書く `Vec3` は箱に入る
--- (docs/implementation/benchmarks.md の「配列に書く構造体の箱」)。bench/numeric/nbody.py は、同じ順で浮動小数の演算を行う Python の実装である
+-- (docs/implementation/benchmarks.md の「配列に書く構造体の箱」)。質量は要素が生の語の `UnboxedArray Float` で持ち、読むたびに
+-- 箱を開けない。bench/numeric/nbody.py は、同じ順で浮動小数の演算を行う Python の実装である
 import Array
 import Env
 import Float
 import MutArray
 import String
+import UnboxedArray
 
 data Vec3 =
   | Vec3 Float Float Float
@@ -52,9 +54,9 @@ velocities () =
     , scale (Vec3 2.68067772490389322e-03 1.62824170038242295e-03 (-9.51592254519715870e-05)) days_per_year
     ]
 
-masses : Unit -> <Panic> Array Float
+masses : Unit -> <Panic> UnboxedArray Float
 masses () =
-  Array.from_list
+  UnboxedArray.from_list
     [ solar_mass
     , 9.54791938424326609e-04 * solar_mass
     , 2.85885980666130812e-04 * solar_mass
@@ -63,28 +65,28 @@ masses () =
     ]
 
 -- 全体の運動量が 0 になるように、太陽の速度を決める
-offset : Array Vec3 -> Array Float -> <Panic> Array Vec3
+offset : Array Vec3 -> UnboxedArray Float -> <Panic> Array Vec3
 offset vel mass =
   var p = Vec3 0.0 0.0 0.0
-  for 0 (Array.length mass) (fn i -> p <- add p (scale vel[i] mass[i]))
+  for 0 (UnboxedArray.length mass) (fn i -> p <- add p (scale vel[i] (UnboxedArray.get mass i)))
   let Vec3 px py pz = p
   Array.set vel 0 (Vec3 (0.0 - px / solar_mass) (0.0 - py / solar_mass) (0.0 - pz / solar_mass))
 
-energy : Array Vec3 -> Array Vec3 -> Array Float -> <Panic> Float
+energy : Array Vec3 -> Array Vec3 -> UnboxedArray Float -> <Panic> Float
 energy pos vel mass =
-  let n = Array.length mass
+  let n = UnboxedArray.length mass
   var e = 0.0
   for 0 n (fn i ->
-    e <- e + 0.5 * mass[i] * dot vel[i] vel[i]
+    e <- e + 0.5 * UnboxedArray.get mass i * dot vel[i] vel[i]
     for (i + 1) n (fn j ->
       let d = sub pos[i] pos[j]
-      e <- e - mass[i] * mass[j] / Float.sqrt (dot d d)))
+      e <- e - UnboxedArray.get mass i * UnboxedArray.get mass j / Float.sqrt (dot d d)))
   e
 
 -- 配列の変数は範囲の最後の式でしか取り出せない (E3008) ので、進める計算と最後の表示を1つの関数に書く
-simulate : Int -> Array Vec3 -> Array Vec3 -> Array Float -> <IO, Panic> Unit
+simulate : Int -> Array Vec3 -> Array Vec3 -> UnboxedArray Float -> <IO, Panic> Unit
 simulate steps pos0 vel0 mass =
-  let n = Array.length mass
+  let n = UnboxedArray.length mass
   var pos = Array.thaw pos0
   var vel = Array.thaw vel0
   for 0 steps (fn _ ->
@@ -93,12 +95,12 @@ simulate steps pos0 vel0 mass =
         let d = sub pos[i] pos[j]
         let d2 = dot d d
         let mag = dt / (d2 * Float.sqrt d2)
-        vel[i] <- sub vel[i] (scale d (mass[j] * mag))
-        vel[j] <- add vel[j] (scale d (mass[i] * mag))))
+        vel[i] <- sub vel[i] (scale d (UnboxedArray.get mass j * mag))
+        vel[j] <- add vel[j] (scale d (UnboxedArray.get mass i * mag))))
     for 0 n (fn i -> pos[i] <- add pos[i] (scale vel[i] dt)))
   report (MutArray.freeze pos) (MutArray.freeze vel) mass
 
-report : Array Vec3 -> Array Vec3 -> Array Float -> <IO, Panic> Unit
+report : Array Vec3 -> Array Vec3 -> UnboxedArray Float -> <IO, Panic> Unit
 report pos vel mass = println (Float.to_fixed 9 (energy pos vel mass))
 
 main : Unit -> <IO, Panic> Unit
