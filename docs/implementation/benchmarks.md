@@ -424,13 +424,13 @@ C/Rust との比
 
 ### `bench/native.sh`
 
-`bench/native.sh`は`bench/`のすべてのプログラムを、VM (`eml run`) とネイティブ (`eml run --native`) の両方で、release ビルドの`EML_WORKERS=1`で3回ずつ走らせ、`instructions retired`と実時間の中央値を出す。測り方は`bench/run.sh`と同じである。測る前に2つの標準出力を比べ、違えば数値の代わりに`differs`と出す。`--native`がE0004で断るプログラムは`rejected`と出す。比は、ネイティブの命令の数をVMの命令の数で割った値で、どちらも`empty` (フロントエンド、コード生成、起動の分) の命令の数を引いてから割る。引くのは`empty`の分だけなので、各プログラム自身のコンパイルの費用は行に残り、実行の短い行ではネイティブの比が大きめに出る。数は記録で、門ではない。実時間を Python と比べる数値計算の行は、`bench/scripts.sh`の数値計算の表の`(native)`の行にある (上の「スクリプトの計測」)。
+`bench/native.sh`は`bench/`のすべてのプログラムを、VM (`eml run`) とネイティブ (`eml run --native`) の両方で、release ビルドの`EML_WORKERS=1`で、プロセス全体と`--load-only` (プログラムを実行系にロードして、`main`を実行せずに終わる) を3回ずつ走らせ、`instructions retired`と実時間の中央値を出す。測り方は`bench/run.sh`と同じである。測る前に2つの標準出力を比べ、違えば数値の代わりに`differs`と出す。`--native`がE0004で断るプログラムは`rejected`と出す。表は、プロセス全体の命令の数 (「VM 命令」「native 命令」) と、2つのロードの命令の数 (「VM ロード」「native ロード」) を持つ。ネイティブのロードは、フロントエンド、コンパイラ、機械語の生成とその書き込みのすべてを含み、`--load-only`もエントリのthunkまでコンパイルする。比は「native / VM (実行)」の1つで、(native 命令 - native ロード) / (VM 命令 - VM ロード)、つまりそのプログラム自身のロードを引いた実行の分どうしの比である。ネイティブのコードはリリースのための実行系で、その物差しはロードを除いた実行である。JITのコンパイルを実行に混ぜた比は、この比べに答えない。全体の命令の数とロードは表に残るので、全体の比は行から計算できる。実時間の列はプロセス全体の値である。数は記録で、門ではない。実時間を Python と比べる数値計算の行は、`bench/scripts.sh`の数値計算の表の`(native)`の行にある (上の「スクリプトの計測」)。
 
 ネイティブの実行系には仕事の数を数える仕組みがなく、この表のために生成するコードに数える命令を足すこともしない。そこで、最後の4列には同じプログラムのVMの`RunStats` (`--stats`。`rc_increments`、`rc_decrements`、`allocations`、`reuses`) を置く。列の名前に`(VM)`と付けたとおり、これはプログラムがヒープに対してする仕事の多さを表すもので、ネイティブのコードが実際にした仕事ではない。`RunStats`には解放の数がない。`--stats`は検査モードなので、命令の数を測る速いモードと数が少し違うことがある。
 
 `fib`は呼び出しの多い行である。`fib 25`は242785回の呼び出しで、実行の分は、VMが90254169命令 (1回あたり約372)、ネイティブが15681397命令 (1回あたり約65) である。実時間はどの行も0.02秒以下で、0.01秒の単位では差が見えにくいので、行の比べには命令の数を使う。
 
-`ep_float`と`nbody`は、ネイティブのコードがエフェクトの操作とhandlerを下ろすので、ネイティブで動く。`ep_float`は特殊化しないhandlerの下で操作を起こし、比は0.70である。`nbody`は`for`に渡す閉包の中で`var`を読み書きするので、その読み書きは操作の呼び出しのまま残る。ネイティブのコードは操作ごとに実行系のエントリを呼び、実行の分の命令はVMの1.50倍である。`state`、`state_loop`、`state_loop_by_hand`、`state_nested`、`fold_state`、`iter_generate`、`iter_pipeline`、`iter_pipeline_by_hand`もhandlerを使うが、最適化がhandlerを丸ごと消すので、ネイティブのコードにエフェクトの操作はない。
+`ep_float`と`nbody`は、ネイティブのコードがエフェクトの操作とhandlerを下ろすので、ネイティブで動く。`ep_float`は特殊化しないhandlerの下で操作を起こすので、ネイティブのコードは操作ごとに実行系のエントリを呼ぶ。`nbody`は`for`に渡す閉包の中で`var`を読み書きするが、最適化が4つの`var`のhandlerを状態を渡す形にするので、`nbody`のLIRのどのループにもエフェクトの操作はなく、状態は`for`の関数の引数と結果で運ばれる。`state`、`state_loop`、`state_loop_by_hand`、`state_nested`、`fold_state`、`iter_generate`、`iter_pipeline`、`iter_pipeline_by_hand`もhandlerを使うが、最適化がhandlerを丸ごと消すので、ネイティブのコードにエフェクトの操作はない。
 
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.2.1 (26B131)

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# 基準のプログラムを release ビルドの `eml run` (VM) と `eml run --native` で3回ずつ走らせ、実行した命令の数と実時間の
-# 中央値、native / VM の比 (実行の分どうし) を Markdown の表で出す (docs/implementation/benchmarks.md の「ネイティブの数値」)。
+# 基準のプログラムを release ビルドの `eml run` (VM) と `eml run --native` で、プロセス全体と `--load-only` (ロードだけ) の
+# 両方を3回ずつ走らせ、命令の数と実時間の中央値、native / VM の比 (実行の分どうし) を Markdown の表で出す
+# (docs/implementation/benchmarks.md の「ネイティブの数値」)。
 # 数は記録で、門ではない。ネイティブが断るプログラムは `rejected`、VM と標準出力が違うプログラムは `differs` と出す。
 # 命令の数は macOS の `/usr/bin/time -l` の `instructions retired` で測る (bench/run.sh と同じ)。
 set -euo pipefail
@@ -70,17 +71,10 @@ echo "- OS: macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
 echo "- rustc: $(rustc -V)"
 echo "- コミット: $(git -C "$root" describe --always --dirty --abbrev=7)"
 echo
-echo "| プログラム | VM 命令 | native 命令 | native / VM (実行の分) | VM 実時間 (s) | native 実時間 (s) | dup (VM) | decref (VM) | alloc (VM) | reuse (VM) |"
-echo "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+echo "| プログラム | VM 命令 | native 命令 | VM ロード | native ロード | native / VM (実行) | VM 実時間 (s) | native 実時間 (s) | dup (VM) | decref (VM) | alloc (VM) | reuse (VM) |"
+echo "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
 
-vm_base=0
-native_base=0
-# `empty` を先に測る (比の基準になる)
-files=("$root/bench/empty.em")
 for file in "$root"/bench/*.em; do
-  [[ "$file" == "$root/bench/empty.em" ]] || files+=("$file")
-done
-for file in "${files[@]}"; do
   name="$(basename "$file" .em)"
   # 標準出力の比べは、断られたかどうかの判定も兼ねる。断りは終了コード1と標準エラーの E0004 で、実行時の失敗と区別する
   vm_err="$(mktemp)"
@@ -106,30 +100,26 @@ for file in "${files[@]}"; do
   rm -f "$native_err"
 
   if (( rejected )); then
-    echo "| \`$name\` | | rejected | rejected | | | | | | |"
+    echo "| \`$name\` | | rejected | | | rejected | | | | | | |"
     continue
   fi
   if [[ "$vm_out" != "$native_out" ]]; then
-    echo "| \`$name\` | differs | differs | differs | | | | | | |"
+    echo "| \`$name\` | differs | differs | | | differs | | | | | | |"
     continue
   fi
 
   read -r vm_count vm_seconds <<<"$(measure "" "$file")"
   read -r native_count native_seconds <<<"$(measure --native "$file")"
+  read -r vm_load _ <<<"$(measure --load-only "$file")"
+  read -r native_load _ <<<"$(measure "--native --load-only" "$file")"
   stats="$(limited "$eml" run --stats "$file" 2>&1 >/dev/null | grep '^stats:' || true)"
-  if [[ "$name" == empty ]]; then
-    vm_base="$vm_count"
-    native_base="$native_count"
-    ratio=""
+  vm_part=$(( vm_count - vm_load ))
+  native_part=$(( native_count - native_load ))
+  # 実行の分が 0 以下なら、比は意味を持たない
+  if (( vm_part > 0 && native_part > 0 )); then
+    ratio="$(awk -v n="$native_part" -v v="$vm_part" 'BEGIN { printf "%.2f", n / v }')"
   else
-    vm_part=$(( vm_count - vm_base ))
-    native_part=$(( native_count - native_base ))
-    # 実行の分が 0 以下なら、比は意味を持たない
-    if (( vm_part > 0 && native_part > 0 )); then
-      ratio="$(awk -v n="$native_part" -v v="$vm_part" 'BEGIN { printf "%.2f", n / v }')"
-    else
-      ratio="-"
-    fi
+    ratio="-"
   fi
-  echo "| \`$name\` | $vm_count | $native_count | $ratio | $vm_seconds | $native_seconds | $(stat "$stats" rc_increments) | $(stat "$stats" rc_decrements) | $(stat "$stats" allocations) | $(stat "$stats" reuses) |"
+  echo "| \`$name\` | $vm_count | $native_count | $vm_load | $native_load | $ratio | $vm_seconds | $native_seconds | $(stat "$stats" rc_increments) | $(stat "$stats" rc_decrements) | $(stat "$stats" allocations) | $(stat "$stats" reuses) |"
 done
