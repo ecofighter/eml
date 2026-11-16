@@ -3,7 +3,9 @@
 #![cfg(not(miri))]
 use std::ffi::c_void;
 
-use crate::common::native::{clif, clif_linked, program};
+use eml_cabi::Linked;
+
+use crate::common::native::{clif, clif_linked, machine, program};
 
 #[test]
 fn an_arith_row() {
@@ -1427,4 +1429,261 @@ fn the_raise_helper() {
         return
     }
     ");
+}
+
+/// 欄0を残し欄1を手放す`release`。`f`はtokenを作らない形で、`g`はtokenを作る形である。
+const RELEASES: &str = "\
+layout P { P(obj, obj, int) }
+fn f(x.0: obj) -> obj {
+  unpack x.0 P #0(a.1: obj, b.2: obj, n.3: int)
+  release x.0 P #0(a.1, _, _)
+  return a.1
+}
+fn g(x.0: obj) -> obj {
+  unpack x.0 P #0(a.1: obj, b.2: obj, n.3: int)
+  let r.4: token = release x.0 P #0(a.1, _, _)
+  drop_token r.4
+  return a.1
+}
+";
+
+#[test]
+fn a_release() {
+    // 生成したコードは一意な道だけを持つ。数が1なら、残さない欄1をインラインの`decref`で手放し、箱を空けるか箱の語を
+    // tokenにする。ほかの数では、冷たいブロックで`eml_rt_release(ctx, x, k:10, 2)`を1回呼び、tokenは空である
+    // (docs/spec/native.md の「データ」)
+    insta::assert_snapshot!(clif(RELEASES, "f"), @"
+    function %f:f(i64, i64) -> i64 tail {
+        gv0 = symbol colocated %k:10
+        sig0 = (i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) c
+        sig3 = (i64, i64) c
+        sig4 = (i64, i64, i64, i64) c
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_rt_decref sig2
+        fn3 = %eml_rt_free_block sig3
+        fn4 = %eml_rt_release sig4
+
+    block0(v0: i64, v1: i64):
+        v2 = load.i64 notrap aligned v0+40
+        v3 = load.i32 notrap aligned v2
+        v4 = iconst.i32 0
+        v5 = icmp ne v3, v4  ; v4 = 0
+        v6 = get_stack_pointer.i64 
+        v7 = load.i64 notrap aligned v0+48
+        v8 = icmp ult v6, v7
+        v9 = bor v5, v8
+        brif v9, block1, block3
+
+    block1 cold:
+        v10 = func_addr.i64 fn0
+        v11 = iconst.i64 0
+        v12 = call fn1(v0, v10, v11)  ; v11 = 0
+        v13 = iconst.i64 0
+        v14 = icmp eq v12, v13  ; v13 = 0
+        brif v14, block3, block2
+
+    block2 cold:
+        call fn2(v0, v1)
+        v15 = iconst.i64 1
+        return v15  ; v15 = 1
+
+    block3:
+        v16 = load.i64 notrap aligned v1+8
+        v17 = load.i64 notrap aligned v1+16
+        v18 = load.i64 notrap aligned v1+24
+        v19 = load.i32 notrap aligned v1
+        v20 = iconst.i32 1
+        v21 = icmp eq v19, v20  ; v20 = 1
+        brif v21, block5, block6
+
+    block5:
+        v22 = load.i64 notrap aligned v1+16
+        v23 = load.i32 notrap aligned v22
+        v24 = iconst.i32 -2
+        v25 = iadd v23, v24  ; v24 = -2
+        v26 = iconst.i32 0x7fff_fffd
+        v27 = icmp ult v25, v26  ; v26 = 0x7fff_fffd
+        brif v27, block7, block8
+
+    block7:
+        v28 = iconst.i32 -1
+        v29 = iadd.i32 v23, v28  ; v28 = -1
+        store notrap aligned v29, v22
+        jump block10
+
+    block8:
+        brif.i32 v23, block9, block10
+
+    block9 cold:
+        call fn2(v0, v22)
+        jump block10
+
+    block10:
+        call fn3(v0, v1)
+        jump block4
+
+    block6 cold:
+        v30 = symbol_value.i64 gv0
+        v31 = iconst.i64 2
+        call fn4(v0, v1, v30, v31)  ; v31 = 2
+        jump block4
+
+    block4:
+        return v16
+    }
+    ");
+    insta::assert_snapshot!(clif(RELEASES, "g"), @"
+    function %f:g(i64, i64) -> i64 tail {
+        gv0 = symbol colocated %k:10
+        sig0 = (i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) c
+        sig3 = (i64, i64, i64, i64) c
+        sig4 = (i64, i64) c
+        fn0 = colocated %f:g sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_rt_decref sig2
+        fn3 = %eml_rt_release sig3
+        fn4 = %eml_rt_drop_token sig4
+
+    block0(v0: i64, v1: i64):
+        v2 = load.i64 notrap aligned v0+40
+        v3 = load.i32 notrap aligned v2
+        v4 = iconst.i32 0
+        v5 = icmp ne v3, v4  ; v4 = 0
+        v6 = get_stack_pointer.i64 
+        v7 = load.i64 notrap aligned v0+48
+        v8 = icmp ult v6, v7
+        v9 = bor v5, v8
+        brif v9, block1, block3
+
+    block1 cold:
+        v10 = func_addr.i64 fn0
+        v11 = iconst.i64 0
+        v12 = call fn1(v0, v10, v11)  ; v11 = 0
+        v13 = iconst.i64 0
+        v14 = icmp eq v12, v13  ; v13 = 0
+        brif v14, block3, block2
+
+    block2 cold:
+        call fn2(v0, v1)
+        v15 = iconst.i64 1
+        return v15  ; v15 = 1
+
+    block3:
+        v16 = load.i64 notrap aligned v1+8
+        v17 = load.i64 notrap aligned v1+16
+        v18 = load.i64 notrap aligned v1+24
+        v20 = load.i32 notrap aligned v1
+        v21 = iconst.i32 1
+        v22 = icmp eq v20, v21  ; v21 = 1
+        brif v22, block5, block6
+
+    block5:
+        v23 = load.i64 notrap aligned v1+16
+        v24 = load.i32 notrap aligned v23
+        v25 = iconst.i32 -2
+        v26 = iadd v24, v25  ; v25 = -2
+        v27 = iconst.i32 0x7fff_fffd
+        v28 = icmp ult v26, v27  ; v27 = 0x7fff_fffd
+        brif v28, block7, block8
+
+    block7:
+        v29 = iconst.i32 -1
+        v30 = iadd.i32 v24, v29  ; v29 = -1
+        store notrap aligned v30, v23
+        jump block10
+
+    block8:
+        brif.i32 v24, block9, block10
+
+    block9 cold:
+        call fn2(v0, v23)
+        jump block10
+
+    block10:
+        jump block4(v1)
+
+    block6 cold:
+        v31 = symbol_value.i64 gv0
+        v32 = iconst.i64 2
+        call fn3(v0, v1, v31, v32)  ; v32 = 2
+        v33 = iconst.i64 0
+        jump block4(v33)  ; v33 = 0
+
+    block4(v19: i64):
+        call fn4(v0, v19)
+        return v16
+    }
+    ");
+}
+
+#[test]
+fn keep_bytes_are_read_only_and_not_loaded() {
+    // `keep`のバイトは中身で名前を決めた読み取り専用の物で、ローダーは書かないので`Image.data`に行を持たない。物は0を
+    // 足して8バイトの倍数かつ8バイト以上にする。生の欄だけの構築子のtokenを作る`release`は何も残さず、走査する語も
+    // ないので、`k:`の8バイトの0を渡す。`f`と`g`は同じ並びなので、物`k:10`を1つ共有する (docs/spec/native.md の
+    // 「値と定数」)
+    let fields = ["obj"; 9].join(", ");
+    let bound: Vec<String> = (0..9).map(|i| format!("a{i}.{}: obj", i + 1)).collect();
+    let text = format!(
+        "layout N {{ N({fields}) }}
+layout S {{ S(int, int) }}
+{RELEASES}fn h(x.0: obj) -> obj {{
+  unpack x.0 N #0({bound})
+  release x.0 N #0(a0.1, _, _, _, _, _, _, _, a8.9)
+  decref a8.9
+  return a0.1
+}}
+fn s(x.0: obj) -> int {{
+  unpack x.0 S #0(n.1: int, m.2: int)
+  let r.3: token = release x.0 S #0(_, _)
+  drop_token r.3
+  let c.4: obj = const \"c\"
+  decref c.4
+  return n.1
+}}
+",
+        bound = bound.join(", ")
+    );
+    let mut m = machine();
+    m.load(&program(&text), &Linked::default()).unwrap();
+    let symbols = m.data_symbols();
+    let mut keeps: Vec<(String, *const u8, Vec<u8>)> = symbols
+        .iter()
+        .filter(|(name, _, _)| name.starts_with("k:"))
+        .map(|&(ref name, at, writable)| {
+            assert!(!writable, "{name}");
+            let size = if name.len() > 2 + 8 { 16 } else { 8 };
+            // SAFETY: マシンが生きている間生きている、`size`バイトの物である
+            let bytes = unsafe { std::slice::from_raw_parts(at, size) }.to_vec();
+            (name.clone(), at, bytes)
+        })
+        .collect();
+    keeps.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut nine = vec![0; 16];
+    (nine[0], nine[8]) = (1, 1);
+    assert_eq!(
+        keeps
+            .iter()
+            .map(|(name, _, bytes)| (name.as_str(), bytes.clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("k:", vec![0; 8]),
+            ("k:10", vec![1, 0, 0, 0, 0, 0, 0, 0]),
+            ("k:100000001", nine)
+        ]
+    );
+    let image = m.image().unwrap();
+    // SAFETY: マシンが生きている間、`Image`の表は生きていて変わらない
+    let data = unsafe { image.data.as_slice() };
+    assert_eq!(data.len(), symbols.len() - keeps.len());
+    for row in data {
+        let slot = row.slot.cast_const().cast::<u8>();
+        assert!(keeps.iter().all(|&(_, at, _)| slot != at));
+    }
+    m.close();
 }

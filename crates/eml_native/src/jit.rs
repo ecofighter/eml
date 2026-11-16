@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use cranelift_jit::JITModule;
-use cranelift_module::ModuleError;
+use cranelift_module::{Module, ModuleError};
 use eml_cabi::Linked;
 use eml_extern::ExternEffect;
 use eml_lir::{OpRet, Program, Repr};
@@ -165,6 +165,7 @@ impl Tables {
                     }
                     Datum::Effect(effect) => (DATUM_EFFECT, u64::from(number(*effect)), ""),
                     Datum::Mask(_) => (DATUM_MASK, 0, ""),
+                    Datum::Keep(_) => unreachable!("the loader never writes a keep datum"),
                 };
                 DatumRow {
                     kind,
@@ -524,6 +525,26 @@ impl NativeMachine {
     #[doc(hidden)]
     pub fn image(&self) -> Option<&Image> {
         self.tables.as_ref().map(|tables| &tables.image)
+    }
+
+    /// 読み込んだmoduleのどのデータの物についても、記号の名前、番地、moduleがそれを書ける物として宣言したか。テストが、
+    /// `keep`のバイトの物の置き場所と共有を確かめるためにある。
+    #[doc(hidden)]
+    pub fn data_symbols(&self) -> Vec<(String, *const u8, bool)> {
+        let (Some(_), Some(module)) = (&self.tables, &self.module) else {
+            return Vec::new();
+        };
+        module
+            .declarations()
+            .get_data_objects()
+            .map(|(id, declaration)| {
+                (
+                    declaration.linkage_name(id).into_owned(),
+                    module.get_finalized_data(id).0,
+                    declaration.writable,
+                )
+            })
+            .collect()
     }
 
     /// マシンを終え、領域を返す。`Drop`も同じことをする。

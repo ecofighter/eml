@@ -8,7 +8,8 @@ use eml_nrt::image::{DATUM_BIG_INT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_ST
 use eml_rt::{Ctx, Fast, Kind, Word, layout};
 
 use crate::common::native::{
-    Lin, Visit, agree, call, call_visited, clif, host, lin_bit, native, program, visit,
+    Lin, Visit, agree, agree_fast, agree_source, call, call_visited, clif, host, lin_bit, native,
+    program, visit,
 };
 
 const MAIN: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
@@ -576,4 +577,149 @@ fn g() -> obj lin {{
         let clif = clif(&text, function);
         assert!(clif.contains("%a:mut"), "{function} reads a:mut:\n{clif}");
     }
+}
+
+/// 走査する語が`n`個の形の`keep`の並び。何も残さない並びも含む。それはtokenを作る`release`だけが書ける。
+fn keep_patterns(n: usize) -> Vec<Vec<bool>> {
+    let mut patterns = vec![
+        vec![false; n],
+        vec![true; n],
+        (0..n).map(|i| i == 0).collect(),
+        (0..n).map(|i| i + 1 == n).collect(),
+        (0..n).map(|i| i % 2 == 0).collect(),
+        (0..n).map(|i| i % 2 == 1 || n == 1).collect(),
+        (0..n).map(|i| i % 3 == 1 || i + 1 == n).collect(),
+    ];
+    patterns.sort();
+    patterns.dedup();
+    patterns
+}
+
+/// 走査する語が`n`個と生の語が1つの形`W`の、`keep_patterns(n)`の並びごとの`release`を、tokenを作らない形と作る形で
+/// 流すプログラム。何も残さない並びは、tokenを作る形だけで流す。各並びで、新しい値を2回手放す。1回目は参照が2つあるので一意でない道を、2回目は一意な道を通る。
+/// 残した子は`println`が消費するので、出力が残した子の並びである。
+fn keep_program(n: usize) -> String {
+    let fields: Vec<&str> = std::iter::repeat_n("obj", n).chain(["int"]).collect();
+    let mut text = format!("layout W {{ W({}) }}\n", fields.join(", "));
+    text += "fn make(k.0: int) -> obj {\n";
+    for i in 0..n {
+        text += &format!(
+            "  let s{i}.{}: obj = extern \"Prelude.Show Int.show\"({})\n",
+            i + 1,
+            1000 + i
+        );
+    }
+    let made: Vec<String> = (0..n)
+        .map(|i| format!("s{i}.{}", i + 1))
+        .chain(["k.0".to_string()])
+        .collect();
+    text += &format!(
+        "  let w.{}: obj = con W #0({})\n  return w.{}\n}}\n",
+        n + 1,
+        made.join(", "),
+        n + 1
+    );
+    let bound: Vec<String> = (0..n)
+        .map(|i| format!("f{i}.{}: obj", i + 1))
+        .chain(["m.99: int".to_string()])
+        .collect();
+    let mut main = "fn entry$main() -> unit {\n".to_string();
+    let mut next = 0;
+    for (p, keep) in keep_patterns(n).iter().enumerate() {
+        let named: Vec<String> = keep
+            .iter()
+            .enumerate()
+            .map(|(i, &kept)| {
+                if kept {
+                    format!("f{i}.{}", i + 1)
+                } else {
+                    "_".to_string()
+                }
+            })
+            .chain(["_".to_string()])
+            .collect();
+        let shown: String = keep
+            .iter()
+            .enumerate()
+            .filter(|&(_, &kept)| kept)
+            .map(|(i, _)| {
+                format!(
+                    "  let u{i}.{}: unit = extern Prelude.println(f{i}.{})\n",
+                    200 + i,
+                    i + 1
+                )
+            })
+            .collect();
+        let forms: &[bool] = if keep.contains(&true) {
+            &[false, true]
+        } else {
+            &[true]
+        };
+        for &token in forms {
+            let name = format!("rel{p}{}", if token { "t" } else { "" });
+            let release = if token {
+                format!(
+                    "  let r.100: token = release x.0 W #0({})\n  drop_token r.100\n",
+                    named.join(", ")
+                )
+            } else {
+                format!("  release x.0 W #0({})\n", named.join(", "))
+            };
+            text += &format!(
+                "fn {name}(x.0: obj) -> unit {{\n  unpack x.0 W #0({})\n{release}{shown}  return ()\n}}\n",
+                bound.join(", ")
+            );
+            main += &format!(
+                "  let w.{a}: obj = call make({p})\n  dup w.{a}\n  let u.{b}: unit = call {name}(w.{a})\n  \
+                 let v.{c}: unit = call {name}(w.{a})\n",
+                a = next,
+                b = next + 1,
+                c = next + 2
+            );
+            next += 3;
+        }
+    }
+    main += "  return ()\n}\n";
+    text + &main
+}
+
+#[test]
+fn keep_patterns_up_to_64_fields_agree_with_the_vm() {
+    // 一意でない道の`eml_rt_release`は、VMの速いモードの`release`と同じ列でヒープの操作を呼ぶ。出力は残した子の並びで、
+    // 子を取り違えれば出力が、数を誤ればcensusが違いを見つける (docs/spec/native.md の「データ」)
+    // `n`が0の形は生の欄だけを持ち、tokenを作る`release`が何も残さずに8バイトの0の`k:`を渡す
+    for n in [0, 1, 2, 3, 8, 9, 31, 64] {
+        agree_fast(&keep_program(n));
+    }
+}
+
+#[test]
+fn the_yielding_struct_program_releases_the_dummy() {
+    // UIのプログラム`effects/struct_result_while_yielding.em`は、`pair_of`のyieldの道で`prim dummy()`の値を
+    // `release unboxed`で手放す。最適化が形を変えてこの道がなくなれば、このテストが落ちる (docs/spec/lir.md の
+    // 「ダミーの値」)
+    let source = include_str!("../../../tests/ui/run/effects/struct_result_while_yielding.em");
+    let text = eml_lir::pretty(&eml_test_support::lir(source));
+    let body: Vec<&str> = text
+        .split("\nyields fn pair_of(")
+        .nth(1)
+        .expect("a yielding `pair_of`")
+        .lines()
+        .take_while(|line| *line != "}")
+        .collect();
+    let dummies: Vec<&str> = body
+        .iter()
+        .filter_map(|line| {
+            let (var, rhs) = line.trim().strip_prefix("let ")?.split_once(':')?;
+            rhs.ends_with("= prim dummy()").then_some(var)
+        })
+        .collect();
+    assert!(
+        dummies.iter().any(|var| body.iter().any(|line| line
+            .trim()
+            .starts_with(&format!("release unboxed {var} Pair")))),
+        "{}",
+        body.join("\n")
+    );
+    agree_source(source);
 }

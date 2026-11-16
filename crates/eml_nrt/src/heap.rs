@@ -1,8 +1,9 @@
-//! 生成したコードが呼ぶヒープのエントリ (docs/spec/native.md の「ヒープのエントリ」)。どれも`eml_rt`のヒープの操作1つの包みで、
-//! workerの構造体には触れない。失敗はすべて致命的である (docs/spec/native.md の「失敗の手順」)。
+//! 生成したコードが呼ぶヒープのエントリ (docs/spec/native.md の「ヒープのエントリ」)。`eml_rt_release`のほかは
+//! `eml_rt`のヒープの操作1つの包みで、`eml_rt_release`はその操作の列である。どれもworkerの構造体には触れない。失敗は
+//! すべて致命的である (docs/spec/native.md の「失敗の手順」)。
 #![allow(unsafe_code)]
 
-use eml_rt::{ArithFault, Fault, HeapError, Token, Word, layout};
+use eml_rt::{ArithFault, Fault, HeapError, Kind, Token, Word, layout};
 
 use crate::enter::Fatal;
 use crate::image::{ARITH_DIVISION_BY_ZERO, ARITH_INTEGER_OVERFLOW};
@@ -90,6 +91,54 @@ crate::entries! {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.heap_mut().free_block(w) }?;
         Ok::<(), HeapError>(())
+    }
+
+    /// 箱を呼ぶ側だけが持つのでないときの`release`と同じに、呼ぶ側の`x`の参照を手放す。参照が最後なら、`keep`のバイトが
+    /// 0の走査する語を小さい順に手放し、その後に箱を空ける。そうでなければ、バイトが0でない走査する語を小さい順に`dup`し、
+    /// その後に`x`を手放す。ほかのヒープのエントリが包むヒープの操作の列で、VMの`release`と同じ順に呼ぶ
+    /// (docs/spec/native.md の「ヒープのエントリ」)。
+    ///
+    /// # Safety
+    /// `ctx`はこのworkerの生きている`Ctx`である。`x`は、このヒープか付けた塊の生きている`Data`の物体で、走査する語を
+    /// `n`個持ち、呼ぶ側がその参照を1つ持つ。呼び出しはその参照を消費する。`x`が不死の物体なら、その参照は
+    /// `acquire_immortal`か`dup`で作ったものである。`x`の数が正なら、持ち主は今のworkerである。共有の`x`は`lin`ビットを
+    /// 持たない。`keep`は、呼び出しの間変わらない、読める`n`バイトのアドレスで、どのバイトも0か1である。`n`が0でもnullで
+    /// ない。バイトが1の走査する語は、呼ぶ側が参照を取らずに`x`からもう束縛した子である。`x`の参照が最後でなければ、
+    /// 呼び出しはその子に呼ぶ側の参照を1つ足すので、その子は`lin`ビットを持たない。最後なら、その子の参照は呼ぶ側に渡る。
+    /// バイトが0の走査する語は呼ぶ側の`x`の参照の分と数え、その参照が最後なら呼び出しが手放す。
+    pub(crate) shim fn eml_rt_release(ctx, x: obj, keep: ptr, n: i64) {
+        let n = usize::try_from(n).map_err(|_| HeapError::WrongLayout)?;
+        // SAFETY: 呼ぶ側の約束。バイトとして読むので、どの値も妥当である
+        let keep = unsafe { std::slice::from_raw_parts(keep.cast::<u8>(), n) };
+        // SAFETY: `Ctx`の語には触れない
+        let heap = unsafe { ctx.heap_mut() };
+        if cfg!(debug_assertions) {
+            // SAFETY: 呼ぶ側の約束
+            let (meta, scanned) = unsafe { (heap.meta(x)?, heap.scanned_len(x)?) };
+            assert!(
+                meta.kind() == Kind::Data && scanned == n,
+                "a release names a shape the value does not have"
+            );
+            assert!(keep.iter().all(|&byte| byte <= 1), "a keep byte is not 0 or 1");
+        }
+        // SAFETY: 呼ぶ側の約束。どの欄も`x`を手放す前に読み、残す子は箱を手放す前に`dup`するので、呼ぶ側の参照が
+        // 読む間ずっと`x`を生かしている。残さない子は呼ぶ側の最後の参照の分と数える
+        // (docs/spec/object-model.md の「核の操作」)
+        unsafe {
+            if heap.is_last(x)? {
+                for i in (0..n).filter(|&i| keep[i] == 0) {
+                    let child = heap.scanned(x, i)?;
+                    heap.decref(child)?;
+                }
+                heap.free_block(x)
+            } else {
+                for i in (0..n).filter(|&i| keep[i] != 0) {
+                    let child = heap.scanned(x, i)?;
+                    heap.dup(child)?;
+                }
+                heap.decref(x)
+            }
+        }
     }
 
     /// tokenの箱に`Data`のヘッダを書く。tokenが空なら確保する。フィールドは呼ぶ側が書く。

@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/data/shared_release_keeps_fields.em
+---
+--- stdout ---
+3300 2200 1100 .
+303 202 101 .
+304 203 102 .
+3003 2002 1001 .
+3300 2200 1100 .
+--- stderr ---

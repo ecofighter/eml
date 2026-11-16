@@ -2,7 +2,7 @@
 source: crates/eml_cli/tests/ui.rs
 expression: counts
 ---
-accepted 489
+accepted 492
 skipped 6
 rejected 151
   async row 129

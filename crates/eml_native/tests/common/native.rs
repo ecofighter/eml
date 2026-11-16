@@ -216,6 +216,11 @@ pub fn agree(text: &str) {
     agree_program(&program(text));
 }
 
+/// `agree`と同じだが、VMを速いモードで流す。VMの速いモードと同じ列を走らせることを確かめるテストのためである。
+pub fn agree_fast(text: &str) {
+    agree_program_with(&program(text), &RunConfig::default());
+}
+
 /// `agree`と同じだが、emlのソースからコンパイルしたプログラムを流す。
 pub fn agree_source(source: &str) {
     agree_program(&eml_test_support::lir(source));
@@ -262,10 +267,13 @@ pub fn native(text: &str) -> (String, Result<Option<i64>, String>) {
 }
 
 fn agree_program(program: &eml_lir::Program) {
-    let vm_config = RunConfig::default().with_debug_heap(true);
+    agree_program_with(program, &RunConfig::default().with_debug_heap(true));
+}
+
+fn agree_program_with(program: &eml_lir::Program, vm_config: &RunConfig) {
     let vm_host = capture();
     let vm_out = vm_host.output();
-    let vm = execute_finished(program, &vm_config, vm_host.into_ref(), Engine::Vm);
+    let vm = execute_finished(program, vm_config, vm_host.into_ref(), Engine::Vm);
     let host = capture();
     let out = host.output();
     let native = execute_finished(

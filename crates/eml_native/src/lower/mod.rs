@@ -50,6 +50,7 @@ pub struct Lowered {
     pub applies: Vec<Defined>,
     /// PAPのアダプタ`eml$pap$<r>`と、その`r`。
     pub paps: Vec<(u32, Defined)>,
+    /// ローダーが書く読み込み時の値。`keep`のバイトの物は入らない。
     pub data: Vec<(Datum, DataId)>,
 }
 

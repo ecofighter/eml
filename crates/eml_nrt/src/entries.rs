@@ -74,7 +74,9 @@ macro_rules! __kind {
 /// 引数と結果のRustの型。`i64`と`f64`のほかに、行の表が書くReprの名前も受ける。ほかのトークンはコンパイルの誤りになる。
 /// 機械の型はどの引数も`i64`か`f64`だが、物体の語 (`obj`、`tobj`、`token`と文脈のRepr) のRustの型は`Word`である。`Word`は
 /// `repr(transparent)`のポインタなので、どの対象でも`i64`と同じ渡し方で、語のprovenanceが入口をまたいで残る。引数の
-/// `ptr`は語の並びへのポインタで、Rustの型は`*const Word`なので、それを通して読む語もprovenanceを保つ。引数の`dtor`は
+/// `ptr`は、指す先を各エントリが自分の前提で決めるポインタである (語の並び、`evv_mask`の項目、`eml_rt_release`の
+/// バイト)。Rustの型は`*const Word`なので、それを通して読む語はprovenanceを保ち、ほかのものを読むエントリはキャストする。
+/// 引数の`dtor`は
 /// ハンドルの型のdtorかなしで、Rustの型は`Option<eml_rows::ffi::Dtor>`である。関数ポインタの`Option`はポインタと同じ
 /// ABIを持ち、nullが`None`なので、語はキャストなしにABIだけで関数ポインタになる (docs/spec/native.md の「エントリのABI」)。
 #[doc(hidden)]
@@ -1290,5 +1292,316 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), all);
+    }
+
+    /// `eml_rt_release`の状態ごとのテスト (docs/spec/native.md の「ヒープのエントリ」)。
+    mod release {
+        use std::sync::Mutex;
+
+        use eml_rt::rc::LOCAL_MAX;
+        use eml_rt::{Ctx, Fast, Word, layout};
+
+        use super::{ctx, live};
+        use crate::heap::{eml_rt_alloc_data, eml_rt_decref, eml_rt_dup_slow, eml_rt_release};
+
+        /// 物体の数の語へのポインタ。`Word`は`*mut ()`の透明な包みなので、この変換は来歴を保つ。
+        fn count_word(w: Word) -> *mut i32 {
+            // SAFETY: `Word`と`*mut ()`は同じ表現を持つ
+            let header = unsafe { std::mem::transmute::<Word, *mut ()>(w) };
+            header.wrapping_byte_add(layout::RC_BYTE).cast::<i32>()
+        }
+
+        /// 生きている物体`w`の数。
+        ///
+        /// # Safety
+        /// `w`は生きている物体で、ほかのスレッドはその数を書かない。
+        unsafe fn rc(w: Word) -> i32 {
+            // SAFETY: 呼ぶ側の約束
+            unsafe { count_word(w).read() }
+        }
+
+        /// `eml_rt_release(c, x, keep, keep.len())`。
+        ///
+        /// # Safety
+        /// `eml_rt_release`と同じ。
+        unsafe fn release(c: *mut Ctx<Fast>, x: Word, keep: &[u8]) {
+            // SAFETY: 呼ぶ側の約束。`keep`は呼び出しの間生きている
+            unsafe { eml_rt_release(c, x, keep.as_ptr().cast::<Word>(), keep.len() as i64) }
+        }
+
+        /// 走査する語を`scanned`個持つ物体で、欄`i`に`children[i]`を書く。ほかの欄は`()`のままである。
+        ///
+        /// # Safety
+        /// `c`は生きている`Ctx`で、どの子もこのヒープの物体か即値で、その参照は物体に移る。
+        unsafe fn parent(c: *mut Ctx<Fast>, scanned: usize, children: &[(usize, Word)]) -> Word {
+            // SAFETY: 呼ぶ側の約束
+            unsafe {
+                let w = eml_rt_alloc_data(c, 0, scanned as i64, 0, 0);
+                let first = layout::data_first(scanned, false);
+                for &(i, child) in children {
+                    (*c).heap_mut().set_field(w, first + i, child).unwrap();
+                }
+                w
+            }
+        }
+
+        /// 欄0に残す文字列、欄1に残さない文字列を持つ親と、その2つの子。
+        ///
+        /// # Safety
+        /// `c`は生きている`Ctx`である。
+        unsafe fn pair(c: *mut Ctx<Fast>) -> (Word, Word, Word) {
+            // SAFETY: 呼ぶ側の約束
+            unsafe {
+                let kept = (*c).heap_mut().alloc_string("kept");
+                let dropped = (*c).heap_mut().alloc_string("dropped");
+                (parent(c, 2, &[(0, kept), (1, dropped)]), kept, dropped)
+            }
+        }
+
+        /// `w`から届く物体を共有にする。
+        ///
+        /// # Safety
+        /// `Heap::share`と同じ。
+        unsafe fn share(c: *mut Ctx<Fast>, w: Word) {
+            // SAFETY: 呼ぶ側の約束
+            unsafe {
+                let worker = (*c).heap().worker();
+                (*c).heap_mut().share(w, worker).unwrap();
+            }
+        }
+
+        // 下の2つを最初に書いた。エントリが子を走査する語の番号でなくペイロードの位置で読むと、数の語を子として読んで
+        // 失敗する
+        #[test]
+        fn past_the_count_word_the_last_reference_reads_scanned_words() {
+            for keep_first in [true, false] {
+                let mut ctx = ctx();
+                let c: *mut Ctx<Fast> = &mut *ctx;
+                // SAFETY: `c`はこのテストが持つ`Ctx`で、その最初と最後の使用の間は`c`だけを通す。子の参照は親の欄へ移る
+                unsafe {
+                    let first = (*c).heap_mut().alloc_string("first");
+                    let last = (*c).heap_mut().alloc_string("last");
+                    let x = parent(c, 256, &[(0, first), (255, last)]);
+                    let mut keep = vec![0u8; 256];
+                    let (kept, dropped) = if keep_first {
+                        (first, last)
+                    } else {
+                        (last, first)
+                    };
+                    keep[if keep_first { 0 } else { 255 }] = 1;
+                    release(c, x, &keep);
+                    assert_eq!(live(&mut *c), [("String".to_string(), 1)]);
+                    assert_eq!(rc(kept), 1);
+                    assert!(!(*c).heap_mut().live_objects().contains(&dropped));
+                    eml_rt_decref(c, kept);
+                    assert_eq!(live(&mut *c), []);
+                }
+            }
+        }
+
+        #[test]
+        fn past_the_count_word_a_shared_box_dups_scanned_words() {
+            for keep_first in [true, false] {
+                let mut ctx = ctx();
+                let c: *mut Ctx<Fast> = &mut *ctx;
+                // SAFETY: 上と同じ。テストは親の参照を2つ持つ
+                unsafe {
+                    let first = (*c).heap_mut().alloc_string("first");
+                    let last = (*c).heap_mut().alloc_string("last");
+                    let x = parent(c, 256, &[(0, first), (255, last)]);
+                    eml_rt_dup_slow(c, x);
+                    let mut keep = vec![0u8; 256];
+                    let (kept, other) = if keep_first {
+                        (first, last)
+                    } else {
+                        (last, first)
+                    };
+                    keep[if keep_first { 0 } else { 255 }] = 1;
+                    release(c, x, &keep);
+                    assert_eq!((rc(x), rc(kept), rc(other)), (1, 2, 1));
+                    eml_rt_decref(c, kept);
+                    eml_rt_decref(c, x);
+                    assert_eq!(live(&mut *c), []);
+                }
+            }
+        }
+
+        #[test]
+        fn a_local_count_of_two_dups_the_kept_child() {
+            let mut ctx = ctx();
+            let c: *mut Ctx<Fast> = &mut *ctx;
+            // SAFETY: 上と同じ
+            unsafe {
+                let (x, kept, dropped) = pair(c);
+                eml_rt_dup_slow(c, x);
+                release(c, x, &[1, 0]);
+                assert_eq!((rc(x), rc(kept), rc(dropped)), (1, 2, 1));
+                eml_rt_decref(c, kept);
+                eml_rt_decref(c, x);
+                assert_eq!(live(&mut *c), []);
+            }
+        }
+
+        #[test]
+        fn a_stuck_count_stays_and_dups_the_kept_child() {
+            let mut ctx = ctx();
+            let c: *mut Ctx<Fast> = &mut *ctx;
+            // SAFETY: 上と同じ。張り付いた数には2^31 - 2回の`dup`でしか届かないので、数を直接書き、手放す前に1に戻す
+            unsafe {
+                let (x, kept, dropped) = pair(c);
+                count_word(x).write(LOCAL_MAX);
+                release(c, x, &[1, 0]);
+                assert_eq!((rc(x), rc(kept), rc(dropped)), (LOCAL_MAX, 2, 1));
+                count_word(x).write(1);
+                eml_rt_decref(c, kept);
+                eml_rt_decref(c, x);
+                assert_eq!(live(&mut *c), []);
+            }
+        }
+
+        #[test]
+        fn an_immortal_box_in_an_attached_region_is_left_alone() {
+            use crate::constants::{Built, Datum, build};
+            static CODE: [u8; 2] = [0; 2];
+            let mut ctx = ctx();
+            let control = std::sync::Arc::clone(ctx.heap().control());
+            // 静的なクロージャは、走査する語を1つ持つ不死の`Data`である
+            let data = [Datum::Fn {
+                arity: 1,
+                code: CODE.as_ptr(),
+            }];
+            let Built { words, region } = build(&control, &data).unwrap();
+            let c: *mut Ctx<Fast> = &mut *ctx;
+            // SAFETY: 上と同じ。塊を付けても`Ctx`の持つ語は変わらない。手放す参照は`dup`で作る
+            unsafe {
+                (*c).heap_mut().attach(region.unwrap());
+                let x = words[0];
+                let child = (*c).heap().scanned(x, 0).unwrap();
+                for keep in [[1u8], [0u8]] {
+                    eml_rt_dup_slow(c, x);
+                    release(c, x, &keep);
+                    assert_eq!(rc(x), 0);
+                    assert_eq!((*c).heap().scanned(x, 0), Ok(child));
+                }
+                assert_eq!(live(&mut *c), []);
+            }
+        }
+
+        #[test]
+        fn a_shared_box_that_is_not_the_last_dups_the_kept_child() {
+            let mut ctx = ctx();
+            let c: *mut Ctx<Fast> = &mut *ctx;
+            // SAFETY: 上と同じ。テストは親の参照を2つ持ち、届く物体はどれも`lin`ビットを持たない
+            unsafe {
+                let (x, kept, dropped) = pair(c);
+                eml_rt_dup_slow(c, x);
+                share(c, x);
+                assert_eq!((rc(x), rc(kept), rc(dropped)), (-2, -1, -1));
+                release(c, x, &[1, 0]);
+                assert_eq!((rc(x), rc(kept), rc(dropped)), (-1, -2, -1));
+                eml_rt_decref(c, kept);
+                eml_rt_decref(c, x);
+                assert_eq!(live(&mut *c), []);
+            }
+        }
+
+        #[test]
+        fn the_last_reference_to_a_shared_box_frees_it() {
+            let mut ctx = ctx();
+            let c: *mut Ctx<Fast> = &mut *ctx;
+            // SAFETY: 上と同じ。テストは親の参照を1つ持つ
+            unsafe {
+                let (x, kept, dropped) = pair(c);
+                share(c, x);
+                release(c, x, &[1, 0]);
+                let alive = (*c).heap_mut().live_objects();
+                assert!(!alive.contains(&x) && !alive.contains(&dropped));
+                assert_eq!(rc(kept), -1);
+                eml_rt_decref(c, kept);
+                assert_eq!(live(&mut *c), []);
+            }
+        }
+
+        #[test]
+        fn the_last_reference_to_a_shared_box_does_not_dup_a_kept_lin_child() {
+            let mut ctx = ctx();
+            let c: *mut Ctx<Fast> = &mut *ctx;
+            // SAFETY: 上と同じ。`lin`の子には親を通して1回だけ届くので、`share`はその所有を移し、数は1のままである
+            unsafe {
+                let lin = eml_rt_alloc_data(c, 0, 0, 1, 1);
+                let dropped = (*c).heap_mut().alloc_string("dropped");
+                let x = parent(c, 2, &[(0, lin), (1, dropped)]);
+                share(c, x);
+                release(c, x, &[1, 0]);
+                assert_eq!(rc(lin), 1);
+                assert_eq!(live(&mut *c), [("Data".to_string(), 1)]);
+                eml_rt_decref(c, lin);
+                assert_eq!(live(&mut *c), []);
+            }
+        }
+
+        #[test]
+        fn immediate_children_are_neither_counted_nor_followed() {
+            let mut ctx = ctx();
+            let c: *mut Ctx<Fast> = &mut *ctx;
+            // SAFETY: 上と同じ。テストは親の参照を2つ持つ
+            unsafe {
+                let x = parent(c, 2, &[(0, Word::imm(5)), (1, Word::imm(7))]);
+                eml_rt_dup_slow(c, x);
+                release(c, x, &[1, 0]);
+                assert_eq!(rc(x), 1);
+                assert_eq!((*c).heap().scanned(x, 0), Ok(Word::imm(5)));
+                release(c, x, &[1, 0]);
+                assert_eq!(live(&mut *c), []);
+            }
+        }
+
+        #[test]
+        fn a_box_without_scanned_words_reads_no_keep_byte() {
+            // `n`が0でも、生成したコードは8バイトのデータの物のアドレスを渡す
+            static NONE: [u8; 8] = [0; 8];
+            let mut ctx = ctx();
+            let c: *mut Ctx<Fast> = &mut *ctx;
+            // SAFETY: 上と同じ。テストは親の参照を2つ持つ
+            unsafe {
+                let x = eml_rt_alloc_data(c, 3, 0, 2, 0);
+                eml_rt_dup_slow(c, x);
+                release(c, x, &NONE[..0]);
+                assert_eq!(rc(x), 1);
+                release(c, x, &NONE[..0]);
+                assert_eq!(live(&mut *c), []);
+            }
+        }
+
+        /// 破棄処理で名前を`DROPPED`に書く`Foreign`の値。
+        struct Noted(&'static str);
+
+        impl Drop for Noted {
+            fn drop(&mut self) {
+                DROPPED.lock().unwrap().push(self.0);
+            }
+        }
+
+        static DROPPED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+        #[test]
+        fn the_last_reference_to_a_shared_box_drops_children_in_order() {
+            // `x = C(a, f2, p)`、`a = D(p)`で何も残さない。`a`を手放しても`p`は`x`の欄が生かすので、破棄処理は欄の順の
+            // `f2`、`p`である
+            let mut ctx = ctx();
+            let c: *mut Ctx<Fast> = &mut *ctx;
+            // SAFETY: 上と同じ。`p`の参照の1つは`a`の欄へ、もう1つは`x`の欄へ移る。どの物体も`lin`ビットを持たない
+            unsafe {
+                let p = (*c).heap_mut().alloc_foreign(Noted("p"), false);
+                let f2 = (*c).heap_mut().alloc_foreign(Noted("f2"), false);
+                eml_rt_dup_slow(c, p);
+                let a = parent(c, 1, &[(0, p)]);
+                let x = parent(c, 3, &[(0, a), (1, f2), (2, p)]);
+                share(c, x);
+                release(c, x, &[0, 0, 0]);
+                assert_eq!(*DROPPED.lock().unwrap(), ["f2", "p"]);
+                assert_eq!(live(&mut *c), []);
+            }
+        }
     }
 }

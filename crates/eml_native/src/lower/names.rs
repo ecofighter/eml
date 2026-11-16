@@ -56,6 +56,16 @@ pub fn mask(text: &str) -> String {
     format!("m:{text}")
 }
 
+/// `release`の`keep`のバイトのデータの記号。走査する語ごとに、残す語は`1`、ほかは`0`の数字を並べる
+/// (docs/spec/native.mdの「値と定数」)。
+pub fn keep(keep: &[bool]) -> String {
+    let digits: String = keep
+        .iter()
+        .map(|&kept| if kept { '1' } else { '0' })
+        .collect();
+    format!("k:{digits}")
+}
+
 /// 種類の並び`params -> rets`のthunkの記号。`eml$thunk$if$i`のようになる。
 pub fn thunk(params: &[Kind], rets: &[Kind]) -> String {
     let letters = |kinds: &[Kind]| -> String {

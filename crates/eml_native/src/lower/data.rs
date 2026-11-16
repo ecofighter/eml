@@ -131,10 +131,10 @@ impl<M: Module> FnLower<'_, '_, M> {
     }
 
     /// `release value ctor(fields)`。`token`があれば、tokenを作る形である。`value`の参照を1つ手放し、名前を書いた欄が
-    /// その子の参照を1つずつ受け取る。値はいつも欄のある構築子の箱なので、数は即値を確かめずに読む。数が1なら、残さない
-    /// 子を手放し、箱を空けるか、箱の語をそのままtokenにする。ほかの数では`eml_rt_is_last`に問う。最後の参照 (数-1) なら
-    /// 箱を空け、そうでなければ残す子を`dup`して`value`を手放す。tokenを作る形は、数が1のときのほかは空のtokenを作る
-    /// (docs/spec/native.md の「データ」)。`unboxed`の形は、ダミーを受けたら何もせず、空のtokenを作る。
+    /// その子の参照を1つずつ受け取る。値はいつも欄のある構築子の箱なので、数は即値を確かめずに読む。生成したコードは
+    /// 一意な道だけを持つ。数が1なら、残さない子を手放し、箱を空けるか、箱の語をそのままtokenにする。ほかの数では、冷たい
+    /// ブロックで`eml_rt_release`を呼び、tokenは空である (docs/spec/native.md の「データ」)。`unboxed`の形は、ダミーを
+    /// 受けたら何もせず、空のtokenを作る。
     pub(super) fn release(
         &mut self,
         value: VarId,
@@ -156,8 +156,14 @@ impl<M: Module> FnLower<'_, '_, M> {
             self.b.switch_to_block(object);
         }
         let layout_ctor = self.layout_ctor(ctor);
+        debug_assert_eq!(
+            fields.len(),
+            layout_ctor.fields.len(),
+            "a release names as many fields as its constructor has"
+        );
         let shape = layout_ctor.shape();
-        // 走査する欄ごとの、受け取る変数 (`None`は残さない子)、位置、Reprである
+        // 走査する欄ごとの、受け取る変数 (`None`は残さない子)、位置、Reprである。走査する欄の位置は0から順に並ぶので、
+        // この並びの添字は走査する語の番号である
         let children: Vec<(Option<VarId>, u32, Repr)> = fields
             .iter()
             .zip(&shape.positions)
@@ -167,39 +173,32 @@ impl<M: Module> FnLower<'_, '_, M> {
             .collect();
         let rc = mem::load_rc(&mut self.b, x);
         let unique = mem::is_one_ref(&mut self.b, rc);
-        let ask = self.cold_block();
-        let last = self.b.create_block();
+        let owned = self.b.create_block();
+        let other = self.cold_block();
+        self.b.ins().brif(unique, owned, &[], other, &[]);
+        self.b.switch_to_block(owned);
+        self.drop_unkept(x, shape.scanned, &children);
         match token {
             None => {
-                self.b.ins().brif(unique, last, &[], ask, &[]);
+                self.call_entry("eml_rt_free_block", &[x]);
+                self.b.ins().jump(done, &[]);
             }
             Some(_) => {
-                let owned = self.b.create_block();
-                self.b.ins().brif(unique, owned, &[], ask, &[]);
-                self.b.switch_to_block(owned);
-                self.drop_unkept(x, shape.scanned, &children);
                 let tok = mem::token_of_box(&mut self.b, x);
                 self.b.ins().jump(done, &[BlockArg::Value(tok)]);
             }
         }
-        self.b.switch_to_block(ask);
-        let shared = self.b.create_block();
-        let is_last = self
-            .call_entry("eml_rt_is_last", &[x])
-            .expect("`eml_rt_is_last` returns 0 or 1");
-        self.b.ins().brif(is_last, last, &[], shared, &[]);
-        self.b.switch_to_block(last);
-        self.drop_unkept(x, shape.scanned, &children);
-        self.call_entry("eml_rt_free_block", &[x]);
-        self.jump_empty(done, token.is_some());
-        self.b.switch_to_block(shared);
-        for &(field, _, repr) in &children {
-            if let Some(field) = field {
-                let child = self.var(field);
-                self.dup(child, repr);
-            }
-        }
-        self.decref(x, Repr::Obj);
+        self.b.switch_to_block(other);
+        // `n`は並びそのものの長さにする。並びの物の大きさと`n`が作り方で一致し、並びは`x`の走査する語より長くならない
+        // ので、エントリはどちらの範囲も越えて読まない
+        let keep: Vec<bool> = children
+            .iter()
+            .map(|&(field, _, _)| field.is_some())
+            .collect();
+        let len = keep.len() as i64;
+        let keep = self.datum_address(Datum::Keep(keep));
+        let n = self.b.ins().iconst(types::I64, len);
+        self.call_entry("eml_rt_release", &[x, keep, n]);
         self.jump_empty(done, token.is_some());
         self.b.switch_to_block(done);
         if let (Some(token), Some(made)) = (token, made) {
