@@ -959,6 +959,8 @@ verifierは命令ごとに所有、Repr、印を確かめるが、値を作っ�
 
 エンジンはプログラムを`eml_lir::Trusted`としてだけ受け取る。`Trusted`は`Program`を包み、作る道は`unsafe fn Trusted::new`だけである。この関数の約束 (P1) は、渡す`Program`が上の「実行の前提」のうちverifierが確かめられない前提をすべて満たすことである。`Trusted`は中の`Program`を書き換える道を持たない。テストの外で`Trusted`を作るのは`eml_cli`の`Session`だけで、検査を通ったプログラムから自分のパイプラインで作ったLIRだけを包む ([アーキテクチャ](../implementation/architecture.md)の「CLI と lib API」)。テストは手書きのLIRを包み、まず検査モードで実行する。
 
+VMのエントリ (`eml_vm::execute`、`Machine::load`、`AnyMachine::load`、`CodeBase::load`) は`&Trusted`を取る。verifierを通さない読み込み (`load_unverified`) は`&Program`を取り、`Trusted`を作らない。
+
 ## 実行時エラー
 
 次の場合は実行を止めて実行時エラーにする。CLI の終了コードは 1 で、割り込みで止まったときは 130、SIGTERM で止まったときは 143 である ([VM](vm.md) の「上限と割り込み」)。

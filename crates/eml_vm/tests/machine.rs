@@ -16,7 +16,7 @@ use eml_vm::{
     AnyMachine, CompileError, Machine, RunConfig, RuntimeError, capture_host, disassemble,
 };
 
-use crate::common::parse;
+use crate::common::{parse, trusted};
 
 fn names<M: eml_rt::Mode>(machine: &Machine<M>) -> Vec<&str> {
     machine
@@ -36,7 +36,7 @@ fn run_two(first: &str, second: &str) -> String {
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
         for text in [first, second] {
-            let program = parse(text);
+            let program = trusted(text);
             eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
             let loaded = machine
                 .load(&program, &eml_vm::Linked::default())
@@ -85,10 +85,10 @@ fn second() -> unit {{
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
     let a = machine
-        .load(&parse(&first), &eml_vm::Linked::default())
+        .load(&trusted(&first), &eml_vm::Linked::default())
         .unwrap();
     let b = machine
-        .load(&parse(&second), &eml_vm::Linked::default())
+        .load(&trusted(&second), &eml_vm::Linked::default())
         .unwrap();
     assert_eq!((a.entry, b.entry), (0, 2));
     assert_eq!(names(&machine), ["main", "say", "second"]);
@@ -129,10 +129,10 @@ fn second() -> unit {{
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
     machine
-        .load(&parse(&first), &eml_vm::Linked::default())
+        .load(&trusted(&first), &eml_vm::Linked::default())
         .unwrap();
     machine
-        .load(&parse(&second), &eml_vm::Linked::default())
+        .load(&trusted(&second), &eml_vm::Linked::default())
         .unwrap();
     let text = disassemble(machine.code());
     let second_fn = &text[text.find("fn second").unwrap()..];
@@ -168,10 +168,10 @@ fn g(p.0: unit) -> unit {
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
     machine
-        .load(&parse(first), &eml_vm::Linked::default())
+        .load(&trusted(first), &eml_vm::Linked::default())
         .unwrap();
     machine
-        .load(&parse(second), &eml_vm::Linked::default())
+        .load(&trusted(second), &eml_vm::Linked::default())
         .unwrap();
     let text = disassemble(machine.code());
     let g = &text[text.find("fn g").unwrap()..];
@@ -198,11 +198,11 @@ fn second() -> unit {
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
     let a = machine
-        .load(&parse(first), &eml_vm::Linked::default())
+        .load(&trusted(first), &eml_vm::Linked::default())
         .unwrap();
     machine.run(a.entry).unwrap();
     let b = machine
-        .load(&parse(second), &eml_vm::Linked::default())
+        .load(&trusted(second), &eml_vm::Linked::default())
         .unwrap();
     assert_eq!(
         machine.run(b.entry).unwrap_err(),
@@ -235,11 +235,11 @@ fn one() -> int {
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
     machine
-        .load(&parse(first), &eml_vm::Linked::default())
+        .load(&trusted(first), &eml_vm::Linked::default())
         .unwrap();
     assert_eq!(
         machine
-            .load(&parse(second), &eml_vm::Linked::default())
+            .load(&trusted(second), &eml_vm::Linked::default())
             .unwrap_err(),
         CompileError::Mismatch {
             function: "one".to_string()
@@ -259,7 +259,7 @@ fn main() -> unit {
 ";
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
-    let program = parse(text);
+    let program = trusted(text);
     let error = machine
         .load(&program, &eml_vm::Linked::default())
         .unwrap_err();
@@ -308,10 +308,10 @@ b2:
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
     machine
-        .load(&parse(first), &eml_vm::Linked::default())
+        .load(&trusted(first), &eml_vm::Linked::default())
         .unwrap();
     machine
-        .load(&parse(second), &eml_vm::Linked::default())
+        .load(&trusted(second), &eml_vm::Linked::default())
         .unwrap();
     assert_eq!(names(&machine), ["pick", "other"]);
 }
@@ -432,13 +432,13 @@ fn second() -> unit {
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
         let first = machine
-            .load(&parse(first), &eml_vm::Linked::default())
+            .load(&trusted(first), &eml_vm::Linked::default())
             .unwrap();
         let error = machine.run(first.entry).unwrap_err();
         assert_eq!(error.to_string(), "division by zero in `main`");
         assert!(!error.is_broken());
         let second = machine
-            .load(&parse(second), &eml_vm::Linked::default())
+            .load(&trusted(second), &eml_vm::Linked::default())
             .unwrap();
         machine
             .run(second.entry)
@@ -483,7 +483,7 @@ fn an_interrupt_before_load_is_held_until_the_first_safe_point() {
                 control.interrupt();
             }
             let loaded = machine
-                .load(&parse(COUNT_THEN_SAY), &eml_vm::Linked::default())
+                .load(&trusted(COUNT_THEN_SAY), &eml_vm::Linked::default())
                 .unwrap();
             if !before_load {
                 control.interrupt();
@@ -532,7 +532,7 @@ fn third() -> unit {
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
     let mut run = |text: &str| {
         let loaded = machine
-            .load(&parse(text), &eml_vm::Linked::default())
+            .load(&trusted(text), &eml_vm::Linked::default())
             .unwrap();
         machine.run(loaded.entry).map(|finished| finished.stats)
     };
@@ -623,7 +623,7 @@ fn a_shown_entry_returns_its_text_after_the_output() {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
-        let program = parse(SHOWN);
+        let program = trusted(SHOWN);
         eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
         let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
         let (_, text) = machine.run_shown(loaded.entry, 100).unwrap();
@@ -646,7 +646,7 @@ fn a_shown_entry_must_return_an_object() {
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
     let loaded = machine
         .load(
-            &parse("fn main() -> unit {\n  return ()\n}\n"),
+            &trusted("fn main() -> unit {\n  return ()\n}\n"),
             &eml_vm::Linked::default(),
         )
         .unwrap();
@@ -755,7 +755,7 @@ fn every_run_quiesces_its_driver() {
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
     let loaded = machine
         .load(
-            &parse(&format!(
+            &trusted(&format!(
                 "\
 fn main() -> unit {{
   let s.0: obj = const \"ran\"
@@ -784,7 +784,7 @@ fn a_failed_run_quiesces_its_driver_before_recovery() {
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
     let loaded = machine
         .load(
-            &parse(
+            &trusted(
                 "\
 fn main() -> unit {
   let n.0: int = extern \"Prelude.Div Int.%\"(1, 0)
@@ -1092,7 +1092,7 @@ fn every_quiesce_gets_the_job_budget() {
             machine = machine.with_job_budget(budget);
         }
         let loaded = machine
-            .load(&parse(src), &eml_vm::Linked::default())
+            .load(&trusted(src), &eml_vm::Linked::default())
             .unwrap();
         let ran = machine.run(loaded.entry).map(|_| ());
         machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -1199,7 +1199,7 @@ fn main() -> unit {{
 {SAY}"
     );
     let loaded = machine
-        .load(&parse(&again), &eml_vm::Linked::default())
+        .load(&trusted(&again), &eml_vm::Linked::default())
         .unwrap();
     machine
         .run(loaded.entry)

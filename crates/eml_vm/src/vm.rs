@@ -4334,7 +4334,7 @@ mod tests {
     /// 確かめる (docs/spec/vm.md の「タスクとスケジュール」)。
     #[test]
     fn a_running_task_collects_a_notice_at_its_safepoint() {
-        let program = eml_lir::parse(
+        let program = crate::trusted(
             "\
 fn main() -> unit {
   let u.0: unit = call f(())
@@ -4344,8 +4344,7 @@ fn f(p.0: unit) -> unit {
   return p.0
 }
 ",
-        )
-        .unwrap_or_else(|error| panic!("{error}"));
+        );
         let control = Arc::new(Control::new(eml_rt::Limits::default()));
         let mut code = CodeBase::<eml_rt::Checked>::new(Arc::clone(&control));
         let entry = code.load(&program, &crate::Linked::default()).unwrap();
@@ -4432,7 +4431,7 @@ fn f(p.0: unit) -> unit {
         Ctx<eml_rt::Checked>,
         Scheduler<P>,
     ) {
-        let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+        let program = crate::trusted(text);
         let control = Arc::new(Control::new(limits));
         let mut code = CodeBase::<eml_rt::Checked>::new(Arc::clone(&control));
         code.load(&program, &crate::Linked::default()).unwrap();

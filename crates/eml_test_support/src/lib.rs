@@ -436,7 +436,7 @@ impl eml_rt::Host for RecordingHost {
 /// LIR を `capture()` の Host で実行する。上限の値に頼るテストは、`RunConfig` を自分で作って渡す。
 #[cfg(feature = "run")]
 pub fn execute(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     config: &RunConfig,
 ) -> (String, Result<RunStats, RuntimeError>) {
     execute_on(program, config, capture(), Engine::Vm)
@@ -445,7 +445,7 @@ pub fn execute(
 /// LIR を `engine` で `host` に実行し、捕まえた標準出力を返す。ネイティブは数えないので、`RunStats` は既定の値になる。
 #[cfg(feature = "run")]
 pub fn execute_on(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     config: &RunConfig,
     host: CaptureHost,
     engine: Engine,
@@ -459,7 +459,7 @@ pub fn execute_on(
 /// `execute_on` と同じく流し、`Finished` のまま返す。終了コードを両方の実行系で比べるテストのため。
 #[cfg(feature = "run")]
 pub fn execute_finished(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     config: &RunConfig,
     host: HostRef,
     engine: Engine,

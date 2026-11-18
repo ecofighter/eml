@@ -13,7 +13,7 @@ use eml_vm::{Finished, Machine, RunConfig, RuntimeError};
 
 use eml_test_support::schedule_independent;
 
-use crate::common::parse;
+use crate::common::{parse, trusted};
 
 /// `par` の両方の子が値を返し、親が和を表示する。
 const PAR: &str = "\
@@ -47,7 +47,7 @@ fn run(src: &str, workers: usize) -> (String, Result<Finished, RuntimeError>) {
 
 /// 検査モードで、`control` の上限の run を1回行う。
 fn run_program(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     control: Arc<Control>,
 ) -> (String, Result<Finished, RuntimeError>) {
     let (host, out) = eml_vm::capture_host(Default::default());
@@ -139,7 +139,7 @@ fn the_workers_exist_before_the_first_fork() {
 #[test]
 fn code_with_roots_starts_no_worker() {
     let par = eml_test_support::lir(PAR);
-    let roots = parse(ROOTS);
+    let roots = trusted(ROOTS);
 
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(4), host);
@@ -265,7 +265,7 @@ fn text(p.0: unit) -> tobj {{
 }}
 {FORKS}"
     );
-    let program = parse(&text);
+    let program = trusted(&text);
     let (host, _) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(2), host);
     let entry = machine

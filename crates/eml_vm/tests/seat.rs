@@ -11,7 +11,7 @@ use eml_sched::{Control, Limits};
 use eml_test_support::RecordingHost;
 use eml_vm::{Machine, RunConfig, RuntimeError};
 
-use crate::common::parse;
+use crate::common::trusted;
 
 const HELLO: &str = "\
 main : Unit -> <IO, Panic> Unit
@@ -36,7 +36,7 @@ fn internal(result: Result<eml_vm::Finished, RuntimeError>) -> &'static str {
 /// ヒープを指しうるためである (docs/spec/vm.mdの「誤り、止めること、終わり」)。
 #[test]
 fn a_separate_run_refuses_session_roots() {
-    let program = parse(
+    let program = trusted(
         "\
 fn keep() -> unit {
   let b.0: tobj = box 1

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use eml_lir::Program;
+use eml_lir::{Program, Trusted};
 use eml_rt::{
     Checked, Control, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Stats, Stop,
 };
@@ -78,7 +78,7 @@ pub(crate) const WORKER_STACK: usize = 8 << 20;
 /// 実行して閉じる。runの間、呼んだスレッドはメインのworkerで、`main`はrunが作るworker 0で動く
 /// (docs/spec/vm.mdの「上限と割り込み」)。
 pub fn execute(
-    program: &Program,
+    program: &Trusted,
     linked: &Linked,
     config: &RunConfig,
     host: HostRef,
@@ -286,7 +286,7 @@ impl<M: Mode> Machine<M> {
 
     /// プログラムを追記する。`linked` は `eml_native` がこのプログラムの C の表をつないだ結果である。誤りを返した後の
     /// `Machine` は使い続けない (`CodeBase::load`)。
-    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, CompileError> {
+    pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<Loaded, CompileError> {
         self.refuse_after_panic();
         let entry = self.code.load(program, linked)?;
         self.attach_region();
@@ -1458,7 +1458,7 @@ impl AnyMachine {
         }
     }
 
-    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, CompileError> {
+    pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<Loaded, CompileError> {
         match self {
             AnyMachine::Fast(machine) => machine.load(program, linked),
             AnyMachine::Checked(machine) => machine.load(program, linked),
@@ -1591,4 +1591,11 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         function,
         at: None,
     }
+}
+
+#[cfg(test)]
+pub(crate) fn trusted(text: &str) -> Trusted {
+    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    // SAFETY: テストの手書きLIRの約束はテストが負う。テストは検査モードでも動かして確かめる
+    unsafe { Trusted::new(program) }
 }

@@ -11,7 +11,7 @@ use eml_sched::error::RunFault;
 use eml_sched::{Control, Limits};
 use eml_vm::{Finished, RunConfig, RuntimeError};
 
-use crate::common::parse;
+use crate::common::trusted;
 
 /// 組の構築子、`Panic` と `Fail` のエフェクト、それぞれの fork の関数、`prompt$` とその補助の関数。
 const PRELUDE: &str = "\
@@ -205,14 +205,14 @@ fn spin_two(p.0: unit) -> tobj {
 /// 出力、誤りの文言、スケジュールによらない `RunStats` が同じでなければならない。逐次が通れば、速いモードの逐次でも流して
 /// 出力を比べる。逐次の検査モードの出力と結果を返す。
 fn run_par_lir(text: &str, max_depth: usize) -> (String, Result<Finished, RuntimeError>) {
-    let program = parse(text);
+    let program = trusted(text);
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}\n{text}"));
     run_par_program(&program, max_depth)
 }
 
 /// `run_par_lir` の、読んで確かめた後の部分。
 fn run_par_program(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     max_depth: usize,
 ) -> (String, Result<Finished, RuntimeError>) {
     let (out, result) = run_in(program, true, Sched::Sequential, max_depth);
@@ -242,7 +242,7 @@ fn summary(result: &Result<Finished, RuntimeError>) -> Result<eml_sched::config:
 }
 
 fn run_in(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     debug_heap: bool,
     sched: Sched,
     max_depth: usize,
@@ -255,7 +255,7 @@ fn run_in(
 }
 
 fn run_with(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     debug_heap: bool,
     sched: Sched,
     control: Arc<Control>,
@@ -680,7 +680,7 @@ fn again(p.0: unit) -> tobj {{
 /// 割り込みは子の中でもすぐに実行を止める。`par` の後の安全点で、右の子が始まる前に止まる。
 #[test]
 fn an_interrupt_stops_the_run_before_the_right_child_runs() {
-    let program = parse(&with_prelude(
+    let program = trusted(&with_prelude(
         "\
 fn main() -> unit {
   let t.0: obj = par (,) #0(&one, &noisy)
@@ -869,7 +869,7 @@ fn seeds_preempt_long_children_and_sequential_never_preempts() {
     let (out, result) = run_par(LONG);
     assert_eq!(out, "1\n2\n2\n1\n7\n100\n");
     assert_eq!(result.map(|finished| finished.preemptions), Ok(0));
-    let program = parse(&with_prelude(LONG));
+    let program = trusted(&with_prelude(LONG));
     for seed in [1, 2026] {
         let (_, seeded) = run_in(&program, true, Sched::Seeded(seed), usize::MAX);
         let preemptions = seeded.map(|finished| finished.preemptions);
@@ -883,7 +883,7 @@ fn seeds_preempt_long_children_and_sequential_never_preempts() {
 /// 同じ seed は同じスケジュールを繰り返す。
 #[test]
 fn a_seed_reruns_the_same_schedule() {
-    let program = parse(&with_prelude(LONG));
+    let program = trusted(&with_prelude(LONG));
     let run = || run_in(&program, true, Sched::Seeded(7), usize::MAX);
     let (first_out, first) = run();
     let (second_out, second) = run();
@@ -895,7 +895,7 @@ fn a_seed_reruns_the_same_schedule() {
 /// 決まるためである。同時に生きている物体の数だけは、子が交互に進む順で変わる。
 #[test]
 fn the_run_stats_do_not_depend_on_the_schedule() {
-    let program = parse(&with_prelude(LONG));
+    let program = trusted(&with_prelude(LONG));
     let (_, sequential) = run_in(&program, true, Sched::Sequential, usize::MAX);
     let sequential = sequential.expect("the sequential run").stats;
     assert!(sequential.allocations > 0 && sequential.unwound_frames > 0);

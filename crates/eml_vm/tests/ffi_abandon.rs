@@ -196,7 +196,7 @@ fn a_machine_that_abandoned_a_job_runs_again() {
     // 割り込みのビットは`clear`でしか下りないので、REPLと同じく次のrunの前に下ろす
     control.clear();
     // 名前が同じなら同じコードでなければならないので、`entry$main`を持たない手書きのLIRにする
-    let program2 = crate::common::parse(
+    let program2 = crate::common::trusted(
         "\
 fn main() -> unit {
   let s.0: obj = const \"again\"
@@ -398,7 +398,7 @@ main () = Async.run (fn () -> sum_gated (grow 10 \"ab\") 2048 100156)
     interrupter.join().unwrap();
     control.clear();
     // 名前が同じなら同じコードでなければならないので、`entry$main`を持たない手書きのLIRにする
-    let program2 = crate::common::parse(
+    let program2 = crate::common::trusted(
         "\
 fn main() -> unit {
   let s.0: obj = const \"again\"

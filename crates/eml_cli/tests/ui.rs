@@ -206,7 +206,7 @@ fn stub_park(path: &Path) -> eml_sched::park::ParkFactory {
     reason = "each run of a file sets the engine, the mode, the policy and the workers"
 )]
 fn execute_in(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     path: &Path,
     root: &Path,
     marks: &Marks,
@@ -321,7 +321,7 @@ fn assert_agrees(suffix: &str, label: &str, other: &Ran, checked: &Ran, compare_
 /// docs/implementation/testing.md の「2つのモードで流す」)。
 fn assert_fast_mode_agrees(
     suffix: &str,
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     path: &Path,
     root: &Path,
     marks: &Marks,
@@ -386,7 +386,7 @@ fn workers_label(workers: usize, sched: Sched, signals: &[VirtualSignal]) -> Str
 /// 上だけで流したことになる (docs/implementation/testing.md の「seed で流す」)。
 fn assert_workers_agree(
     suffix: &str,
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     path: &Path,
     root: &Path,
     marks: &Marks,
@@ -484,7 +484,7 @@ fn rerun_hint(path: &Path) -> String {
 /// 速いモードでは流さない。スケジューラの誤りが速いモードで未定義の動作になると、同じプロセスのほかのテストを壊す。
 fn assert_seeds_agree(
     suffix: &str,
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     path: &Path,
     root: &Path,
     marks: &Marks,

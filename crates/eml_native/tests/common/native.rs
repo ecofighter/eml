@@ -2,6 +2,7 @@
 use std::sync::Arc;
 
 use eml_cabi::Linked;
+use eml_lir::Trusted;
 use eml_native::{Arg, NativeMachine};
 use eml_nrt::image::Start;
 use eml_nrt::{Finished, HostRef, RunConfig, RuntimeError, Thunk};
@@ -9,10 +10,19 @@ use eml_rt::{Buffering, Ctx, Fast, StdHost, Word};
 use eml_test_support::{Engine, capture, execute_finished};
 
 /// LIRのテキストを読み、verifierを通す。
-pub fn program(text: &str) -> eml_lir::Program {
+pub fn program(text: &str) -> Trusted {
+    trust(parsed(text))
+}
+
+fn parsed(text: &str) -> eml_lir::Program {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
     program
+}
+
+pub fn trust(program: eml_lir::Program) -> Trusted {
+    // SAFETY: 手書きのLIRの約束はテストが負う。テストは検査モードでも動かして確かめる
+    unsafe { Trusted::new(program) }
 }
 
 pub fn host() -> HostRef {
@@ -228,9 +238,9 @@ pub fn agree_source(source: &str) {
 
 /// `agree`と同じだが、`Reuse`までのLIRのパスを通してから流す。
 pub fn agree_lowered(text: &str) {
-    let mut program = program(text);
+    let mut program = parsed(text);
     eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
-    agree_program(&program);
+    agree_program(&trust(program));
 }
 
 /// `agree`と同じだが、どちらのrunも`host`が作るHostで流し、標準出力は比べない。書けない出力のようなHostのためである。
@@ -266,11 +276,11 @@ pub fn native(text: &str) -> (String, Result<Option<i64>, String>) {
     )
 }
 
-fn agree_program(program: &eml_lir::Program) {
+fn agree_program(program: &Trusted) {
     agree_program_with(program, &RunConfig::default().with_debug_heap(true));
 }
 
-fn agree_program_with(program: &eml_lir::Program, vm_config: &RunConfig) {
+fn agree_program_with(program: &Trusted, vm_config: &RunConfig) {
     let vm_host = capture();
     let vm_out = vm_host.output();
     let vm = execute_finished(program, vm_config, vm_host.into_ref(), Engine::Vm);

@@ -12,7 +12,7 @@ use eml_sched::park::ParkFactory;
 use eml_sched::{Control, Limits, Stop};
 use eml_vm::{CodeBase, Entry, Finished, Machine, Normal, Ready, RunConfig, RuntimeError, Task};
 
-use crate::common::parse;
+use crate::common::trusted;
 
 fn sync<T: Sync>() {}
 
@@ -140,7 +140,7 @@ fn a_seeded_run_of_one_task_does_not_preempt() {
     let run = |sched| {
         let config = RunConfig::default().with_debug_heap(true).with_sched(sched);
         let (host, _) = eml_vm::capture_host(Default::default());
-        eml_vm::execute(&parse(COUNT), &eml_vm::Linked::default(), &config, host).unwrap()
+        eml_vm::execute(&trusted(COUNT), &eml_vm::Linked::default(), &config, host).unwrap()
     };
     let sequential = run(Sched::Sequential);
     assert_eq!(sequential.preemptions, 0);
@@ -159,8 +159,8 @@ fn an_interrupted_control_stops_at_the_first_safepoint() {
             .with_debug_heap(debug_heap)
             .with_control(control);
         let (host, _) = eml_vm::capture_host(Default::default());
-        let error =
-            eml_vm::execute(&parse(COUNT), &eml_vm::Linked::default(), &config, host).unwrap_err();
+        let error = eml_vm::execute(&trusted(COUNT), &eml_vm::Linked::default(), &config, host)
+            .unwrap_err();
         assert_eq!(error.to_string(), "interrupted in `main`");
         assert!(error.interrupted());
     }
@@ -182,7 +182,7 @@ fn main() -> unit {
   return u.3
 }
 ";
-    let program = parse(text);
+    let program = trusted(text);
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
     let control = Arc::new(Control::new(Limits::default()));
     control.interrupt();
@@ -260,7 +260,7 @@ fn an_exit_is_written_to_the_end_field() {
             .with_control(Arc::clone(&control));
         let (host, _) = eml_vm::capture_host(Default::default());
         let finished =
-            eml_vm::execute(&parse(EXIT), &eml_vm::Linked::default(), &config, host).unwrap();
+            eml_vm::execute(&trusted(EXIT), &eml_vm::Linked::default(), &config, host).unwrap();
         assert_eq!(finished.exit, Some(3));
         assert_eq!(control.exit_code(), Some(3));
     }
@@ -279,10 +279,10 @@ fn second() -> unit {
     let control = Arc::new(Control::new(Limits::default()));
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host);
     let first = machine
-        .load(&parse(EXIT), &eml_vm::Linked::default())
+        .load(&trusted(EXIT), &eml_vm::Linked::default())
         .unwrap();
     let second = machine
-        .load(&parse(quiet), &eml_vm::Linked::default())
+        .load(&trusted(quiet), &eml_vm::Linked::default())
         .unwrap();
     assert_eq!(machine.run(first.entry).unwrap().exit, Some(3));
     assert_eq!(machine.run(second.entry).unwrap().exit, None);
@@ -330,7 +330,7 @@ fn second() -> unit {
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let second = machine
-        .load(&parse(quiet), &eml_vm::Linked::default())
+        .load(&trusted(quiet), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine.run(first.entry);
     std::fs::remove_dir_all(&root).unwrap();

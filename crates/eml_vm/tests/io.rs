@@ -1060,7 +1060,7 @@ main () = Async.run (fn () ->
 }
 
 /// `machine` で `program` を流して閉じる。
-fn run_to_close<M: eml_rt::Mode>(mut machine: Machine<M>, program: &eml_lir::Program) {
+fn run_to_close<M: eml_rt::Mode>(mut machine: Machine<M>, program: &eml_lir::Trusted) {
     let loaded = machine.load(program, &eml_vm::Linked::default()).unwrap();
     machine
         .run(loaded.entry)

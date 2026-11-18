@@ -318,7 +318,7 @@ pub enum Engine {
 #[cfg(feature = "run")]
 pub fn execute_on(
     engine: Engine,
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     linked: &Linked,
     config: &RunConfig,
     host: HostRef,

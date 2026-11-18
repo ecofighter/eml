@@ -11,7 +11,7 @@ use std::sync::Arc;
 use eml_cabi::Linked;
 use eml_extern::{CFunction, CHandleId, CParam, CRet, Extern, RuntimeEntry};
 use eml_lir::unwind::Unwinds;
-use eml_lir::{FnIdx, Program, Rhs, Stmt};
+use eml_lir::{FnIdx, Program, Rhs, Stmt, Trusted};
 use eml_rt::{Control, Mode};
 
 use crate::code::{
@@ -71,7 +71,7 @@ impl<M: Mode> CodeBase<M> {
     /// `linked`を比べた後に、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムは
     /// `CodeBase`に何も書かずに`Invalid`で断る。たどるのは変換する関数だけで、debugのビルドでは変換し直す関数もたどる。プログラム全体の規則は
     /// プログラム全体に当てる (docs/spec/vm.mdの「追記」)。
-    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<u32, CompileError> {
+    pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<u32, CompileError> {
         self.load_with(program, linked, |code| {
             eml_lir::unwind::verified_for(program, |index| code.walked(program, index))
                 .map_err(CompileError::Invalid)

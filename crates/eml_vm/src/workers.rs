@@ -1581,7 +1581,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
   return r.2
 }
 ";
-        let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+        let program = crate::trusted(text);
         let control = Arc::new(Control::new(Limits {
             workers: 2,
             ..Limits::default()
