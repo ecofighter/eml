@@ -3,6 +3,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -91,23 +92,34 @@ pub fn execute(
     let finished = if config.load_only {
         Finished::not_run()
     } else {
-        machine.run(loaded.entry)?
+        machine.run(loaded)?
     };
     machine.close()?;
     Ok(finished)
 }
 
-/// `Machine::load` の結果。
+/// `Machine::load`と`Machine::extend`の結果。欄を隠し、返した`Machine`の印を持つので、`run`はほかの`Machine`の
+/// `Loaded`を断る (docs/spec/vm.mdの「追記」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Loaded {
-    /// 読み込んだプログラムのエントリの関数の、`CodeBase` での番号。
-    pub entry: u32,
+    machine: u64,
+    entry: u32,
 }
 
-/// 入力をまたいで `CodeBase` と `Ctx` を持つ実行の状態 (docs/spec/vm.md の「追記」)。`load` でプログラムを追記し、
-/// `run` でエントリの関数を実行する。モードごとの確かめは、作るときに `Machine<Fast>::new` と `Machine<Checked>::new` が
-/// 決める。渡す `Control` を同時に使う `Machine` は1つだけにする。ID の表と数が `Control` にあるためである
-/// (docs/spec/object-model.md の「実行の制御」)。
+impl Loaded {
+    /// 読み込んだプログラムのエントリの関数の、`CodeBase`での番号。
+    pub fn entry(self) -> u32 {
+        self.entry
+    }
+}
+
+/// `Machine`の印を配る。印は`Loaded`を返した`Machine`を見分けるだけなので、順序づけは要らない。
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// 入力をまたいで`CodeBase`と`Ctx`を持つ実行の状態 (docs/spec/vm.mdの「追記」)。`load`と`extend`でプログラムを読み込み、
+/// `run`でエントリの関数を実行する。モードごとの確かめは、作るときに`Machine<Fast>::new`と`Machine<Checked>::new`が
+/// 決める。渡す`Control`を同時に使う`Machine`は1つだけにする。IDの表と数が`Control`にあるためである
+/// (docs/spec/object-model.mdの「実行の制御」)。
 pub struct Machine<M: Mode> {
     /// 時計と待ち。`with_driver` が渡すか、最初の run が `clock` と方針の seed から作り、run の間は `Scheduler` に
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
@@ -119,6 +131,8 @@ pub struct Machine<M: Mode> {
     /// `with_driver`で渡したdriverは、時計の欄によらず基準を`Injected`にする。出どころを知らないdriverのrunには
     /// OSのシグナルを中継せず、眠るdriverとして空きの待ちを切る (docs/spec/vm.mdの「時計と driver」)。
     run_clock: Option<RunClock>,
+    /// この`Machine`の印。`Loaded`に入れ、`run`が自分の返した`Loaded`かを見分ける。
+    id: u64,
     code: CodeBase<M>,
     /// `ctx` と同じ Host。worker 1..N-1 の `Ctx` に写す。
     host: HostRef,
@@ -190,6 +204,7 @@ impl<M: Mode> Machine<M> {
         at_close: fn(&mut Ctx<M>) -> Result<(), RuntimeError>,
     ) -> Machine<M> {
         Machine {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
             code: CodeBase::new(Arc::clone(&control)),
             max_depth: control.limits().max_depth,
             host: host.clone(),
@@ -284,16 +299,35 @@ impl<M: Mode> Machine<M> {
         &self.code
     }
 
-    /// プログラムを追記する。`linked` は `eml_native` がこのプログラムの C の表をつないだ結果である。誤りを返した後の
-    /// `Machine` は使い続けない (`CodeBase::load`)。
+    /// コードのない`Machine`にプログラムを読み込む。`linked`は`eml_clink`がこのプログラムのCの表をつないだ結果である。
+    /// コードを持つ`Machine`に足すのは`extend`で、`load`はどのビルドでもpanicする (`CodeBase::load`)。誤りを返した後の
+    /// `Machine`は使い続けない。
     pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<Loaded, CompileError> {
         self.refuse_after_panic();
         let entry = self.code.load(program, linked)?;
-        self.attach_region();
-        Ok(Loaded { entry })
+        Ok(self.loaded(entry))
     }
 
-    /// verifierを通さずにプログラムを追記する。ほかは`load`と同じである (`CodeBase::load_unverified`)。
+    /// コードを持つ`Machine`にプログラムを追記する。コードのない`Machine`では`load`と同じである
+    /// (`CodeBase::extend`)。誤りを返した後の`Machine`は使い続けない。
+    ///
+    /// # Safety
+    ///
+    /// P2: `program`は、この`Machine`がすでに持つコードのプログラムと同じセッションから作ったものである。名前が同じ関数は
+    /// 同じコードで、根は書いたときの型のまま読む。Cの関数とハンドルの型の表は約束に入らない。どのビルドでも、何も書く
+    /// 前に前の表と比べ、違えば`Mismatch`で断る (docs/spec/lir.mdの「エンジンの約束」)。
+    pub unsafe fn extend(
+        &mut self,
+        program: &Trusted,
+        linked: &Linked,
+    ) -> Result<Loaded, CompileError> {
+        self.refuse_after_panic();
+        // SAFETY: 呼ぶ側がP2を約束する
+        let entry = unsafe { self.code.extend(program, linked) }?;
+        Ok(self.loaded(entry))
+    }
+
+    /// verifierを通さずにプログラムを追記する。ほかは`extend`と同じである (`CodeBase::load_unverified`)。
     ///
     /// # Safety
     ///
@@ -307,8 +341,16 @@ impl<M: Mode> Machine<M> {
         self.refuse_after_panic();
         // SAFETY: 呼ぶ側が`CodeBase::load_unverified`の約束を引き継ぐ
         let entry = unsafe { self.code.load_unverified(program, linked) }?;
+        Ok(self.loaded(entry))
+    }
+
+    /// 読み込んだ塊を付け替え、エントリの関数の番号にこの`Machine`の印を付ける。
+    fn loaded(&mut self, entry: u32) -> Loaded {
         self.attach_region();
-        Ok(Loaded { entry })
+        Loaded {
+            machine: self.id,
+            entry,
+        }
     }
 
     fn attach_region(&mut self) {
@@ -319,25 +361,30 @@ impl<M: Mode> Machine<M> {
         }
     }
 
-    /// エントリの関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
-    /// 根は手放さず、次の実行に残す。続けられる誤りの後と `exit` が実行を捨てた後は、根から届く物体を新しいヒープに
-    /// 写して古いヒープを捨て、元の誤りか `exit` の `Finished` を返す。回復が失敗したら `Unrecovered` を返す
-    /// (docs/spec/vm.md の「追記」)。
-    pub fn run(&mut self, entry: u32) -> Result<Finished, RuntimeError> {
-        self.run_recovering(entry, None)
+    /// エントリの関数を`()`で実行する。統計は`Machine`を作ってからの積算で、`peak_stack`だけがこの実行の値である。
+    /// 根は手放さず、次の実行に残す。続けられる誤りの後と`exit`が実行を捨てた後は、根から届く物体を新しいヒープに
+    /// 写して古いヒープを捨て、元の誤りか`exit`の`Finished`を返す。回復が失敗したら`Unrecovered`を返す。
+    /// ほかの`Machine`が返した`loaded`は、何も実行せずに内部の誤りで断る (docs/spec/vm.mdの「追記」)。
+    pub fn run(&mut self, loaded: Loaded) -> Result<Finished, RuntimeError> {
+        self.run_recovering(loaded, None)
             .map(|(finished, _)| finished)
     }
 
-    /// 文字列を返すエントリの関数を実行し、結果の文字列の先頭 `max_chars` 文字を写して返す。REPL が式の入力の値を書いた
-    /// 文字列を受け取るのに使う。LIR はエントリが文字列を返すことを印さないので、呼ぶ側が文字列を返すエントリにだけ使う。誤りと
-    /// 回復は `run` と同じである。`exit` で終わった実行は結果を返さないので、文字列は `None` になる
-    /// (docs/spec/vm.md の「追記」)。
-    pub fn run_shown(
+    /// 文字列を返すエントリの関数を実行し、結果の文字列の先頭`max_chars`文字を写して返す。REPLが式の入力の値を書いた
+    /// 文字列を受け取るのに使う。誤りと回復とほかの`Machine`の`loaded`は`run`と同じである。`exit`で終わった実行は
+    /// 結果を返さないので、文字列は`None`になる (docs/spec/vm.mdの「追記」)。
+    ///
+    /// # Safety
+    ///
+    /// P4: `loaded`のエントリの関数が結果をRCのReprで返すなら、その結果は文字列である。LIRはエントリが文字列を返すことを
+    /// 印さず、速いモードは確かめずに結果を文字列として写す。結果がRCのReprでないエントリは約束に入らない。どのビルドでも、
+    /// 実行する前に内部の誤りで断る (docs/spec/lir.mdの「エンジンの約束」)。
+    pub unsafe fn run_shown(
         &mut self,
-        entry: u32,
+        loaded: Loaded,
         max_chars: usize,
     ) -> Result<(Finished, Option<String>), RuntimeError> {
-        self.run_recovering(entry, Some(max_chars))
+        self.run_recovering(loaded, Some(max_chars))
     }
 
     /// `line` を Host の標準出力に1行として書き、書き出す。REPL が整形した結果を書くのに使う。
@@ -352,11 +399,20 @@ impl<M: Mode> Machine<M> {
 
     fn run_recovering(
         &mut self,
-        entry: u32,
+        loaded: Loaded,
         shown: Option<usize>,
     ) -> Result<(Finished, Option<String>), RuntimeError> {
         self.refuse_after_panic();
-        match self.run_entry(entry, shown) {
+        if loaded.machine != self.id {
+            // ほかの`Machine`の番号は、この`CodeBase`のどの関数も指しうる。引数のない関数として実行すれば、速いモードは
+            // 物体の引数の代わりに`()`を読む (docs/spec/vm.mdの「追記」)
+            return Err(RuntimeError::Fault {
+                fault: RunFault::Internal("a loaded entry of another machine"),
+                function: String::new(),
+                at: None,
+            });
+        }
+        match self.run_entry(loaded.entry, shown) {
             Ok(Ran::Done(finished, text)) => Ok((finished, text)),
             // 捨てた run のヒープには片付けていないタスクの物体が残るので、誤りの後と同じく入れ替える。`Scheduler` と
             // 登録表は `run_scheduled` が返るときに捨ててあるので、古いヒープの語を持つものは回復の後に残らない
@@ -1467,6 +1523,21 @@ impl AnyMachine {
 
     /// # Safety
     ///
+    /// P2: `Machine::extend`と同じである (docs/spec/lir.mdの「エンジンの約束」)。
+    pub unsafe fn extend(
+        &mut self,
+        program: &Trusted,
+        linked: &Linked,
+    ) -> Result<Loaded, CompileError> {
+        // SAFETY: 呼ぶ側がP2を約束する
+        match self {
+            AnyMachine::Fast(machine) => unsafe { machine.extend(program, linked) },
+            AnyMachine::Checked(machine) => unsafe { machine.extend(program, linked) },
+        }
+    }
+
+    /// # Safety
+    ///
     /// `CodeBase::load_unverified`と同じである。
     #[cfg(feature = "testing")]
     pub unsafe fn load_unverified(
@@ -1481,21 +1552,25 @@ impl AnyMachine {
         }
     }
 
-    pub fn run(&mut self, entry: u32) -> Result<Finished, RuntimeError> {
+    pub fn run(&mut self, loaded: Loaded) -> Result<Finished, RuntimeError> {
         match self {
-            AnyMachine::Fast(machine) => machine.run(entry),
-            AnyMachine::Checked(machine) => machine.run(entry),
+            AnyMachine::Fast(machine) => machine.run(loaded),
+            AnyMachine::Checked(machine) => machine.run(loaded),
         }
     }
 
-    pub fn run_shown(
+    /// # Safety
+    ///
+    /// P4: `Machine::run_shown`と同じである (docs/spec/lir.mdの「エンジンの約束」)。
+    pub unsafe fn run_shown(
         &mut self,
-        entry: u32,
+        loaded: Loaded,
         max_chars: usize,
     ) -> Result<(Finished, Option<String>), RuntimeError> {
+        // SAFETY: 呼ぶ側がP4を約束する
         match self {
-            AnyMachine::Fast(machine) => machine.run_shown(entry, max_chars),
-            AnyMachine::Checked(machine) => machine.run_shown(entry, max_chars),
+            AnyMachine::Fast(machine) => unsafe { machine.run_shown(loaded, max_chars) },
+            AnyMachine::Checked(machine) => unsafe { machine.run_shown(loaded, max_chars) },
         }
     }
 

@@ -47,10 +47,7 @@ fn keep() -> unit {
     );
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(control(), host).with_seat(Seat::Separate);
-    let entry = machine
-        .load(&program, &eml_vm::Linked::default())
-        .unwrap()
-        .entry;
+    let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     assert_eq!(
         internal(machine.run(entry)),
         "code reaching session roots cannot run with a main worker on another thread"
@@ -67,10 +64,7 @@ fn a_separate_machine_refuses_an_injected_driver() {
     let mut machine = Machine::<Checked>::new(control(), host)
         .with_driver(Box::new(eml_io::TestDriver::new(None)))
         .with_seat(Seat::Separate);
-    let entry = machine
-        .load(&program, &eml_vm::Linked::default())
-        .unwrap()
-        .entry;
+    let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     assert_eq!(
         internal(machine.run(entry)),
         "a separate run makes its driver on worker 0"
@@ -99,10 +93,7 @@ fn a_separate_machine_runs_twice() {
     let mut machine = Machine::<Checked>::new(control(), host)
         .with_clock(Clock::Real)
         .with_seat(Seat::Separate);
-    let entry = machine
-        .load(&program, &eml_vm::Linked::default())
-        .unwrap()
-        .entry;
+    let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     for _ in 0..2 {
         machine.run(entry).unwrap_or_else(|error| panic!("{error}"));
     }
@@ -111,10 +102,7 @@ fn a_separate_machine_runs_twice() {
 
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(control(), host).with_seat(Seat::Separate);
-    let entry = machine
-        .load(&program, &eml_vm::Linked::default())
-        .unwrap()
-        .entry;
+    let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     machine.run(entry).unwrap_or_else(|error| panic!("{error}"));
     let mut machine = machine.with_signals(vec![eml_sched::driver::VirtualSignal {
         at_ms: 15,
@@ -203,10 +191,7 @@ main () = println \"boom\"
         );
         let (host, _) = RecordingHost::new(Some("boom"));
         let mut machine = Machine::<Checked>::new(control(), host.host_ref());
-        let entry = machine
-            .load(&program, &eml_vm::Linked::default())
-            .unwrap()
-            .entry;
+        let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.run(entry)))
             .expect_err("the panic reaches the caller");
         assert_eq!(
@@ -236,10 +221,7 @@ main () = Async.run (fn () ->
             ..Limits::default()
         }));
         let mut machine = Machine::<Checked>::new(control, host.host_ref());
-        let entry = machine
-            .load(&program, &eml_vm::Linked::default())
-            .unwrap()
-            .entry;
+        let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.run(entry)))
             .expect_err("the panic reaches the caller");
         assert_eq!(
@@ -299,8 +281,7 @@ main () = Async.run (fn () ->
         let mut machine = Machine::<Checked>::new(limited, host_ref.clone());
         let entry = machine
             .load(&panicking, &eml_vm::Linked::default())
-            .unwrap()
-            .entry;
+            .unwrap();
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.run(entry)))
             .expect_err("the panic reaches the caller");
         assert_eq!(
@@ -322,8 +303,7 @@ main () =
         let mut machine = Machine::<Checked>::new(control(), host_ref);
         let entry = machine
             .load(&reopening, &eml_vm::Linked::default())
-            .unwrap()
-            .entry;
+            .unwrap();
         machine.run(entry).unwrap_or_else(|error| panic!("{error}"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(out.contents(), "reopened\n");

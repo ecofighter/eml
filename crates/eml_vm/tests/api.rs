@@ -281,11 +281,10 @@ fn second() -> unit {
     let first = machine
         .load(&trusted(EXIT), &eml_vm::Linked::default())
         .unwrap();
-    let second = machine
-        .load(&trusted(quiet), &eml_vm::Linked::default())
-        .unwrap();
-    assert_eq!(machine.run(first.entry).unwrap().exit, Some(3));
-    assert_eq!(machine.run(second.entry).unwrap().exit, None);
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let second = unsafe { machine.extend(&trusted(quiet), &eml_vm::Linked::default()) }.unwrap();
+    assert_eq!(machine.run(first).unwrap().exit, Some(3));
+    assert_eq!(machine.run(second).unwrap().exit, None);
     assert_eq!(control.exit_code(), None);
     machine.close().unwrap();
 }
@@ -329,13 +328,12 @@ fn second() -> unit {
     let first = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
-    let second = machine
-        .load(&trusted(quiet), &eml_vm::Linked::default())
-        .unwrap();
-    let finished = machine.run(first.entry);
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let second = unsafe { machine.extend(&trusted(quiet), &eml_vm::Linked::default()) }.unwrap();
+    let finished = machine.run(first);
     std::fs::remove_dir_all(&root).unwrap();
     assert_eq!(finished.unwrap().exit, Some(3));
-    assert_eq!(machine.run(second.entry).unwrap().exit, None);
+    assert_eq!(machine.run(second).unwrap().exit, None);
     machine.close().unwrap();
     assert_eq!(out.contents(), "exiting\n");
 }
@@ -454,7 +452,7 @@ main () = Async.run (fn () -> Async.sleep_ms 50)
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap();
     let calls = calls.lock().unwrap();
@@ -487,7 +485,7 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
                 .with_sched(Sched::Sequential)
                 .with_doorbell(doorbell);
             let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
-            machine.run(loaded.entry)
+            machine.run(loaded)
         })
     };
     let has_monitor = || {
@@ -562,7 +560,7 @@ fn run_real_on(
             }
         }
     });
-    let result = machine.run(loaded.entry);
+    let result = machine.run(loaded);
     let closed = machine.close();
     let elapsed = start.elapsed();
     drop(done);

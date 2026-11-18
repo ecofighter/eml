@@ -383,7 +383,7 @@ main () = Async.run (fn () ->
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "Cancelled: task was cancelled\n");
@@ -431,7 +431,7 @@ main () = Async.run (fn () ->
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "Cancelled: task was cancelled\n");
@@ -467,7 +467,7 @@ main () = Async.run (fn () ->
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(finished.exit, Some(3));
@@ -603,7 +603,7 @@ main () = Async.run (fn () ->
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "hi\n");
@@ -651,7 +651,7 @@ main () = Async.run (fn () ->
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "0\n");
@@ -706,7 +706,7 @@ main () = Async.run (fn () ->
             .load(&eml_test_support::lir(&src), &eml_vm::Linked::default())
             .unwrap();
         let finished = machine
-            .run(loaded.entry)
+            .run(loaded)
             .unwrap_or_else(|error| panic!("{error}"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
         finished.stats
@@ -992,7 +992,7 @@ fn a_spent_budget_looks_at_the_os_and_goes_on_alone() {
             )
             .unwrap();
         let finished = machine
-            .run(loaded.entry)
+            .run(loaded)
             .unwrap_or_else(|error| panic!("{error}"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
         let waits = log.lock().unwrap().waits;
@@ -1063,7 +1063,7 @@ main () = Async.run (fn () ->
 fn run_to_close<M: eml_rt::Mode>(mut machine: Machine<M>, program: &eml_lir::Trusted) {
     let loaded = machine.load(program, &eml_vm::Linked::default()).unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
 }
@@ -1778,7 +1778,7 @@ fn run_on_watch(src: &str, driver: FileWatch) -> String {
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     out.contents()

@@ -142,7 +142,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 | `eml_types` | `check(&Program, &SourceFiles) -> (TypedProgram, Vec<Diagnostic>)`。`SourceFiles` は E3003 の fix の字下げを求めるのに使う |
 | `eml_core_ir` | `lower(Input) -> eml_lir::Program`。`Input` は HIR の `Program`、`TypedProgram`、エントリの `FunctionId`、`SourceFiles` の組で、どのエントリも同じものを受け取る。translate、`optimize`、EP、LIR への変換 (`to_lir`)、LIR のパス (`eml_lir::passes_until`) の順に呼ぶ。LIR のパスの途中で止める `lower_until(Input, eml_lir::Pass)` と、Core IR の段で止める `core_until(Input, Pass) -> Program` もある。エントリの関数は呼ぶ側が渡す。`SourceFiles` は extern の呼び出しの位置を行と列にするのに使う |
 | `eml_lir` | `passes_until(&mut Program, Pass)`。変換の直後の LIR に、box の挿入から指定したパスまでをかける |
-| `eml_vm` | `execute(&eml_lir::Trusted, &Linked, &RunConfig, HostRef) -> Result<Finished, RuntimeError>`。`CodeBase::new(Arc<Control>)` の表に `CodeBase::load(&eml_lir::Trusted, &Linked) -> Result<u32, CompileError>` でバイトコードを足し、`Ctx<M>` の上で実行する |
+| `eml_vm` | `execute(&eml_lir::Trusted, &Linked, &RunConfig, HostRef) -> Result<Finished, RuntimeError>`。`CodeBase::new(Arc<Control>)`の空の表に`CodeBase::load(&eml_lir::Trusted, &Linked) -> Result<u32, CompileError>`でバイトコードを読み込み (追記は同じ形の`unsafe fn CodeBase::extend`)、`Ctx<M>`の上で実行する |
 
 ## エラーが出ても止まらない
 
@@ -516,7 +516,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `eml run --workers <N>` (と環境変数 `EML_WORKERS`) は worker の数を選ぶ。`eml repl` は持たず、`repl_limits().workers` は 1 である ([起動](../spec/stdlib.md) の「起動」)
 - `eml run` と `eml repl` はスケジュールの方針がいつも `Normal` である (ライブラリの既定の `Sched::default()` は `Sequential` である。[VM](../spec/vm.md) の「タスクとスケジュール」)
 - `eml repl [--debug-heap] [--link KEY=VALUE]... [file]`は、`file`を渡すと`:load`と同じく最初の入力として読み、`repl_limits()`の上限で`eml_cli::Repl`を使う。端末の繰り返しはbinの`terminal.rs`で、行を入力にまとめるのはlibの`eml_cli::lines`である。規則は [REPLの端末](../spec/repl.md)にある。終了コードは、0 = `:quit`かEOFで終わった、1 = 検査モードのリーク、続けられない誤り、行を読めない誤り、2 = 使い方の誤り、である。入力の誤りと実行時エラーは終了コードを変えない
-- Ctrl-Cと`Terminate`のシグナルのハンドラはbinの`interrupt`モジュールが入れる。unixでは`interrupt/unix.rs`が`libc::sigaction`で、Windowsでは`interrupt/windows.rs`が`SetConsoleCtrlHandler`で入れる。`src/`の`unsafe`は、`interrupt`モジュールと、`physical_memory`と、`Trusted::new`を呼ぶ`lower_trusted`と、端末の列の数を読むbinの`terminal.rs`の`stdout_width`の中だけに置く
+- Ctrl-Cと`Terminate`のシグナルのハンドラはbinの`interrupt`モジュールが入れる。unixでは`interrupt/unix.rs`が`libc::sigaction`で、Windowsでは`interrupt/windows.rs`が`SetConsoleCtrlHandler`で入れる。`src/`の`unsafe`は、`interrupt`モジュールと、`physical_memory`と、`Trusted::new`を呼ぶ`lower_trusted`と、`extend`と`run_shown`を呼ぶ`repl.rs`の`Repl::run`と、端末の列の数を読むbinの`terminal.rs`の`stdout_width`の中だけに置く
 
 `eml_cli` の lib は次の API を公開する。`Session` はパイプラインを組む唯一の場所で、CLI、UI テスト、`eml_test_support` がこれを通す。UI テストはこれをプロセス内で呼ぶ。どのメソッドも読み込みの結果から計算し直し、途中の結果を持たない。途中の結果を使い回すのは、salsa でクエリ化するときに考える。`Session` は `Send + Sync` で、`crates/eml_cli/tests/api.rs` が確かめる。salsa への載せ替えと、フロントエンドの並列のコンパイルに備えるためで、実行とは関係ない。読み込みの結果が持つのは緑の木 (green tree) と `AstPtr` だけで、ノードを持たないので `Send + Sync` にできる。`Repl` は `Machine` を持つので `Send` でなく、作ったスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。
 

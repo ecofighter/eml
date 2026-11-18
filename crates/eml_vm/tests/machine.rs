@@ -38,11 +38,11 @@ fn run_two(first: &str, second: &str) -> String {
         for text in [first, second] {
             let program = trusted(text);
             eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-            let loaded = machine
-                .load(&program, &eml_vm::Linked::default())
+            // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+            let loaded = unsafe { machine.extend(&program, &eml_vm::Linked::default()) }
                 .unwrap_or_else(|error| panic!("{error:?}"));
             machine
-                .run(loaded.entry)
+                .run(loaded)
                 .unwrap_or_else(|error| panic!("{error}"));
         }
         machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -87,10 +87,9 @@ fn second() -> unit {{
     let a = machine
         .load(&trusted(&first), &eml_vm::Linked::default())
         .unwrap();
-    let b = machine
-        .load(&trusted(&second), &eml_vm::Linked::default())
-        .unwrap();
-    assert_eq!((a.entry, b.entry), (0, 2));
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let b = unsafe { machine.extend(&trusted(&second), &eml_vm::Linked::default()) }.unwrap();
+    assert_eq!((a.entry(), b.entry()), (0, 2));
     assert_eq!(names(&machine), ["main", "say", "second"]);
 }
 
@@ -131,9 +130,8 @@ fn second() -> unit {{
     machine
         .load(&trusted(&first), &eml_vm::Linked::default())
         .unwrap();
-    machine
-        .load(&trusted(&second), &eml_vm::Linked::default())
-        .unwrap();
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    unsafe { machine.extend(&trusted(&second), &eml_vm::Linked::default()) }.unwrap();
     let text = disassemble(machine.code());
     let second_fn = &text[text.find("fn second").unwrap()..];
     assert!(second_fn.contains("load_const s0, c0"), "{second_fn}");
@@ -170,9 +168,8 @@ fn g(p.0: unit) -> unit {
     machine
         .load(&trusted(first), &eml_vm::Linked::default())
         .unwrap();
-    machine
-        .load(&trusted(second), &eml_vm::Linked::default())
-        .unwrap();
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    unsafe { machine.extend(&trusted(second), &eml_vm::Linked::default()) }.unwrap();
     let text = disassemble(machine.code());
     let g = &text[text.find("fn g").unwrap()..];
     assert!(g.contains("= E0.op0("), "{g}");
@@ -200,12 +197,11 @@ fn second() -> unit {
     let a = machine
         .load(&trusted(first), &eml_vm::Linked::default())
         .unwrap();
-    machine.run(a.entry).unwrap();
-    let b = machine
-        .load(&trusted(second), &eml_vm::Linked::default())
-        .unwrap();
+    machine.run(a).unwrap();
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let b = unsafe { machine.extend(&trusted(second), &eml_vm::Linked::default()) }.unwrap();
     assert_eq!(
-        machine.run(b.entry).unwrap_err(),
+        machine.run(b).unwrap_err(),
         RuntimeError::Fault {
             fault: RunFault::Extern(Fault::Arith(ArithFault::DivisionByZero)),
             function: "second".to_string(),
@@ -238,13 +234,64 @@ fn one() -> int {
         .load(&trusted(first), &eml_vm::Linked::default())
         .unwrap();
     assert_eq!(
-        machine
-            .load(&trusted(second), &eml_vm::Linked::default())
-            .unwrap_err(),
+        // SAFETY: このテストはP2をわざと破る。debugのビルドだけで動き、比べが`Mismatch`で断った後は`Machine`を実行しない
+        unsafe { machine.extend(&trusted(second), &eml_vm::Linked::default()) }.unwrap_err(),
         CompileError::Mismatch {
             function: "one".to_string()
         }
     );
+}
+
+/// コードを持つマシンへの`load`は、どのビルドでもpanicする。追記は`extend`で行う (docs/spec/vm.mdの「追記」)。
+#[test]
+#[should_panic(expected = "load on a machine that has code")]
+fn a_load_into_a_machine_with_code_panics() {
+    let text = "\
+fn main() -> unit {
+  return ()
+}
+";
+    let (host, _) = capture_host(Default::default());
+    let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
+    machine
+        .load(&trusted(text), &eml_vm::Linked::default())
+        .unwrap();
+    let _ = machine.load(&trusted(text), &eml_vm::Linked::default());
+}
+
+/// マシンはほかのマシンの`load`が返した`Loaded`を内部の誤りで断り、その後も自分の`Loaded`を実行する
+/// (docs/spec/vm.mdの「追記」)。
+#[test]
+fn a_loaded_of_another_machine_is_refused() {
+    let text = "\
+fn main() -> unit {
+  let s.0: obj = const \"ran\"
+  let u.1: unit = extern Prelude.println(s.0)
+  return u.1
+}
+";
+    let (host, out) = capture_host(Default::default());
+    let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
+    let (other_host, _) = capture_host(Default::default());
+    let mut other = Machine::<Fast>::new(RunConfig::default().control, other_host);
+    let own = machine
+        .load(&trusted(text), &eml_vm::Linked::default())
+        .unwrap();
+    let foreign = other
+        .load(&trusted(text), &eml_vm::Linked::default())
+        .unwrap();
+    let error = machine.run(foreign).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("a loaded entry of another machine"),
+        "{error}"
+    );
+    assert_eq!(out.contents(), "");
+    machine.run(own).unwrap();
+    assert_eq!(out.contents(), "ran\n");
+    machine.close().unwrap();
+    other.close().unwrap();
 }
 
 /// 読み込みはどのビルドでもプログラムをverifierで確かめ、verifierが拒むプログラムを何も変換せずに断る。文言は規則と
@@ -310,9 +357,8 @@ b2:
     machine
         .load(&trusted(first), &eml_vm::Linked::default())
         .unwrap();
-    machine
-        .load(&trusted(second), &eml_vm::Linked::default())
-        .unwrap();
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    unsafe { machine.extend(&trusted(second), &eml_vm::Linked::default()) }.unwrap();
     assert_eq!(names(&machine), ["pick", "other"]);
 }
 
@@ -434,14 +480,14 @@ fn second() -> unit {
         let first = machine
             .load(&trusted(first), &eml_vm::Linked::default())
             .unwrap();
-        let error = machine.run(first.entry).unwrap_err();
+        let error = machine.run(first).unwrap_err();
         assert_eq!(error.to_string(), "division by zero in `main`");
         assert!(!error.is_broken());
-        let second = machine
-            .load(&trusted(second), &eml_vm::Linked::default())
-            .unwrap();
+        // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+        let second =
+            unsafe { machine.extend(&trusted(second), &eml_vm::Linked::default()) }.unwrap();
         machine
-            .run(second.entry)
+            .run(second)
             .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(out.contents(), "after\n");
         machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -488,7 +534,7 @@ fn an_interrupt_before_load_is_held_until_the_first_safe_point() {
             if !before_load {
                 control.interrupt();
             }
-            let error = machine.run(loaded.entry).unwrap_err();
+            let error = machine.run(loaded).unwrap_err();
             assert_eq!(error.to_string(), "interrupted in `main`");
             assert_eq!(out.contents(), "");
             machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -531,10 +577,9 @@ fn third() -> unit {
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
     let mut run = |text: &str| {
-        let loaded = machine
-            .load(&trusted(text), &eml_vm::Linked::default())
-            .unwrap();
-        machine.run(loaded.entry).map(|finished| finished.stats)
+        // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+        let loaded = unsafe { machine.extend(&trusted(text), &eml_vm::Linked::default()) }.unwrap();
+        machine.run(loaded).map(|finished| finished.stats)
     };
     let before = run(first).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(before.peak_objects, 4, "{before:?}");
@@ -575,7 +620,7 @@ fn main() -> unit {
         // SAFETY: 根に`lin`の値を置くことのほかは実行の前提を守り、それを回復の見張りが断る
         let loaded =
             unsafe { machine.load_unverified(&parse(text), &eml_vm::Linked::default()) }.unwrap();
-        errors.push(machine.run(loaded.entry).unwrap_err());
+        errors.push(machine.run(loaded).unwrap_err());
     }
     std::fs::remove_dir_all(&root).unwrap();
     for error in errors {
@@ -626,11 +671,13 @@ fn a_shown_entry_returns_its_text_after_the_output() {
         let program = trusted(SHOWN);
         eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
         let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
-        let (_, text) = machine.run_shown(loaded.entry, 100).unwrap();
+        // SAFETY: P4: `SHOWN`のエントリは文字列を返す
+        let (_, text) = unsafe { machine.run_shown(loaded, 100) }.unwrap();
         assert_eq!(text.as_deref(), Some("x = 42"));
         // エントリが書いた行は、結果を返す前に書き出してある
         assert_eq!(out.contents(), "printed\n");
-        let (_, text) = machine.run_shown(loaded.entry, 3).unwrap();
+        // SAFETY: 上と同じ
+        let (_, text) = unsafe { machine.run_shown(loaded, 3) }.unwrap();
         assert_eq!(text.as_deref(), Some("x ="));
         machine.write_line("x = 42 : Int").unwrap();
         assert_eq!(out.contents(), "printed\nprinted\nx = 42 : Int\n");
@@ -650,7 +697,8 @@ fn a_shown_entry_must_return_an_object() {
             &eml_vm::Linked::default(),
         )
         .unwrap();
-    let error = machine.run_shown(loaded.entry, 10).unwrap_err();
+    // SAFETY: P4: エントリの`ret`はRCのReprでないので約束に入らず、`run_shown`は実行する前に内部の誤りで断る
+    let error = unsafe { machine.run_shown(loaded, 10) }.unwrap_err();
     assert!(
         matches!(
             error,
@@ -767,7 +815,7 @@ fn main() -> unit {{
         )
         .unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     assert!(quiesces.load(Ordering::SeqCst) >= 1);
     machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -795,7 +843,7 @@ fn main() -> unit {
             &eml_vm::Linked::default(),
         )
         .unwrap();
-    let error = machine.run(loaded.entry).unwrap_err();
+    let error = machine.run(loaded).unwrap_err();
     assert_eq!(error.to_string(), "division by zero in `main`");
     assert_eq!(quiesces.load(Ordering::SeqCst), 2);
     machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -823,7 +871,7 @@ fn a_failing_driver_breaks_the_run() {
             &eml_vm::Linked::default(),
         )
         .unwrap();
-    let error = machine.run(loaded.entry).unwrap_err();
+    let error = machine.run(loaded).unwrap_err();
     assert!(error.is_broken(), "{error}");
     assert!(
         error
@@ -848,7 +896,7 @@ fn a_driver_left_pending_is_dropped_with_the_run() {
             &eml_vm::Linked::default(),
         )
         .unwrap();
-    let error = machine.run(loaded.entry).unwrap_err();
+    let error = machine.run(loaded).unwrap_err();
     assert!(error.is_broken(), "{error}");
     assert!(
         error
@@ -961,7 +1009,7 @@ fn run_on_stub(src: &str) -> (String, eml_vm::Finished, Vec<String>) {
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     let log = log.lock().unwrap().clone();
@@ -1094,7 +1142,7 @@ fn every_quiesce_gets_the_job_budget() {
         let loaded = machine
             .load(&trusted(src), &eml_vm::Linked::default())
             .unwrap();
-        let ran = machine.run(loaded.entry).map(|_| ());
+        let ran = machine.run(loaded).map(|_| ());
         machine.close().unwrap_or_else(|error| panic!("{error}"));
         let jobs = jobs.lock().unwrap().clone();
         (ran, jobs)
@@ -1132,7 +1180,7 @@ fn exit_keeps_its_code(src: &str) {
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(finished.exit, Some(3));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -1187,7 +1235,7 @@ main () = Async.run body
         )
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(finished.exit, Some(3));
     let again = format!(
@@ -1198,11 +1246,10 @@ fn main() -> unit {{
 }}
 {SAY}"
     );
-    let loaded = machine
-        .load(&trusted(&again), &eml_vm::Linked::default())
-        .unwrap();
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let loaded = unsafe { machine.extend(&trusted(&again), &eml_vm::Linked::default()) }.unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "ran\n");

@@ -1588,10 +1588,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         }));
         let (host, _) = crate::capture_host(Default::default());
         let mut machine = Machine::<Checked>::new(control, host);
-        let entry = machine
-            .load(&program, &crate::Linked::default())
-            .unwrap()
-            .entry;
+        let entry = machine.load(&program, &crate::Linked::default()).unwrap();
         let finished = machine.run(entry).unwrap();
         assert_eq!(finished.placed, 1);
         assert!(

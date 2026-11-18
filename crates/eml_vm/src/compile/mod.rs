@@ -59,6 +59,17 @@ impl<M: Mode> CodeBase<M> {
         }
     }
 
+    /// 空の表にプログラムを読み込み、エントリの関数の番号を返す。関数を持つ表に足すのは`extend`で、`load`はどのビルドでも
+    /// panicする。どの関数も変換するので、名前が同じ関数が同じコードであるという約束は要らない (docs/spec/vm.mdの「追記」)。
+    /// ほかは`extend`と同じである。
+    pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<u32, CompileError> {
+        assert!(
+            self.functions.is_empty(),
+            "internal error: load on a machine that has code; use extend"
+        );
+        self.load_verified(program, linked)
+    }
+
     /// プログラムを追記し、エントリの関数の番号を返す。すでにある名前の関数は前の番号を使い、ない名前の関数だけを変換して
     /// 末尾に足す。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭を引くので、関数の先頭の位置が決まる前に
     /// 呼び出しを書ける。名前が同じ関数はいつも同じコードになるので (docs/spec/vm.md の「追記」)、debug ビルドでは
@@ -71,7 +82,21 @@ impl<M: Mode> CodeBase<M> {
     /// `linked`を比べた後に、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムは
     /// `CodeBase`に何も書かずに`Invalid`で断る。たどるのは変換する関数だけで、debugのビルドでは変換し直す関数もたどる。プログラム全体の規則は
     /// プログラム全体に当てる (docs/spec/vm.mdの「追記」)。
-    pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<u32, CompileError> {
+    ///
+    /// # Safety
+    ///
+    /// P2: `program`は、表がすでに持つ関数のプログラムと同じセッションから作ったものである。releaseのビルドは、名前が
+    /// 同じ関数を変換し直さずに前のコードを使う。Cの関数とハンドルの型の表は約束に入らない。どのビルドでも`c_links`が
+    /// 何も書く前に比べ、違えば`Mismatch`で断る (docs/spec/lir.mdの「エンジンの約束」)。
+    pub unsafe fn extend(
+        &mut self,
+        program: &Trusted,
+        linked: &Linked,
+    ) -> Result<u32, CompileError> {
+        self.load_verified(program, linked)
+    }
+
+    fn load_verified(&mut self, program: &Trusted, linked: &Linked) -> Result<u32, CompileError> {
         self.load_with(program, linked, |code| {
             eml_lir::unwind::verified_for(program, |index| code.walked(program, index))
                 .map_err(CompileError::Invalid)
@@ -85,7 +110,8 @@ impl<M: Mode> CodeBase<M> {
     /// # Safety
     ///
     /// プログラムは、呼ぶテストがわざと起こす誤りを除いて、verifierが確かめる規則をすべて含む実行の前提を満たす
-    /// (docs/spec/lir.mdの「実行の前提」)。テストは、VMの見張りと検査モードだけを守りとして受け入れる。
+    /// (docs/spec/lir.mdの「実行の前提」)。テストは、VMの見張りと検査モードだけを守りとして受け入れる。関数を持つ表に
+    /// 読み込むときは、`extend`のP2も約束する。
     #[cfg(feature = "testing")]
     pub unsafe fn load_unverified(
         &mut self,

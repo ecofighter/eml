@@ -147,6 +147,27 @@ fn a_second_load_is_refused() {
     m.close();
 }
 
+/// マシンはほかのマシンの`load`が返した`Loaded`を内部の誤りで断り、その後も自分の`Loaded`を実行する
+/// (docs/spec/native.mdの「関数の形」)。
+#[test]
+fn a_loaded_of_another_machine_is_refused() {
+    let program = program(MAIN);
+    let mut m = machine();
+    let mut other = machine();
+    let own = m.load(&program, &Linked::default()).unwrap();
+    let foreign = other.load(&program, &Linked::default()).unwrap();
+    let error = m.run(foreign, native_options()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("a loaded entry of another machine"),
+        "{error}"
+    );
+    assert_eq!(m.run(own, native_options()).unwrap().exit, None);
+    m.close();
+    other.close();
+}
+
 #[test]
 fn symbols_cover_every_function() {
     let text = format!(

@@ -249,10 +249,10 @@ fn loading_the_same_c_function_twice_keeps_one_entry() {
     let mut entries = Vec::new();
     for text in [ABS_FIRST, ABS_SECOND, ABS_FIRST] {
         let program = trusted(text);
-        let loaded = machine
-            .load(&program, &linked_all(&program))
+        // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+        let loaded = unsafe { machine.extend(&program, &linked_all(&program)) }
             .unwrap_or_else(|error| panic!("{error:?}"));
-        entries.push(loaded.entry);
+        entries.push(loaded);
     }
     let text = disassemble(machine.code());
     assert_eq!(text.matches("cfn ").count(), 1, "{text}");
@@ -294,24 +294,28 @@ fn {f}(n.0: int) -> int {{
     let first = trusted(ABS_FIRST);
     machine.load(&first, &linked_all(&first)).unwrap();
     let with_drop = trusted(&handle(" drop \"rs_handle_free\"", "keep"));
-    machine.load(&with_drop, &linked_all(&with_drop)).unwrap();
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    unsafe { machine.extend(&with_drop, &linked_all(&with_drop)) }.unwrap();
     let second = trusted(other);
     assert_eq!(
-        machine.load(&second, &linked_all(&second)),
+        // SAFETY: P2: 名前が同じ関数はなく、根も使わない。Cの表の宣言は前と違うが、Cの表はP2に入らず、`extend`がどのビルドでも何も書く前に`Mismatch`で断る
+        unsafe { machine.extend(&second, &linked_all(&second)) },
         Err(CompileError::Mismatch {
             function: "Main.abs".into()
         })
     );
     let without_drop = trusted(&handle("", "other"));
     assert_eq!(
-        machine.load(&without_drop, &linked_all(&without_drop)),
+        // SAFETY: P2: 名前が同じ関数はなく、根も使わない。Cの表の宣言は前と違うが、Cの表はP2に入らず、`extend`がどのビルドでも何も書く前に`Mismatch`で断る
+        unsafe { machine.extend(&without_drop, &linked_all(&without_drop)) },
         Err(CompileError::Mismatch {
             function: "Main.Handle".into()
         })
     );
     // `Mismatch` は何も書かないので、同じ `Machine` に前のプログラムをもう一度読み込んで流せる
-    let loaded = machine.load(&first, &linked_all(&first)).unwrap();
-    machine.run(loaded.entry).unwrap();
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let loaded = unsafe { machine.extend(&first, &linked_all(&first)) }.unwrap();
+    machine.run(loaded).unwrap();
     machine.close().unwrap();
     assert_eq!(out.contents(), "5\n");
 }
@@ -523,7 +527,7 @@ fn run_counting(main: &str, refuse: bool) -> (String, (usize, usize)) {
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     let counts = *log.lock().unwrap();
@@ -665,10 +669,8 @@ main () = Async.run (fn () ->
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
     let entries: Vec<_> = (0..2)
         .map(|_| {
-            machine
-                .load(&program, &linked)
-                .unwrap_or_else(|error| panic!("{error:?}"))
-                .entry
+            // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+            unsafe { machine.extend(&program, &linked) }.unwrap_or_else(|error| panic!("{error:?}"))
         })
         .collect();
     for entry in entries {
@@ -691,7 +693,7 @@ fn run_real(src: &str, workers: usize) -> (String, Finished) {
         .with_job_budget(Duration::from_millis(20));
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     (out.contents(), finished)
@@ -899,7 +901,7 @@ main () = Async.run body
         );
         rs_gate_open(100026);
     });
-    let result = machine.run(loaded.entry);
+    let result = machine.run(loaded);
     opener.join().unwrap();
     let error = result.unwrap_err();
     assert!(!error.interrupted(), "{error:?}");

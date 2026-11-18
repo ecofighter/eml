@@ -187,11 +187,11 @@ fn second() -> unit {
         let mut machine = AnyMachine::new(&config, host);
         for text in [first, second] {
             let program = crate::common::verified(text);
-            let loaded = machine
-                .load(&program, &eml_vm::Linked::default())
+            // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+            let loaded = unsafe { machine.extend(&program, &eml_vm::Linked::default()) }
                 .unwrap_or_else(|error| panic!("{error:?}"));
             machine
-                .run(loaded.entry)
+                .run(loaded)
                 .unwrap_or_else(|error| panic!("{error}"));
         }
         machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -216,7 +216,8 @@ fn shown() -> obj {
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
         let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
-        let (_, shown) = machine.run_shown(loaded.entry, 10).unwrap();
+        // SAFETY: P4: エントリは`String.++`の結果の文字列を返す
+        let (_, shown) = unsafe { machine.run_shown(loaded, 10) }.unwrap();
         assert_eq!(shown.as_deref(), Some("é7"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
     }

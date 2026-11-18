@@ -953,15 +953,21 @@ LIRを実行する[VM](vm.md)とネイティブのコードは、次の意味に
 
 verifierは命令ごとに所有、Repr、印を確かめるが、値を作ったときの配置を追わず、`poly`の印が指す物体のKindも確かめられない (上の「Kind の印の検査」)。externの引数は、Reprと印でしか比べない。そのため、verifierを通ることは、verifierが確かめる規則を保証するが、上の前提は保証しない。
 
-エンジンのエントリが受け取る約束と、残りの前提を約束するのが誰かは、次の「エンジンの約束」にある。読み込みは、どのビルドでもverifierが確かめることを確かめ、verifierが拒むプログラムを断る (上の「verifier」)。verifierが拒むIRを読み込めるのは`eml_vm`のテストだけで、開発だけのfeature `testing`の後ろにある確かめない読み込み (`unsafe fn load_unverified`) を使う ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)。`Machine`に続けて読み込むときの約束は、[VM](vm.md)の「追記」にある。
+エンジンのエントリが受け取る約束と、残りの前提を約束するのが誰かは、次の「エンジンの約束」にある。読み込みは、どのビルドでもverifierが確かめることを確かめ、verifierが拒むプログラムを断る (上の「verifier」)。verifierが拒むIRを読み込めるのは`eml_vm`のテストだけで、開発だけのfeature `testing`の後ろにある確かめない読み込み (`unsafe fn load_unverified`) を使う ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)。コードを持つ`Machine`に追記するときの約束は、次の「エンジンの約束」のP2である。
 
 ## エンジンの約束
 
 エンジンはプログラムを`eml_lir::Trusted`としてだけ受け取る。`Trusted`は`Program`を包み、作る道は`unsafe fn Trusted::new`だけである。この関数の約束 (P1) は、渡す`Program`が上の「実行の前提」のうちverifierが確かめられない前提をすべて満たすことである。`Trusted`は中の`Program`を書き換える道を持たない。テストの外で`Trusted`を作るのは`eml_cli`の`Session`だけで、検査を通ったプログラムから自分のパイプラインで作ったLIRだけを包む ([アーキテクチャ](../implementation/architecture.md)の「CLI と lib API」)。テストは手書きのLIRを包み、まず検査モードで実行する。
 
-VMのエントリ (`eml_vm::execute`、`Machine::load`、`AnyMachine::load`、`CodeBase::load`) は`&Trusted`を取る。verifierを通さない読み込み (`load_unverified`) は`&Program`を取り、`Trusted`を作らない。
+VMのエントリ (`eml_vm::execute`、`Machine`、`AnyMachine`、`CodeBase`の`load`と`extend`) は`&Trusted`を取る。verifierを通さない読み込み (`load_unverified`) は`&Program`を取り、`Trusted`を作らない。
 
 ネイティブのエントリ (`eml_native::execute`、`NativeMachine::load`) も`&Trusted`を取る。`eml_native::unsupported`はプログラムを調べるだけで読み込まないので、`&Program`を取る。
+
+マシンのエントリには、ほかに次の約束と規則がある ([VM](vm.md)の「追記」)。
+
+- P2: VMのマシンの`unsafe fn extend` (`Machine`、`AnyMachine`、`CodeBase`) がコードを持つマシンに追記するプログラムは、マシンがすでに持つプログラムと同じセッションから作ったものである。名前が同じ関数は同じコードで、根は書いたときの型のまま読む。releaseのビルドは、名前が同じ関数の命令列を比べない。Cの関数とハンドルの型の表は約束に入らない。`extend`はどのビルドでも、何も書く前にそれを前の表と比べ、違えば`Mismatch`で断る ([VM](vm.md)の「C の関数の命令」)。`load`はコードを持たないマシンだけに読み込み、コードを持つマシンではどのビルドでもpanicする
+- P3: 呼ぶ側の約束ではない。`run`と`run_shown`は、同じマシンの`load`か`extend`が返した`Loaded`を受け取る。`Loaded`は欄を隠してマシンの印を持ち、マシンはどのビルドでも、ほかのマシンの`Loaded`を内部の誤りで断る。ネイティブのマシンも同じである ([ネイティブの実行系](native.md)の「関数の形」)
+- P4: VMのマシンの`unsafe fn run_shown` (`Machine`、`AnyMachine`) に渡す`Loaded`のエントリの関数が結果をRCのReprで返すなら、その結果は文字列である。速いモードは、確かめずに結果を文字列として写す。結果がRCのReprでないエントリは約束に入らず、`run_shown`はどのビルドでも、実行する前に内部の誤りで断る
 
 ## 実行時エラー
 

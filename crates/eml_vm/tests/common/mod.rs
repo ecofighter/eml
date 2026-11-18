@@ -102,7 +102,7 @@ pub fn execute_unverified(
         // SAFETY: 呼ぶテストは、わざと起こす誤りのほかは実行の前提を守り、VMの見張りと検査モードだけを守りとする
         let loaded = unsafe { machine.load_unverified(program, &eml_vm::Linked::default()) }
             .map_err(|error| eml_vm::compile_error(program, error))?;
-        machine.run(loaded.entry)
+        machine.run(loaded)
     };
     let result = run().and_then(|finished| machine.close().map(|()| finished));
     (out.contents(), result)
@@ -143,7 +143,7 @@ fn run_merged(program: &Trusted, debug_heap: bool) -> (String, Result<(), Runtim
         let loaded = machine
             .load(program, &eml_vm::Linked::default())
             .map_err(|error| eml_vm::compile_error(program, error))?;
-        machine.run(loaded.entry)?;
+        machine.run(loaded)?;
         Ok::<(), RuntimeError>(())
     };
     let result = run().and_then(|()| machine.close());

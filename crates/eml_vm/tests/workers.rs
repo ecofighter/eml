@@ -144,22 +144,18 @@ fn code_with_roots_starts_no_worker() {
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(4), host);
     machine.load(&roots, &eml_vm::Linked::default()).unwrap();
-    let entry = machine
-        .load(&par, &eml_vm::Linked::default())
-        .unwrap()
-        .entry;
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let entry = unsafe { machine.extend(&par, &eml_vm::Linked::default()) }.unwrap();
     assert_eq!(machine.run(entry).unwrap().workers, 0);
     machine.close().unwrap();
     assert_eq!(out.contents(), "3\n");
 
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(4), host);
-    let entry = machine
-        .load(&par, &eml_vm::Linked::default())
-        .unwrap()
-        .entry;
+    let entry = machine.load(&par, &eml_vm::Linked::default()).unwrap();
     assert_eq!(machine.run(entry).unwrap().workers, 3);
-    machine.load(&roots, &eml_vm::Linked::default()).unwrap();
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    unsafe { machine.extend(&roots, &eml_vm::Linked::default()) }.unwrap();
     assert_eq!(machine.run(entry).unwrap().workers, 0);
     machine.close().unwrap();
     assert_eq!(out.contents(), "3\n3\n");
@@ -268,11 +264,9 @@ fn text(p.0: unit) -> tobj {{
     let program = trusted(&text);
     let (host, _) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(2), host);
-    let entry = machine
-        .load(&program, &eml_vm::Linked::default())
-        .unwrap()
-        .entry;
-    let (finished, shown) = machine.run_shown(entry, 100).unwrap();
+    let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
+    // SAFETY: P4: エントリは文字列を返す
+    let (finished, shown) = unsafe { machine.run_shown(entry, 100) }.unwrap();
     assert_eq!(shown.as_deref(), Some("12345"));
     assert_eq!((finished.workers, finished.placed), (1, 1));
     machine.close().unwrap();
@@ -570,10 +564,7 @@ main () =
     );
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(2), host);
-    let entry = machine
-        .load(&failing, &eml_vm::Linked::default())
-        .unwrap()
-        .entry;
+    let entry = machine.load(&failing, &eml_vm::Linked::default()).unwrap();
     for _ in 0..2 {
         let error = machine.run(entry).unwrap_err();
         assert!(error.to_string().contains("division by zero"), "{error}");

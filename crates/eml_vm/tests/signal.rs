@@ -136,7 +136,7 @@ fn run_real_on(
         true
     });
     let start = Instant::now();
-    let result = machine.run(loaded.entry);
+    let result = machine.run(loaded);
     let elapsed = start.elapsed();
     drop(done);
     let poked = poker.join().unwrap();
@@ -306,7 +306,7 @@ main () = Async.run (fn () -> Signal.wait Signal.Terminate)
             }
         }
     });
-    let result = machine.run(loaded.entry);
+    let result = machine.run(loaded);
     drop(done);
     watchdog.join().unwrap();
     let error = result.unwrap_err();

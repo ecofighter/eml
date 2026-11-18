@@ -3,6 +3,7 @@
 #![allow(unsafe_code)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cranelift_jit::JITModule;
 use cranelift_module::{Module, ModuleError};
@@ -29,11 +30,16 @@ pub struct Symbol {
     pub size: u32,
 }
 
-/// `load`の結果。実行の入口の`Program.functions`での添字である。
+/// `load`の結果。実行の入口の`Program.functions`での添字と、返したマシンの印を隠して持つので、`run`はほかのマシンの
+/// `Loaded`を断る (docs/spec/native.mdの「関数の形」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Loaded {
-    pub entry: u32,
+    machine: u64,
+    entry: u32,
 }
+
+/// マシンの印を配る。印は`Loaded`を返したマシンを見分けるだけなので、順序づけは要らない。
+static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadError {
@@ -202,6 +208,8 @@ impl Tables {
 /// JITのホスト。マシン1つがmodule 1つと領域1つを持ち、`load`で作り、マシンが終わるときに`close`でも`Drop`でも返す。
 /// マシンのworkerはそれを共有し、プロセス全体のmoduleはない (docs/spec/native.md の「関数の形」)。
 pub struct NativeMachine {
+    /// このマシンの印。`Loaded`に入れ、`run`が自分の返した`Loaded`かを見分ける。
+    id: u64,
     config: RunConfig,
     host: HostRef,
     keep_clif: bool,
@@ -224,6 +232,7 @@ pub struct NativeMachine {
 impl NativeMachine {
     pub fn new(config: &RunConfig, host: HostRef) -> NativeMachine {
         NativeMachine {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
             config: config.clone(),
             host,
             keep_clif: false,
@@ -407,11 +416,13 @@ impl NativeMachine {
             raise_effects,
         ));
         Ok(Loaded {
+            machine: self.id,
             entry: program.entry.0,
         })
     }
 
-    /// 読み込んだプログラムの入口を実行する。入口は引数を取らない。
+    /// 読み込んだプログラムの入口を実行する。入口は引数を取らない。ほかのマシンが返した`loaded`は、何も実行せずに
+    /// 内部の誤りで断る。
     pub fn run(&mut self, loaded: Loaded, options: Options) -> Result<Finished, RuntimeError> {
         let (thunk, code, results, counted) = self.prepare(loaded)?;
         let mut argv = vec![0u64; results];
@@ -420,6 +431,11 @@ impl NativeMachine {
 
     /// 入口を呼ぶ準備をする。入口のthunkを定義し、thunk、コードのアドレス、結果の数、結果を数えるかどうかを返す。
     fn prepare(&mut self, loaded: Loaded) -> Result<(Thunk, *const u8, usize, bool), RuntimeError> {
+        if loaded.machine != self.id {
+            // ほかのマシンの添字は、このマシンの引数のないどの関数も指しうる。その関数は、入口でないので`evv`に
+            // 要る証拠がないまま動く (docs/spec/native.mdの「関数の形」)
+            return Err(internal("", "a loaded entry of another machine"));
+        }
         let tables = self.tables.as_ref().expect("a program is loaded");
         let entry = &tables.functions[loaded.entry as usize];
         let (name, rets, code, counted) = (
