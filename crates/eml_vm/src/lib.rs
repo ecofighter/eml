@@ -1417,7 +1417,9 @@ fn finish_run<M: Mode>(
         }
         workers::end_check(kept_pending, left).map_err(at_finish)?;
         // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
-        // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである
+        // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである。C4については、
+        // `end_check(kept_pending, ..)`が通ったので、worker 0のdriverは`pending()`を0にした`quiesce`から戻っていて、
+        // ほかのworkerのdriverは抜ける前に静止させて落としてある
         unsafe { cells::sweep_all(cells, ctx, task.depth_offset) }
             .map_err(|fault| at_finish(fault.into()))
     });

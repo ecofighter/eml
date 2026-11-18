@@ -58,10 +58,13 @@
 //! ままにする。
 //!
 //! - C1: `ctx`は呼ぶworkerのスレッド自身の`Ctx`で、呼ぶ側は呼び出しの間`Ctx::heap_mut`の契約を守る
-//!   (docs/spec/object-model.md の「基本操作の契約」)。
-//! - C2: 引数の`Word`は、どれも関数の文書が名指すReprを持つ。ポインタなら、`ctx`のヒープか、それに付けた領域か共有した
-//!   領域の、文書が名指す種類の生きている物体を指し、呼ぶ側はその参照を1つ持つ。文書が借りると書かない限り、呼び出しが
-//!   その参照を取る。
+//!   (docs/spec/object-model.mdの「基本操作の契約」)。`here.me`と`here.host`は、このrunでの呼ぶworkerの番号である。
+//!   引数の`worker`は呼び出しをするタスクの論理的なIDで、文書が別に書かない限り`ctx`のヒープの今のworkerである。
+//!   呼ぶタスクを名指すセルの引数は、そのタスクのセルである。速いモードでは、`ctx`のyieldの状態の語は即値か不死の
+//!   物体である (yieldの外では`()`で、`exit`が`Finish`まで巻き戻す間は、宛先がヒープの不死のダミーである)。
+//! - C2: 引数の`Word`と、引数の中の語 (`Outcome`、根のslice、`Hold`、`JobEnd`) は、どれも関数の文書が名指す
+//!   Reprを持つ。ポインタなら、`ctx`のヒープか、それに付けた領域か共有した領域の、文書が名指す種類の生きている物体を
+//!   指し、呼ぶ側はその参照を1つ持つ。文書が借りると書かない限り、呼び出しがその参照を取る。
 //! - C3: 渡す`Shared`、`Registry`、`Depot`、`Discards`、`IoWork`、`Hold`は、C1からC4を守る呼ぶ側だけが動かしてきた。
 //!   中の語はどれもC2の下で渡したもので、継続はどれもparkしたタスクの生きている継続であり、`Registry::arrive`か
 //!   `complete`に渡した完了はどれも、その鍵で出した操作へのdriverの完了である。また、このモジュールの安全な関数を
@@ -69,6 +72,10 @@
 //!   取り消しの手順は、docs/spec/vm.md の「セルと登録表」、docs/spec/vm.md の「channel」、docs/spec/vm.md の
 //!   「操作の記録」、docs/spec/vm.md の「取り消しの届け方」にある。
 //! - C4: `driver`はrunの`RunClock`が作ったものか、それを渡す側が`Machine::with_driver`の約束をしたものである。
+//!   これらの関数がdriverに出す操作は、`RawBuf::new`の約束の下で記憶を貸す。貸すのは、受け付けたworkerのヒープの
+//!   `Bytes`か、そこにあるストリームの物体のbufferである。呼ぶ側は呼び出しが戻った後もその約束を守る。この登録表の
+//!   操作を渡されたどのdriverも、`pending()`を0にした`quiesce`から戻るか落とされるまで、呼ぶ側は記録のbufferか
+//!   ストリームを持つヒープを落とさず、回復もしない。`sweep_all`を呼ぶのはその後だけである。
 
 use std::any::Any;
 use std::borrow::Cow;
@@ -1025,7 +1032,11 @@ impl IoStream {
     /// 記憶は `Vec` 自身の確保の中の未初期化の空きで、eml のヒープの外である。`Vec::as_mut_ptr` は buffer への参照を
     /// 作らないので、完了まで `rest` に触れなければ、貸した位置は書かれるまで有効である (docs/spec/vm.md の「時計と
     /// driver」の `RawBuf`)。
-    fn lend_room(&mut self, grow: bool) -> Option<(usize, RawBuf)> {
+    ///
+    /// # Safety
+    /// 呼ぶ側は、ここに届く公開の関数の約束 (モジュールの文書の「呼ぶ側の約束」) と、返す値についての
+    /// `RawBuf::new`の約束を守る。
+    unsafe fn lend_room(&mut self, grow: bool) -> Option<(usize, RawBuf)> {
         if self.start > 0 {
             self.rest.drain(..self.start);
             self.start = 0;
@@ -1037,8 +1048,8 @@ impl IoStream {
             }
             self.rest.reserve_exact(filled.max(READ_ROOM));
         }
-        // SAFETY: 位置は`rest`の確保の中の空きで、長さはその中に収まる。読みの受け付けは貸した値を`Op::Read`にだけ
-        // 渡し、完了を確定するまで`rest`に触れない
+        // SAFETY: 位置は`rest`の確保の中の空きで、長さはその中に収まる。返す値の`RawBuf::new`の約束は、この関数の
+        // `# Safety`のとおり呼ぶ側が守る (`Op::Read`の`buf`としてだけdriverに渡し、操作が終わるまで`rest`に触れない)
         let raw = unsafe {
             RawBuf::new(
                 self.rest.as_mut_ptr().wrapping_add(filled),
@@ -3574,7 +3585,8 @@ impl Registry {
             .take()
             .ok_or(CellFault::Internal("an op settles without a result"))?;
         self.stats.completions += 1;
-        match self.advance(ctx, bin, depth_offset, op, result, cancelled)? {
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        match unsafe { self.advance(ctx, bin, depth_offset, op, result, cancelled) }? {
             Some(next) => {
                 self.submit_op(op, next, here, work)?;
                 Ok(None)
@@ -3584,7 +3596,10 @@ impl Registry {
     }
 
     /// 1つの結果で記録の段階を進める。続けて driver に出す操作があればそれを返し、記録が終わったら `None` を返す。
-    fn advance<M: Mode>(
+    ///
+    /// # Safety
+    /// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
+    unsafe fn advance<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         bin: &Arc<HostBin>,
@@ -3610,7 +3625,9 @@ impl Registry {
             (OpPhase::Probe, OpKind::Line { .. }, Ok(Done::Size(_))) => {
                 let (worker, stream) = (record.worker, record.stream);
                 let stream = stream.ok_or(CellFault::Internal("a read op has no stream"))?;
-                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す。
+                // `with_worker`と`lend_line_room`の呼び出しはその約束の下にある。返す`RawBuf`は
+                // `Op::Read`の`buf`としてだけdriverに出し、操作が終わるまでストリームのbufferに触れない
                 let (handle, lent) = unsafe {
                     with_worker(ctx, worker, depth_offset, |ctx| {
                         lend_line_room(ctx, stream, true)
@@ -3628,7 +3645,9 @@ impl Registry {
                 let (Some(buf), Some(stream)) = (buf, stream) else {
                     return Err(CellFault::Internal("a read op has no buffer or stream"));
                 };
-                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す。
+                // `with_worker`と`grow_read_room`の呼び出しはその約束の下にある。返す`RawBuf`は
+                // `Op::Read`の`buf`としてだけdriverに出し、操作が終わるまで記録のbufferに触れない
                 let (buf, handle, raw) = unsafe {
                     with_worker(ctx, worker, depth_offset, |ctx| {
                         grow_read_room(ctx, buf, stream)
@@ -3683,7 +3702,8 @@ impl Registry {
                     }
                     Err(_) => None,
                 };
-                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す。
+                // `with_worker`と`line_step`の呼び出しもその約束の下にある
                 let step = unsafe {
                     with_worker(ctx, worker, depth_offset, |ctx| {
                         line_step(ctx, stream, filled, got, stopped)
@@ -3693,7 +3713,9 @@ impl Registry {
                     // 次の周も、ストリームの buffer に空きが残っていれば待たずに貸す。ソケットでないストリームは
                     // 空きがなければ広げて貸す
                     (LineStep::Again(handle), _) => {
-                        // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                        // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す。
+                        // `with_worker`と`lend_line_room`の呼び出しはその約束の下にある。返す`RawBuf`は
+                        // `Op::Read`の`buf`としてだけdriverに出し、操作が終わるまでストリームのbufferに触れない
                         let (_, lent) = unsafe {
                             with_worker(ctx, worker, depth_offset, |ctx| {
                                 lend_line_room(ctx, stream, false)
@@ -4015,7 +4037,8 @@ pub unsafe fn take_line<M: Mode>(
     token: i64,
     worker: u32,
 ) -> Result<Result<Word, String>, CellFault> {
-    let (line, text, prefix) = take_line_op(shared, ctx, token, worker)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let (line, text, prefix) = unsafe { take_line_op(shared, ctx, token, worker) }?;
     if text {
         return Ok(Ok(line));
     }
@@ -4035,7 +4058,8 @@ pub unsafe fn take_line_bytes<M: Mode>(
     token: i64,
     worker: u32,
 ) -> Result<Word, CellFault> {
-    let (line, text, _) = take_line_op(shared, ctx, token, worker)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let (line, text, _) = unsafe { take_line_op(shared, ctx, token, worker) }?;
     if !text {
         return Ok(line);
     }
@@ -4044,7 +4068,10 @@ pub unsafe fn take_line_bytes<M: Mode>(
 }
 
 /// 行の記録を取り出し、写した行の物体、それが文字列であること、誤りの文言の前に付ける語を返す。
-fn take_line_op<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
+unsafe fn take_line_op<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -4080,12 +4107,14 @@ pub unsafe fn submit_write<M: Mode>(
     buf: Word,
     stream: Word,
 ) -> Result<i64, CellFault> {
-    let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let bound = unsafe { bind_stream(shared, here, ctx, driver.as_deref_mut(), stream) }?;
     // 記録が物体を生かし、取り出すまで書き換えないので、driver は完了までこの位置を読める。一意は求めない。
     // その場で書き換える操作はどれも一意を求め、記録が参照を1つ持つ間は写すからである
     // (docs/spec/object-model.md の T10 の行)
     let bytes = unsafe { ctx.heap().bytes(buf)? };
-    // SAFETY: 上のとおり、記録が`bytes`の物体を完了まで生かし、書き換えない。値は`Op::Write`にだけ渡す
+    // SAFETY: 上のとおり、記録が`bytes`の物体を操作の終わりまで生かし、書き換えない。バイトは`Bytes`の中身なので
+    // 初期化されている。値は`Op::Write`の`buf`としてdriverにだけ渡す
     let raw = unsafe {
         RawBuf::new(
             if bytes.is_empty() {
@@ -4098,7 +4127,8 @@ pub unsafe fn submit_write<M: Mode>(
     };
     let kind = OpKind::Write {
         len: raw.cap(),
-        prefix: stream_prefix(ctx, stream)?,
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        prefix: unsafe { stream_prefix(ctx, stream) }?,
     };
     let mut record = net_record(kind, worker, Some(stream));
     record.buf = Some(buf);
@@ -4109,7 +4139,8 @@ pub unsafe fn submit_write<M: Mode>(
             None
         }
     };
-    submit(shared, here, ctx, driver, depth_offset, record, op, None)
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { submit(shared, here, ctx, driver, depth_offset, record, op, None) }
 }
 
 /// `Std.Net.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移す。buffer が一意で空きが
@@ -4130,31 +4161,39 @@ pub unsafe fn submit_read<M: Mode>(
     buf: Word,
     stream: Word,
 ) -> Result<i64, CellFault> {
-    let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let bound = unsafe { bind_stream(shared, here, ctx, driver.as_deref_mut(), stream) }?;
     // 一意でない buffer はここで写さず、広げるときに1回だけ写す。`read_line` が読みすぎたバイトがあれば、driver の
     // 操作を出さずにそれを返す (docs/spec/stdlib.md の「`Std.Net`」)
     // 読めるようになるのを待つのはソケットだけで、ほかのストリームは受け付けで広げて貸す。ファイルの読みは
     // プールの仕事なので、読めるかを問う操作がない (docs/spec/vm.md の「操作の記録」)
     let socket = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).is_socket() };
-    let (buf, phase, op) = match (serve_rest(ctx, buf, stream)?, bound) {
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let (buf, phase, op) = match (unsafe { serve_rest(ctx, buf, stream) }?, bound) {
         (Some((buf, n)), _) => (buf, OpPhase::Done(Ok(n), false), None),
         (None, Err(e)) => (buf, OpPhase::Done(Err(e), false), None),
-        (None, Ok(handle)) => match spare_room(ctx, buf)? {
+        // SAFETY: 呼ぶ側の約束をそのまま渡す。返す`RawBuf`は`Op::Read`の`buf`としてだけdriverに渡し、
+        // 操作が終わるまで貸した場所に触れない
+        (None, Ok(handle)) => match unsafe { spare_room(ctx, buf) }? {
             Some(raw) => (buf, OpPhase::Transfer, Some(Op::Read { handle, buf: raw })),
             None if socket => (buf, OpPhase::Probe, Some(Op::Readable { handle })),
             None => {
-                let (buf, handle, raw) = grow_read_room(ctx, buf, stream)?;
+                // SAFETY: 呼ぶ側の約束をそのまま渡す。返す`RawBuf`は`Op::Read`の`buf`としてだけdriverに渡し、
+                // 操作が終わるまで貸した場所に触れない
+                let (buf, handle, raw) = unsafe { grow_read_room(ctx, buf, stream) }?;
                 (buf, OpPhase::Transfer, Some(Op::Read { handle, buf: raw }))
             }
         },
     };
     let kind = OpKind::Read {
-        prefix: stream_prefix(ctx, stream)?,
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        prefix: unsafe { stream_prefix(ctx, stream) }?,
     };
     let mut record = net_record(kind, worker, Some(stream));
     record.buf = Some(buf);
     record.phase = phase;
-    submit(shared, here, ctx, driver, depth_offset, record, op, None)
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { submit(shared, here, ctx, driver, depth_offset, record, op, None) }
 }
 
 /// `Std.Net.submit_read_line`。`stream` は呼ぶ側から移ってきた参照で、記録に移す。ストリームの buffer の残りに改行が
@@ -4172,21 +4211,25 @@ pub unsafe fn submit_read_line<M: Mode>(
     depth_offset: usize,
     stream: Word,
 ) -> Result<i64, CellFault> {
-    let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let bound = unsafe { bind_stream(shared, here, ctx, driver.as_deref_mut(), stream) }?;
     // ストリームは `TcpStream` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`TcpStream` は `Lin`)
     let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream)? };
     let found = s.find_line(0, false);
     let (mut filled, mut made, mut not_utf8) = (0, None, false);
     let (op, phase) = match found {
         Some(Found::Line(n)) => {
-            let (line, text) = take_line_text(ctx, stream, n)?;
+            // SAFETY: 呼ぶ側の約束をそのまま渡す
+            let (line, text) = unsafe { take_line_text(ctx, stream, n) }?;
             (made, not_utf8) = (Some(line), !text);
             (None, OpPhase::Done(Ok(0), false))
         }
         Some(_) => (None, OpPhase::Done(Err(line_too_long()), false)),
         None => match bound {
             Err(e) => (None, OpPhase::Done(Err(e), false)),
-            Ok(_) => match lend_line_room(ctx, stream, false)? {
+            // SAFETY: 呼ぶ側の約束をそのまま渡す。返す`RawBuf`は`Op::Read`の`buf`としてだけdriverに渡し、
+            // 操作が終わるまで貸した場所に触れない
+            Ok(_) => match unsafe { lend_line_room(ctx, stream, false) }? {
                 (handle, Some((at, raw))) => {
                     filled = at;
                     (Some(Op::Read { handle, buf: raw }), OpPhase::Transfer)
@@ -4199,12 +4242,14 @@ pub unsafe fn submit_read_line<M: Mode>(
     let kind = OpKind::Line {
         filled,
         not_utf8,
-        prefix: stream_prefix(ctx, stream)?,
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        prefix: unsafe { stream_prefix(ctx, stream) }?,
     };
     let mut record = net_record(kind, worker, Some(stream));
     record.phase = phase;
     record.made = made;
-    submit(shared, here, ctx, driver, depth_offset, record, op, None)
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { submit(shared, here, ctx, driver, depth_offset, record, op, None) }
 }
 
 /// `Std.Net.submit_listen`。`host` と `port` は呼ぶ側から移ってきた参照と即値で、`host` は読んでから手放す。
@@ -4240,16 +4285,19 @@ pub unsafe fn submit_listen<M: Mode>(
         prefix: prefix.into(),
     };
     let record = net_record(kind, worker, None);
-    Ok(Ok(submit(
-        shared,
-        here,
-        ctx,
-        driver,
-        depth_offset,
-        record,
-        Some(op),
-        None,
-    )?))
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    Ok(Ok(unsafe {
+        submit(
+            shared,
+            here,
+            ctx,
+            driver,
+            depth_offset,
+            record,
+            Some(op),
+            None,
+        )
+    }?))
 }
 
 /// `Std.Net.submit_accept`。リスナー `listener` は呼ぶ側から移ってきた参照で、記録に移す。
@@ -4273,16 +4321,19 @@ pub unsafe fn submit_accept<M: Mode>(
     };
     let op = Op::Accept { listener: handle };
     let record = net_record(OpKind::Accept, worker, Some(listener));
-    submit(
-        shared,
-        here,
-        ctx,
-        driver,
-        depth_offset,
-        record,
-        Some(op),
-        None,
-    )
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe {
+        submit(
+            shared,
+            here,
+            ctx,
+            driver,
+            depth_offset,
+            record,
+            Some(op),
+            None,
+        )
+    }
 }
 
 /// `Std.Net.submit_connect`。`submit_listen` と同じく `host` を読んで手放す。`host` は名前でもよく、driver が解決する。
@@ -4313,16 +4364,19 @@ pub unsafe fn submit_connect<M: Mode>(
         prefix: prefix.into(),
     };
     let record = net_record(kind, worker, None);
-    Ok(Ok(submit(
-        shared,
-        here,
-        ctx,
-        driver,
-        depth_offset,
-        record,
-        Some(op),
-        None,
-    )?))
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    Ok(Ok(unsafe {
+        submit(
+            shared,
+            here,
+            ctx,
+            driver,
+            depth_offset,
+            record,
+            Some(op),
+            None,
+        )
+    }?))
 }
 
 /// `Std.Stream.submit_open`。`path` は呼ぶ側から移ってきた参照で、読んでから手放す。`mode` は 0 が読み、1 が作る、2 が
@@ -4375,16 +4429,19 @@ pub unsafe fn submit_open<M: Mode>(
         res: RawResource::File(file),
     };
     let record = net_record(kind, worker, None);
-    Ok(Ok(submit(
-        shared,
-        here,
-        ctx,
-        driver,
-        depth_offset,
-        record,
-        Some(op),
-        None,
-    )?))
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    Ok(Ok(unsafe {
+        submit(
+            shared,
+            here,
+            ctx,
+            driver,
+            depth_offset,
+            record,
+            Some(op),
+            None,
+        )
+    }?))
 }
 
 /// `Std.Net.submit_shutdown_write` と `submit_set_nodelay`。`stream` は呼ぶ側から移ってきた参照で、記録に移す。
@@ -4405,7 +4462,8 @@ pub unsafe fn submit_control<M: Mode>(
     on: Option<bool>,
     stream: Word,
 ) -> Result<i64, CellFault> {
-    let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let bound = unsafe { bind_stream(shared, here, ctx, driver.as_deref_mut(), stream) }?;
     let kind = match on {
         None => OpKind::ShutdownWrite,
         Some(_) => OpKind::SetNodelay,
@@ -4419,15 +4477,19 @@ pub unsafe fn submit_control<M: Mode>(
             None
         }
     };
-    submit(shared, here, ctx, driver, depth_offset, record, op, None)
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { submit(shared, here, ctx, driver, depth_offset, record, op, None) }
 }
 
 /// 呼ぶ側の物体から lock の外で作った記録を表に入れ、`op` があれば driver に出して、token を返す。driver がその場で
 /// 終えた操作はここで決着させる。誤りで終わっても記録は終わった記録として残り、取り出しの行が放す
 /// (docs/spec/vm.md の「操作の記録」)。`point` のタスクが取り消しの地点で投げるなら、`op` を出さずに取り消しで
 /// 終わった記録にする (docs/spec/vm.md の「`blocking` の呼び出し」)。
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
 #[allow(clippy::too_many_arguments)]
-fn submit<M: Mode>(
+unsafe fn submit<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4439,7 +4501,8 @@ fn submit<M: Mode>(
 ) -> Result<i64, CellFault> {
     // 縛ったハンドルを引く操作だけが、縛った worker を host にする。取り込みに失敗したストリームの記録は driver に出さない
     record.host = match record.stream {
-        Some(w) => bound_host(ctx, &record.kind, w)?.unwrap_or(here.host),
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        Some(w) => unsafe { bound_host(ctx, &record.kind, w) }?.unwrap_or(here.host),
         None => here.host,
     };
     let mut work = IoWork::default();
@@ -4498,18 +4561,21 @@ pub unsafe fn run_io<M: Mode>(
             let raw = driver.bin();
             let mut cells = shared.lock();
             let bin = cells.host_bin(here.me, raw)?;
-            settle_arrival(
-                &mut cells,
-                here,
-                ctx,
-                &bin,
-                depth_offset,
-                op,
-                result,
-                false,
-                work,
-                out,
-            )?;
+            // SAFETY: 呼ぶ側の約束をそのまま渡す
+            unsafe {
+                settle_arrival(
+                    &mut cells,
+                    here,
+                    ctx,
+                    &bin,
+                    depth_offset,
+                    op,
+                    result,
+                    false,
+                    work,
+                    out,
+                )
+            }?;
         }
     }
     for op in work.cancels.drain(..) {
@@ -4521,8 +4587,11 @@ pub unsafe fn run_io<M: Mode>(
 /// lock の区間の中で、host の `here.me` が記録 `op` の結果を置く。持ち主も自分なら同じ区間で当て、待つタスクの起こしを
 /// 走らせる仕事にして `out` に積む。持ち主がほかの worker なら、待つタスクがいるときだけ持ち主へ `Completion` を送る。
 /// host は記録の語に触れない (docs/spec/vm.md の「操作の記録」)。
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
 #[allow(clippy::too_many_arguments)]
-fn settle_arrival<M: Mode>(
+unsafe fn settle_arrival<M: Mode>(
     cells: &mut Registry,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4597,18 +4666,21 @@ pub unsafe fn complete<M: Mode>(
         } in arrivals.by_ref()
         {
             let op = CellRef::decode(key as i64);
-            settle_arrival(
-                &mut cells,
-                here,
-                ctx,
-                bin,
-                depth_offset,
-                op,
-                result,
-                cancelled,
-                &mut work,
-                out,
-            )?;
+            // SAFETY: 呼ぶ側の約束をそのまま渡す
+            unsafe {
+                settle_arrival(
+                    &mut cells,
+                    here,
+                    ctx,
+                    bin,
+                    depth_offset,
+                    op,
+                    result,
+                    cancelled,
+                    &mut work,
+                    out,
+                )
+            }?;
             if !work.submits.is_empty() {
                 rest = false;
                 break;
@@ -4661,16 +4733,19 @@ pub unsafe fn submit_job<M: Mode>(
     job: Op,
 ) -> Result<i64, CellFault> {
     let record = net_record(OpKind::Job { from, answer: None }, worker, None);
-    submit(
-        shared,
-        here,
-        ctx,
-        driver,
-        depth_offset,
-        record,
-        Some(job),
-        Some(me),
-    )
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe {
+        submit(
+            shared,
+            here,
+            ctx,
+            driver,
+            depth_offset,
+            record,
+            Some(job),
+            Some(me),
+        )
+    }
 }
 
 /// `take_job`が返す、終わったプールの仕事。`result`はプールが返した箱か、仕事を走らせられなかった誤りか、取り消しの
@@ -4879,7 +4954,8 @@ pub unsafe fn submit_wait<M: Mode>(
             None
         }
     };
-    submit(shared, here, ctx, driver, depth_offset, record, op, None)
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { submit(shared, here, ctx, driver, depth_offset, record, op, None) }
 }
 
 /// `Std.Exec.reap`。借りた子 `child` の段 `k` を回収し、終了コードを返す。`Op::Wait` の知らせの後なので待たずに済む。
@@ -4922,7 +4998,10 @@ pub unsafe fn exec_reap<M: Mode>(
 }
 
 /// 受け付けに移ってきたストリーム `stream` の記録が、誤りの文言の前に付ける語の元。
-fn stream_prefix<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<Prefix, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
+unsafe fn stream_prefix<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<Prefix, CellFault> {
     // ストリームは呼ぶ側から移ってきた唯一の参照である (`TcpStream`、`Reader`、`Writer` は `Lin`)
     Ok(unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).prefix() })
 }
@@ -4960,7 +5039,10 @@ pub unsafe fn stream_unbound<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<bool
 /// ストリームはそのハンドルを返す。取り込みを driver が断れば、ソケットは閉じ、ストリームは以後どの操作も誤りで終える
 /// (docs/spec/vm.md の「操作の記録」)。driver はストリームのハンドルを引く `submit_*` が受け取ったもので、取り込みは
 /// 持ち主のスレッドで行う。
-fn bind_stream<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
+unsafe fn bind_stream<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5010,7 +5092,14 @@ fn lost_stream() -> io::Error {
 /// 記録が持つリスナーかストリーム `w` を縛った worker。そのハンドルを引く操作は、その worker が host である。新しい
 /// ハンドルを作る操作 (`listen` と `connect`) は物体を持たず、持ち主の I/O を受け付ける worker が host になる
 /// (docs/spec/vm.md の「操作の記録」)。
-fn bound_host<M: Mode>(ctx: &Ctx<M>, kind: &OpKind, w: Word) -> Result<Option<u32>, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
+unsafe fn bound_host<M: Mode>(
+    ctx: &Ctx<M>,
+    kind: &OpKind,
+    w: Word,
+) -> Result<Option<u32>, CellFault> {
     // どちらも記録が持つ唯一の参照である (`TcpListener` と `TcpStream` は `Lin`)
     Ok(unsafe {
         match kind {
@@ -5096,21 +5185,30 @@ enum LineStep {
 /// ストリーム `stream` の buffer に空きがあれば貸す。`grow` か、ストリームがソケットでなければ、空きが足りないときに
 /// 広げてから貸す。読めるようになるのを待つのはソケットだけだからである (docs/spec/vm.md の「操作の記録」)。返すのは
 /// ハンドルと、`IoStream::lend_room` が返す貸す前の長さと貸した記憶である。記録の worker ID に切り替えた下で呼ぶ。
-fn lend_line_room<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束 (モジュールの文書の「呼ぶ側の約束」) と、返す値についての
+/// `RawBuf::new`の約束を守る。
+unsafe fn lend_line_room<M: Mode>(
     ctx: &mut Ctx<M>,
     stream: Word,
     grow: bool,
 ) -> Result<(IoHandle, Option<(usize, RawBuf)>), CellFault> {
     // ストリームは記録が持つ唯一の参照である (docs/spec/vm.md の「操作の記録」)
     let s = unsafe { &mut *ctx.heap().foreign_unique::<IoStream>(stream)? };
-    let lent = s.lend_room(grow || !s.is_socket());
+    // SAFETY: 呼ぶ側の約束をそのまま渡す。返す`RawBuf`は`Op::Read`の`buf`としてだけdriverに渡し、
+    // 操作が終わるまで貸した場所に触れない
+    let lent = unsafe { s.lend_room(grow || !s.is_socket()) };
     Ok((s.bind.handle()?, lent))
 }
 
 /// ストリーム `stream` の残りの先頭 `n` バイトの行を新しい物体に1回だけ写し、返したことにする。UTF-8 なら文字列に、
 /// UTF-8 でなければ `Bytes` に写し、文字列に写したかを添えて返す。UTF-8 でない行も `Std.Stream.read_line_bytes`
 /// が読めるように残す (docs/spec/stdlib.md の「`Std.Stream`」)。
-fn take_line_text<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
+unsafe fn take_line_text<M: Mode>(
     ctx: &mut Ctx<M>,
     stream: Word,
     n: usize,
@@ -5132,7 +5230,10 @@ fn take_line_text<M: Mode>(
 
 /// 行の連鎖の読みの完了を、ストリーム `stream` の buffer に確定して次の段階を決める。`got` は読んだバイト数で、誤りなら
 /// `None` である。`stopped` は記録に取り消しか期限の印があることである。記録の worker ID に切り替えた下で呼ぶ。
-fn line_step<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
+unsafe fn line_step<M: Mode>(
     ctx: &mut Ctx<M>,
     stream: Word,
     filled: usize,
@@ -5149,7 +5250,8 @@ fn line_step<M: Mode>(
     // バイトには改行がなかった
     match s.find_line(filled, n == 0) {
         Some(Found::Line(n)) => {
-            let (line, text) = take_line_text(ctx, stream, n)?;
+            // SAFETY: 呼ぶ側の約束をそのまま渡す
+            let (line, text) = unsafe { take_line_text(ctx, stream, n) }?;
             return Ok(LineStep::Line(line, text));
         }
         Some(Found::TooLong) => return Ok(LineStep::TooLong),
@@ -5171,7 +5273,10 @@ fn line_too_long() -> io::Error {
 
 /// ストリーム `stream` の buffer に残りがあれば、その先頭の `READ_ROOM` バイトまでを `buf` の後ろに足して返したことに
 /// し、足した後の buffer の語とバイト数を返す。残りがなければ `None` で、`buf` はそのままである。
-fn serve_rest<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
+unsafe fn serve_rest<M: Mode>(
     ctx: &mut Ctx<M>,
     buf: Word,
     stream: Word,
@@ -5190,7 +5295,11 @@ fn serve_rest<M: Mode>(
 
 /// 読みの受け付けに移ってきた `Bytes` の参照 `buf` が一意で、長さの後ろの空きが `MIN_ROOM` バイト以上あれば、そのうち
 /// `READ_ROOM` バイトまでを読みに貸す。ほかは `None` で、何も変えない (docs/spec/vm.md の「操作の記録」)。
-fn spare_room<M: Mode>(ctx: &mut Ctx<M>, buf: Word) -> Result<Option<RawBuf>, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束 (モジュールの文書の「呼ぶ側の約束」) と、返す値についての
+/// `RawBuf::new`の約束を守る。
+unsafe fn spare_room<M: Mode>(ctx: &mut Ctx<M>, buf: Word) -> Result<Option<RawBuf>, CellFault> {
     // `buf` は呼ぶ側から移ってきた今の worker の参照で、この後に作る記録へ移す。`Ctx` の持つ語には触れない
     let heap = unsafe { ctx.heap_mut() };
     if !unsafe { heap.is_unique(buf) }? {
@@ -5207,7 +5316,11 @@ fn spare_room<M: Mode>(ctx: &mut Ctx<M>, buf: Word) -> Result<Option<RawBuf>, Ce
 /// より少ない (docs/spec/vm.md の「操作の記録」)。返すのは記録が持つ buffer の語、端のハンドル、貸した記憶である。
 /// 記録の worker ID に切り替えた下で呼ぶ。`HeapError` は検査モードの前提の違反で、driver に出す前に返すので、貸した
 /// ままの記憶は残らない。確保量の上限は誤りにせず、次の安全点で止まる。
-fn grow_read_room<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束 (モジュールの文書の「呼ぶ側の約束」) と、返す値についての
+/// `RawBuf::new`の約束を守る。
+unsafe fn grow_read_room<M: Mode>(
     ctx: &mut Ctx<M>,
     buf: Word,
     stream: Word,
@@ -5608,7 +5721,10 @@ pub unsafe fn task_handle<M: Mode>(ctx: &mut Ctx<M>, shared: &Arc<Shared>, cell:
 }
 
 /// ハンドルに受け取った印を付けて手放す。印があるので破棄処理は mail に積まない。
-fn give_up<M: Mode>(ctx: &mut Ctx<M>, handle: Word) -> Result<(), CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、ここに届く公開の関数の約束を守る (モジュールの文書の「呼ぶ側の約束」)。
+unsafe fn give_up<M: Mode>(ctx: &mut Ctx<M>, handle: Word) -> Result<(), CellFault> {
     unsafe {
         (*ctx.heap().foreign_unique::<TaskHandle>(handle)?).taken = true;
         ctx.heap_mut().decref(handle)?;
@@ -5643,7 +5759,8 @@ pub unsafe fn take<M: Mode>(
     };
     // ハンドルの参照は呼ぶ側から移ってきたもので、ここで手放す。受け取った印を先に付けるので、破棄処理は mail に
     // 積まない。タスクの ID は、その ID の値を受け取るか落とした後で退かせる
-    give_up(ctx, handle)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { give_up(ctx, handle) }?;
     // SAFETY: 呼ぶ側の約束をそのまま渡す
     unsafe { retired.run(ctx, depth_offset) }?;
     Ok(result)
@@ -5663,7 +5780,8 @@ pub unsafe fn detach<M: Mode>(
 ) -> Result<(), CellFault> {
     // SAFETY: 呼ぶ側の約束をそのまま渡す
     let cell = unsafe { handle_cell(ctx, shared, handle) }?;
-    give_up(ctx, handle)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { give_up(ctx, handle) }?;
     let mut discards = Discards::default();
     shared.lock().let_go(here, cell, cancel, &mut discards)?;
     // SAFETY: 呼ぶ側の約束をそのまま渡す
@@ -5896,7 +6014,8 @@ pub unsafe fn park_io_until<M: Mode>(
 /// 捨てる (docs/spec/vm.md の「終わり」)。
 ///
 /// # Safety
-/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C3、C4を守る (docs/spec/lir.mdの「エンジンの約束」)。
+/// 特に、この登録表の操作を渡されたどのdriverも、`pending()`を0にした`quiesce`から戻ったか落とされた後に呼ぶ。
 pub unsafe fn sweep_all<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,

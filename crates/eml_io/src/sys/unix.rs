@@ -725,7 +725,8 @@ impl<P: Poller> Unix<P> {
             return Start::Done(Ok(Outcome::Size(0)));
         }
         let mut byte = MaybeUninit::<u8>::uninit();
-        // SAFETY: `byte`はこの関数の終わりまで生きて動かず、この値を使うのはすぐ下の1回の同期の`recv`だけである
+        // SAFETY: `byte`はこの関数の終わりまで生きて動かない。この値は、このdriver自身のbackendのすぐ下の1回の同期の
+        // `recv`にだけ渡し、操作はそれが結果を返したときに終わる。書くのはその`recv`だけで、初期化されていなくてよい
         let buf = unsafe { RawBuf::new(byte.as_mut_ptr(), 1) };
         // 1バイトか EOF が読めれば終わる。覗いた誤りは消費される
         let result = recv_raw(sock.fd.as_fd(), buf, PEEK).map(|_| Outcome::Size(0));

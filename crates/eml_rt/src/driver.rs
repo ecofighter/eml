@@ -31,12 +31,13 @@ impl RawBuf {
     }
 }
 
-// SAFETY: `ptr` は、貸す側のスレッドで操作の記録が持つ物体から作る。記録は、`submit` が `Submit::Done` を返すか
-// 完了を記録に当てるまで、その物体を生かし、動かさず、`Read` に貸した記憶は一意に保つ。その間 `RawBuf` を読み書きする
-// のは、driver を持つスレッドと、その操作のファイルの仕事を走らせるプールのスレッドだけである。仕事はプールの列の
-// mutex を通ってプールのスレッドへ渡り、答えは受け箱の mutex と `wait` と `completions` を通って戻るので、どちらの
-// 受け渡しも happens-before の辺になり、貸す側が完了の後に読むか確定するのは仕事の書きの後になる
-// (docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)。
+// SAFETY: 値は`RawBuf::new`の約束の下で作る。そのバイトは、この値で始めたどの操作も終わるまで確保されたまま動かず、
+// その間driverのほかには何も書かない。操作が終わるのは、`Submit::Done`、完了の取り出し、`pending()`を0にした
+// `quiesce`、driverを落とすことのどれかで、backendに直に渡した操作ではbackendが結果を知らせたときである。その間
+// `RawBuf`を読み書きするのは、driverを持つスレッドと、カーネルと、その操作のファイルの仕事を走らせるプールの
+// スレッドだけである。仕事はプールの列のmutexを通ってプールのスレッドへ渡り、答えは受け箱のmutexと`wait`と
+// `completions`を通って戻るので、どちらの受け渡しもhappens-beforeの辺になり、貸す側が完了の後に読むか確定するのは
+// 仕事の書きの後になる (docs/spec/vm.mdの「時計と driver」、docs/spec/object-model.mdのT10の行)。
 unsafe impl Send for RawBuf {}
 
 /// driver に出す操作。

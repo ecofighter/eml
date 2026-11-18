@@ -80,7 +80,9 @@ fn take_async<M: Mode>(
             Notice::CancelIo(op) => cells.cancel_hosted(op, here.me, work)?,
             Notice::Completion(op) => {
                 // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
-                // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである
+                // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである。yieldの状態は、
+                // `take_slot`から`exit`の後に来たときは`exit_abort`が置いたヒープの不死のダミーだけを持ち、ほかの
+                // ときは空である
                 woken.extend(unsafe { cells.take_completion(ctx, depth_offset, op, here, work) }?);
             }
             Notice::Limit(cell) => limited.extend(cells.limit_forwarded(cell, here.me)),
@@ -871,7 +873,8 @@ impl<P: Policy> Scheduler<P> {
             &mut Vec::new(),
         )?;
         // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
-        // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである
+        // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである。呼ぶのは`finish`だけで、
+        // yieldの状態は、`exit`の後なら`exit_abort`が置いたヒープの不死のダミーだけを持ち、ほかのときは空である
         unsafe {
             cells::run_io(
                 shared,

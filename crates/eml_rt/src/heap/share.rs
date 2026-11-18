@@ -2320,6 +2320,10 @@ impl<M: Mode> Heap<M> {
     /// `w` は即値か、このヒープか付けた塊の生きている物体を指し、そこから届く物体はどれも生きている。所有を移す物体
     /// (局所の `lin` の物体と、その下の rc 1 の物体) には1回だけ届き、共有の側の `lin` の物体には届かない。共有の
     /// `lin` でない物体から局所の物体だけを通って届く局所の物体は、`lin` か rc 1 である。
+    /// この呼び出しから、ほかのどのスレッドも共有にした物体の参照を手放し、その解放を終えるまで、持ち主はこのヒープで
+    /// ページを歩く操作 (`live_objects`、`check_invariants`、`leaks`、`freeze`、`recover`、`Control::check_owned`) を
+    /// 呼ばず、ヒープを落とさない。`Control`のどのヒープを検査モードで歩くのも、その`Control`のヒープの物体をどの
+    /// スレッドも書かない間だけである (docs/spec/object-model.mdの「別のスレッドからの解放」)。
     #[verifier::spinoff_prover]
     pub unsafe fn share(&mut self, w: Word, receiver: u32) -> (r: Result<(), HeapError>)
         requires

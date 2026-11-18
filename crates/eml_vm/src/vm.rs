@@ -2708,7 +2708,8 @@ fn finish<R: Exec>(
         here!(sched, post, here);
         // 終わりでは動くタスクがないので、旗を付ける `Task` もない
         // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
-        // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+        // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである。
+        // yieldの状態は、`exit`の後なら`exit_abort`が置いたヒープの不死のダミーだけを持ち、ほかのときは空である
         unsafe {
             cells::drain(
                 &sched.cells,

@@ -257,20 +257,26 @@ impl TestDriver {
     fn file_io(&mut self, handle: IoHandle, buf: RawBuf, write: bool) -> io::Result<usize> {
         let file = self.files.get_mut(&handle).ok_or_else(no_handle)?;
         if write {
-            // 貸した側は、完了を取り出すまで記憶を生かし、書き換えない (`RawBuf`)
+            // 貸した側は、操作が終わるまで (完了の取り出し、`pending()`を0にした`quiesce`、driverを落とすこと) 記憶を
+            // 生かし、書き換えない。`Op::Write`のバイトは初期化されている (`RawBuf::new`)
             file.write_all(&unsafe { bytes(buf) })?;
             return Ok(buf.cap());
         }
-        // 貸した側は、完了を取り出すまで記憶を生かし、一意に保ち、動かさない。`ptr` は `cap` バイトを指し、`cap` が 0 の
-        // ときも空でない番地である (`u8` の slice に整列は要らない)
-        // (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
-        let room = unsafe { std::slice::from_raw_parts_mut(buf.ptr(), buf.cap()) };
-        loop {
-            match file.read(room) {
+        // 貸した場所は初期化されていないことがあり、`cap`が0なら番地も任意なので、sliceを作らず、初期化した控えに読んでから
+        // 写す (`RawBuf::new`)
+        let mut scratch = vec![0u8; buf.cap()];
+        let n = loop {
+            match file.read(&mut scratch) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                result => return result,
+                result => break result?,
             }
+        };
+        if n > 0 {
+            // SAFETY: `n <= cap`で、`cap > 0`の`ptr`は、貸した側が完了まで生かし動かさない`cap`バイトを指し、
+            // それを書くのはdriverだけである (`RawBuf::new`。docs/spec/vm.mdの「時計と driver」)
+            unsafe { std::ptr::copy_nonoverlapping(scratch.as_ptr(), buf.ptr(), n) };
         }
+        Ok(n)
     }
 
     /// ファイルのハンドルの読み書きか。仕事と同じく受け付けでは動かさず、決着の組に入れる。

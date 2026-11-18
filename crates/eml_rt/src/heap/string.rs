@@ -915,8 +915,8 @@ impl<M: Mode> Heap<M> {
         }
         let tracked p = self.core.tracked_perm(h@.addr);
         let ptr = bytes_lend(h, cap, len, Tracked(p));
-        // SAFETY: 返す位置から`8 * (cap - 1) - len`バイトは、このブロックの長さの後ろの空きである。`RawBuf::new`の
-        // 約束は、この関数の`# Safety`とともに呼ぶ側へ渡る
+        // SAFETY: 返す位置から`8 * (cap - 1) - len`バイトは、このブロックという1つの確保の、長さの後ろの空きである。
+        // `RawBuf::new`の約束 (渡す先、期間、ほかに触れるもの) は、この関数の`# Safety`とともに呼ぶ側へ渡る
         Ok(unsafe { RawBuf::new(ptr, 8 * (cap - 1) - len) })
     }
 
