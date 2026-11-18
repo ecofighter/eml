@@ -54,17 +54,21 @@ pub(crate) fn submit_op<R: Exec>(
     // 仕事は本物の時計のrunでは自分のdriverのプールで走る (docs/spec/vm.md の「時計と driver」)
     sched.own_driver()?;
     here!(sched, post, here);
-    let token = cells::submit_job(
-        &sched.cells,
-        &here,
-        ctx,
-        sched.driver.as_deref_mut(),
-        task.worker,
-        task.depth_offset,
-        me,
-        from,
-        op,
-    )?;
+    // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+    // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+    let token = unsafe {
+        cells::submit_job(
+            &sched.cells,
+            &here,
+            ctx,
+            sched.driver.as_deref_mut(),
+            task.worker,
+            task.depth_offset,
+            me,
+            from,
+            op,
+        )
+    }?;
     task.set_raw(dst, token);
     Ok(())
 }
@@ -113,7 +117,9 @@ fn take_on<M: Mode, T: Send + 'static>(
     wake: i64,
     from: JobSource,
 ) -> Result<Outcome<T>, RunFault> {
-    let taken = cells::take_job(shared, ctx, token, worker)?;
+    // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+    // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+    let taken = unsafe { cells::take_job(shared, ctx, token, worker) }?;
     if taken.from != from {
         return Err(RunFault::Internal("an op is taken by another function"));
     }
@@ -153,28 +159,36 @@ mod tests {
         registry
             .lock()
             .set_bin(0, Arc::new(cells::HostBin::new(driver.bin(), false)));
-        let token = cells::submit_job(
-            registry,
-            &solo(registry),
-            ctx,
-            Some(&mut driver),
-            0,
-            0,
-            me,
-            JobSource::C(3),
-            job,
-        )
+        // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+        // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+        let token = unsafe {
+            cells::submit_job(
+                registry,
+                &solo(registry),
+                ctx,
+                Some(&mut driver),
+                0,
+                0,
+                me,
+                JobSource::C(3),
+                job,
+            )
+        }
         .unwrap();
         driver.wait(None).unwrap();
-        cells::complete(
-            registry,
-            &solo(registry),
-            ctx,
-            &mut driver,
-            0,
-            &mut Vec::new(),
-            &mut Vec::new(),
-        )
+        // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+        // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+        unsafe {
+            cells::complete(
+                registry,
+                &solo(registry),
+                ctx,
+                &mut driver,
+                0,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+        }
         .unwrap();
         token
     }

@@ -2707,15 +2707,19 @@ fn finish<R: Exec>(
     {
         here!(sched, post, here);
         // 終わりでは動くタスクがないので、旗を付ける `Task` もない
-        cells::drain(
-            &sched.cells,
-            &here,
-            ctx,
-            sched.driver.as_deref_mut(),
-            task.depth_offset,
-            &mut out,
-            &mut Vec::new(),
-        )?;
+        // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+        // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+        unsafe {
+            cells::drain(
+                &sched.cells,
+                &here,
+                ctx,
+                sched.driver.as_deref_mut(),
+                task.depth_offset,
+                &mut out,
+                &mut Vec::new(),
+            )
+        }?;
     }
     if !out.is_empty() || sched.cells.lock().left_at_end() {
         return Err(RunFault::Internal("a task is left at the end"));
@@ -2823,7 +2827,9 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncFinishOk => {
             // 結果はタスクの ID に預けた印を付けてから置く。`take` が同じ ID から受け取る
-            let value = cells::Depot::of(task.worker).publish(ctx, task.get(arg(0)))?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let value = unsafe { cells::Depot::of(task.worker).publish(ctx, task.get(arg(0))) }?;
             deposit(task, cells::Outcome::Value(value))?;
             task.set(dst, Word::UNIT);
         }
@@ -2846,7 +2852,9 @@ fn async_op<R: Exec>(
                 Take::Task
             };
             let handle = task.get(arg(0));
-            match cells::take(&sched.cells, ctx, handle, kind, task.depth_offset)? {
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            match unsafe { cells::take(&sched.cells, ctx, handle, kind, task.depth_offset) }? {
                 Ok(value) => task.set(dst, value),
                 Err(raise) => return raise_again::<R>(code, ctx, task, dst, raise, ext),
             }
@@ -2886,7 +2894,9 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncTaskCell => {
             // ハンドルは借りるだけで、組を作る後の `con` が消費する (docs/spec/core-ir.md の「組を返す extern」)
-            let c = cells::cell_of(ctx, &sched.cells, task.get(arg(0)))?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let c = unsafe { cells::cell_of(ctx, &sched.cells, task.get(arg(0))) }?;
             task.set_raw(dst, c);
         }
         Extern::AsyncForkJob => {
@@ -2951,14 +2961,18 @@ fn async_op<R: Exec>(
         ext @ (Extern::AsyncDetach | Extern::AsyncCancelRaw) => {
             let cancel = ext == Extern::AsyncCancelRaw;
             here!(sched, post, here);
-            cells::detach(
-                &sched.cells,
-                &here,
-                ctx,
-                task.get(arg(0)),
-                cancel,
-                task.depth_offset,
-            )?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            unsafe {
+                cells::detach(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    task.get(arg(0)),
+                    cancel,
+                    task.depth_offset,
+                )
+            }?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncStartInRaw => {
@@ -3096,7 +3110,9 @@ fn async_op<R: Exec>(
         // どの行も登録表の lock を1区間だけ取り、預かり先の操作 (`open`、`publish`、`receive`、`close`) は lock の
         // 外で行う。予約から確定までに要るものは worker の `hold` が持つ (docs/spec/vm.md の「channel」)
         Extern::ChanNewRaw => {
-            let depot = cells::Depot::open(ctx);
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let depot = unsafe { cells::Depot::open(ctx) };
             let c = sched.cells.lock().new_chan(task.raw(arg(0)), depot);
             task.set_raw(dst, c);
         }
@@ -3126,7 +3142,9 @@ fn async_op<R: Exec>(
         }
         Extern::ChanPushRaw => {
             let (chan, mut depot) = cells::Hold::take_send(&mut sched.hold, task.raw(arg(1)))?;
-            let x = depot.publish(ctx, task.get(arg(0)))?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let x = unsafe { depot.publish(ctx, task.get(arg(0))) }?;
             let mut runs = Vec::new();
             {
                 here!(sched, post, here);
@@ -3143,10 +3161,14 @@ fn async_op<R: Exec>(
             let (chan, mut depot, item) =
                 cells::Hold::take_recv(&mut sched.hold, task.raw(arg(0)))?;
             // 品物は予約で列から取ったので、ほかに参照がない
-            let x = depot.receive(ctx, item)?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let x = unsafe { depot.receive(ctx, item) }?;
             let gone = sched.cells.lock().pop_raw(chan)?;
             if let Some(gone) = gone {
-                gone.close(ctx)?;
+                // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+                // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+                unsafe { gone.close(ctx) }?;
             }
             task.set(dst, x);
         }
@@ -3160,7 +3182,9 @@ fn async_op<R: Exec>(
                 gone
             };
             if let Some(gone) = gone {
-                gone.close(ctx)?;
+                // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+                // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+                unsafe { gone.close(ctx) }?;
             }
             for run in runs {
                 schedule(sched, run)?;
@@ -3195,7 +3219,9 @@ fn async_op<R: Exec>(
             let mut step = {
                 here!(sched, post, here);
                 let mut cells = sched.cells.lock();
-                cells.settle_token(ctx, task.depth_offset, token, me, &here, &mut work)?;
+                // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+                // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+                unsafe { cells.settle_token(ctx, task.depth_offset, token, me, &here, &mut work) }?;
                 cells.op_ready(token, task.raw(arg(1)), me)?
             };
             work.cancel_on(sched.driver.as_deref_mut())?;
@@ -3215,16 +3241,20 @@ fn async_op<R: Exec>(
             let (token, k) = (task.raw(arg(0)), task.get(arg(1)));
             let run = {
                 here!(sched, post, here);
-                cells::park_io(
-                    &sched.cells,
-                    &here,
-                    ctx,
-                    sched.driver.as_deref_mut(),
-                    task.depth_offset,
-                    token,
-                    me,
-                    k,
-                )?
+                // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+                // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+                unsafe {
+                    cells::park_io(
+                        &sched.cells,
+                        &here,
+                        ctx,
+                        sched.driver.as_deref_mut(),
+                        task.depth_offset,
+                        token,
+                        me,
+                        k,
+                    )
+                }?
             };
             if let Some(run) = run {
                 schedule(sched, run)?;
@@ -3242,18 +3272,22 @@ fn async_op<R: Exec>(
             };
             let run = {
                 here!(sched, post, here);
-                cells::park_io_until(
-                    &sched.cells,
-                    &here,
-                    ctx,
-                    sched.driver.as_deref_mut(),
-                    task.depth_offset,
-                    now,
-                    ms,
-                    token,
-                    me,
-                    k,
-                )?
+                // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+                // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+                unsafe {
+                    cells::park_io_until(
+                        &sched.cells,
+                        &here,
+                        ctx,
+                        sched.driver.as_deref_mut(),
+                        task.depth_offset,
+                        now,
+                        ms,
+                        token,
+                        me,
+                        k,
+                    )
+                }?
             };
             if let Some(run) = run {
                 schedule(sched, run)?;
@@ -3279,16 +3313,20 @@ fn async_op<R: Exec>(
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
-            let token = cells::submit_write(
-                &sched.cells,
-                &here,
-                ctx,
-                sched.driver.as_deref_mut(),
-                task.worker,
-                task.depth_offset,
-                buf,
-                stream,
-            )?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let token = unsafe {
+                cells::submit_write(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.worker,
+                    task.depth_offset,
+                    buf,
+                    stream,
+                )
+            }?;
             task.set_raw(dst, token);
         }
         ext @ (Extern::NetSubmitShutdownWrite | Extern::NetSubmitSetNodelay) => {
@@ -3299,32 +3337,40 @@ fn async_op<R: Exec>(
             };
             bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
-            let token = cells::submit_control(
-                &sched.cells,
-                &here,
-                ctx,
-                sched.driver.as_deref_mut(),
-                task.worker,
-                task.depth_offset,
-                on,
-                stream,
-            )?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let token = unsafe {
+                cells::submit_control(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.worker,
+                    task.depth_offset,
+                    on,
+                    stream,
+                )
+            }?;
             task.set_raw(dst, token);
         }
         Extern::NetSubmitRead | Extern::StreamSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
-            let token = cells::submit_read(
-                &sched.cells,
-                &here,
-                ctx,
-                sched.driver.as_deref_mut(),
-                task.worker,
-                task.depth_offset,
-                buf,
-                stream,
-            )?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let token = unsafe {
+                cells::submit_read(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.worker,
+                    task.depth_offset,
+                    buf,
+                    stream,
+                )
+            }?;
             task.set_raw(dst, token);
         }
         ext @ (Extern::NetSubmitListen | Extern::NetSubmitConnect) => {
@@ -3333,27 +3379,35 @@ fn async_op<R: Exec>(
             sched.own_driver()?;
             here!(sched, post, here);
             let submitted = if ext == Extern::NetSubmitListen {
-                cells::submit_listen(
-                    &sched.cells,
-                    &here,
-                    ctx,
-                    sched.driver.as_deref_mut(),
-                    task.worker,
-                    task.depth_offset,
-                    host,
-                    port,
-                )?
+                // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+                // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+                unsafe {
+                    cells::submit_listen(
+                        &sched.cells,
+                        &here,
+                        ctx,
+                        sched.driver.as_deref_mut(),
+                        task.worker,
+                        task.depth_offset,
+                        host,
+                        port,
+                    )
+                }?
             } else {
-                cells::submit_connect(
-                    &sched.cells,
-                    &here,
-                    ctx,
-                    sched.driver.as_deref_mut(),
-                    task.worker,
-                    task.depth_offset,
-                    host,
-                    port,
-                )?
+                // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+                // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+                unsafe {
+                    cells::submit_connect(
+                        &sched.cells,
+                        &here,
+                        ctx,
+                        sched.driver.as_deref_mut(),
+                        task.worker,
+                        task.depth_offset,
+                        host,
+                        port,
+                    )
+                }?
             };
             match submitted {
                 Ok(token) => task.set_raw(dst, token),
@@ -3370,15 +3424,19 @@ fn async_op<R: Exec>(
         Extern::NetSubmitAccept => {
             let listener = task.get(arg(0));
             here!(sched, post, here);
-            let token = cells::submit_accept(
-                &sched.cells,
-                &here,
-                ctx,
-                sched.driver.as_deref_mut(),
-                task.worker,
-                task.depth_offset,
-                listener,
-            )?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let token = unsafe {
+                cells::submit_accept(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.worker,
+                    task.depth_offset,
+                    listener,
+                )
+            }?;
             task.set_raw(dst, token);
         }
         Extern::NetOpListener
@@ -3416,30 +3474,43 @@ fn async_op<R: Exec>(
                 Extern::StreamTakeReader => cells::Made::Reader,
                 _ => cells::Made::Writer,
             };
-            let w = cells::take_made(&sched.cells, ctx, task.raw(arg(0)), task.worker, made)?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let w = unsafe {
+                cells::take_made(&sched.cells, ctx, task.raw(arg(0)), task.worker, made)
+            }?;
             task.set(dst, w);
         }
         Extern::NetTakeBytes | Extern::StreamTakeBytes => {
-            let buf = cells::take_bytes(&sched.cells, ctx, task.raw(arg(0)), task.worker)?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let buf =
+                unsafe { cells::take_bytes(&sched.cells, ctx, task.raw(arg(0)), task.worker) }?;
             task.set(dst, buf);
         }
         Extern::NetSubmitReadLine | Extern::StreamSubmitReadLine => {
             let stream = task.get(arg(0));
             bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
-            let token = cells::submit_read_line(
-                &sched.cells,
-                &here,
-                ctx,
-                sched.driver.as_deref_mut(),
-                task.worker,
-                task.depth_offset,
-                stream,
-            )?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let token = unsafe {
+                cells::submit_read_line(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.worker,
+                    task.depth_offset,
+                    stream,
+                )
+            }?;
             task.set_raw(dst, token);
         }
         ext @ (Extern::NetTakeLine | Extern::StreamTakeLine) => {
-            match cells::take_line(&sched.cells, ctx, task.raw(arg(0)), task.worker)? {
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            match unsafe { cells::take_line(&sched.cells, ctx, task.raw(arg(0)), task.worker) }? {
                 Ok(line) => task.set(dst, line),
                 // `Stdin.read_line` と同じく、UTF-8 でない行は種類 `NotUtf8` にする (docs/spec/stdlib.md の「`Std.Net`」)
                 Err(message) => {
@@ -3452,11 +3523,18 @@ fn async_op<R: Exec>(
             }
         }
         Extern::StreamTakeLineBytes => {
-            let line = cells::take_line_bytes(&sched.cells, ctx, task.raw(arg(0)), task.worker)?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let line = unsafe {
+                cells::take_line_bytes(&sched.cells, ctx, task.raw(arg(0)), task.worker)
+            }?;
             task.set(dst, line);
         }
         ext @ (Extern::NetFinish | Extern::StreamFinish | Extern::ExecFinish) => {
-            let taken = cells::take_op(&sched.cells, ctx, task.raw(arg(0)), task.worker)?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let taken =
+                unsafe { cells::take_op(&sched.cells, ctx, task.raw(arg(0)), task.worker) }?;
             // 記録が持っていたものは受け付けたタスクの ID の物体で、操作は終わっているので driver はもう触れない。
             // 作ったハンドルは落とすと bin を通して閉じる (docs/spec/vm.md の「操作の記録」)
             for w in [taken.buf, taken.made].into_iter().flatten() {
@@ -3529,12 +3607,16 @@ fn async_op<R: Exec>(
         }
         Extern::NetLocalPort => {
             // リスナーは借りるだけで、組を作る後の `con` が消費する
-            let port = cells::local_port(ctx, task.get(arg(0)))?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let port = unsafe { cells::local_port(ctx, task.get(arg(0))) }?;
             task.set_raw(dst, port);
         }
         Extern::NetPeerAddr => {
             // ストリームは借りるだけで、組を作る後の `con` が消費する
-            let peer = cells::peer_addr(ctx, task.get(arg(0)))?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let peer = unsafe { cells::peer_addr(ctx, task.get(arg(0))) }?;
             task.set(dst, peer);
         }
         Extern::StreamSubmitOpen => {
@@ -3542,16 +3624,20 @@ fn async_op<R: Exec>(
             // 取り込みは、本物の時計の run では自分の driver が行う (docs/spec/vm.md の「時計と driver」)
             sched.own_driver()?;
             here!(sched, post, here);
-            let submitted = cells::submit_open(
-                &sched.cells,
-                &here,
-                ctx,
-                sched.driver.as_deref_mut(),
-                task.worker,
-                task.depth_offset,
-                path,
-                mode,
-            )?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let submitted = unsafe {
+                cells::submit_open(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.worker,
+                    task.depth_offset,
+                    path,
+                    mode,
+                )
+            }?;
             match submitted {
                 Ok(token) => task.set_raw(dst, token),
                 // 開けなかったファイルは、記録を作らずに `FileIn.open` と同じ種類で投げる
@@ -3576,13 +3662,21 @@ fn async_op<R: Exec>(
         }
         Extern::StreamSource => {
             // 読み手は借りるだけで、組を作る後の `con` が消費する
-            let name = cells::stream_source(ctx, task.get(arg(0)))?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let name = unsafe { cells::stream_source(ctx, task.get(arg(0))) }?;
             task.set(dst, name);
         }
         Extern::ExecSpawnRaw => {
-            let stages = cells::take_string(ctx, task.get(arg(0)))?;
-            let payload = cells::take_string(ctx, task.get(arg(2)))?;
-            let path = cells::take_string(ctx, task.get(arg(4)))?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let stages = unsafe { cells::take_string(ctx, task.get(arg(0))) }?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let payload = unsafe { cells::take_string(ctx, task.get(arg(2))) }?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let path = unsafe { cells::take_string(ctx, task.get(arg(4))) }?;
             let (stdin, stdout) = (task.raw(arg(1)), task.raw(arg(3)));
             // 仮想の時計のテストの driver は子を扱わない。どの worker でも driver に触れる前に断る。worker 1 から先は
             // driver を持たないためである (docs/spec/stdlib.md の「`Std.Exec`」)
@@ -3663,7 +3757,9 @@ fn async_op<R: Exec>(
                 _ => cells::ChildPipe::Stderr,
             };
             // 子は借りるだけで、組を作る後の `con` が消費する
-            match cells::exec_take(ctx, task.get(arg(0)), pipe)? {
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            match unsafe { cells::exec_take(ctx, task.get(arg(0)), pipe) }? {
                 Ok(stream) => task.set(dst, stream),
                 Err(message) => {
                     let raise = Raise::Io {
@@ -3676,7 +3772,9 @@ fn async_op<R: Exec>(
         }
         Extern::ExecStageCount => {
             // 子は借りるだけで、組を作る後の `con` が消費する
-            let n = cells::exec_stage_count(ctx, task.get(arg(0)))?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let n = unsafe { cells::exec_stage_count(ctx, task.get(arg(0))) }?;
             task.set_raw(dst, n);
         }
         Extern::ExecSubmitWait => {
@@ -3684,21 +3782,27 @@ fn async_op<R: Exec>(
             // 子の終わりは、持ち主の worker の driver が待つ (docs/spec/vm.md の「操作の記録」)
             sched.own_driver()?;
             here!(sched, post, here);
-            let token = cells::submit_wait(
-                &sched.cells,
-                &here,
-                ctx,
-                sched.driver.as_deref_mut(),
-                task.worker,
-                task.depth_offset,
-                k,
-                child,
-            )?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            let token = unsafe {
+                cells::submit_wait(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.worker,
+                    task.depth_offset,
+                    k,
+                    child,
+                )
+            }?;
             task.set_raw(dst, token);
         }
         Extern::ExecReap => {
             // 子は借りるだけで、組を作る後の `con` が消費する
-            match cells::exec_reap(ctx, task.raw(arg(0)), task.get(arg(1)))? {
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            match unsafe { cells::exec_reap(ctx, task.raw(arg(0)), task.get(arg(1))) }? {
                 Ok(code) => task.set_raw(dst, code),
                 Err((e, message)) => {
                     let raise = Raise::Io {
@@ -3760,7 +3864,9 @@ fn bind_here<M: Mode, P: Policy>(
     ctx: &Ctx<M>,
     stream: Word,
 ) -> Result<(), RunFault> {
-    if cells::stream_unbound(ctx, stream)? {
+    // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+    // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+    if unsafe { cells::stream_unbound(ctx, stream) }? {
         sched.own_driver()?;
     }
     Ok(())
@@ -3839,12 +3945,20 @@ fn start_task<R: Exec>(
     let roots = unshared_roots(ctx, sched);
     let started = {
         here!(sched, post, here);
-        sched
-            .cells
-            .lock()
-            .start(ctx, &here, scope, task.worker, owner, g, &roots, pinned)?
+        // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`g`は`Trusted`のプログラムの命令が渡す閉包で、
+        // コンパイラが決めたReprを持つ。`roots`は`ctx`のセッションの根のうちまだ印のないもの (`unshared_roots`) で、
+        // 根の表が参照を持ったまま、`start`は借りて印を付けるだけである。`ctx`はこのworkerの`Ctx`で、登録表はこのrunの
+        // ものである
+        unsafe {
+            sched
+                .cells
+                .lock()
+                .start(ctx, &here, scope, task.worker, owner, g, &roots, pinned)
+        }?
     };
-    Ok(started.map(|(cell, run)| (cells::task_handle(ctx, &sched.cells, cell), run)))
+    // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`cell`は直前の`start`が登録表に作ったタスクのセルで、
+    // `ctx`はこのworkerの`Ctx`である
+    Ok(started.map(|(cell, run)| (unsafe { cells::task_handle(ctx, &sched.cells, cell) }, run)))
 }
 
 /// `finish_*` の終わり方をエントリの `Task` に預ける。核に渡すのは `Task` の `Finish` で、そのときにはタスクの ID の物体は
@@ -4063,15 +4177,19 @@ fn entry_finish<R: Exec>(
         let mut out = Vec::new();
         {
             here!(sched, post, here);
-            cells::finish(
-                &sched.cells,
-                &here,
-                ctx,
-                cell,
-                outcome,
-                task.depth_offset,
-                &mut out,
-            )?;
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+            // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+            unsafe {
+                cells::finish(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    cell,
+                    outcome,
+                    task.depth_offset,
+                    &mut out,
+                )
+            }?;
         }
         for run in out {
             schedule(sched, run)?;

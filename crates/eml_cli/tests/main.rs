@@ -10,6 +10,7 @@ mod lines;
 mod pretty;
 mod repl;
 mod std_invariants;
+mod surface;
 mod terminal;
 #[cfg(feature = "tls")]
 mod tls;

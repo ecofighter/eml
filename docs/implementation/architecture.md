@@ -125,6 +125,17 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 - `eml_cli`は`eml_diagnostics`と`eml_hir`に常に依存し、下流の段階をfeatureで足す。`types`は`eml_types`、`core`は`eml_core_ir`と`eml_lir`、`run`は`eml_vm`と、実行のインタフェースの型を持つ`eml_sched`と、本物のHostを作る`eml_io`と、行の本体を持つ`eml_rows`と、Cの関数をつなぐ`eml_clink`と、ネイティブのコードを作る`eml_native`と、端末の行の編集の`rustyline`と、unixではSIGINTのハンドラと物理メモリを読む`libc`を、Windowsではコンソールのhandlerを入れて物理メモリを読む`windows-sys`を足す。`eml_lir`はフロントエンドに依存しないので、段階のfeatureは増やさない。既定は`run`、`tls`、`gui`で、`tls`は`eml_rows/tls`、`eml_io/tls`の順にfeatureを有効にし、`gui`は`eml_rows/gui`を、既定に入れない`gui-native`は`eml_rows/gui-native`を有効にする。バイナリ`eml`は`run`がなければ作らない (`required-features`)。ワークスペースの`eml_cli`の依存は既定のfeatureを外してあり、依存する側が段階を選ぶ
 - `eml_test_support`は開発専用のcrateで、パイプラインに入らない。各crateの結合テストがdev-dependencyとして使う。パイプラインは`eml_cli::Session`で組み、段階をfeature (`hir` < `types` < `core` < `run`) で選ぶ。各featureは、`eml_cli`の同じ段階までのfeatureを有効にする。各crateは自分の段階までを有効にする。破壊的な変更の途中で下流のcrateがまだ組み立たなくても、変更している段階のテストを流せるようにするため ([テスト戦略](testing.md))。feature `run`は`eml_sched`にも依存し、`Finished`、`HostRef`、`RunConfig`、`RunStats`、`RuntimeError`をそこから名指す。`eml_rt`にも依存し、書いた行とスレッドを覚えるHost `RecordingHost`を持つ。`eml_vm`と`eml_rows`の結合テストが使う
 
+## 公開の面と`unsafe`
+
+関数は、公開のものも非公開のものも、次の順に分ける。
+
+1. その中にも下にも、引数についての事実や、安全な公開の項目が決められる状態に頼る`unsafe`の操作がない。安全な関数にする
+2. その事実を、それを確かめる構築子だけを持つ型で運べる (欄を非公開にし、構築子自身が約束を要るなら`unsafe fn new`にする)。その型を使う。`Trusted`、`Loaded`、`Linked`、`CHandle`がこの型である
+3. ほかのcrateが項目を名指さない。`pub(crate)`にする
+4. それ以外は、`# Safety`の節を持つ`unsafe fn`にする
+
+実行系が記憶の安全をその実装に任せるtraitは、ほかのcrateからは`unsafe fn` (`Machine::with_driver`) を通してだけ受け取るか、`unsafe trait`にする。`eml_sched`では、`Ctx`を取る公開の関数は`unsafe fn`である。例外はfeature `testing`の`test_ctx`と`stream_on`で、物体を作るだけなので安全である。登録表に語を置くか返すだけの関数は安全なままにし、それを読む関数が、登録表の中身を自分の約束に書く。`Ctx`、`Heap`、`Word`、`RawBuf`、driverの`Op`、`IoDriver`、生のポインタを名指す安全な公開の関数と公開の欄は、理由とともに`crates/eml_cli/tests/surface.rs`に並べる ([テスト戦略](testing.md)の「公開の面の検査」)。`eml_rt`はこのテストの外にあり、Verusと自分の信頼の一覧が確かめる (docs/spec/object-model.md の「`unsafe` の核」)。
+
 ## 各段階の規律
 
 - 各段階は `fn stage(input: &In) -> (Out, Vec<Diagnostic>)` の形の純粋な関数にする。グローバルな可変状態は持たない。例外は `eml_core_ir` で、診断のエラーがないプログラムだけを受け取り、`Program` を返す (下の「エラーが出ても止まらない」)

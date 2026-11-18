@@ -51,6 +51,24 @@
 //! `cancel`、`flag`、`cancel_new` はどのタスクの操作からも書く。`current` と `run` は持ち主だけが書き、印を付ける
 //! 操作が読む。スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
 //! そのタスクを動かすか取り消しを処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
+//!
+//! 呼ぶ側の約束: このモジュールの`Ctx`を取る公開の関数は`unsafe fn`で、呼ぶ側は、関数の`# Safety`が挙げる次の約束を守る
+//! (docs/spec/lir.md の「エンジンの約束」)。例外はfeature `testing`の`test_ctx`と`stream_on`で、物体を作るだけなので
+//! 安全である。`Ctx`を取らない関数は語と完了を置くか返すだけで、それを読むのはどれも`Ctx`を取る関数なので、安全な
+//! ままにする。
+//!
+//! - C1: `ctx`は呼ぶworkerのスレッド自身の`Ctx`で、呼ぶ側は呼び出しの間`Ctx::heap_mut`の契約を守る
+//!   (docs/spec/object-model.md の「基本操作の契約」)。
+//! - C2: 引数の`Word`は、どれも関数の文書が名指すReprを持つ。ポインタなら、`ctx`のヒープか、それに付けた領域か共有した
+//!   領域の、文書が名指す種類の生きている物体を指し、呼ぶ側はその参照を1つ持つ。文書が借りると書かない限り、呼び出しが
+//!   その参照を取る。
+//! - C3: 渡す`Shared`、`Registry`、`Depot`、`Discards`、`IoWork`、`Hold`は、C1からC4を守る呼ぶ側だけが動かしてきた。
+//!   中の語はどれもC2の下で渡したもので、継続はどれもparkしたタスクの生きている継続であり、`Registry::arrive`か
+//!   `complete`に渡した完了はどれも、その鍵で出した操作へのdriverの完了である。また、このモジュールの安全な関数を
+//!   それらに対して呼んだのは、上の不変条件を保つ形だけである。タスク、スコープ、channelと預かり先、操作の記録、
+//!   取り消しの手順は、docs/spec/vm.md の「セルと登録表」、docs/spec/vm.md の「channel」、docs/spec/vm.md の
+//!   「操作の記録」、docs/spec/vm.md の「取り消しの届け方」にある。
+//! - C4: `driver`はrunの`RunClock`が作ったものか、それを渡す側が`Machine::with_driver`の約束をしたものである。
 
 use std::any::Any;
 use std::borrow::Cow;
@@ -1354,11 +1372,22 @@ impl Discards {
     }
 
     /// 並べた順に行う。ID の物体が残っていれば、退かせるときに `TransferLeak` がヒープの誤りとして出る。
-    pub fn run<M: Mode>(&mut self, ctx: &mut Ctx<M>, depth_offset: usize) -> Result<(), CellFault> {
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn run<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        depth_offset: usize,
+    ) -> Result<(), CellFault> {
         for discard in self.0.drain(..) {
             match discard {
-                Discard::Word(w, worker) => Depot::of(worker).discard(ctx, w, depth_offset)?,
-                Discard::Retire(worker) => Depot::of(worker).close(ctx)?,
+                // SAFETY: 呼ぶ側の約束をそのまま渡す
+                Discard::Word(w, worker) => {
+                    unsafe { Depot::of(worker).discard(ctx, w, depth_offset) }?
+                }
+                // SAFETY: 呼ぶ側の約束をそのまま渡す
+                Discard::Retire(worker) => unsafe { Depot::of(worker).close(ctx) }?,
             }
         }
         Ok(())
@@ -1919,8 +1948,11 @@ impl Registry {
     /// `pinned`なら、タスクをメインのworkerに固定したものとして数える。
     /// 新しい ID に渡す前に、`g` とまだ印のないセッションの根 `roots` に共有の印を付ける (`par` の fork と同じ。
     /// docs/spec/vm.md の「`Async` のタスク」)。
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
     #[allow(clippy::too_many_arguments)]
-    pub fn start<M: Mode>(
+    pub unsafe fn start<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         here: &Here,
@@ -3195,7 +3227,7 @@ impl Registry {
 
     /// host が、記録 `c` に置かれた操作を driver に出すために取り出す。同じ区間で受け付けた印を立て、取り消しの印を読む。
     /// 真なら、取り消しが受け付けの前に来たので、host は出した後に取り消しを頼む (docs/spec/vm.md の「操作の記録」)。
-    pub fn take_queued(&mut self, c: CellRef) -> Result<(Op, bool), CellFault> {
+    pub(crate) fn take_queued(&mut self, c: CellRef) -> Result<(Op, bool), CellFault> {
         let record = self.op_mut(c)?;
         let op = record.pending_op.take().ok_or(CellFault::Internal(
             "an op is submitted without being queued",
@@ -3292,7 +3324,10 @@ impl Registry {
     /// 持ち主 `here.me` が、受け箱の `Completion` を受けて記録 `op` の結果を当てる。host は待つタスクがいるときだけ
     /// 送り、待つタスクは結果を受けるまで止まっているので、結果は `Completion` だけが当てる。生きていない記録と結果の
     /// ない記録は内部の誤りである (docs/spec/vm.md の「操作の記録」)。
-    pub fn take_completion<M: Mode>(
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn take_completion<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         depth_offset: usize,
@@ -3304,12 +3339,16 @@ impl Registry {
             Some(CellKind::Op(record)) if record.arrival.is_some() => {}
             _ => return Err(CellFault::Internal("a completion names no arrived op")),
         }
-        self.settle_arrived(ctx, depth_offset, op, here, work)
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        unsafe { self.settle_arrived(ctx, depth_offset, op, here, work) }
     }
 
     /// 持ち主 `here.me` が、記録 `op` に置かれた結果があれば当てる。当てて記録が終われば、待つタスクの起こしを返す。
     /// 結果を置いていない記録には何もしない (docs/spec/vm.md の「操作の記録」)。
-    pub fn settle_arrived<M: Mode>(
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn settle_arrived<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         depth_offset: usize,
@@ -3328,13 +3367,17 @@ impl Registry {
             .cloned()
             .flatten()
             .ok_or(CellFault::Internal("an op has a host without a driver"))?;
-        self.settle_op(ctx, &bin, depth_offset, op, here, work)
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        unsafe { self.settle_op(ctx, &bin, depth_offset, op, here, work) }
     }
 
     /// タスク `me` が token `token` の操作を待つか続けるかを決める前に、host が置いた結果があれば当てる。決める区間と
     /// 同じ区間で当てるので、結果の置かれた記録を終わっていないと見て待ち、`Completion` を受けずに止まることはない
     /// (docs/spec/vm.md の「操作の記録」)。
-    pub fn settle_token<M: Mode>(
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn settle_token<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         depth_offset: usize,
@@ -3346,7 +3389,8 @@ impl Registry {
         let worker = self.task_mut(me)?.worker;
         let op = self.op_of(token, worker)?;
         // 待つタスクはまだいないので、当てても起こしはない
-        match self.settle_arrived(ctx, depth_offset, op, here, work)? {
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        match unsafe { self.settle_arrived(ctx, depth_offset, op, here, work) }? {
             Some(_) => Err(CellFault::Internal("an op is awaited twice")),
             None => Ok(()),
         }
@@ -3504,7 +3548,10 @@ impl Registry {
     /// 操作を同じ鍵で出し直す。host が自分ならその操作を `work` に積み、ほかの worker なら host へ送る。終わった記録に
     /// 待つタスクがいれば、その起こしを返す。記録の語は受け付けたタスクの物体なので、今のタスクが誰でも、その ID に
     /// 切り替えてから触れる。`bin` は host の driver の、作ったハンドルを閉じる bin である。
-    pub fn settle_op<M: Mode>(
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn settle_op<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         bin: &Arc<HostBin>,
@@ -3559,9 +3606,12 @@ impl Registry {
             (OpPhase::Probe, OpKind::Line { .. }, Ok(Done::Size(_))) => {
                 let (worker, stream) = (record.worker, record.stream);
                 let stream = stream.ok_or(CellFault::Internal("a read op has no stream"))?;
-                let (handle, lent) = with_worker(ctx, worker, depth_offset, |ctx| {
-                    lend_line_room(ctx, stream, true)
-                })?;
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                let (handle, lent) = unsafe {
+                    with_worker(ctx, worker, depth_offset, |ctx| {
+                        lend_line_room(ctx, stream, true)
+                    })
+                }?;
                 let (filled, raw) =
                     lent.ok_or(CellFault::Internal("a grown buffer has no room"))?;
                 let record = self.op_mut(op)?;
@@ -3574,9 +3624,12 @@ impl Registry {
                 let (Some(buf), Some(stream)) = (buf, stream) else {
                     return Err(CellFault::Internal("a read op has no buffer or stream"));
                 };
-                let (buf, handle, raw) = with_worker(ctx, worker, depth_offset, |ctx| {
-                    grow_read_room(ctx, buf, stream)
-                })?;
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                let (buf, handle, raw) = unsafe {
+                    with_worker(ctx, worker, depth_offset, |ctx| {
+                        grow_read_room(ctx, buf, stream)
+                    })
+                }?;
                 let record = self.op_mut(op)?;
                 record.buf = Some(buf);
                 record.phase = OpPhase::Transfer;
@@ -3586,11 +3639,13 @@ impl Registry {
             (OpPhase::Transfer, OpKind::Read { .. }, Ok(Done::Size(n))) => {
                 let (worker, buf) = (record.worker, record.buf);
                 let buf = buf.ok_or(CellFault::Internal("a read op has no buffer"))?;
-                // 記録は貸した後も buffer の唯一の参照を持ち、書き換えていない。driver は `Ok(n)` で `n` バイトを
-                // 書き終えている (docs/spec/object-model.md の T10 の行、docs/spec/vm.md の「操作の記録」)
-                with_worker(ctx, worker, depth_offset, |ctx| unsafe {
-                    ctx.heap_mut().bytes_commit(buf, n)
-                })?;
+                let commit = |ctx: &mut Ctx<M>| {
+                    // 記録は貸した後もbufferの唯一の参照を持ち、書き換えていない。driverは`Ok(n)`で`n`バイトを
+                    // 書き終えている (docs/spec/object-model.mdのT10の行、docs/spec/vm.mdの「操作の記録」)
+                    unsafe { ctx.heap_mut().bytes_commit(buf, n) }
+                };
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                unsafe { with_worker(ctx, worker, depth_offset, commit) }?;
                 Ok(n)
             }
             (
@@ -3624,16 +3679,22 @@ impl Registry {
                     }
                     Err(_) => None,
                 };
-                let step = with_worker(ctx, worker, depth_offset, |ctx| {
-                    line_step(ctx, stream, filled, got, stopped)
-                })?;
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                let step = unsafe {
+                    with_worker(ctx, worker, depth_offset, |ctx| {
+                        line_step(ctx, stream, filled, got, stopped)
+                    })
+                }?;
                 match (step, result) {
                     // 次の周も、ストリームの buffer に空きが残っていれば待たずに貸す。ソケットでないストリームは
                     // 空きがなければ広げて貸す
                     (LineStep::Again(handle), _) => {
-                        let (_, lent) = with_worker(ctx, worker, depth_offset, |ctx| {
-                            lend_line_room(ctx, stream, false)
-                        })?;
+                        // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                        let (_, lent) = unsafe {
+                            with_worker(ctx, worker, depth_offset, |ctx| {
+                                lend_line_room(ctx, stream, false)
+                            })
+                        }?;
                         let record = self.op_mut(op)?;
                         return Ok(Some(match lent {
                             Some((filled, raw)) => {
@@ -3673,10 +3734,12 @@ impl Registry {
                     },
                     port,
                 };
-                made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
-                    // 確保するだけで、`Ctx` の持つ語には触れない。`TcpListener` は `Lin` である
+                let alloc = |ctx: &mut Ctx<M>| {
+                    // 確保するだけで、`Ctx`の持つ語には触れない。`TcpListener`は`Lin`である
                     unsafe { ctx.heap_mut() }.alloc_foreign(listener, true)
-                }));
+                };
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                made = Some(unsafe { with_worker(ctx, record.worker, depth_offset, alloc) });
                 Ok(0)
             }
             (
@@ -3694,10 +3757,12 @@ impl Registry {
                     rest: Vec::new(),
                     start: 0,
                 };
-                made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
-                    // `NetListener` と同じ。`TcpStream` は `Lin` である
+                let alloc = |ctx: &mut Ctx<M>| {
+                    // `NetListener`と同じ。`TcpStream`は`Lin`である
                     unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
-                }));
+                };
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                made = Some(unsafe { with_worker(ctx, record.worker, depth_offset, alloc) });
                 Ok(0)
             }
             // 受けたソケットは縛らずにストリームにする。最初に操作を受け付ける worker が自分の driver に取り込む
@@ -3709,10 +3774,12 @@ impl Registry {
                     rest: Vec::new(),
                     start: 0,
                 };
-                made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
-                    // `NetListener` と同じ。`TcpStream` は `Lin` である
+                let alloc = |ctx: &mut Ctx<M>| {
+                    // `NetListener`と同じ。`TcpStream`は`Lin`である
                     unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
-                }));
+                };
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                made = Some(unsafe { with_worker(ctx, record.worker, depth_offset, alloc) });
                 Ok(0)
             }
             // 取り込んだファイルも `connect` の結果と同じく host に縛ったストリームにする。取り消しを頼んだ記録でも
@@ -3728,10 +3795,12 @@ impl Registry {
                     rest: Vec::new(),
                     start: 0,
                 };
-                made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
-                    // `NetListener` と同じ。`Reader` と `Writer` は `Lin` である
+                let alloc = |ctx: &mut Ctx<M>| {
+                    // `NetListener`と同じ。`Reader`と`Writer`は`Lin`である
                     unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
-                }));
+                };
+                // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+                made = Some(unsafe { with_worker(ctx, record.worker, depth_offset, alloc) });
                 Ok(0)
             }
             (OpPhase::Transfer, _, Err(e)) => Err(e),
@@ -3846,7 +3915,10 @@ impl Registry {
 
 /// 取り出しの行。token を消費して終わった記録を放し、結果と buffer を返す。残ったストリームは落とす。取り出すのは
 /// 受け付けたタスク (`worker`) だけである。記録の語はそのタスクの物体なので、切り替えずに受け取れる。
-pub fn take_op<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn take_op<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -3877,14 +3949,18 @@ pub enum Made {
 /// `Std.Net.take_listener`、`take_stream`、`Std.Stream.take_reader`、`take_writer`。token を消費して記録を放し、
 /// 完了の中身から作った `Foreign` を返す。結果の番号が `OUTCOME_OK` の記録だけを取り出す。`made` は求める記録の種類で、
 /// 違う種類の記録は内部の誤りである。
-pub fn take_made<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn take_made<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
     worker: u32,
     made: Made,
 ) -> Result<Word, CellFault> {
-    let taken = take_op(shared, ctx, token, worker)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let taken = unsafe { take_op(shared, ctx, token, worker) }?;
     if taken.outcome() != OUTCOME_OK {
         return Err(CellFault::Internal("an op is taken after it failed"));
     }
@@ -3903,13 +3979,17 @@ pub fn take_made<M: Mode>(
 /// `Std.Net.take_bytes`。token を消費して記録を放し、記録の buffer を返す。読みなら読んだバイトを足した buffer、
 /// 書きなら書いた buffer そのものである。結果の番号が `OUTCOME_OK` の読みか書きの記録だけを取り出す
 /// (docs/spec/stdlib.md の「`Std.Net`」)。
-pub fn take_bytes<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn take_bytes<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
     worker: u32,
 ) -> Result<Word, CellFault> {
-    let taken = take_op(shared, ctx, token, worker)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let taken = unsafe { take_op(shared, ctx, token, worker) }?;
     if taken.outcome() != OUTCOME_OK {
         return Err(CellFault::Internal("an op is taken after it failed"));
     }
@@ -3922,7 +4002,10 @@ pub fn take_bytes<M: Mode>(
 /// `Std.Net.take_line`。token を消費して記録を放し、完了の時点で写した行 (終わりの改行を含み、残りのない EOF なら空)
 /// の文字列を返す。行が UTF-8 でなければ、写した `Bytes` を落として IO の失敗の文言を返す。結果の番号が `OUTCOME_OK`
 /// の行の記録だけを取り出す (docs/spec/stdlib.md の「`Std.Net`」)。
-pub fn take_line<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn take_line<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -3939,7 +4022,10 @@ pub fn take_line<M: Mode>(
 
 /// `Std.Stream.take_line_bytes`。`take_line` と同じ行を、UTF-8 かどうかによらず `Bytes` で返す
 /// (docs/spec/stdlib.md の「`Std.Stream`」)。
-pub fn take_line_bytes<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn take_line_bytes<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -3960,7 +4046,8 @@ fn take_line_op<M: Mode>(
     token: i64,
     worker: u32,
 ) -> Result<(Word, bool, String), CellFault> {
-    let taken = take_op(shared, ctx, token, worker)?;
+    // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+    let taken = unsafe { take_op(shared, ctx, token, worker) }?;
     if taken.outcome() != OUTCOME_OK {
         return Err(CellFault::Internal("an op is taken after it failed"));
     }
@@ -3975,8 +4062,11 @@ fn take_line_op<M: Mode>(
 /// `Std.Net.submit_write`。`buf` と `stream` は呼ぶ側から移ってきた参照で、記録に移す。
 /// `buf` の内容をすべて書く操作を driver に出し、token を返す。`me` は呼んだ worker、`worker` は呼んだタスクの論理的な
 /// ID で、`depth_offset` はその深さの起点である。共有の `Bytes` も写さずに貸し、`take_bytes` が同じ参照を返す。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn submit_write<M: Mode>(
+pub unsafe fn submit_write<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4019,8 +4109,11 @@ pub fn submit_write<M: Mode>(
 /// `MIN_ROOM` バイト以上あれば、その空きを貸して読む操作を出す。そうでなければ、端が読めるようになるのを待つ操作を
 /// 出し、読めるようになってから広げて貸す。何も来ない端の読みに、呼び手が渡さない記憶を持たせないためである
 /// (docs/spec/vm.md の「操作の記録」)。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn submit_read<M: Mode>(
+pub unsafe fn submit_read<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4060,7 +4153,10 @@ pub fn submit_read<M: Mode>(
 /// `Std.Net.submit_read_line`。`stream` は呼ぶ側から移ってきた参照で、記録に移す。ストリームの buffer の残りに改行が
 /// あれば、driver の操作を出さずに行を切り出して終わった記録にする。なければ行の連鎖を始める。buffer に空きが
 /// あればそれを貸して読み、なければストリームが読めるようになるのを待つ (docs/spec/vm.md の「操作の記録」)。
-pub fn submit_read_line<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn submit_read_line<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4107,8 +4203,11 @@ pub fn submit_read_line<M: Mode>(
 /// `Std.Net.submit_listen`。`host` と `port` は呼ぶ側から移ってきた参照と即値で、`host` は読んでから手放す。
 /// `host` が IP アドレスの綴りでないか `port` が範囲の外なら、操作を出さずに IO の失敗の文言を返す
 /// (docs/spec/stdlib.md の「`Std.Net`」)。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn submit_listen<M: Mode>(
+pub unsafe fn submit_listen<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4118,7 +4217,8 @@ pub fn submit_listen<M: Mode>(
     host: Word,
     port: i64,
 ) -> Result<Result<i64, String>, CellFault> {
-    let host = take_string(ctx, host)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let host = unsafe { take_string(ctx, host) }?;
     let prefix = format!("cannot listen on {host}:{port}");
     let Ok(ip) = host.parse::<IpAddr>() else {
         return Ok(Err(format!("{prefix}: the host is not an IP address")));
@@ -4146,7 +4246,10 @@ pub fn submit_listen<M: Mode>(
 }
 
 /// `Std.Net.submit_accept`。リスナー `listener` は呼ぶ側から移ってきた参照で、記録に移す。
-pub fn submit_accept<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn submit_accept<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4177,8 +4280,11 @@ pub fn submit_accept<M: Mode>(
 
 /// `Std.Net.submit_connect`。`submit_listen` と同じく `host` を読んで手放す。`host` は名前でもよく、driver が解決する。
 /// `port` が 1 から 65535 の外なら、操作を出さずに IO の失敗の文言を返す (docs/spec/stdlib.md の「`Std.Net`」)。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn submit_connect<M: Mode>(
+pub unsafe fn submit_connect<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4188,7 +4294,8 @@ pub fn submit_connect<M: Mode>(
     host: Word,
     port: i64,
 ) -> Result<Result<i64, String>, CellFault> {
-    let host = take_string(ctx, host)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let host = unsafe { take_string(ctx, host) }?;
     let prefix = format!("cannot connect to {host}:{port}");
     let port = match u16::try_from(port) {
         Ok(port) if port > 0 => port,
@@ -4215,8 +4322,11 @@ pub fn submit_connect<M: Mode>(
 /// 足すである。Host が呼んだ worker の上でファイルを開き、開けなければ記録を作らずに、誤りと IO の失敗の文言を返す。
 /// 開けたファイルは `Op::Adopt` で呼んだタスクの I/O の host の driver に取り込み、`connect` と同じく完了から
 /// ストリームを作る (docs/spec/vm.md の「操作の記録」)。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn submit_open<M: Mode>(
+pub unsafe fn submit_open<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4226,7 +4336,8 @@ pub fn submit_open<M: Mode>(
     path: Word,
     mode: i64,
 ) -> Result<Result<i64, (io::Error, String)>, CellFault> {
-    let path = take_string(ctx, path)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let path = unsafe { take_string(ctx, path) }?;
     let mode = match mode {
         0 => OpenMode::Read,
         1 => OpenMode::Create,
@@ -4273,8 +4384,11 @@ pub fn submit_open<M: Mode>(
 /// driver を直接呼ばず、ほかの操作と同じく記録を通して host の driver に出す。持ち主が host でない worker でも、
 /// 同じ道で host に届くためである (docs/spec/vm.md の「操作の記録」)。`on` は `set_nodelay` の値で、`None` なら
 /// `shutdown_write` である。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn submit_control<M: Mode>(
+pub unsafe fn submit_control<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4336,7 +4450,8 @@ fn submit<M: Mode>(
         cells.record(record, op, here, &mut work)?
     };
     let mut out = Vec::new();
-    run_io(shared, here, ctx, driver, depth_offset, &mut work, &mut out)?;
+    // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+    unsafe { run_io(shared, here, ctx, driver, depth_offset, &mut work, &mut out) }?;
     // 待つタスクはまだいないので、再開の仕事はできない
     if !out.is_empty() {
         return Err(CellFault::Internal("a new op has a waiting task"));
@@ -4349,7 +4464,10 @@ fn submit<M: Mode>(
 /// それも続けて出す。持ち主がほかの worker なら、待つタスクがいるときに `Completion` を送る。終わった操作の待つ
 /// 自分のタスクを再開する仕事を `out` に積む (docs/spec/vm.md の「操作の記録」)。driver を持たない worker は自分で
 /// 受け付けないので、出す操作も取り消しもないときだけ `driver` が `None` でよい。
-pub fn run_io<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn run_io<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4418,7 +4536,8 @@ fn settle_arrival<M: Mode>(
         Arrival::Leave => return Ok(()),
     }
     // 待つタスクは記録の持ち主のタスクで、持ち主は自分なので、送り直す起こしはない
-    if let Some(woken) = cells.settle_op(ctx, bin, depth_offset, op, here, work)? {
+    // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+    if let Some(woken) = unsafe { cells.settle_op(ctx, bin, depth_offset, op, here, work) }? {
         match cells.take_wake(&woken, here.me)? {
             Route::Run(run) => out.push(run),
             Route::Forward(_) => {
@@ -4436,8 +4555,11 @@ fn settle_arrival<M: Mode>(
 /// 空にするためである。数は集める地点がほかの読みと同じ区間で読む。完了は1つの lock の区間で続けて置き、当てた結果が
 /// 次の操作を出すときだけ lock を放して出す。出した操作がその場で終われば、次の完了より先に当てる
 /// (docs/spec/vm.md の「操作の記録」)。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn complete<M: Mode>(
+pub unsafe fn complete<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4489,15 +4611,18 @@ pub fn complete<M: Mode>(
         if rest {
             return Ok(());
         }
-        run_io(
-            shared,
-            here,
-            ctx,
-            Some(&mut *driver),
-            depth_offset,
-            &mut work,
-            out,
-        )?;
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        unsafe {
+            run_io(
+                shared,
+                here,
+                ctx,
+                Some(&mut *driver),
+                depth_offset,
+                &mut work,
+                out,
+            )
+        }?;
     }
 }
 
@@ -4510,8 +4635,14 @@ fn op_key(op: CellRef) -> OpKey {
 /// プールの仕事の受け付け。仕事`job`を記録のhostのdriverに出し、tokenを返す。`from`は仕事の出どころで、取り出しが
 /// 確かめる。`me`は呼んだタスクで、取り消しの地点なら仕事を出さない。記録は語を持たない (docs/spec/vm.md の
 /// 「操作の記録」)。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。加えて、
+/// `job`は`Op::Job`である。仕事がヒープの記憶を読み書きするなら、その記憶は、記録の結果を`take_job`で取り出すまで
+/// 生きていて動かず、仕事のほかには誰も書かない (docs/spec/vm.md の「時計と driver」、docs/spec/vm.md の
+/// 「`blocking` の呼び出し」)。
 #[allow(clippy::too_many_arguments)]
-pub fn submit_job<M: Mode>(
+pub unsafe fn submit_job<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4556,13 +4687,17 @@ impl JobTaken {
 }
 
 /// プールの仕事の取り出し。tokenを消費して記録を放す。取り出すのは受け付けたタスク (`worker`) だけである。
-pub fn take_job<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn take_job<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
     worker: u32,
 ) -> Result<JobTaken, CellFault> {
-    let taken = take_op(shared, ctx, token, worker)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let taken = unsafe { take_op(shared, ctx, token, worker) }?;
     let OpKind::Job { from, answer } = taken.kind else {
         return Err(CellFault::Internal("an op is taken as another kind of op"));
     };
@@ -4597,7 +4732,10 @@ fn net_record(kind: OpKind, worker: u32, stream: Option<Word>) -> OpRecord {
 }
 
 /// 呼ぶ側から移ってきた `String` の参照 `w` の中身を写して、参照を手放す。
-pub fn take_string<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<String, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC2を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn take_string<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<String, CellFault> {
     // `w` は呼ぶ側が持つ今の worker の参照で、`Ctx` の持つ語には触れない。中身は写し終えてから手放す
     let text = unsafe { (*ctx.heap().string(w)?).to_owned() };
     unsafe { ctx.heap_mut().decref(w)? };
@@ -4605,7 +4743,10 @@ pub fn take_string<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<String, CellFau
 }
 
 /// `Std.Net.local_port`。借りたリスナーが待ち受けるポート。
-pub fn local_port<M: Mode>(ctx: &Ctx<M>, listener: Word) -> Result<i64, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC2を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn local_port<M: Mode>(ctx: &Ctx<M>, listener: Word) -> Result<i64, CellFault> {
     // リスナーは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpListener` は `Lin`)
     Ok(i64::from(unsafe {
         (*ctx.heap().foreign_unique::<NetListener>(listener)?).port
@@ -4613,7 +4754,10 @@ pub fn local_port<M: Mode>(ctx: &Ctx<M>, listener: Word) -> Result<i64, CellFaul
 }
 
 /// `Std.Net.peer_addr`。借りたストリームの相手の番地を、Rust の `SocketAddr` の表示の形の新しい文字列にする。
-pub fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC2を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
     // ストリームは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpStream` は `Lin`)
     let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream)? };
     let Origin::Peer(peer) = s.origin else {
@@ -4624,7 +4768,10 @@ pub fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFa
 
 /// `Std.Stream.source`。借りた読み手を開いたパスを、引用符で囲んだ新しい文字列にする。包みが読みの誤りの文言に使う
 /// (docs/spec/stdlib.md の「`Std.Stream`」)。
-pub fn stream_source<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC2を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn stream_source<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
     // 読み手は呼ぶ側が持つ唯一の参照で、借りて読むだけである (`Reader` は `Lin`)
     let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream)? };
     let name = match &s.origin {
@@ -4638,7 +4785,10 @@ pub fn stream_source<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, Ce
 /// `Std.Exec.stdin`、`stdout`、`stderr`。借りた子 `child` から、まだ取り出していない pipe の端を移し、縛っていないまま
 /// `Stream.Writer` か `Stream.Reader` の新しい物体にする。端がなければ (2回目か、pipe にしなかった向き)、IO の失敗の
 /// 文言を返す (docs/spec/stdlib.md の「`Std.Exec`」)。
-pub fn exec_take<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC2を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn exec_take<M: Mode>(
     ctx: &mut Ctx<M>,
     child: Word,
     pipe: ChildPipe,
@@ -4669,7 +4819,10 @@ pub fn exec_take<M: Mode>(
 }
 
 /// `Std.Exec.stage_count`。借りた子の段の数。
-pub fn exec_stage_count<M: Mode>(ctx: &Ctx<M>, child: Word) -> Result<i64, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC2を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn exec_stage_count<M: Mode>(ctx: &Ctx<M>, child: Word) -> Result<i64, CellFault> {
     // 子は呼ぶ側が持つ唯一の参照で、借りて読むだけである (`Child` は `Lin`)
     let n = unsafe {
         (*ctx.heap().foreign_unique::<ExecChild>(child)?)
@@ -4683,8 +4836,11 @@ pub fn exec_stage_count<M: Mode>(ctx: &Ctx<M>, child: Word) -> Result<i64, CellF
 /// 段`k`の終わりを持ち主`here.me`のdriverに`Op::Wait`で待たせる。持ち主とhostを同じworkerにするのは、
 /// タスクが持ち主のworkerから動かないためである。driverの待ちは回収しないので、知らせの後で`reap`が回収する。
 /// 回収した段と、OSの子を持たないHostの段は、driverに出さずに終わった記録にする (docs/spec/vm.mdの「操作の記録」)。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn submit_wait<M: Mode>(
+pub unsafe fn submit_wait<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4722,7 +4878,10 @@ pub fn submit_wait<M: Mode>(
 /// `Std.Exec.reap`。借りた子 `child` の段 `k` を回収し、終了コードを返す。`Op::Wait` の知らせの後なので待たずに済む。
 /// OS の子を持たない Host の段は、ここで止まって待つ。回収した段はその終了コードを返す。回収できなければ、IO の失敗の
 /// 誤りと文言を返す (docs/spec/stdlib.md の「`Std.Exec`」)。
-pub fn exec_reap<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC2を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn exec_reap<M: Mode>(
     ctx: &Ctx<M>,
     k: i64,
     child: Word,
@@ -4763,7 +4922,10 @@ fn stream_prefix<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<Prefix, CellFaul
 
 /// ストリーム `stream` の driver のハンドル。ストリームは呼ぶ側から移ってきた参照か記録が持つ参照で、持ち主が返すか
 /// 落とす。
-pub fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC2を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
     // ストリームは持ち主のただ1つの参照である (`TcpStream` は `Lin`。docs/spec/vm.md の「操作の記録」)
     unsafe {
         (*ctx.heap().foreign_unique::<IoStream>(stream)?)
@@ -4774,7 +4936,10 @@ pub fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, Ce
 
 /// ストリーム `stream` が、受けたまままだ縛っていないか。そのストリームの操作を受け付ける worker は、先に自分の driver を
 /// 持つ (docs/spec/vm.md の「時計と driver」)。
-pub fn stream_unbound<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<bool, CellFault> {
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC2を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn stream_unbound<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<bool, CellFault> {
     // ストリームは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpStream` は `Lin`)
     Ok(unsafe {
         matches!(
@@ -5043,7 +5208,8 @@ fn grow_read_room<M: Mode>(
     buf: Word,
     stream: Word,
 ) -> Result<(Word, IoHandle, RawBuf), CellFault> {
-    let handle = stream_handle(ctx, stream)?;
+    // SAFETY: この関数を呼ぶのは`Ctx`を取る公開の関数だけで、その呼ぶ側の約束をそのまま渡す
+    let handle = unsafe { stream_handle(ctx, stream) }?;
     let heap = unsafe { ctx.heap_mut() };
     let content = unsafe { heap.bytes(buf)? };
     let len = content.len();
@@ -5395,7 +5561,10 @@ enum Side {
 /// 落ちたときに mail に積むために自分の run の `Shared` を持つので、それを比べれば run を見分けられる。
 /// `Task a` は `Lin` で入力をまたいで残らないので、検査を通ったプログラムからは届かない
 /// (docs/spec/vm.md の「`Async` のタスク」)。ハンドルは呼ぶ側の物体なので、登録表の lock の外で読む。
-pub fn handle_cell<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn handle_cell<M: Mode>(
     ctx: &Ctx<M>,
     shared: &Arc<Shared>,
     handle: Word,
@@ -5410,16 +5579,23 @@ pub fn handle_cell<M: Mode>(
 }
 
 /// 借りたハンドル `handle` のセルの番号を `Std.Async.Cell` の即値で返す。
-pub fn cell_of<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn cell_of<M: Mode>(
     ctx: &Ctx<M>,
     shared: &Arc<Shared>,
     handle: Word,
 ) -> Result<i64, CellFault> {
-    Ok(handle_cell(ctx, shared, handle)?.encode())
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    Ok(unsafe { handle_cell(ctx, shared, handle) }?.encode())
 }
 
 /// `start` が置いたタスク `cell` のハンドルを、登録表の lock を放してから今の worker の物体として作る。
-pub fn task_handle<M: Mode>(ctx: &mut Ctx<M>, shared: &Arc<Shared>, cell: CellRef) -> Word {
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn task_handle<M: Mode>(ctx: &mut Ctx<M>, shared: &Arc<Shared>, cell: CellRef) -> Word {
     // 確保するだけで、`Ctx` の持つ語には触れない。`Task a` は `Lin` である
     unsafe { ctx.heap_mut() }.alloc_foreign(
         TaskHandle {
@@ -5442,32 +5618,42 @@ fn give_up<M: Mode>(ctx: &mut Ctx<M>, handle: Word) -> Result<(), CellFault> {
 
 /// ハンドル `handle` を消費して、終わったタスクの値を返すか、失敗を返す。`handle` は呼ぶ側が持つ参照である。
 /// 値は lock を放してから、終わったタスクの ID から今の worker へ戻し、その後でタスクの ID を退かせる。
-pub fn take<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn take<M: Mode>(
     shared: &Arc<Shared>,
     ctx: &mut Ctx<M>,
     handle: Word,
     kind: Take,
     depth_offset: usize,
 ) -> Result<Result<Word, Raise>, CellFault> {
-    let cell = handle_cell(ctx, shared, handle)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let cell = unsafe { handle_cell(ctx, shared, handle) }?;
     let (mut dropped, mut retired) = (Discards::default(), Discards::default());
     let taken = shared.lock().take(cell, kind, &mut dropped, &mut retired)?;
     let result = match taken {
-        Ok((w, worker)) => Ok(Depot::of(worker).receive(ctx, w)?),
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        Ok((w, worker)) => Ok(unsafe { Depot::of(worker).receive(ctx, w) }?),
         Err(raise) => {
-            dropped.run(ctx, depth_offset)?;
+            // SAFETY: 呼ぶ側の約束をそのまま渡す
+            unsafe { dropped.run(ctx, depth_offset) }?;
             Err(raise)
         }
     };
     // ハンドルの参照は呼ぶ側から移ってきたもので、ここで手放す。受け取った印を先に付けるので、破棄処理は mail に
     // 積まない。タスクの ID は、その ID の値を受け取るか落とした後で退かせる
     give_up(ctx, handle)?;
-    retired.run(ctx, depth_offset)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { retired.run(ctx, depth_offset) }?;
     Ok(result)
 }
 
 /// `detach` と `cancel_raw`。ハンドルを手放し、終わったタスクのセルを放すか、持ち手のないタスクにする。
-pub fn detach<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn detach<M: Mode>(
     shared: &Arc<Shared>,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5475,17 +5661,22 @@ pub fn detach<M: Mode>(
     cancel: bool,
     depth_offset: usize,
 ) -> Result<(), CellFault> {
-    let cell = handle_cell(ctx, shared, handle)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    let cell = unsafe { handle_cell(ctx, shared, handle) }?;
     give_up(ctx, handle)?;
     let mut discards = Discards::default();
     shared.lock().let_go(here, cell, cancel, &mut discards)?;
-    discards.run(ctx, depth_offset)
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { discards.run(ctx, depth_offset) }
 }
 
 /// タスク `cell` を `outcome` で終え、worker `here.me` で走らせる起こしを `out` に積み、ほかの worker の起こしを送る。
 /// ハンドルがもう落ちていれば、lock を放してから値を落とし、タスクの ID を退かせる。`depth_offset` は呼んだ実行系の
 /// タスクの深さの起点である。
-pub fn finish<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn finish<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5501,7 +5692,8 @@ pub fn finish<M: Mode>(
         cells.finish(here, cell, outcome, &mut woken, &mut discards)?;
         cells.route(&mut woken, here, out)?;
     }
-    discards.run(ctx, depth_offset)
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { discards.run(ctx, depth_offset) }
 }
 
 /// 仕事 `cell` を `end` で終え、待っていたタスクの起こしを worker `here.me` で走らせる仕事にして `out` に積むか、
@@ -5525,7 +5717,10 @@ pub fn finish_job(
 /// lock の下でまとめて取り出してから処理し、処理が新しい項を積むので、取り出す項がなくなるまで繰り返す。項ごとに短い lock の区間で処理し、lock を放してから、その項の driver への
 /// 取り消し、語の破棄と ID の退かせ、シグナルを保留から下ろすことを行う。破棄の破棄処理が積む項は、それより後に積まれた
 /// 項より先に処理する (docs/spec/vm.md の「セルと登録表」)。項を1つでも処理したら真を返す。
-pub fn drain<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn drain<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5557,7 +5752,8 @@ pub fn drain<M: Mode>(
                 bits
             };
             work.cancel_on(driver.as_deref_mut())?;
-            discards.run(ctx, depth_offset)?;
+            // SAFETY: 呼ぶ側の約束をそのまま渡す
+            unsafe { discards.run(ctx, depth_offset) }?;
             // 届けたので保留から下ろし、次の同じシグナルをハンドラが1回目として扱うようにする
             // (docs/spec/vm.md の「上限と割り込み」)
             if settled != 0 {
@@ -5643,8 +5839,11 @@ pub fn solo(shared: &Shared) -> Here<'_> {
 /// 持ち主 `here.me` のタスク `me` が token `token` の操作を待つ。1つの lock の区間で、host が置いた結果があれば先に
 /// 当ててから `Registry::park_io` を行い、lock を放してから自分の driver への取り消しを頼む。ほかの worker が host の
 /// 操作の取り消しと出し直しは、その区間で host へ送る (docs/spec/vm.md の「操作の記録」)。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn park_io<M: Mode>(
+pub unsafe fn park_io<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5657,7 +5856,8 @@ pub fn park_io<M: Mode>(
     let mut work = IoWork::default();
     let run = {
         let mut cells = shared.lock();
-        cells.settle_token(ctx, depth_offset, token, me, here, &mut work)?;
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        unsafe { cells.settle_token(ctx, depth_offset, token, me, here, &mut work) }?;
         cells.park_io(here, &mut work, token, me, k)?
     };
     work.cancel_on(driver)?;
@@ -5665,8 +5865,11 @@ pub fn park_io<M: Mode>(
 }
 
 /// `park_io` に期限を付けた待ち。区間と取り消しの扱いは `park_io` と同じである。
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2、C3とC4を守る (docs/spec/lir.md の「エンジンの約束」)。
 #[allow(clippy::too_many_arguments)]
-pub fn park_io_until<M: Mode>(
+pub unsafe fn park_io_until<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5681,7 +5884,8 @@ pub fn park_io_until<M: Mode>(
     let mut work = IoWork::default();
     let run = {
         let mut cells = shared.lock();
-        cells.settle_token(ctx, depth_offset, token, me, here, &mut work)?;
+        // SAFETY: 呼ぶ側の約束をそのまま渡す
+        unsafe { cells.settle_token(ctx, depth_offset, token, me, here, &mut work) }?;
         cells.park_io_until(here, &mut work, now_ms, ms, token, me, k)?
     };
     work.cancel_on(driver)?;
@@ -5690,14 +5894,18 @@ pub fn park_io_until<M: Mode>(
 
 /// run の終わりに、残ったセルをすべて放す。lock を放してから語を落として ID を退かせ、その間に積まれた mail の項は
 /// 捨てる (docs/spec/vm.md の「終わり」)。
-pub fn sweep_all<M: Mode>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+pub unsafe fn sweep_all<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     depth_offset: usize,
 ) -> Result<(), CellFault> {
     let mut discards = Discards::default();
     shared.lock().sweep_all(&mut discards)?;
-    discards.run(ctx, depth_offset)?;
+    // SAFETY: 呼ぶ側の約束をそのまま渡す
+    unsafe { discards.run(ctx, depth_offset) }?;
     drop(shared.mail.take_all());
     Ok(())
 }
@@ -5719,7 +5927,10 @@ pub struct Depot {
 
 impl Depot {
     /// 新しい預かる ID を出す。`new_raw` の行が、`new_chan` の前に登録表の lock の外で1回呼ぶ。
-    pub fn open<M: Mode>(ctx: &mut Ctx<M>) -> Depot {
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn open<M: Mode>(ctx: &mut Ctx<M>) -> Depot {
         Depot {
             worker: unsafe { ctx.heap_mut() }.fork_worker(),
         }
@@ -5732,34 +5943,57 @@ impl Depot {
 
     /// 値 `w` を預ける。送り手の ID のまま、構造に入れる前に呼ぶ。`Unr` の物体に共有の印を付け、`lin` の物体から rc 1 の
     /// 道で届く物体の持ち主を預かる ID にする (docs/spec/object-model.md の「`share`」)。語は変わらない。
-    pub fn publish<M: Mode>(&mut self, ctx: &mut Ctx<M>, w: Word) -> Result<Word, CellFault> {
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn publish<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        w: Word,
+    ) -> Result<Word, CellFault> {
         unsafe { ctx.heap_mut().share(w, self.worker) }?;
         Ok(w)
     }
 
     /// 構造から取り出した値 `w` を、今の worker の局所の値として受け取る。取り出した後、ほかに参照がない状態で、受け手の
     /// ID のまま呼ぶ (docs/spec/object-model.md の「`transfer_back`」)。語は変わらない。
-    pub fn receive<M: Mode>(&mut self, ctx: &mut Ctx<M>, w: Word) -> Result<Word, CellFault> {
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn receive<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        w: Word,
+    ) -> Result<Word, CellFault> {
         unsafe { ctx.heap_mut().transfer_back(w, self.worker) }?;
         Ok(w)
     }
 
     /// 受け取られない値 `w` を預かる ID の下で落とす。`decref` は即値も、破棄処理を持つ `Foreign` も受ける。
-    pub fn discard<M: Mode>(
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn discard<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         w: Word,
         depth_offset: usize,
     ) -> Result<(), CellFault> {
-        with_worker(ctx, self.worker, depth_offset, |ctx| unsafe {
-            ctx.heap_mut().decref(w)
-        })?;
+        // SAFETY: 呼ぶ側の約束をそのまま渡す。`decref`する`w`も、C2の下で渡した語である
+        unsafe {
+            with_worker(ctx, self.worker, depth_offset, |ctx| {
+                ctx.heap_mut().decref(w)
+            })
+        }?;
         Ok(())
     }
 
     /// 預かる ID を退かせる。値をすべて `discard` した後、セルを放す直前に1回呼ぶ。ID の物体が残っていれば
     /// `TransferLeak` を返す (`par` の join と同じ)。
-    pub fn close<M: Mode>(self, ctx: &mut Ctx<M>) -> Result<(), CellFault> {
+    ///
+    /// # Safety
+    /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
+    pub unsafe fn close<M: Mode>(self, ctx: &mut Ctx<M>) -> Result<(), CellFault> {
         unsafe { ctx.heap_mut() }.retire_worker(self.worker)?;
         Ok(())
     }
@@ -5767,7 +6001,13 @@ impl Depot {
 
 /// ほかのタスクの ID の物体を放すときの切り替え。`evv` を空にして ID `id` に替え、`f` の後で元の `evv`、worker、
 /// 深さの起点 `depth_offset`、深さの上限に戻す。RC には触れない (docs/spec/object-model.md の「タスクの切り替え」)。
-pub fn with_worker<M: Mode, T>(
+///
+/// # Safety
+/// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1を守る (docs/spec/lir.md の「エンジンの約束」)。加えて、速いモード
+/// では`ctx`がyieldの途中でない (yieldの状態の語が`()`である) か、yieldの状態の局所の物体の持ち主が`id`である。
+/// `Ctx::switch_task`は、切り替えた後の文脈で`Ctx`の持つ語を新しいworkerが持つことを求めるからである。`id`そのものは
+/// どの値でも記憶を壊さない。
+pub unsafe fn with_worker<M: Mode, T>(
     ctx: &mut Ctx<M>,
     id: u32,
     depth_offset: usize,
@@ -5794,6 +6034,10 @@ pub fn end_with_exit(control: &Control, n: i64) -> bool {
 
 // 輪の単体テストは子のモジュールに置かない。子のモジュールは親を`super`の道で読むが、このファイルは`std`と
 // `eml_rt`だけを読む約束で、`crates/eml_sched/tests/imports.rs`がそれを行ごとに確かめる
+//
+// SAFETY: 下のテストが`Ctx`を取る関数を呼ぶ`unsafe`のブロックは、どれもこの理由による (モジュールの文書の
+// 「呼ぶ側の約束」)。テストは、同じ`Ctx`の上で自分が確保した語だけを、各関数が名指す種類で渡し、登録表はこの
+// モジュールの関数だけで動かす。どれも検査モードで走り、速いモードでも走る2つは、検査モードで通った同じ手順を繰り返す
 
 /// 根のスコープに、動いているタスクのセルを1つ置く。輪だけを確かめるので、ヒープの ID は持たない。
 #[cfg(any(test, feature = "testing"))]
@@ -6382,16 +6626,18 @@ fn park_on<M: Mode>(
     token: i64,
     me: CellRef,
 ) -> Result<Option<Runnable>, CellFault> {
-    park_io(
-        registry,
-        &solo(registry),
-        ctx,
-        Some(driver),
-        0,
-        token,
-        me,
-        Word::UNIT,
-    )
+    unsafe {
+        park_io(
+            registry,
+            &solo(registry),
+            ctx,
+            Some(driver),
+            0,
+            token,
+            me,
+            Word::UNIT,
+        )
+    }
 }
 
 /// `park_on` に、今の時刻 `now_ms` から `ms` ミリ秒の期限を付けた待ち。
@@ -6405,18 +6651,20 @@ fn park_until_on<M: Mode>(
     token: i64,
     me: CellRef,
 ) -> Result<Option<Runnable>, CellFault> {
-    park_io_until(
-        registry,
-        &solo(registry),
-        ctx,
-        Some(driver),
-        0,
-        now_ms,
-        ms,
-        token,
-        me,
-        Word::UNIT,
-    )
+    unsafe {
+        park_io_until(
+            registry,
+            &solo(registry),
+            ctx,
+            Some(driver),
+            0,
+            now_ms,
+            ms,
+            token,
+            me,
+            Word::UNIT,
+        )
+    }
 }
 
 /// `b"x"` を書く操作を受け付け、token を返す。
@@ -6441,16 +6689,18 @@ fn submit_bytes(
 ) -> i64 {
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes(bytes);
     let stream = net_stream(ctx);
-    submit_write(
-        registry,
-        &solo(registry),
-        ctx,
-        Some(&mut *driver),
-        worker,
-        0,
-        buf,
-        stream,
-    )
+    unsafe {
+        submit_write(
+            registry,
+            &solo(registry),
+            ctx,
+            Some(&mut *driver),
+            worker,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap()
 }
 
@@ -6476,7 +6726,7 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     ));
     // 終わった操作の取り消しは driver に頼まない
     assert!(driver.cancelled.is_empty());
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     assert!(taken.cancelling && taken.result.is_err());
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
@@ -6492,17 +6742,19 @@ fn submit_ffi_job(
     me: CellRef,
 ) -> i64 {
     let job = Op::Job(Box::new(|| Box::new(7u64) as Box<dyn std::any::Any + Send>));
-    submit_job(
-        registry,
-        &solo(registry),
-        ctx,
-        Some(&mut *driver),
-        0,
-        0,
-        me,
-        JobSource::C(3),
-        job,
-    )
+    unsafe {
+        submit_job(
+            registry,
+            &solo(registry),
+            ctx,
+            Some(&mut *driver),
+            0,
+            0,
+            me,
+            JobSource::C(3),
+            job,
+        )
+    }
     .unwrap()
 }
 
@@ -6529,7 +6781,7 @@ fn a_job_record_takes_the_boxed_answer() {
     );
     assert!(out.is_empty());
     assert_eq!(registry.lock().in_flight(0), 0);
-    let taken = take_job(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_job(&registry, &mut ctx, token, 0) }.unwrap();
     assert_eq!(taken.from, JobSource::C(3));
     assert_eq!(taken.answer::<u64>().unwrap().unwrap(), 42);
     let leaks = ctx.leaks();
@@ -6559,7 +6811,7 @@ fn a_cancelled_task_submits_no_job() {
         assert!(matches!(record.phase, OpPhase::Done(Err(_), true)));
         assert!(record.pending_op.is_none());
     }
-    let taken = take_job(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_job(&registry, &mut ctx, token, 0) }.unwrap();
     assert!(taken.result.is_err());
 }
 
@@ -6577,17 +6829,19 @@ fn a_job_answer_of_another_type_is_an_internal_error() {
         result: Ok(Done::Job(Box::new(42i32))),
         cancelled: false,
     });
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut Vec::new(),
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+    }
     .unwrap();
-    let taken = take_job(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_job(&registry, &mut ctx, token, 0) }.unwrap();
     assert!(matches!(
         taken.answer::<u64>(),
         Err(CellFault::Internal(
@@ -6637,7 +6891,7 @@ fn op_ready_counts_a_wait_only_on_a_finished_op() {
         },
         (1, 2, 0)
     );
-    let taken = take_op(&registry, &mut ctx, done, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, done, 0) }.unwrap();
     assert!(matches!(taken.result, Ok(1)));
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     registry.lock().parts[0].in_flight = 0;
@@ -6646,7 +6900,7 @@ fn op_ready_counts_a_wait_only_on_a_finished_op() {
         .op_mut(CellRef::decode(pending))
         .unwrap()
         .phase = OpPhase::Done(Ok(1), false);
-    let taken = take_op(&registry, &mut ctx, pending, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, pending, 0) }.unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
@@ -6670,14 +6924,14 @@ fn writes_spend_budget_by_their_length() {
         assert_eq!(registry.lock().op_ready(token, 0, me).unwrap(), FAST_GO);
         spent.push(BUDGET - registry.lock().task_mut(me).unwrap().budget);
         registry.lock().task_mut(me).unwrap().budget = BUDGET;
-        let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+        let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
         unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     }
     assert_eq!(spent, [1, 1, 2, 3]);
     let token = submit_bytes(&registry, &mut ctx, &mut driver, 0, &[1; 65536]);
     assert_eq!(registry.lock().op_ready(token, 0, me).unwrap(), FAST_YIELD);
     assert_eq!(registry.lock().task_mut(me).unwrap().budget, 0);
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
@@ -6707,7 +6961,7 @@ fn going_on_after_a_spent_budget_counts_the_wait_and_refills() {
     assert_eq!(cells.stats.parks, 1);
     assert!(matches!(cells.go_on(me), Err(CellFault::Internal(_))));
     drop(cells);
-    let taken = take_op(&registry, &mut ctx, done, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, done, 0) }.unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
@@ -6746,7 +7000,7 @@ fn a_cancel_during_a_fast_yield_is_counted_once() {
     registry.lock().task_mut(me).unwrap().phase = Phase::Parked;
     registry.lock().resumed(me, WOKE, true).unwrap();
     assert_eq!(registry.lock().task_mut(me).unwrap().budget, BUDGET);
-    let taken = take_op(&registry, &mut ctx, done, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, done, 0) }.unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
@@ -6774,7 +7028,7 @@ fn an_op_used_by_another_task_is_an_internal_error() {
         registry.lock().op_of(token, 2),
         Err(CellFault::Internal("an op is used by another task"))
     ));
-    let taken = take_op(&registry, &mut ctx, token, 1).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 1) }.unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
@@ -6791,10 +7045,10 @@ fn a_second_take_of_an_op_is_an_internal_error() {
     };
     let registry = Shared::new(Registry::new(Vec::new(), 1));
     let token = submit_x(&registry, &mut ctx, &mut driver, 0);
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     assert!(matches!(
-        take_op(&registry, &mut ctx, token, 0),
+        unsafe { take_op(&registry, &mut ctx, token, 0) },
         Err(CellFault::Internal("an op names no record"))
     ));
     let leaks = ctx.leaks();
@@ -6813,12 +7067,14 @@ fn sweep_all_frees_a_waited_op_before_its_task() {
     let me = running_task(&registry, scope);
     let worker = unsafe { ctx.heap_mut() }.fork_worker();
     registry.lock().task_mut(me).unwrap().worker = worker;
-    with_worker(&mut ctx, worker, 0, |ctx| {
-        let token = submit_x(&registry, ctx, &mut driver, worker);
-        let run = park_on(&registry, ctx, &mut driver, token, me).unwrap();
-        assert!(run.is_none());
-    });
-    sweep_all(&registry, &mut ctx, 0).unwrap();
+    unsafe {
+        with_worker(&mut ctx, worker, 0, |ctx| {
+            let token = submit_x(&registry, ctx, &mut driver, worker);
+            let run = park_on(&registry, ctx, &mut driver, token, me).unwrap();
+            assert!(run.is_none());
+        })
+    };
+    unsafe { sweep_all(&registry, &mut ctx, 0) }.unwrap();
     assert_eq!(registry.lock().parts[0].in_flight, 0);
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
@@ -6839,17 +7095,19 @@ fn a_completion_with_a_stale_generation_names_no_op() {
         cancelled: false,
     });
     let mut out = Vec::new();
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap();
-    let taken = take_op(&registry, &mut ctx, old, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, old, 0) }.unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let new = submit_x(&registry, &mut ctx, &mut driver, 0);
     let fresh = CellRef::decode(new);
@@ -6860,15 +7118,17 @@ fn a_completion_with_a_stale_generation_names_no_op() {
         result: Ok(Done::Size(1)),
         cancelled: false,
     });
-    let fault = complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    let fault = unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap_err();
     assert!(
         matches!(fault, CellFault::Internal("a completion names no op")),
@@ -7003,15 +7263,17 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
             mail: &shared.mail,
             post: &Unposted,
         };
-        run_io(
-            &shared,
-            &host,
-            &mut ctx,
-            Some(&mut driver),
-            0,
-            &mut work,
-            &mut Vec::new(),
-        )
+        unsafe {
+            run_io(
+                &shared,
+                &host,
+                &mut ctx,
+                Some(&mut driver),
+                0,
+                &mut work,
+                &mut Vec::new(),
+            )
+        }
         .unwrap();
         assert_eq!(driver.cancelled, [op_key(op)], "{before:?}");
         assert_eq!(shared.lock().in_flight(1), 1);
@@ -7073,15 +7335,17 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
             &mut work,
         )
         .unwrap();
-    run_io(
-        &shared,
-        &solo(&shared),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        &mut work,
-        &mut Vec::new(),
-    )
+    unsafe {
+        run_io(
+            &shared,
+            &solo(&shared),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            &mut work,
+            &mut Vec::new(),
+        )
+    }
     .unwrap();
     assert!(driver.cancelled.is_empty());
     assert!(matches!(
@@ -7101,16 +7365,18 @@ fn probed_read(
     buf: Word,
 ) -> (i64, CellRef) {
     let stream = net_stream(ctx);
-    let token = submit_read(
-        registry,
-        &solo(registry),
-        ctx,
-        Some(&mut *driver),
-        0,
-        0,
-        buf,
-        stream,
-    )
+    let token = unsafe {
+        submit_read(
+            registry,
+            &solo(registry),
+            ctx,
+            Some(&mut *driver),
+            0,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap();
     let op = CellRef::decode(token);
     assert!(
@@ -7125,15 +7391,17 @@ fn probed_read(
         cancelled: false,
     });
     let mut out = Vec::new();
-    complete(
-        registry,
-        &solo(registry),
-        ctx,
-        driver,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    unsafe {
+        complete(
+            registry,
+            &solo(registry),
+            ctx,
+            driver,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap();
     // 読めるようになっただけでは再開せず、貸した記憶への読みを同じ鍵で待つ
     assert!(out.is_empty());
@@ -7169,16 +7437,18 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
         let submits = driver.submits;
         let (token, op) = if in_place {
             let stream = net_stream(&mut ctx);
-            let token = submit_read(
-                &registry,
-                &solo(&registry),
-                &mut ctx,
-                Some(&mut driver),
-                0,
-                0,
-                buf,
-                stream,
-            )
+            let token = unsafe {
+                submit_read(
+                    &registry,
+                    &solo(&registry),
+                    &mut ctx,
+                    Some(&mut driver),
+                    0,
+                    0,
+                    buf,
+                    stream,
+                )
+            }
             .unwrap();
             let op = CellRef::decode(token);
             // 読めるようになるのを待つ操作を出さず、読みだけを出す
@@ -7208,17 +7478,19 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
             cancelled: false,
         });
         let mut out = Vec::new();
-        complete(
-            &registry,
-            &solo(&registry),
-            &mut ctx,
-            &mut driver,
-            0,
-            &mut Vec::new(),
-            &mut out,
-        )
+        unsafe {
+            complete(
+                &registry,
+                &solo(&registry),
+                &mut ctx,
+                &mut driver,
+                0,
+                &mut Vec::new(),
+                &mut out,
+            )
+        }
         .unwrap();
-        let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+        let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
         let back = taken.buf.unwrap();
         assert_eq!(back, lent);
         assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"ab");
@@ -7253,7 +7525,10 @@ fn growing_a_full_buffer_doubles_its_length() {
         Ok(Done::Size(0)),
         &mut Vec::new(),
     );
-    let back = take_op(&registry, &mut ctx, token, 0).unwrap().buf.unwrap();
+    let back = unsafe { take_op(&registry, &mut ctx, token, 0) }
+        .unwrap()
+        .buf
+        .unwrap();
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }.len(), 200_000);
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
     let leaks = ctx.leaks();
@@ -7285,21 +7560,23 @@ fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
         result: Ok(Done::Size(2)),
         cancelled: false,
     });
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap();
     assert!(matches!(
         out.as_slice(),
         [Runnable::ResumeIo { cell, wake: CANCELLED, .. }] if *cell == me
     ));
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     assert!(taken.cancelling && matches!(taken.result, Ok(2)));
     let back = taken.buf.unwrap();
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abxy");
@@ -7329,22 +7606,24 @@ fn write_of_a_shared_buffer<M: Mode>() -> Ctx<M> {
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"shared");
     unsafe { ctx.heap_mut().dup(buf) }.unwrap();
     let stream = net_stream(&mut ctx);
-    let token = submit_write(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        buf,
-        stream,
-    )
+    let token = unsafe {
+        submit_write(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap();
     let at = unsafe { ctx.heap().bytes(buf) }.unwrap();
     assert_eq!(driver.writes.len(), 1);
     assert_eq!(driver.writes[0].ptr, at.cast::<u8>().cast_mut());
     assert_eq!(driver.written, [b"shared".to_vec()]);
-    let back = take_bytes(&registry, &mut ctx, token, 0).unwrap();
+    let back = unsafe { take_bytes(&registry, &mut ctx, token, 0) }.unwrap();
     assert!(back == buf);
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"shared");
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
@@ -7377,16 +7656,18 @@ fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
     };
     unsafe { ctx.heap_mut().dup(buf) }.unwrap();
     let stream = net_stream(&mut ctx);
-    let token = submit_write(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        buf,
-        stream,
-    )
+    let token = unsafe {
+        submit_write(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap();
     assert_eq!(driver.held.len(), 1);
     let lent = driver.held[0].1;
@@ -7414,16 +7695,18 @@ fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
     dup(&mut ctx);
     let reads = driver.lent.len();
     let other = net_stream(&mut ctx);
-    let read = submit_read(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        buf,
-        other,
-    )
+    let read = unsafe {
+        submit_read(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            buf,
+            other,
+        )
+    }
     .unwrap();
     assert_eq!(driver.lent.len(), reads);
     assert!(matches!(
@@ -7435,17 +7718,19 @@ fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
         result: Err(io::Error::from(io::ErrorKind::ConnectionReset)),
         cancelled: false,
     });
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut Vec::new(),
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+    }
     .unwrap();
-    let taken = take_op(&registry, &mut ctx, read, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, read, 0) }.unwrap();
     assert!(taken.buf == Some(buf));
     unsafe { ctx.heap_mut().decref(buf) }.unwrap();
     assert!(driver.written.is_empty());
@@ -7455,18 +7740,20 @@ fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
         result: Ok(Done::Size(3)),
         cancelled: false,
     });
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut Vec::new(),
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+    }
     .unwrap();
     assert_eq!(driver.written, [b"abc".to_vec()]);
-    let back = take_bytes(&registry, &mut ctx, token, 0).unwrap();
+    let back = unsafe { take_bytes(&registry, &mut ctx, token, 0) }.unwrap();
     assert!(back == buf);
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abc");
     assert_eq!(unsafe { &*ctx.heap().bytes(alias).unwrap() }, b"zbc");
@@ -7505,15 +7792,17 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
         result: Err(io::Error::other("cancelled")),
         cancelled: true,
     });
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap();
     let Some(Runnable::ResumeIo {
         cell,
@@ -7526,7 +7815,7 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
     };
     assert_eq!(cell, me);
     assert_eq!(registry.lock().op_outcome(op, 0).unwrap(), OUTCOME_LATE);
-    let taken = take_op(&registry, &mut ctx, op, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, op, 0) }.unwrap();
     assert!(taken.timed_out && !taken.cancelling);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
@@ -7565,15 +7854,17 @@ fn cancelling_or_finishing_a_timed_op_wait_removes_its_timer() {
         result: Err(io::Error::other("cancelled")),
         cancelled: true,
     });
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap();
     assert_eq!(registry.lock().next_deadline(0), None);
     let resumed: Vec<(CellRef, i64)> = out
@@ -7588,7 +7879,7 @@ fn cancelling_or_finishing_a_timed_op_wait_removes_its_timer() {
         let Runnable::ResumeIo { op, .. } = run else {
             unreachable!("checked above");
         };
-        let taken = take_op(&registry, &mut ctx, op, 0).unwrap();
+        let taken = unsafe { take_op(&registry, &mut ctx, op, 0) }.unwrap();
         assert!(!taken.timed_out);
         unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     }
@@ -7618,21 +7909,23 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
         cancelled: true,
     });
     let mut out = Vec::new();
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap();
     let Some(Runnable::ResumeIo { wake: WOKE, op, .. }) = out.pop() else {
         panic!("the op wait resumes with `Woke`");
     };
     assert_eq!(registry.lock().op_outcome(op, 0).unwrap(), OUTCOME_LATE);
-    let taken = take_op(&registry, &mut ctx, op, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, op, 0) }.unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
@@ -7655,15 +7948,17 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
         cancelled: false,
     });
     let mut out = Vec::new();
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap();
     assert!(out.is_empty());
     let run = park_until_on(&registry, &mut ctx, &mut driver, 0, 50, token, me).unwrap();
@@ -7676,7 +7971,7 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
     drop(cells);
     assert!(driver.cancelled.is_empty());
     assert_eq!(registry.lock().op_outcome(token, 0).unwrap(), OUTCOME_OK);
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     assert!(matches!(taken.result, Ok(1)) && !taken.timed_out);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
@@ -7701,15 +7996,17 @@ fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
         port: 1,
     };
     let listener = unsafe { ctx.heap_mut() }.alloc_foreign(listener, true);
-    let token = submit_accept(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        listener,
-    )
+    let token = unsafe {
+        submit_accept(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            listener,
+        )
+    }
     .unwrap();
     let key = driver.last_key;
     let run = park_until_on(&registry, &mut ctx, &mut driver, 0, 50, token, me).unwrap();
@@ -7722,22 +8019,24 @@ fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
         result: Err(result),
         cancelled,
     });
-    complete(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        &mut driver,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    unsafe {
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap();
     let Some(Runnable::ResumeIo { wake: WOKE, op, .. }) = out.pop() else {
         panic!("the op wait resumes with `Woke`");
     };
     let code = registry.lock().op_outcome(op, 0).unwrap();
     let back = registry.lock().op_stream(op, 0).unwrap();
-    let taken = take_op(&registry, &mut ctx, op, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, op, 0) }.unwrap();
     assert!(taken.timed_out && taken.made.is_none() && taken.failure().is_none());
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
     let leaks = ctx.leaks();
@@ -7832,16 +8131,18 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
     // worker 1 の接続は自分の driver に出す
     let mut driver_1 = NoDriver::default();
     let addr = unsafe { ctx.heap_mut() }.alloc_string("127.0.0.1");
-    let token = submit_connect(
-        &shared,
-        &on(1),
-        &mut ctx,
-        Some(&mut driver_1),
-        0,
-        0,
-        addr,
-        80,
-    )
+    let token = unsafe {
+        submit_connect(
+            &shared,
+            &on(1),
+            &mut ctx,
+            Some(&mut driver_1),
+            0,
+            0,
+            addr,
+            80,
+        )
+    }
     .unwrap()
     .unwrap();
     assert_eq!((host_of(token), driver_1.submits), (1, 1));
@@ -7854,17 +8155,19 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
         cancelled: false,
     });
     let mut out = Vec::new();
-    complete(
-        &shared,
-        &on(1),
-        &mut ctx,
-        &mut driver_1,
-        0,
-        &mut Vec::new(),
-        &mut out,
-    )
+    unsafe {
+        complete(
+            &shared,
+            &on(1),
+            &mut ctx,
+            &mut driver_1,
+            0,
+            &mut Vec::new(),
+            &mut out,
+        )
+    }
     .unwrap();
-    let stream = take_made(&shared, &mut ctx, token, 0, Made::Stream).unwrap();
+    let stream = unsafe { take_made(&shared, &mut ctx, token, 0, Made::Stream) }.unwrap();
     assert_eq!(
         unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream).unwrap() }
             .bind
@@ -7873,16 +8176,18 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
     );
     // そのストリームを引く worker 1 の操作は、知らせを送らずに worker 1 の driver に出す
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes_room(64);
-    let read = submit_read(
-        &shared,
-        &on(1),
-        &mut ctx,
-        Some(&mut driver_1),
-        0,
-        0,
-        buf,
-        stream,
-    )
+    let read = unsafe {
+        submit_read(
+            &shared,
+            &on(1),
+            &mut ctx,
+            Some(&mut driver_1),
+            0,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap();
     assert_eq!((host_of(read), driver_1.submits), (1, 2));
     assert!(posted.0.borrow().is_empty());
@@ -7902,16 +8207,18 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
         true,
     );
     let bytes = unsafe { ctx.heap_mut() }.alloc_bytes_room(8);
-    let write = submit_write(
-        &shared,
-        &on(0),
-        &mut ctx,
-        Some(&mut driver_0),
-        0,
-        0,
-        bytes,
-        other,
-    )
+    let write = unsafe {
+        submit_write(
+            &shared,
+            &on(0),
+            &mut ctx,
+            Some(&mut driver_0),
+            0,
+            0,
+            bytes,
+            other,
+        )
+    }
     .unwrap();
     assert_eq!((host_of(write), driver_0.submits), (1, 0));
     assert_eq!(*posted.0.borrow(), [1]);
@@ -7942,16 +8249,18 @@ fn a_read_of_a_file_grows_at_submit() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
     let buf = bytes_ab(&mut ctx, 0);
     let stream = file_stream(&mut ctx);
-    let token = submit_read(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        buf,
-        stream,
-    )
+    let token = unsafe {
+        submit_read(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap();
     let op = CellRef::decode(token);
     assert_eq!(driver.submits, 1);
@@ -7971,7 +8280,7 @@ fn a_read_of_a_file_grows_at_submit() {
         Ok(Done::Size(2)),
         &mut out,
     );
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     let back = taken.buf.unwrap();
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abcd");
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
@@ -7987,15 +8296,17 @@ fn a_read_line_of_a_file_grows_at_submit() {
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
     let stream = file_stream(&mut ctx);
-    let token = submit_read_line(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        stream,
-    )
+    let token = unsafe {
+        submit_read_line(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            stream,
+        )
+    }
     .unwrap();
     let op = CellRef::decode(token);
     assert_eq!(driver.submits, 1);
@@ -8027,7 +8338,9 @@ fn a_read_line_of_a_file_grows_at_submit() {
         Ok(Done::Size(0)),
         &mut out,
     );
-    let line = take_line(&registry, &mut ctx, token, 0).unwrap().unwrap();
+    let line = unsafe { take_line(&registry, &mut ctx, token, 0) }
+        .unwrap()
+        .unwrap();
     assert_eq!(
         unsafe { (&*ctx.heap().string(line).unwrap()).len() },
         READ_ROOM
@@ -8047,16 +8360,18 @@ fn a_read_of_a_shared_buffer_on_a_file_copies_once() {
     let buf = bytes_ab(&mut ctx, 2 * READ_ROOM);
     unsafe { ctx.heap_mut().dup(buf) }.unwrap();
     let stream = file_stream(&mut ctx);
-    let token = submit_read(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        buf,
-        stream,
-    )
+    let token = unsafe {
+        submit_read(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap();
     let op = CellRef::decode(token);
     assert_eq!(driver.submits, 1);
@@ -8074,7 +8389,7 @@ fn a_read_of_a_shared_buffer_on_a_file_copies_once() {
         Ok(Done::Size(2)),
         &mut out,
     );
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     let back = taken.buf.unwrap();
     assert_eq!(back, lent);
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abcd");
@@ -8135,7 +8450,7 @@ fn open_on_worker_1(
 ) -> i64 {
     let path =
         unsafe { ctx.heap_mut() }.alloc_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
-    submit_open(shared, here, ctx, driver, 0, 0, path, 0)
+    unsafe { submit_open(shared, here, ctx, driver, 0, 0, path, 0) }
         .unwrap()
         .unwrap()
 }
@@ -8152,7 +8467,7 @@ fn host_takes_submit(
     let mut work = IoWork::default();
     shared.lock().take_submit(op, here.me, &mut work).unwrap();
     let mut out = Vec::new();
-    run_io(shared, here, ctx, Some(driver), 0, &mut work, &mut out).unwrap();
+    unsafe { run_io(shared, here, ctx, Some(driver), 0, &mut work, &mut out) }.unwrap();
     assert!(out.is_empty());
 }
 
@@ -8184,12 +8499,14 @@ fn an_open_record_binds_the_file_to_the_openers_host() {
     assert_eq!((driver_0.submits, driver_0.adopted), (1, 1));
     // 待つタスクのいない記録には `Completion` を送らず、持ち主が次に読むときに当てる
     assert!(posted.completions.borrow().is_empty());
-    let woken = shared
-        .lock()
-        .settle_arrived(&mut ctx, 0, op, &on(1, 0), &mut IoWork::default())
-        .unwrap();
+    let woken = unsafe {
+        shared
+            .lock()
+            .settle_arrived(&mut ctx, 0, op, &on(1, 0), &mut IoWork::default())
+    }
+    .unwrap();
     assert!(woken.is_none());
-    let reader = take_made(&shared, &mut ctx, token, 0, Made::Reader).unwrap();
+    let reader = unsafe { take_made(&shared, &mut ctx, token, 0, Made::Reader) }.unwrap();
     assert_eq!(host_of(&ctx, reader), Some(0));
     unsafe { ctx.heap_mut().decref(reader) }.unwrap();
     // 本物の時計: worker 1 は自分の driver に取り込む
@@ -8205,7 +8522,7 @@ fn an_open_record_binds_the_file_to_the_openers_host() {
     let token = open_on_worker_1(&shared, &here, &mut ctx, Some(&mut driver_1));
     assert!(posted.submits.borrow().is_empty());
     assert_eq!((driver_1.submits, driver_1.adopted), (1, 1));
-    let reader = take_made(&shared, &mut ctx, token, 0, Made::Reader).unwrap();
+    let reader = unsafe { take_made(&shared, &mut ctx, token, 0, Made::Reader) }.unwrap();
     assert_eq!(host_of(&ctx, reader), Some(1));
     unsafe { ctx.heap_mut().decref(reader) }.unwrap();
     let leaks = ctx.leaks();
@@ -8230,20 +8547,23 @@ fn an_open_cancelled_after_adoption_bins_its_handle() {
     let op = CellRef::decode(token);
     // 待ち始めたタスクに取り消しが届く。host はまだ受け付けていないので、印だけを付ける
     shared.lock().task_mut(me).unwrap().cancel = true;
-    let run = park_io(&shared, &on(1), &mut ctx, None, 0, token, me, Word::UNIT).unwrap();
+    let run =
+        unsafe { park_io(&shared, &on(1), &mut ctx, None, 0, token, me, Word::UNIT) }.unwrap();
     assert!(run.is_none());
     assert!(shared.lock().op_mut(op).unwrap().cancelling);
     let mut driver_0 = NoDriver::default();
     host_takes_submit(&shared, &on(0), &mut ctx, &mut driver_0, op);
     assert_eq!(driver_0.adopted, 1);
     assert_eq!(*posted.completions.borrow(), [(1, op)]);
-    let woken = shared
-        .lock()
-        .take_completion(&mut ctx, 0, op, &on(1), &mut IoWork::default())
-        .unwrap();
+    let woken = unsafe {
+        shared
+            .lock()
+            .take_completion(&mut ctx, 0, op, &on(1), &mut IoWork::default())
+    }
+    .unwrap();
     assert!(woken.is_some());
     // `finish` と同じく記録を放し、作ったストリームを落とす
-    let taken = take_op(&shared, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&shared, &mut ctx, token, 0) }.unwrap();
     assert!(taken.cancelling);
     assert_eq!(taken.outcome(), OUTCOME_OK);
     let made = taken.made.unwrap();
@@ -8282,15 +8602,17 @@ fn accept_unbound(
         },
         true,
     );
-    let token = submit_accept(
-        shared,
-        &solo(shared),
-        ctx,
-        Some(&mut driver_0),
-        0,
-        0,
-        listener,
-    )
+    let token = unsafe {
+        submit_accept(
+            shared,
+            &solo(shared),
+            ctx,
+            Some(&mut driver_0),
+            0,
+            0,
+            listener,
+        )
+    }
     .unwrap();
     driver_0.done.push(Completion {
         key: driver_0.last_key,
@@ -8300,18 +8622,20 @@ fn accept_unbound(
         }),
         cancelled: false,
     });
-    complete(
-        shared,
-        &solo(shared),
-        ctx,
-        &mut driver_0,
-        0,
-        &mut Vec::new(),
-        &mut Vec::new(),
-    )
+    unsafe {
+        complete(
+            shared,
+            &solo(shared),
+            ctx,
+            &mut driver_0,
+            0,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+    }
     .unwrap();
-    let stream = take_made(shared, ctx, token, 0, Made::Stream).unwrap();
-    assert!(stream_unbound(ctx, stream).unwrap());
+    let stream = unsafe { take_made(shared, ctx, token, 0, Made::Stream) }.unwrap();
+    assert!(unsafe { stream_unbound(ctx, stream) }.unwrap());
     stream
 }
 
@@ -8335,16 +8659,18 @@ fn an_accepted_stream_is_hosted_by_the_worker_that_uses_it_first() {
     let stream = accept_unbound(&shared, &mut ctx, sock);
     let mut driver_1 = NoDriver::default();
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes_room(64);
-    let read = submit_read(
-        &shared,
-        &on(1),
-        &mut ctx,
-        Some(&mut driver_1),
-        0,
-        0,
-        buf,
-        stream,
-    )
+    let read = unsafe {
+        submit_read(
+            &shared,
+            &on(1),
+            &mut ctx,
+            Some(&mut driver_1),
+            0,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap();
     assert_eq!(
         (host_of(read), driver_1.adopted, driver_1.submits),
@@ -8369,21 +8695,23 @@ fn a_stream_that_a_driver_refuses_fails_every_op() {
         ..NoDriver::default()
     };
     let bytes = unsafe { ctx.heap_mut() }.alloc_bytes_room(8);
-    let write = submit_write(
-        &shared,
-        &solo(&shared),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        bytes,
-        stream,
-    )
+    let write = unsafe {
+        submit_write(
+            &shared,
+            &solo(&shared),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            bytes,
+            stream,
+        )
+    }
     .unwrap();
     assert_eq!(driver.submits, 0);
     assert_eq!(shared.lock().op_outcome(write, 0).unwrap(), OUTCOME_FAILED);
     let stream = shared.lock().op_stream(write, 0).unwrap();
-    let taken = take_op(&shared, &mut ctx, write, 0).unwrap();
+    let taken = unsafe { take_op(&shared, &mut ctx, write, 0) }.unwrap();
     let (_, message) = taken.failure().unwrap();
     assert_eq!(
         message,
@@ -8392,19 +8720,21 @@ fn a_stream_that_a_driver_refuses_fails_every_op() {
     for w in [taken.buf, taken.made].into_iter().flatten() {
         unsafe { ctx.heap_mut().decref(w) }.unwrap();
     }
-    let line = submit_read_line(
-        &shared,
-        &solo(&shared),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        stream,
-    )
+    let line = unsafe {
+        submit_read_line(
+            &shared,
+            &solo(&shared),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            stream,
+        )
+    }
     .unwrap();
     assert_eq!(driver.submits, 0);
     let stream = shared.lock().op_stream(line, 0).unwrap();
-    let taken = take_op(&shared, &mut ctx, line, 0).unwrap();
+    let taken = unsafe { take_op(&shared, &mut ctx, line, 0) }.unwrap();
     let (e, _) = taken.failure().unwrap();
     assert_eq!(e.kind(), io::ErrorKind::NotConnected);
     unsafe { ctx.heap_mut().decref(stream) }.unwrap();
@@ -8434,15 +8764,17 @@ fn complete_op(
         result,
         cancelled: false,
     });
-    complete(
-        registry,
-        &solo(registry),
-        ctx,
-        driver,
-        0,
-        &mut Vec::new(),
-        out,
-    )
+    unsafe {
+        complete(
+            registry,
+            &solo(registry),
+            ctx,
+            driver,
+            0,
+            &mut Vec::new(),
+            out,
+        )
+    }
     .unwrap();
 }
 
@@ -8502,15 +8834,17 @@ fn a_read_line_lends_the_stream_buffer_and_frees_it_when_empty() {
         [(&b"ab\ncd"[..], "ab\n", 2, true), (b"\n", "cd\n", 0, false)]
     {
         let me = running_task(&registry, scope);
-        let token = submit_read_line(
-            &registry,
-            &solo(&registry),
-            &mut ctx,
-            Some(&mut driver),
-            0,
-            0,
-            stream,
-        )
+        let token = unsafe {
+            submit_read_line(
+                &registry,
+                &solo(&registry),
+                &mut ctx,
+                Some(&mut driver),
+                0,
+                0,
+                stream,
+            )
+        }
         .unwrap();
         let op = CellRef::decode(token);
         assert!(
@@ -8534,7 +8868,9 @@ fn a_read_line_lends_the_stream_buffer_and_frees_it_when_empty() {
         ));
         assert!(registry.lock().op_mut(op).unwrap().buf.is_none());
         stream = registry.lock().op_stream(token, 0).unwrap();
-        let taken = take_line(&registry, &mut ctx, token, 0).unwrap().unwrap();
+        let taken = unsafe { take_line(&registry, &mut ctx, token, 0) }
+            .unwrap()
+            .unwrap();
         assert_eq!(unsafe { &*ctx.heap().string(taken).unwrap() }, line);
         unsafe { ctx.heap_mut().decref(taken) }.unwrap();
         let s = net_rest(&ctx, stream);
@@ -8556,15 +8892,17 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
     let scope = registry.lock().open_root(None, None).unwrap();
     let me = running_task(&registry, scope);
     let stream = net_stream(&mut ctx);
-    let token = submit_read_line(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        stream,
-    )
+    let token = unsafe {
+        submit_read_line(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            stream,
+        )
+    }
     .unwrap();
     let op = CellRef::decode(token);
     park_on(&registry, &mut ctx, &mut driver, token, me).unwrap();
@@ -8596,7 +8934,7 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
         [Runnable::ResumeIo { cell, wake: CANCELLED, .. }] if *cell == me
     ));
     let back = registry.lock().op_stream(token, 0).unwrap();
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     assert!(taken.cancelling && taken.result.is_err() && taken.failure().is_none());
     assert_eq!(net_rest(&ctx, back).pending(), b"xy");
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
@@ -8615,15 +8953,17 @@ fn read_line_through(chunks: &[&[u8]]) -> (Result<usize, String>, Vec<usize>) {
     let scope = registry.lock().open_root(None, None).unwrap();
     let me = running_task(&registry, scope);
     let stream = net_stream(&mut ctx);
-    let token = submit_read_line(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        stream,
-    )
+    let token = unsafe {
+        submit_read_line(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            stream,
+        )
+    }
     .unwrap();
     let op = CellRef::decode(token);
     park_on(&registry, &mut ctx, &mut driver, token, me).unwrap();
@@ -8640,7 +8980,7 @@ fn read_line_through(chunks: &[&[u8]]) -> (Result<usize, String>, Vec<usize>) {
     ));
     let back = registry.lock().op_stream(token, 0).unwrap();
     let ok = registry.lock().op_outcome(token, 0).unwrap() == OUTCOME_OK;
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     let result = match (&taken.kind, taken.made, taken.failure()) {
         (OpKind::Line { .. }, Some(line), None) if ok => {
             let n = unsafe { &*ctx.heap().string(line).unwrap() }.len();
@@ -8713,35 +9053,41 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
     let scope = registry.lock().open_root(None, None).unwrap();
     let me = running_task(&registry, scope);
     let stream = net_stream(&mut ctx);
-    let token = submit_read_line(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        stream,
-    )
+    let token = unsafe {
+        submit_read_line(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            stream,
+        )
+    }
     .unwrap();
     let op = CellRef::decode(token);
     park_on(&registry, &mut ctx, &mut driver, token, me).unwrap();
     let mut out = Vec::new();
     let _ = read_line_round(&registry, &mut ctx, &mut driver, op, b"ab\ncd", &mut out);
     let stream = registry.lock().op_stream(token, 0).unwrap();
-    let line = take_line(&registry, &mut ctx, token, 0).unwrap().unwrap();
+    let line = unsafe { take_line(&registry, &mut ctx, token, 0) }
+        .unwrap()
+        .unwrap();
     unsafe { ctx.heap_mut().decref(line) }.unwrap();
     let submitted = driver.submits;
     let buf = bytes_ab(&mut ctx, 0);
-    let token = submit_read(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        buf,
-        stream,
-    )
+    let token = unsafe {
+        submit_read(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap();
     assert_eq!(driver.submits, submitted);
     assert_eq!(registry.lock().parts[0].in_flight, 0);
@@ -8752,7 +9098,7 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
         Some(Runnable::ResumeIo { cell, wake: WOKE, .. }) if cell == next
     ));
     let stream = registry.lock().op_stream(token, 0).unwrap();
-    let back = take_bytes(&registry, &mut ctx, token, 0).unwrap();
+    let back = unsafe { take_bytes(&registry, &mut ctx, token, 0) }.unwrap();
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abcd");
     let s = net_rest(&ctx, stream);
     assert!(s.pending().is_empty() && s.rest.capacity() == 0);
@@ -8824,7 +9170,7 @@ fn a_handle_dropped_under_the_registry_lock_does_not_deadlock() {
     let mut ctx = test_ctx();
     let scope = shared.lock().open_root(None, None).unwrap();
     let cell = running_task(&shared, scope);
-    let handle = task_handle(&mut ctx, &shared, cell);
+    let handle = unsafe { task_handle(&mut ctx, &shared, cell) };
     {
         let _cells = shared.lock();
         unsafe { ctx.heap_mut().decref(handle) }.unwrap();
@@ -8962,29 +9308,33 @@ fn a_cancel_in_the_mail_waits_for_its_owner() {
     let mut ctx = test_ctx();
     let mut out = Vec::new();
     assert!(
-        !drain(
-            &shared,
-            &here(1),
-            &mut ctx,
-            None,
-            0,
-            &mut out,
-            &mut Vec::new()
-        )
+        !unsafe {
+            drain(
+                &shared,
+                &here(1),
+                &mut ctx,
+                None,
+                0,
+                &mut out,
+                &mut Vec::new(),
+            )
+        }
         .unwrap()
     );
     assert!(out.is_empty() && shared.mail.pending());
     // 持ち主の次の集める地点が、満期より先に待ちを外す
     assert!(
-        drain(
-            &shared,
-            &here(0),
-            &mut ctx,
-            None,
-            0,
-            &mut out,
-            &mut Vec::new()
-        )
+        unsafe {
+            drain(
+                &shared,
+                &here(0),
+                &mut ctx,
+                None,
+                0,
+                &mut out,
+                &mut Vec::new(),
+            )
+        }
         .unwrap()
     );
     assert_eq!(resumed_cells(&out), [(cell, CANCELLED)]);
@@ -9088,15 +9438,17 @@ fn a_limit_in_the_mail_is_taken_by_any_worker() {
     shared.mail.push(MailItem::Limit(cell));
     let (mut ctx, mut out, mut limited) = (test_ctx(), Vec::new(), Vec::new());
     assert!(
-        drain(
-            &shared,
-            &solo(&shared),
-            &mut ctx,
-            None,
-            0,
-            &mut out,
-            &mut limited
-        )
+        unsafe {
+            drain(
+                &shared,
+                &solo(&shared),
+                &mut ctx,
+                None,
+                0,
+                &mut out,
+                &mut limited,
+            )
+        }
         .unwrap()
     );
     assert!(out.is_empty());
@@ -9383,7 +9735,7 @@ fn a_commit_without_a_reservation_is_an_internal_error() {
 fn a_close_before_a_reserved_push_keeps_receivers_waiting_for_the_item() {
     let mut ctx = test_ctx();
     let shared = Shared::new(Registry::new(Vec::new(), 1));
-    let c = shared.lock().new_chan(1, Depot::open(&mut ctx));
+    let c = shared.lock().new_chan(1, unsafe { Depot::open(&mut ctx) });
     let mut held = None;
     assert_eq!(
         shared
@@ -9407,7 +9759,7 @@ fn a_close_before_a_reserved_push_keeps_receivers_waiting_for_the_item() {
     assert_eq!(reserve_recv(&mut taken), 0);
     let (chan, _, _) = Hold::take_recv(&mut taken, c).unwrap();
     let depot = shared.lock().pop_raw(chan).unwrap().unwrap();
-    depot.close(&mut ctx).unwrap();
+    unsafe { depot.close(&mut ctx) }.unwrap();
     assert_eq!(reserve_recv(&mut taken), 2);
 }
 
@@ -9451,7 +9803,7 @@ fn the_last_reserved_push_into_a_closed_channel_wakes_every_receiver() {
 fn a_channel_is_released_only_after_the_last_reserved_receive() {
     let mut ctx = test_ctx();
     let shared = Shared::new(Registry::new(Vec::new(), 1));
-    let c = shared.lock().new_chan(1, Depot::open(&mut ctx));
+    let c = shared.lock().new_chan(1, unsafe { Depot::open(&mut ctx) });
     send_now(&shared, c, 1);
     let mut held = None;
     assert_eq!(
@@ -9471,7 +9823,7 @@ fn a_channel_is_released_only_after_the_last_reserved_receive() {
     assert_eq!(chan_state(&shared, c), (0, 0, 1, 0));
     let (chan, _, _) = Hold::take_recv(&mut held, c).unwrap();
     let depot = shared.lock().pop_raw(chan).unwrap().unwrap();
-    depot.close(&mut ctx).unwrap();
+    unsafe { depot.close(&mut ctx) }.unwrap();
     assert!(shared.lock().chan_mut(chan).is_none());
 }
 
@@ -9754,7 +10106,8 @@ fn a_wait_record_is_hosted_by_its_owner() {
         post: &Unposted,
     };
     let (child, _, waits) = fake_child(&mut ctx, &["eml"], true);
-    let token = submit_wait(&shared, &here, &mut ctx, Some(&mut driver), 0, 0, 0, child).unwrap();
+    let token = unsafe { submit_wait(&shared, &here, &mut ctx, Some(&mut driver), 0, 0, 0, child) }
+        .unwrap();
     let op = CellRef::decode(token);
     assert_eq!(driver.submits, 1);
     {
@@ -9769,15 +10122,17 @@ fn a_wait_record_is_hosted_by_its_owner() {
         .unwrap();
     assert!(matches!(arrival, Arrival::Settle));
     let bin = shared.lock().host_bin(2, Arc::default()).unwrap();
-    shared
-        .lock()
-        .settle_op(&mut ctx, &bin, 0, op, &here, &mut IoWork::default())
-        .unwrap();
+    unsafe {
+        shared
+            .lock()
+            .settle_op(&mut ctx, &bin, 0, op, &here, &mut IoWork::default())
+    }
+    .unwrap();
     assert_eq!(shared.lock().op_outcome(token, 0).unwrap(), OUTCOME_OK);
     let child = shared.lock().op_stream(token, 0).unwrap();
-    take_op(&shared, &mut ctx, token, 0).unwrap();
+    unsafe { take_op(&shared, &mut ctx, token, 0) }.unwrap();
     assert_eq!(waits.load(Ordering::Relaxed), 0);
-    assert_eq!(exec_reap(&ctx, 0, child).unwrap().unwrap(), 3);
+    assert_eq!(unsafe { exec_reap(&ctx, 0, child) }.unwrap().unwrap(), 3);
     assert_eq!(waits.load(Ordering::Relaxed), 1);
     // 回収した段は、破棄処理が待ち直さない
     unsafe { ctx.heap_mut().decref(child) }.unwrap();
@@ -9790,7 +10145,7 @@ fn a_wait_record_is_hosted_by_its_owner() {
     };
     let (child, _, _) = fake_child(&mut ctx, &["eml"], true);
     assert!(matches!(
-        submit_wait(&shared, &elsewhere, &mut ctx, None, 0, 0, 0, child),
+        unsafe { submit_wait(&shared, &elsewhere, &mut ctx, None, 0, 0, 0, child) },
         Err(CellFault::Internal(
             "a wait is submitted on a worker that hosts no I/O"
         ))
@@ -9808,24 +10163,26 @@ fn a_wait_on_a_host_without_processes_is_done_at_submit() {
     let shared = Shared::new(Registry::new(Vec::new(), 1));
     let mut driver = NoDriver::default();
     let (child, kills, waits) = fake_child(&mut ctx, &["first", "second"], false);
-    let token = submit_wait(
-        &shared,
-        &solo(&shared),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        1,
-        child,
-    )
+    let token = unsafe {
+        submit_wait(
+            &shared,
+            &solo(&shared),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            1,
+            child,
+        )
+    }
     .unwrap();
     assert_eq!(driver.submits, 0);
     assert_eq!(shared.lock().op_outcome(token, 0).unwrap(), OUTCOME_OK);
     let child = shared.lock().op_stream(token, 0).unwrap();
-    take_op(&shared, &mut ctx, token, 0).unwrap();
+    unsafe { take_op(&shared, &mut ctx, token, 0) }.unwrap();
     assert_eq!(waits.load(Ordering::Relaxed), 0);
-    assert_eq!(exec_reap(&ctx, 1, child).unwrap().unwrap(), 4);
-    assert_eq!(exec_reap(&ctx, 1, child).unwrap().unwrap(), 4);
+    assert_eq!(unsafe { exec_reap(&ctx, 1, child) }.unwrap().unwrap(), 4);
+    assert_eq!(unsafe { exec_reap(&ctx, 1, child) }.unwrap().unwrap(), 4);
     assert_eq!(waits.load(Ordering::Relaxed), 1);
     // 破棄処理は、回収していない段 0 だけを kill して待つ
     unsafe { ctx.heap_mut().decref(child) }.unwrap();
@@ -9842,7 +10199,7 @@ fn a_wait_on_a_host_without_processes_is_done_at_submit() {
 fn a_dropped_exec_child_kills_and_waits_every_stage() {
     let mut ctx = test_ctx();
     let (child, kills, waits) = fake_child(&mut ctx, &["a", "b", "c"], true);
-    assert_eq!(exec_stage_count(&ctx, child).unwrap(), 3);
+    assert_eq!(unsafe { exec_stage_count(&ctx, child) }.unwrap(), 3);
     unsafe { ctx.heap_mut().decref(child) }.unwrap();
     assert_eq!(
         (kills.load(Ordering::Relaxed), waits.load(Ordering::Relaxed)),
@@ -9867,28 +10224,30 @@ fn a_pipe_write_broken_pipe_is_outcome_reset() {
             handle: 7,
             bin: Arc::default(),
         });
-    let writer = exec_take(&mut ctx, child, ChildPipe::Stdin)
+    let writer = unsafe { exec_take(&mut ctx, child, ChildPipe::Stdin) }
         .unwrap()
         .unwrap();
     assert_eq!(
-        exec_take(&mut ctx, child, ChildPipe::Stdin).unwrap(),
+        unsafe { exec_take(&mut ctx, child, ChildPipe::Stdin) }.unwrap(),
         Err("cannot take the standard input of `eml`: not available".to_string())
     );
     assert_eq!(
-        exec_take(&mut ctx, child, ChildPipe::Stdout).unwrap(),
+        unsafe { exec_take(&mut ctx, child, ChildPipe::Stdout) }.unwrap(),
         Err("cannot take the output of `tail`: not available".to_string())
     );
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"late");
-    let token = submit_write(
-        &shared,
-        &solo(&shared),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        buf,
-        writer,
-    )
+    let token = unsafe {
+        submit_write(
+            &shared,
+            &solo(&shared),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            buf,
+            writer,
+        )
+    }
     .unwrap();
     let mut out = Vec::new();
     complete_op(
@@ -9904,7 +10263,7 @@ fn a_pipe_write_broken_pipe_is_outcome_reset() {
         shared.lock().op_prefix(token, 0).unwrap(),
         "cannot write to `eml`"
     );
-    let taken = take_op(&shared, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&shared, &mut ctx, token, 0) }.unwrap();
     assert!(taken.failure().is_none());
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     unsafe { ctx.heap_mut().decref(child) }.unwrap();
@@ -9934,16 +10293,18 @@ fn a_read_of_a_pipe_grows_at_submit() {
         start: 0,
     };
     let stream = unsafe { ctx.heap_mut() }.alloc_foreign(stream, true);
-    let token = submit_read(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        buf,
-        stream,
-    )
+    let token = unsafe {
+        submit_read(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            buf,
+            stream,
+        )
+    }
     .unwrap();
     let op = CellRef::decode(token);
     assert_eq!(driver.submits, 1);
@@ -9957,7 +10318,7 @@ fn a_read_of_a_pipe_grows_at_submit() {
         Err(io::Error::other("gone")),
         &mut out,
     );
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     let (_, message) = taken.failure().unwrap();
     assert_eq!(message, "cannot read the output of `eml`: gone");
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
@@ -9979,24 +10340,26 @@ fn a_stderr_pipe_names_the_errors_of_the_last_stage() {
             handle: 0,
             bin: Arc::default(),
         });
-    let reader = exec_take(&mut ctx, child, ChildPipe::Stderr)
+    let reader = unsafe { exec_take(&mut ctx, child, ChildPipe::Stderr) }
         .unwrap()
         .unwrap();
     assert_eq!(
-        exec_take(&mut ctx, child, ChildPipe::Stderr).unwrap(),
+        unsafe { exec_take(&mut ctx, child, ChildPipe::Stderr) }.unwrap(),
         Err("cannot take the errors of `tail`: not available".to_string())
     );
     let buf = bytes_ab(&mut ctx, 0);
-    let token = submit_read(
-        &registry,
-        &solo(&registry),
-        &mut ctx,
-        Some(&mut driver),
-        0,
-        0,
-        buf,
-        reader,
-    )
+    let token = unsafe {
+        submit_read(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            buf,
+            reader,
+        )
+    }
     .unwrap();
     let mut out = Vec::new();
     complete_op(
@@ -10007,7 +10370,7 @@ fn a_stderr_pipe_names_the_errors_of_the_last_stage() {
         Err(io::Error::other("gone")),
         &mut out,
     );
-    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let taken = unsafe { take_op(&registry, &mut ctx, token, 0) }.unwrap();
     let (_, message) = taken.failure().unwrap();
     assert_eq!(message, "cannot read the errors of `tail`: gone");
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();

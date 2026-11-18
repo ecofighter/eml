@@ -1902,9 +1902,10 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             };
             let scope = shared.lock().open_root(None, None).unwrap();
             let mut start = |owner: u32, pinned: bool| {
-                shared
-                    .lock()
-                    .start(
+                // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+                // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+                unsafe {
+                    shared.lock().start(
                         &mut ctx,
                         &here,
                         scope,
@@ -1914,8 +1915,9 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
                         &[],
                         pinned,
                     )
-                    .unwrap()
-                    .unwrap()
+                }
+                .unwrap()
+                .unwrap()
             };
             let main = run.main() as u32;
             let owner = run.place_owner(true, 0, true);

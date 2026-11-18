@@ -1416,7 +1416,10 @@ fn finish_run<M: Mode>(
             return Err(at_finish(RunFault::Stopped(Stop::Ended)));
         }
         workers::end_check(kept_pending, left).map_err(at_finish)?;
-        cells::sweep_all(cells, ctx, task.depth_offset).map_err(|fault| at_finish(fault.into()))
+        // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
+        // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである
+        unsafe { cells::sweep_all(cells, ctx, task.depth_offset) }
+            .map_err(|fault| at_finish(fault.into()))
     });
     let (tasks, placed_tasks, pinned_tasks) = {
         let cells = cells.lock();
