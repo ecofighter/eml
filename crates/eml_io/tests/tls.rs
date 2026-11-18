@@ -11,10 +11,8 @@ use eml_tls::fixtures::{CA_PEM, OTHER_CA_PEM};
 use eml_tls::{Conn, FAILED, HANDSHAKING, Name, PEER_CLOSED, TRUNCATED, Trust};
 
 fn raw(bytes: &mut [u8]) -> RawBuf {
-    RawBuf {
-        ptr: bytes.as_mut_ptr(),
-        cap: bytes.len(),
-    }
+    // SAFETY: このファイルのテストは、出した操作の完了を取り出すまで`bytes`を生かし、ほかから読み書きしない
+    unsafe { RawBuf::new(bytes.as_mut_ptr(), bytes.len()) }
 }
 
 /// テストが振る鍵。1 から数え、どの driver にも同じ鍵を2度渡さない。

@@ -127,10 +127,10 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 
 ## 公開の面と`unsafe`
 
-関数は、公開のものも非公開のものも、次の順に分ける。
+テスト専用でない (`eml_test_support`のほかの) どのcrateでも、安全な関数をどう呼んでも未定義の振る舞いに届かない ([LIR](../spec/lir.md)の「エンジンの約束」)。そのため、関数は、公開のものも非公開のものも、次の順に分ける。
 
 1. その中にも下にも、引数についての事実や、安全な公開の項目が決められる状態に頼る`unsafe`の操作がない。安全な関数にする
-2. その事実を、それを確かめる構築子だけを持つ型で運べる (欄を非公開にし、構築子自身が約束を要るなら`unsafe fn new`にする)。その型を使う。`Trusted`、`Loaded`、`Linked`、`CHandle`がこの型である
+2. その事実を、それを確かめる構築子だけを持つ型で運べる (欄を非公開にし、構築子自身が約束を要るなら`unsafe fn new`にする)。その型を使う。`Trusted`、`Loaded`、`Linked`、`CHandle`、`RawBuf`がこの型である
 3. ほかのcrateが項目を名指さない。`pub(crate)`にする
 4. それ以外は、`# Safety`の節を持つ`unsafe fn`にする
 
@@ -396,7 +396,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 - `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、OS を呼ばない核 `driver::Driver` を OS ごとの backend `sys::Os` の上で動かす包みである。backend の時計は単調な時計 (`Instant`) で、driver は内部の刻みを持たない。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、`test/net.rs` の仮想のネットワーク (メモリの上の端、リスナー、ポート)、seed で混ぜる決着の順、`submit` の中で終えた操作の数 (`immediate()`) を持つ ([VM](../spec/vm.md) の「時計と driver」)
 - feature `tls` のときだけ組む `test/tls.rs` は、テストの driver の TLS の終端器である。`tls.localhost` と `tls-cut.localhost` への接続ごとに `eml_tls::Conn` のサーバーを1つ持ち、決着の始めに汲む。仮想のネットワークに足したのは、ポートを振った端の対を作る `Network::pair` だけで、端の表には `test` の子のモジュールとして触れる。`eml_io` の `src/` で `eml_tls` を参照するのはこのファイルだけである
-- driverは`Word`、`Ctx`、RCに触れず、記憶には`RawBuf`を通してだけ届く。そのため`eml_io`は`eml_vm`を知らずに組み立てられる。どちらのdriverを使うかは`eml_sched`の`Clock`が決める
+- driverは`Word`、`Ctx`、RCに触れず、記憶には`RawBuf`を通してだけ届く。そのため`eml_io`は`eml_vm`を知らずに組み立てられる。`RawBuf`を作れるのは`unsafe fn RawBuf::new`だけなので、`IoDriver::submit`が安全な関数でも、安全なコードは`eml_io`のdriverに好きな番地を読み書きさせられない。driverは番地と長さを`ptr()`と`cap()`で読み、短い書きの残りは`tail`で指す ([VM](../spec/vm.md)の「時計と driver」)。どちらのdriverを使うかは`eml_sched`の`Clock`が決める
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `RunFault::Driver` で終える
 - `RealDriver::new_at(epoch)` と `TestDriver::new_shared(seed, clock)` は、run の時間の基準を共有する driver を作る。`eml_vm` は本物の時計の run の worker 1..N-1 の driver を前者で作り、どの worker の driver も同じ時刻を読む。仮想の時計は run に1つの数を後者に渡す ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver の受けは、受けたソケットを登録せずに `Done::Accepted` の `RawSocket` で返し、`IoDriver::adopt` がソケットを自分の driver に取り込む。受けたストリームを、受けたリスナーと違う worker の driver に縛るためである。テストの driver の `adopt` は通常のファイルだけ取り込み、ソケットとパイプは断る。受けはいつも `Done::Stream` で終える ([VM](../spec/vm.md) の「時計と driver」)
@@ -415,7 +415,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
   - `sys/unix.rs` は、epoll と kqueue に共通の backend `Unix<P: Poller>` である。fd ごとの行の表 (読める印とその新しさ、向きごとの待ち手1つ、接続中の印、世代) と、各歩と、ソケットとパイプの作り方を持つ。パイプは親の端だけを `O_NONBLOCK` にし、`read` と `write` で進める。OS に渡す識別子は行番号と世代から1か所で作り、`wait` は世代の合わない event を捨てる。ソケットは作るか `adopt` で取り込んだ後に1回だけ edge で登録し、`close` まで登録を変えない。受けただけのソケットは登録しない
   - `sys/epoll.rs` と `sys/kqueue.rs` は `Poller` の実装で、登録と待ちと起こしだけを持つ。起こしは、Linux では level で登録した eventfd、Apple では `EVFILT_USER` である。子の終わりの待ちは、Linux では pidfd を epoll に、Apple では `EVFILT_PROC` を kqueue に登録して知らせを受け、子はまだ回収しない (`waitid` の `WNOWAIT` で、登録の前にすでに終わった子も拾う)。回収は Host が行う
   - `sys/iocp.rs` は Windows の backend である。`Sock` はソケットとアドレスの族、パイプの端、ディスクのファイルのハンドルのどれかを持つ。パイプは親の端を overlapped の名前付きパイプ (`CreateNamedPipeW`) に、子の端を継承させない同期のハンドル (`CreateFileW`) にし、`ReadFile` と `WriteFile` をソケットと同じ箱で出す。子の終わりの待ちは `RegisterWaitForSingleObject` で登録し、callback は鍵を列に積んでポートを起こすだけにする。登録の文脈とプロセスのハンドルの写しは、`UnregisterWaitEx` が戻った後でだけ放す。ディスクのファイルは `GetFileType` で通常のファイルだけを通す。行の表は持たず、OS が持つ箱を2つの表に置く。番地で引く `boxes` は、知らせの箱を取り戻す前に番地を確かめるためにあり、鍵で引く `waiters` は、鍵しか受け取らない `cancel` のためにある。Winsock はプロセスごとに1回だけ始め、`AcceptEx` と `ConnectEx` は `WSAIoctl` で得る。操作ごとの `OVERLAPPED` の箱は backend が持ち、OS に渡してから知らせを読むまでは所有を OS に預ける。`into_raw` と `from_raw` を書くのはこのファイルだけである。箱を放すのは、知らせを読んだときと、呼び出しが同期に失敗したときだけで、取り消しも `close` も箱に触れない。`AcceptEx` の受けのソケットは箱の中にあり、成功の知らせでだけ箱を出る。受けたソケットはポートに結び付けずに返し、`adopt` が結び付ける。箱が残ったまま backend が落ちるときは、プロセスを止める
-- `unsafe` は `mask.rs`、`test.rs`、`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`、`sys/iocp.rs`、`driver/tests/fake.rs` にだけ置き、`trust.rs` のテストが一覧を固定する ([テスト](testing.md) の「`unsafe` の一覧」)。核と `real.rs` は OS を名指さず、`RawBuf` の番地は backend の OS を呼ぶ関数の中でだけ読み、slice を作らない
+- `unsafe`は`mask.rs`、`test.rs`、`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`、`sys/iocp.rs`、`driver/tests/fake.rs`にだけ置き、`trust.rs`のテストが一覧を固定する ([テスト](testing.md)の「`unsafe` の一覧」)。核のテストが`RawBuf`を作る手助けも`fake.rs`に置く。核と`real.rs`はOSを名指さず、`RawBuf`の番地はbackendのOSを呼ぶ関数の中でだけ読み、sliceを作らない
 - 壊れる条件と壊れた後の振る舞い、`quiesce`、driver を落とすときの規則は [VM](../spec/vm.md) の「時計と driver」にある
 - 起こしが長い待ちを終わらせることは、結合テストが遠い期限と期限 `u64::MAX` の `wait` で確かめる
 - 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落としても仕事を待たないこと、落とした後の起こしと、待つ前の起こしが次の待ちだけを終えること、ループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、1つのストリームで待つ読みと待つ書きが両方終わること、溜まった接続の受け、受けたソケットを別のスレッドの driver が取り込んで読み書きすることと取り込まずに落とすと閉じること、リセットで終わる待つ書き、unix でシグナルに割り込まれた待ち、名前の解決とその2つの上限と、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF、OS のソケットを取り込まないこと) を確かめる。`tests/tls.rs` は `tls` のときだけ組み、Rust の `eml_tls::Conn` のクライアントで終端器の handshake、平文の受け渡し、close_notify とその省略、半分の閉じ、証明書の拒否、閉じる順ごとの EOF とポートの解放を確かめる。`tests/tls_off.rs` は `tls` を外したときだけ組み、TLS の名前が `NotFound` で終わることを確かめる ([テスト](testing.md) の「feature の組み合わせの確認」)

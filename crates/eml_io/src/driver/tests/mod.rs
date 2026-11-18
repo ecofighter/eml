@@ -15,13 +15,13 @@ use std::thread;
 use std::time::Duration;
 
 use eml_rt::{
-    Completion, Done, IoDriver, IoHandle, Op, OpKey, RawBuf, RawFile, RawPipe, RawProcess,
-    RawResource, Submit,
+    Completion, Done, IoDriver, IoHandle, Op, OpKey, RawFile, RawPipe, RawProcess, RawResource,
+    Submit,
 };
 
 use super::Driver;
 use super::backend::{Arrival, Cancel, Event, Hold, Outcome};
-use fake::{Call, Fake, Reply, StepKind, accepted};
+use fake::{Call, Fake, Reply, StepKind, accepted, buf};
 
 /// 開くまで通さない門。`fn` の解決器は値を捕まえられないので、テストごとに `static` に置く。
 struct Gate {
@@ -78,13 +78,6 @@ fn listen(driver: &mut Driver<Fake>) -> IoHandle {
     ) {
         Submit::Done(Ok(Done::Listener { handle, .. })) => handle,
         other => panic!("{other:?}"),
-    }
-}
-
-fn buf(bytes: &mut [u8]) -> RawBuf {
-    RawBuf {
-        ptr: bytes.as_mut_ptr(),
-        cap: bytes.len(),
     }
 }
 

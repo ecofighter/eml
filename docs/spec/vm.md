@@ -500,14 +500,22 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ## 時計と driver
 
-- 時計と I/O の待ちは、`eml_rt` の trait `IoDriver` が受け持つ。driver は `Word` にも `Ctx` にも RC にも触れず、記憶には `RawBuf` を通してだけ届く。そのため trait と型は `verus!` の外に置く ([オブジェクトモデル](object-model.md) の「`unsafe` の核」)
+- 時計とI/Oの待ちは、`eml_rt`のtrait `IoDriver`が受け持つ。driverは`Word`にも`Ctx`にもRCにも触れず、記憶には`RawBuf`を通してだけ届く。そのためtraitと型は`verus!`の外に置く。`RawBuf`だけは`verus!`の中にあり、`Heap::bytes_lend`の約束がその大きさを言うのに使う ([オブジェクトモデル](object-model.md)の「`unsafe` の核」)
 
   ```rust
   pub type OpKey = u64;
   pub type IoHandle = u64;
 
   #[derive(Clone, Copy)]
-  pub struct RawBuf { pub ptr: *mut u8, pub cap: usize }
+  pub struct RawBuf { ptr: *mut u8, cap: usize }
+
+  impl RawBuf {
+      pub unsafe fn new(ptr: *mut u8, cap: usize) -> RawBuf;
+      pub fn ptr(self) -> *mut u8;
+      pub fn cap(self) -> usize;
+      pub fn head(self, n: usize) -> RawBuf;
+      pub fn tail(self, n: usize) -> RawBuf;
+  }
 
   pub enum Op {
       Readable { handle: IoHandle },
@@ -570,7 +578,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `cancel(key)` は、呼んだ時点で保留の鍵 `key` の操作だけを、できるだけ取り消す。保留でない鍵には何もせず、後で同じ鍵で出した操作にも効かない。取り消しても `key` の完了は1回届く。本物の driver の readiness の backend (epoll と kqueue) では、取り消しは OS を呼ばずにその場で終わり、取り消しの完了を積む。OS に取り消しを出して終わりを待つ backend では、OS が取り消しを断ると driver は壊れた状態になる。OS が「取り消す操作がない」と答えたときは、終わりがすでに列にあるので待つ。`quiesce` が1秒待っても終わりが届かなくても壊れた状態になる (下の `quiesce` の項)。`Op::Job` とファイルの読み書きの仕事は取り消せない。取り消しを頼まれた操作は、書きの出し直しも、受けの再試行も、接続の次の試行もしない。そうした続きを始めるはずの結果が来たら、誤り `cancelled` で終える
 - `completions` は、`wait` (と `cancel` の即時の取り消し) が届けた完了をすべて渡す。OS を見ず、保留の表を歩かない。順は driver が決め、呼ぶ側は鍵で記録を引く。`pending` は、`Pending` を返して、まだ `completions` で渡していない操作の数である。完了の中身は `Done` で、`Readable`、`Read`、`Write` は `Size`、`Job` は仕事が返した値の `Job`、`ShutdownWrite`、`SetNodelay`、`Wait` は `Size(0)`、`Listen` は作ったリスナーと待ち受けるポートの `Listener`、`Connect` は作ったストリームと相手の番地の `Stream`、`Adopt` は取り込んだ資源の `Handle` である。`Accept` は、本物の driver では受けたソケットと相手の番地の `Accepted`、テストの driver では作ったストリームと相手の番地の `Stream` である。中身のハンドルは、完了を受け取った側が持つ
 - `Completion::cancelled` は、操作が `cancel` (か `quiesce`) のためだけに終わったことを表す。そのとき `result` は `Err` で、本物の driver の誤りはいつも `cancelled` である。実行系は旗で見分けるので、文言を1つにそろえる。本物の driver は、取り消しで操作を終えたとき (readiness の backend ではその場で、OS に出した取り消しではその終わりで) と、取り消しのために続きをやめたときと、名前の解決を手放したときに立てる。テストの driver は、決着の前に取り消した操作に立てる。ほかの結果は、取り消しを頼んだ後に届いた誤りも含めて `false` である。期限と競った本物の誤りを、期限の取り消しと見分けるためである
-- `RawBuf`はdriverに貸す記憶である。`Send`で、貸す側のスレッドで作る。操作の間その記憶を使うのは、driverを持つスレッドと、カーネルと、その操作のファイルの仕事を走らせるdriverのプールのスレッドだけである。仕事は番地を持ってプールの列のmutexを通ってプールのスレッドへ渡り、答えは受け箱のmutexと`wait`と`completions`を通って戻る。どちらの受け渡しもhappens-beforeの辺なので、貸した側が完了の後に読むか確定するのは、いつも仕事の書きの後になる。仕事は番地をOSの呼び出しの中でだけ使ってsliceを作らず、読みでは`ptr[0..cap]`に`cap`バイトまで書いて、書いた数を返す。`cap == 0`は記憶がないことを表し、そのときの`ptr`は読みも書きもしない。貸した側は、`submit`が`Submit::Done`を返すか、その操作の完了を`completions`から取り出すまで、物体を生かし、動かさない。スレッドをまたぐときは、操作の記録がその間、物体を生かして動かさない。`Read`に貸した記憶は一意に保ち、`Write`に貸した記憶は書き換えない。貸す記憶は、`Bytes`の物体の空き ([オブジェクトモデル](object-model.md)のT10の行) か、操作の記録が持つストリーム (`Std.Net.TcpStream`と`Std.Stream.Reader`) の`Foreign`の中の`Vec<u8>`の空き (「`Async` のタスク」の「操作の記録」) である。`Vec`の記憶はemlのヒープの外のRustの確保で、`Foreign`の物体を動かしても動かず、放すのは`Vec`を落とすときだけである。操作の間は記録がストリームのただ1つの参照を持ち、記録を放すのは完了の後の取り出しと`quiesce`の後の`sweep_all`だけなので、完了の前に`Vec`が落ちることはない。静止の後にも操作を残したdriverは、どのヒープにも触れる前に落とし、driverを落とすときは記憶を貸した操作の終わりを待つか、プロセスを止める。貸す位置は`Vec::as_mut_ptr`から作り、bufferへの参照を作らない。完了を受け取るまでVMは`Vec`の中身に触れず、検査モードのヒープの走査も`Foreign`の中身を読まない
+- `RawBuf`はdriverに貸す記憶である。`Send`で、貸す側のスレッドで作る。操作の間その記憶を使うのは、driverを持つスレッドと、カーネルと、その操作のファイルの仕事を走らせるdriverのプールのスレッドだけである。仕事は番地を持ってプールの列のmutexを通ってプールのスレッドへ渡り、答えは受け箱のmutexと`wait`と`completions`を通って戻る。どちらの受け渡しもhappens-beforeの辺なので、貸した側が完了の後に読むか確定するのは、いつも仕事の書きの後になる。仕事は番地をOSの呼び出しの中でだけ使ってsliceを作らず、読みでは`ptr[0..cap]`に`cap`バイトまで書いて、書いた数を返す。`cap == 0`は記憶がないことを表し、そのときの`ptr`は読みも書きもしない。貸した側は、`submit`が`Submit::Done`を返すか、その操作の完了を`completions`から取り出すまで、物体を生かし、動かさない。スレッドをまたぐときは、操作の記録がその間、物体を生かして動かさない。`Read`に貸した記憶は一意に保ち、`Write`に貸した記憶は書き換えない。`RawBuf`の欄は`eml_rt`の外から見えず、作れるのは`unsafe fn RawBuf::new`だけで、その約束はこの貸す側の約束である。`ptr()`と`cap()`は欄を読み、`head(n)`は前の`min(n, cap)`バイト、`tail(n)`はその後ろである。どちらも元の範囲の中にあるので、値の写しや一部は、元の値の約束の下にある。そのため、安全なコードはdriverに好きな記憶を読み書きさせられない ([LIR](lir.md)の「エンジンの約束」のR-8)。貸す記憶は、`Bytes`の物体の空き ([オブジェクトモデル](object-model.md)のT10の行) か、操作の記録が持つストリーム (`Std.Net.TcpStream`と`Std.Stream.Reader`) の`Foreign`の中の`Vec<u8>`の空き (「`Async` のタスク」の「操作の記録」) である。`Vec`の記憶はemlのヒープの外のRustの確保で、`Foreign`の物体を動かしても動かず、放すのは`Vec`を落とすときだけである。操作の間は記録がストリームのただ1つの参照を持ち、記録を放すのは完了の後の取り出しと`quiesce`の後の`sweep_all`だけなので、完了の前に`Vec`が落ちることはない。静止の後にも操作を残したdriverは、どのヒープにも触れる前に落とし、driverを落とすときは記憶を貸した操作の終わりを待つか、プロセスを止める。貸す位置は`Vec::as_mut_ptr`から作り、bufferへの参照を作らない。完了を受け取るまでVMは`Vec`の中身に触れず、検査モードのヒープの走査も`Foreign`の中身を読まない
 - プールの仕事に貸す記憶は、ファイルの仕事の`RawBuf`と、`blocking`のCの呼び出しの留めた大きい引数である。`RawBuf`は、その仕事を走らせるプールのスレッドだけが使う。貸す側は、完了が持ち主のworkerに当たるまで物体を生かし、動かさず、書かせるときは一意に保つ。前後の関係は、プールの列のmutex、受け箱のmutex、`wait`と`completions`、登録表のlockがつなぐ。`blocking`のCの呼び出しは、大きい物体のページにある配列、文字列、バイト列の引数を、ページを留めて仕事に貸し、ほかの物体の引数は写す。貸した範囲を使うのはそのCの呼び出しだけで、Cが戻るまでである (「C の関数の呼び出し」の「`blocking` の呼び出し」)
 - `RawSocket` は、どの driver にも登録も結び付けもしていない OS のソケットで、unix では `OwnedFd`、Windows では `OwnedSocket` (`OsSocket`) を持つ。driver の外の値なので `Send` で、どのスレッドへ移してもよく、落とせばソケットを閉じる。本物の driver の `Accept` は、受けたソケットを登録も結び付けもせずに `Done::Accepted { sock, peer }` で返す。`adopt(RawResource::Socket(sock))` は、そのソケットを自分に登録するか結び付けて、新しいハンドルを返す。ほかの driver が受けたソケットでもよい。登録に失敗すればソケットを閉じて `Err` を返す。壊れた driver は登録せずに `Err` を返し、ソケットは同じく閉じる。受けたソケットをこうして渡すのは、最初に使うタスクの worker の driver に取り込むためである (「`Async` のタスク」の「操作の記録」)。テストの driver の仮想のネットワークの端は driver の外に出せないので、テストの driver の `Accept` は `Done::Stream` で終わり、ソケットの `adopt` はいつも種類 `Unsupported` の誤りを返す。受けた完了を捨てるとき (`quiesce`、driver を落とすとき、鍵の当たらない知らせ) は、`Accepted` のソケットは完了と一緒に落ちて閉じる
 - `adopt`が受けるのは`RawResource`で、上の`RawSocket`か、`RawFile`である。`RawFile`はHostが開いた同期の通常のファイルで、unixでは`OwnedFd`、Windowsでは`OwnedHandle` (`OsHandle`) を持つ。`RawSocket`と同じくdriverの外の値なので`Send`で、落とせばファイルを閉じる。`adopt`はファイルを登録も結び付けもせずに持ち、新しいハンドルを返す。epollとkqueueのbackendはファイルをpollerに登録せず、IOCPのbackendはポートに結び付けない。Windowsでは、本物のdriverもテストのdriverも、取り込むファイルの`GetFileType`が`FILE_TYPE_DISK`でなければ、取り込まずに`NOT_REGULAR` (種類`Unsupported`、文言`not a regular file`) で断る。`Op::Adopt`の取り込みも同じである。Windowsのstdのmetadataは名前付きパイプやデバイスを通常のファイルと見ることがあるので、Hostの確かめを通ったそうしたhandleをプールの仕事に渡さないためである。`Op::Adopt { res }`は同じ取り込みを`submit`から出す操作で、いつも受け付けで終わり、受けたdriverの`adopt`の結果を`Submit::Done(Ok(Done::Handle(handle)))`か`Submit::Done(Err)`で返す。壊れたdriverは取り込まずに`Err`を返し、資源は閉じる。ファイルのハンドルのhostは、それを取り込んだdriverのworkerで、取り込むときに決まり、以後変わらない。hostでないworkerが持ち主のタスクの操作は、ほかのハンドルと同じくmailでhostへ送る。ファイルのハンドルに出せる操作は`Read`と`Write`だけで、`Readable`、`Accept`、`ShutdownWrite`、`SetNodelay`は`InvalidInput`の誤り`the handle is not a socket`でその場で終わる。通常のファイルにはreadinessがないためである。テストのdriverは、ソケットの`adopt`と`Op::Adopt`を種類`Unsupported`の誤りで断り、ファイルは取り込む

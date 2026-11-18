@@ -299,9 +299,9 @@ impl IoDriver for HoldingDriver {
         if let Some(at) = self.held.iter().position(|&(k, _)| k == key) {
             let (result, cancelled) = match self.held.remove(at).1 {
                 Some(buf) => {
-                    assert!(buf.cap >= 2);
+                    assert!(buf.cap() >= 2);
                     // 記録が完了を受け取るまで、貸された記憶に書いてよい
-                    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), buf.ptr, 2) };
+                    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), buf.ptr(), 2) };
                     (Ok(Done::Size(2)), false)
                 }
                 None => (Err(io::Error::other("cancelled")), true),
@@ -519,7 +519,7 @@ impl IoDriver for Recorder {
         let kind = match op {
             Op::Readable { .. } => "readable",
             Op::Read { buf, .. } => {
-                log.lent.push(buf.cap);
+                log.lent.push(buf.cap());
                 "read"
             }
             Op::Write { .. } => "write",

@@ -17,6 +17,12 @@ use eml_rt::{IoWaker, OpKey, PipePair, RawBuf, RawPipe, RawResource, RawSocket};
 
 use crate::driver::backend::{Backend, Cancel, Event, FileJob, Hold, Outcome, Start, Step};
 
+/// テストが`bytes`を貸す。`unsafe`をこのファイルに置くため、核のテストの共通の手助けをここに置く。
+pub(super) fn buf(bytes: &mut [u8]) -> RawBuf {
+    // SAFETY: 核のテストは、出した操作が終わるか取り消しが届くまで`bytes`を生かし、ほかから読み書きしない
+    unsafe { RawBuf::new(bytes.as_mut_ptr(), bytes.len()) }
+}
+
 /// 行番号だけを持つ。`Clone` も `Copy` もしないので、核がソケットを写せないことを型で守る。
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct FakeSock(pub u32);
@@ -357,20 +363,20 @@ impl Backend for Fake {
             let mut file = file.lock().unwrap_or_else(PoisonError::into_inner);
             if write {
                 let len = file.len();
-                file.reserve(buf.cap);
+                file.reserve(buf.cap());
                 // SAFETY: 貸した側は完了まで `buf.ptr[0..cap]` を生かし、書き換えない (`RawBuf`)。仕事はプールの列の
                 // mutex を通ってこのスレッドに来た。`file` は `reserve` で `len + cap` まで空きがあり、貸した記憶とは
                 // 別の確保なので重ならない。写した後で長さを確定する
                 unsafe {
-                    std::ptr::copy_nonoverlapping(buf.ptr, file.as_mut_ptr().add(len), buf.cap);
-                    file.set_len(len + buf.cap);
+                    std::ptr::copy_nonoverlapping(buf.ptr(), file.as_mut_ptr().add(len), buf.cap());
+                    file.set_len(len + buf.cap());
                 }
-                Ok(buf.cap)
+                Ok(buf.cap())
             } else {
-                let n = buf.cap.min(file.len());
+                let n = buf.cap().min(file.len());
                 // SAFETY: 貸した側は完了まで `buf.ptr[0..cap]` を生かし、一意に保つ (`RawBuf`)。写すのは cap 以下で、
                 // `file` は別の確保なので重ならない。答えは受け箱の mutex を通って driver のスレッドへ戻る
-                unsafe { std::ptr::copy_nonoverlapping(file.as_ptr(), buf.ptr, n) };
+                unsafe { std::ptr::copy_nonoverlapping(file.as_ptr(), buf.ptr(), n) };
                 file.drain(..n);
                 Ok(n)
             }
@@ -388,23 +394,23 @@ impl Backend for Fake {
                 let Step::Recv { buf, .. } = step else {
                     panic!("Fill answers only a Recv");
                 };
-                assert!(bytes.len() <= buf.cap, "Fill is longer than the buffer");
+                assert!(bytes.len() <= buf.cap(), "Fill is longer than the buffer");
                 // SAFETY: 貸した側は完了まで `buf.ptr[0..cap]` を生かし、一意に保つ (`RawBuf`)。写すのは cap 以下で、
                 // `bytes` は別の確保なので重ならない
-                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.ptr, bytes.len()) };
+                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.ptr(), bytes.len()) };
                 Start::Done(Ok(Outcome::Size(bytes.len())))
             }
             Some(Reply::Take(n)) => {
                 let Step::Send { buf, .. } = step else {
                     panic!("Take answers only a Send");
                 };
-                assert!(n <= buf.cap, "Take is longer than the buffer");
+                assert!(n <= buf.cap(), "Take is longer than the buffer");
                 let len = self.sent.len();
                 self.sent.reserve(n);
                 // SAFETY: 貸した側は完了まで `buf.ptr[0..cap]` を生かし、書き換えない (`RawBuf`)。`sent` は
                 // `reserve` で `len + n` まで空きがあり、貸した記憶とは別の確保なので重ならない。写した後で長さを確定する
                 unsafe {
-                    std::ptr::copy_nonoverlapping(buf.ptr, self.sent.as_mut_ptr().add(len), n);
+                    std::ptr::copy_nonoverlapping(buf.ptr(), self.sent.as_mut_ptr().add(len), n);
                     self.sent.set_len(len + n);
                 }
                 Start::Done(Ok(Outcome::Size(n)))

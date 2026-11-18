@@ -792,20 +792,20 @@ fn lent_room_is_written_and_committed<M: Mode>() {
             let mut expected = Vec::new();
             for step in [3, 0, usize::MAX] {
                 let b = heap.bytes_lend(w).unwrap();
-                assert!(b.cap >= room - expected.len());
-                let n = step.min(b.cap);
+                assert!(b.cap() >= room - expected.len());
+                let n = step.min(b.cap());
                 let more: Vec<u8> = (expected.len()..expected.len() + n)
                     .map(|i| i as u8)
                     .collect();
                 for (i, &v) in more.iter().enumerate() {
-                    b.ptr.add(i).write(v);
+                    b.ptr().add(i).write(v);
                 }
                 heap.bytes_commit(w, n).unwrap();
                 expected.extend(more);
                 assert_eq!(&*heap.bytes(w).unwrap(), &expected[..]);
             }
             // 埋めた後は空きがない
-            assert_eq!(heap.bytes_lend(w).unwrap().cap, 0);
+            assert_eq!(heap.bytes_lend(w).unwrap().cap(), 0);
             heap.decref(w).unwrap();
         }
     }
@@ -826,10 +826,10 @@ fn lent_room_outlives_other_allocations<M: Mode>() {
             heap.decref(x).unwrap();
             // 空いた `x` の場所を使い直す確保
             let z = heap.alloc_bytes(&other);
-            let n = b.cap.min(room);
+            let n = b.cap().min(room);
             let expected: Vec<u8> = (0..n).map(|i| i as u8).collect();
             for (i, &v) in expected.iter().enumerate() {
-                b.ptr.add(i).write(v);
+                b.ptr().add(i).write(v);
             }
             heap.bytes_commit(w, n).unwrap();
             assert_eq!(&*heap.bytes(w).unwrap(), &expected[..]);
@@ -852,14 +852,14 @@ fn a_lent_room_is_written_by_another_thread<M: Mode>() {
     unsafe {
         let w = heap.alloc_bytes_room(room);
         let b = heap.bytes_lend(w).unwrap();
-        assert!(b.cap >= room);
+        assert!(b.cap() >= room);
         let n = room;
         std::thread::scope(|scope| {
             scope.spawn(move || {
                 // 欄ごとに捕まえると生のポインタだけが移り、閉包が `Send` でなくなるので、`RawBuf` ごと移す
                 let b = b;
                 for i in 0..n {
-                    b.ptr.add(i).write(i as u8);
+                    b.ptr().add(i).write(i as u8);
                 }
             });
         });

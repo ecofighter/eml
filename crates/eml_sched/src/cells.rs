@@ -1037,9 +1037,13 @@ impl IoStream {
             }
             self.rest.reserve_exact(filled.max(READ_ROOM));
         }
-        let raw = RawBuf {
-            ptr: self.rest.as_mut_ptr().wrapping_add(filled),
-            cap: (self.rest.capacity() - filled).min(READ_ROOM),
+        // SAFETY: 位置は`rest`の確保の中の空きで、長さはその中に収まる。読みの受け付けは貸した値を`Op::Read`にだけ
+        // 渡し、完了を確定するまで`rest`に触れない
+        let raw = unsafe {
+            RawBuf::new(
+                self.rest.as_mut_ptr().wrapping_add(filled),
+                (self.rest.capacity() - filled).min(READ_ROOM),
+            )
         };
         Some((filled, raw))
     }
@@ -4081,16 +4085,19 @@ pub unsafe fn submit_write<M: Mode>(
     // その場で書き換える操作はどれも一意を求め、記録が参照を1つ持つ間は写すからである
     // (docs/spec/object-model.md の T10 の行)
     let bytes = unsafe { ctx.heap().bytes(buf)? };
-    let raw = RawBuf {
-        ptr: if bytes.is_empty() {
-            std::ptr::NonNull::dangling().as_ptr()
-        } else {
-            bytes.cast::<u8>().cast_mut()
-        },
-        cap: bytes.len(),
+    // SAFETY: 上のとおり、記録が`bytes`の物体を完了まで生かし、書き換えない。値は`Op::Write`にだけ渡す
+    let raw = unsafe {
+        RawBuf::new(
+            if bytes.is_empty() {
+                std::ptr::NonNull::dangling().as_ptr()
+            } else {
+                bytes.cast::<u8>().cast_mut()
+            },
+            bytes.len(),
+        )
     };
     let kind = OpKind::Write {
-        len: raw.cap,
+        len: raw.cap(),
         prefix: stream_prefix(ctx, stream)?,
     };
     let mut record = net_record(kind, worker, Some(stream));
@@ -5192,10 +5199,7 @@ fn spare_room<M: Mode>(ctx: &mut Ctx<M>, buf: Word) -> Result<Option<RawBuf>, Ce
     // 受け付けは driver に出す前に記録を作って buffer を移す。記録が物体を生かし、一意に保ち、完了を受け取るまで
     // 書き換えないので、driver はこの空きに書ける (docs/spec/object-model.md の T10 の行)
     let raw = unsafe { heap.bytes_lend(buf)? };
-    Ok((raw.cap >= MIN_ROOM).then(|| RawBuf {
-        ptr: raw.ptr,
-        cap: raw.cap.min(READ_ROOM),
-    }))
+    Ok((raw.cap() >= MIN_ROOM).then(|| raw.head(READ_ROOM)))
 }
 
 /// 読めるようになった端 `stream` の読みのために、記録の buffer `buf` を容量 `grown_capacity(長さ)` 以上の新しい物体に
@@ -5220,11 +5224,7 @@ fn grow_read_room<M: Mode>(
     }
     unsafe { heap.decref(buf)? };
     // `spare_room` と同じく、記録が新しい物体を一意に保つ (docs/spec/object-model.md の T10 の行)
-    let raw = unsafe { heap.bytes_lend(fresh)? };
-    let raw = RawBuf {
-        ptr: raw.ptr,
-        cap: READ_ROOM,
-    };
+    let raw = unsafe { heap.bytes_lend(fresh)? }.head(READ_ROOM);
     Ok((fresh, handle, raw))
 }
 
@@ -6504,10 +6504,10 @@ struct NoDriver {
 /// `RawBuf`)。
 #[cfg(test)]
 fn lent_content(buf: RawBuf) -> Vec<u8> {
-    if buf.cap == 0 {
+    if buf.cap() == 0 {
         return Vec::new();
     }
-    unsafe { std::slice::from_raw_parts(buf.ptr, buf.cap) }.to_vec()
+    unsafe { std::slice::from_raw_parts(buf.ptr(), buf.cap()) }.to_vec()
 }
 
 #[cfg(test)]
@@ -6541,7 +6541,7 @@ impl IoDriver for NoDriver {
                 self.writes.push(buf);
                 if self.finish_writes {
                     self.written.push(lent_content(buf));
-                    Submit::Done(Ok(Done::Size(buf.cap)))
+                    Submit::Done(Ok(Done::Size(buf.cap())))
                 } else {
                     self.held.push((key, buf));
                     Submit::Pending
@@ -7319,10 +7319,7 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
     )));
     shared.lock().op_mut(op).unwrap().timed_out = true;
     let mut work = IoWork::default();
-    let empty = RawBuf {
-        ptr: std::ptr::NonNull::dangling().as_ptr(),
-        cap: 0,
-    };
+    let empty = unsafe { RawBuf::new(std::ptr::NonNull::dangling().as_ptr(), 0) };
     shared
         .lock()
         .submit_op(
@@ -7432,7 +7429,7 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
     for room in [2 * READ_ROOM, 16, 0] {
         let me = running_task(&registry, scope);
         let buf = bytes_ab(&mut ctx, room);
-        let spare = unsafe { ctx.heap_mut().bytes_lend(buf) }.unwrap().cap;
+        let spare = unsafe { ctx.heap_mut().bytes_lend(buf) }.unwrap().cap();
         let in_place = spare >= MIN_ROOM;
         let submits = driver.submits;
         let (token, op) = if in_place {
@@ -7470,7 +7467,7 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
         } else {
             READ_ROOM
         };
-        assert_eq!(driver.lent.pop().unwrap().cap, expected);
+        assert_eq!(driver.lent.pop().unwrap().cap(), expected);
         let key = op_key(op);
         driver.done.push(Completion {
             key,
@@ -7510,12 +7507,12 @@ fn growing_a_full_buffer_doubles_its_length() {
     let scope = registry.lock().open_root(None, None).unwrap();
     let me = running_task(&registry, scope);
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes(&vec![7; 200_000]);
-    assert_eq!(unsafe { ctx.heap_mut().bytes_lend(buf) }.unwrap().cap, 0);
+    assert_eq!(unsafe { ctx.heap_mut().bytes_lend(buf) }.unwrap().cap(), 0);
     let (token, op) = probed_read(&registry, &mut ctx, &mut driver, me, buf);
-    assert_eq!(driver.lent.pop().unwrap().cap, READ_ROOM);
+    assert_eq!(driver.lent.pop().unwrap().cap(), READ_ROOM);
     let grown = registry.lock().op_mut(op).unwrap().buf.unwrap();
     // 長さ 200 000 の後ろの空きが 200 000 以上なので、容量は 400 000 以上である
-    let spare = unsafe { ctx.heap_mut().bytes_lend(grown) }.unwrap().cap;
+    let spare = unsafe { ctx.heap_mut().bytes_lend(grown) }.unwrap().cap();
     assert!(spare >= 200_000, "{spare}");
     complete_op(
         &registry,
@@ -7548,7 +7545,7 @@ fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
     let (token, op) = probed_read(&registry, &mut ctx, &mut driver, me, buf);
     let raw = driver.lent.pop().unwrap();
     // 外の書き手として、貸した空きの先頭に書く
-    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), raw.ptr, 2) };
+    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), raw.ptr(), 2) };
     registry.lock().task_mut(me).unwrap().cancel = true;
     let mut out = Vec::new();
     unpark(&registry, &mut driver, me, &mut out);
@@ -7621,7 +7618,7 @@ fn write_of_a_shared_buffer<M: Mode>() -> Ctx<M> {
     .unwrap();
     let at = unsafe { ctx.heap().bytes(buf) }.unwrap();
     assert_eq!(driver.writes.len(), 1);
-    assert_eq!(driver.writes[0].ptr, at.cast::<u8>().cast_mut());
+    assert_eq!(driver.writes[0].ptr(), at.cast::<u8>().cast_mut());
     assert_eq!(driver.written, [b"shared".to_vec()]);
     let back = unsafe { take_bytes(&registry, &mut ctx, token, 0) }.unwrap();
     assert!(back == buf);
@@ -8269,8 +8266,8 @@ fn a_read_of_a_file_grows_at_submit() {
         OpPhase::Transfer
     ));
     let raw = driver.lent.pop().unwrap();
-    assert_eq!(raw.cap, READ_ROOM);
-    unsafe { std::ptr::copy_nonoverlapping(b"cd".as_ptr(), raw.ptr, 2) };
+    assert_eq!(raw.cap(), READ_ROOM);
+    unsafe { std::ptr::copy_nonoverlapping(b"cd".as_ptr(), raw.ptr(), 2) };
     let mut out = Vec::new();
     complete_op(
         &registry,
@@ -8311,10 +8308,10 @@ fn a_read_line_of_a_file_grows_at_submit() {
     let op = CellRef::decode(token);
     assert_eq!(driver.submits, 1);
     let raw = driver.lent.pop().unwrap();
-    assert_eq!(raw.cap, READ_ROOM);
+    assert_eq!(raw.cap(), READ_ROOM);
     // 貸した空きを改行なしで埋めると、次の周は空きのない buffer を広げて貸す
     let filler = vec![b'a'; READ_ROOM];
-    unsafe { std::ptr::copy_nonoverlapping(filler.as_ptr(), raw.ptr, READ_ROOM) };
+    unsafe { std::ptr::copy_nonoverlapping(filler.as_ptr(), raw.ptr(), READ_ROOM) };
     let mut out = Vec::new();
     complete_op(
         &registry,
@@ -8329,7 +8326,7 @@ fn a_read_line_of_a_file_grows_at_submit() {
         registry.lock().op_mut(op).unwrap().phase,
         OpPhase::Transfer
     ));
-    assert!(driver.lent.pop().unwrap().cap >= MIN_ROOM);
+    assert!(driver.lent.pop().unwrap().cap() >= MIN_ROOM);
     complete_op(
         &registry,
         &mut ctx,
@@ -8378,8 +8375,8 @@ fn a_read_of_a_shared_buffer_on_a_file_copies_once() {
     let lent = registry.lock().op_mut(op).unwrap().buf.unwrap();
     assert_ne!(lent, buf);
     let raw = driver.lent.pop().unwrap();
-    assert_eq!(raw.cap, READ_ROOM);
-    unsafe { std::ptr::copy_nonoverlapping(b"cd".as_ptr(), raw.ptr, 2) };
+    assert_eq!(raw.cap(), READ_ROOM);
+    unsafe { std::ptr::copy_nonoverlapping(b"cd".as_ptr(), raw.ptr(), 2) };
     let mut out = Vec::new();
     complete_op(
         &registry,
@@ -8805,9 +8802,9 @@ fn read_line_round(
         ));
         let raw = driver.lent.pop().unwrap();
         assert!(driver.lent.is_empty());
-        first.get_or_insert((probed, raw.cap));
-        let n = raw.cap.min(rest.len());
-        unsafe { std::ptr::copy_nonoverlapping(rest.as_ptr(), raw.ptr, n) };
+        first.get_or_insert((probed, raw.cap()));
+        let n = raw.cap().min(rest.len());
+        unsafe { std::ptr::copy_nonoverlapping(rest.as_ptr(), raw.ptr(), n) };
         complete_op(registry, ctx, driver, op, Ok(Done::Size(n)), out);
         reads.push(n);
         rest = &rest[n..];
@@ -8916,7 +8913,7 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
         &mut out,
     );
     let raw = driver.lent.pop().unwrap();
-    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), raw.ptr, 2) };
+    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), raw.ptr(), 2) };
     registry.lock().task_mut(me).unwrap().cancel = true;
     unpark(&registry, &mut driver, me, &mut out);
     assert_eq!(driver.cancelled, [op_key(op)]);
@@ -10308,7 +10305,7 @@ fn a_read_of_a_pipe_grows_at_submit() {
     .unwrap();
     let op = CellRef::decode(token);
     assert_eq!(driver.submits, 1);
-    assert_eq!(driver.lent.pop().unwrap().cap, READ_ROOM);
+    assert_eq!(driver.lent.pop().unwrap().cap(), READ_ROOM);
     let mut out = Vec::new();
     complete_op(
         &registry,

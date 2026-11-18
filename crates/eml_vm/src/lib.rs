@@ -297,7 +297,7 @@ impl<M: Mode> Machine<M> {
     /// driverは次のことを守る (docs/spec/lir.mdの「エンジンの約束」)。
     ///
     /// - `Op::Read`の完了`Ok(Done::Size(n))`は、`submit`が`Submit::Done`で返すものも`completions`が返すものも、
-    ///   driverが完了を返す前に`buf.ptr`から`n`バイトを書いたことを表す。`n`は`buf.cap`以下である
+    ///   driverが完了を返す前に`buf.ptr()`から`n`バイトを書いたことを表す。`n`は`buf.cap()`以下である
     /// - `Submit::Pending`で受け付けた鍵には、完了を高々1つ返す
     /// - driverが貸されたbufferを読み書きするのは、それを貸した`submit`からその操作の完了までの間だけである。`Op::Write`
     ///   のbufferも、完了の後はプログラムに戻って放されるか書き換えられる。`Submit::Done`の後、完了の後、`pending()`を

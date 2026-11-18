@@ -260,7 +260,7 @@ fn bytes_with_capacity_lend_their_room<M: Mode>() {
     let mut ctx = ctx::<M>();
     let w = ctx.bytes_with_capacity(16).unwrap();
     assert_eq!(body(ctx.heap(), w), b"");
-    let cap = unsafe { ctx.heap_mut().bytes_lend(w) }.unwrap().cap;
+    let cap = unsafe { ctx.heap_mut().bytes_lend(w) }.unwrap().cap();
     assert!(cap >= 16, "{cap}");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
     assert_eq!(mortal(&mut ctx), 0);

@@ -201,7 +201,7 @@ impl TestDriver {
                         // 貸した側は、`submit` が `Submit::Done` を返すか完了を取り出すまで記憶を生かし、書き換えない
                         // (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
                         peer.inbox.extend(unsafe { bytes(buf) });
-                        done(Ok(Done::Size(buf.cap)))
+                        done(Ok(Done::Size(buf.cap())))
                     }
                     _ => done(Err(io::Error::from(io::ErrorKind::BrokenPipe))),
                 }
@@ -219,11 +219,11 @@ impl TestDriver {
                         .get_mut(&handle)
                         .expect("a readable end")
                         .inbox;
-                    let n = buf.cap.min(inbox.len());
+                    let n = buf.cap().min(inbox.len());
                     for (i, byte) in inbox.drain(..n).enumerate() {
                         // 貸した側は、`submit` が `Submit::Done` を返すか完了を取り出すまで記憶を生かし、一意に保ち、
                         // 動かさない。`i < n <= cap` である (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
-                        unsafe { buf.ptr.add(i).write(byte) };
+                        unsafe { buf.ptr().add(i).write(byte) };
                     }
                     done(Ok(Done::Size(n)))
                 }
@@ -259,12 +259,12 @@ impl TestDriver {
         if write {
             // 貸した側は、完了を取り出すまで記憶を生かし、書き換えない (`RawBuf`)
             file.write_all(&unsafe { bytes(buf) })?;
-            return Ok(buf.cap);
+            return Ok(buf.cap());
         }
         // 貸した側は、完了を取り出すまで記憶を生かし、一意に保ち、動かさない。`ptr` は `cap` バイトを指し、`cap` が 0 の
         // ときも空でない番地である (`u8` の slice に整列は要らない)
         // (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
-        let room = unsafe { std::slice::from_raw_parts_mut(buf.ptr, buf.cap) };
+        let room = unsafe { std::slice::from_raw_parts_mut(buf.ptr(), buf.cap()) };
         loop {
             match file.read(room) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -320,11 +320,11 @@ fn localhost(port: u16) -> SocketAddr {
 
 /// `buf` の指す `cap` バイト。前提は `RawBuf` の約束である。
 unsafe fn bytes(buf: RawBuf) -> Vec<u8> {
-    if buf.cap == 0 {
+    if buf.cap() == 0 {
         return Vec::new();
     }
     // `cap > 0` の `ptr` は、貸した側が完了まで生かす `cap` バイトを指す (docs/spec/vm.md の「時計と driver」)
-    unsafe { std::slice::from_raw_parts(buf.ptr, buf.cap) }.to_vec()
+    unsafe { std::slice::from_raw_parts(buf.ptr(), buf.cap()) }.to_vec()
 }
 
 /// 小さく決定的な擬似乱数 (splitmix64)。

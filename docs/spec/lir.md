@@ -970,9 +970,10 @@ VMのエントリ (`eml_vm::execute`、`Machine`、`AnyMachine`、`CodeBase`の`
 - P4: VMのマシンの`unsafe fn run_shown` (`Machine`、`AnyMachine`) に渡す`Loaded`のエントリの関数が結果をRCのReprで返すなら、その結果は文字列である。速いモードは、確かめずに結果を文字列として写す。結果がRCのReprでないエントリは約束に入らず、`run_shown`はどのビルドでも、実行する前に内部の誤りで断る
 - P5: `unsafe fn Session::load_with_std`は標準ライブラリを差し替える。差し替えた標準ライブラリのどの`extern`の宣言も、組み込みの表の行が前提にする型を持つ。埋め込んだ標準ライブラリはテストが表と結び付けるが、差し替えたものを確かめるものはない (上の「実行の前提」の最後の項目)
 - R-2: 呼ぶ側の約束ではない。`load`か`extend`が表を書き始めた後 (Cの表を比べた後) に返す誤りは、マシンを使えなくする。その後の`load`、`extend`、`run`、`run_shown`は、どのビルドでもpanicする。何も書く前に返す誤り (`Invalid`、`MultiValueEntry`、Cの表の`Mismatch`) の後は、マシンを使い続けてよい
-- R-3: `unsafe fn Machine::with_driver`は、VMが作っていないdriverをVMに渡す。driverは自分がしたことだけを報告する。`Op::Read`の完了`Ok(Done::Size(n))`は、driverがその前に`buf.ptr`から`n`バイトを書いたことを表し、`n`は`buf.cap`以下である。`Submit::Pending`で受け付けた鍵には、完了を高々1つ返す。driverが貸されたbufferを読み書きするのは、それを貸した`submit`からその操作の完了までの間だけで、`Submit::Done`の後、完了の後、`pending()`を0にした`quiesce`の後、落とされた後には触れない。`Op::Write`のbufferも、完了の後はプログラムに戻るためである ([VM](vm.md)の「時計と driver」)。ほかのエントリはdriverを自分で作る
+- R-3: `unsafe fn Machine::with_driver`は、VMが作っていないdriverをVMに渡す。driverは自分がしたことだけを報告する。`Op::Read`の完了`Ok(Done::Size(n))`は、driverがその前に`buf.ptr()`から`n`バイトを書いたことを表し、`n`は`buf.cap()`以下である。`Submit::Pending`で受け付けた鍵には、完了を高々1つ返す。driverが貸されたbufferを読み書きするのは、それを貸した`submit`からその操作の完了までの間だけで、`Submit::Done`の後、完了の後、`pending()`を0にした`quiesce`の後、落とされた後には触れない。`Op::Write`のbufferも、完了の後はプログラムに戻るためである ([VM](vm.md)の「時計と driver」)。ほかのエントリはdriverを自分で作る
 - R-5: コード生成器のテストのための`unsafe fn NativeMachine::call`は、読み込んだ関数を、空の`evv`を持つ新しいrunの先頭で動かす。関数は、空の`evv`と渡した引数で入っても「実行の前提」を満たす。引数はスカラーだが、型の範囲の外の`enum`はコンパイルした`switch`のコードに届き、`clause`は関数が自分で入れないevidenceを見つけない。`entry_of`は`unsafe`の関数ポインタを返し、その呼び出しも同じ約束を負う
 - R-7: `eml_sched::cells`の`Ctx`を取る公開の関数は、1つの約束の下の`unsafe fn`で、その約束はモジュールの文書の「呼ぶ側の約束」(C1からC4) である。例外はfeature `testing`の`test_ctx`と`stream_on`で、物体を作るだけなので安全である。`ctx`は呼ぶworker自身の`Ctx`で、`Ctx::heap_mut`の契約の下で使う。引数の語は、どれも関数が名指すReprと種類を持つ。登録表とそれに伴う値は、約束を守る呼ぶ側だけが動かしてきたので、中の語と継続はどれも生きていて、完了はどれもその鍵へのdriver自身の完了である。`driver`はrunの`RunClock`が作ったものか、`with_driver`を通して来たものである (R-3)。語を置くか返すだけの関数は安全なままにする。その語を読む関数は、どれも`unsafe`の関数だからである。置いた`Op`を返す`Registry::take_queued`は`pub(crate)`である
+- R-8: driverに貸す記憶`eml_rt::RawBuf`は、欄をcrateの外から隠し、`unsafe fn RawBuf::new`だけが作る。その約束は、`cap == 0`であるか、`ptr`が`cap`バイトを指し、そのバイトが、その値か写しか一部で出したどの操作も`Submit::Done`を返すか完了を取り出されるまで、確保されたまま動かないことである。それまで、ほかの何もそのバイトを書かず、`Read`ではほかの何も読まない。呼ぶ側は値を`IoDriver::submit`にだけ渡す。`head`と`tail`は元の範囲の中を指すので、安全なコードは貸された記憶の外の番地を作れない。`IoDriver::submit`は安全なままで、`eml_io`のdriverが読み書きするのは、出された`RawBuf`が貸す記憶だけである ([VM](vm.md)の「時計と driver」)
 - R-15: 呼ぶ側の約束ではない。`eml_gui`のQtのbackendは、どのビルドでも、`QApplication`が生きている間は作るのを断り (`NotAvailable`)、Qtに渡す長さをどれもQtのウィジェットが取る範囲に収め、使っているidと形の違うidを断る。WinUIのbackendは、どのビルドでも、XAMLの`Application`が動いていない間は、ウィジェットを作る呼び出しと値を変える呼び出し (`create_window`、`create`、`add_item`、`set`) を断り、測る、置く、見せる呼び出しは知らないウィジェットと同じに扱う。2つ目のAppKitかWinUIのbackendはtoolkitのシングルトンを共有して置き換えないので、どちらにも`QApplication`のような約束はない ([アーキテクチャ](../implementation/architecture.md)の「`eml_gui`の内部」)
 
 次のものは安全の約束ではない。破っても、未定義の振る舞いでなく、誤った結果、panic、止まったままのrunになる。それぞれのdocコメントが振る舞いを書く。
@@ -985,6 +986,16 @@ VMのエントリ (`eml_vm::execute`、`Machine`、`AnyMachine`、`CodeBase`の`
 - R-12: `eml_native::Options`。スタックの上限は`stack`から決めるので、小さすぎる`stack`は深さの誤りかガードページでの中止になり、大きすぎる`stack`はworkerを作れない内部の誤りになる。`body`を呼ばない`masked`はrunを内部の誤りで終わらせ、2回目からの`body`の呼び出しは何もしない
 
 プログラムのCの宣言が正しいことは、プログラムを書く人の約束で ([宣言](declarations.md)の「宣言する側の約束」)、エンジンのRustのAPIが運ぶ約束ではない。この約束は、`link`のitemか`--link`の値が名指すライブラリも覆う。ライブラリを開くとそのコードが走り、その中身は信頼される。Rustのコードが作って`eml_clink::Linker::link`に渡す`CFunction`と`CHandleType`も同じ約束の下の宣言なので、`link`は安全な関数のままである。どちらのエンジンも、どのビルドでも`Linked`をプログラム自身の宣言と比べる。
+
+テスト専用でないどのcrateでも、安全な関数をどう呼んでも未定義の振る舞いに届かない。テスト専用のcrateは`eml_test_support`だけである。ただし、次のことを前提にする。
+
+- コンパイラ (`eml_hir`から`eml_lir`まで)、埋め込んだ標準ライブラリ、エンジンが正しい。これらの誤りはemlの誤りで、呼ぶ側が破った約束ではない
+- プログラムの`extern "C"`の宣言が正しい。これはプログラムを書いた人がemlの言語の中でする約束で ([宣言](declarations.md)の「宣言する側の約束」)、RustのAPIは運ばない
+- `eml_rt`の信頼の一覧が成り立つ ([オブジェクトモデル](object-model.md)の「`unsafe` の核」)
+
+保証に入れないものは、テスト (`tests/`、`#[cfg(test)]`、`eml_test_support`) である。テストの補助の関数が、それぞれのテストに代わって約束する。検査モードも、任意のプログラムを安全に実行する囲いにはならない (上の「実行の前提」)。
+
+これを支えるのは次のことである。workerの`Ctx`を扱う`eml_sched`の関数は、1つの約束の下の`unsafe fn`である (R-7)。driverに貸す記憶は`RawBuf`で、作れるのは`unsafe fn RawBuf::new`だけである (R-8)。VMが作っていないdriverは、`unsafe fn Machine::with_driver`を通してだけ入る (R-3)。`eml_gui`のGUIのbackendは、どのビルドでもtoolkitの約束を確かめる (R-15)。新しい公開の項目をどう分けるかは、[アーキテクチャ](../implementation/architecture.md)の「公開の面と`unsafe`」にある。
 
 ## 実行時エラー
 

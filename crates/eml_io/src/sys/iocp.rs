@@ -596,8 +596,8 @@ fn read_file(handle: HANDLE, buf: RawBuf) -> io::Result<usize> {
     let ok = unsafe {
         ReadFile(
             handle,
-            buf.ptr,
-            u32::try_from(buf.cap).unwrap_or(u32::MAX),
+            buf.ptr(),
+            u32::try_from(buf.cap()).unwrap_or(u32::MAX),
             &mut n,
             ptr::null_mut(),
         )
@@ -611,9 +611,9 @@ fn read_file(handle: HANDLE, buf: RawBuf) -> io::Result<usize> {
 /// ファイルの書きの仕事の本体。プールのスレッドの上で、貸された記憶の `cap` バイトをすべて書く。
 fn write_file(handle: HANDLE, buf: RawBuf) -> io::Result<usize> {
     let mut written = 0;
-    while written < buf.cap {
+    while written < buf.cap() {
         // 残りの位置は貸した記憶の中にあり、指すだけで読み書きしない
-        let at = buf.ptr.wrapping_add(written);
+        let at = buf.ptr().wrapping_add(written);
         let mut n = 0u32;
         // SAFETY: `read_file` と同じく、仕事が答えるまで `buf` は `cap` バイトの読める記憶を指し、ハンドルは開いている。
         // `at` から `cap - written` バイトはその中にある。OS は読むだけで、`n` に書くのは戻るまでの間だけである
@@ -621,7 +621,7 @@ fn write_file(handle: HANDLE, buf: RawBuf) -> io::Result<usize> {
             WriteFile(
                 handle,
                 at,
-                u32::try_from(buf.cap - written).unwrap_or(u32::MAX),
+                u32::try_from(buf.cap() - written).unwrap_or(u32::MAX),
                 &mut n,
                 ptr::null_mut(),
             )
@@ -634,7 +634,7 @@ fn write_file(handle: HANDLE, buf: RawBuf) -> io::Result<usize> {
         }
         written += n as usize;
     }
-    Ok(buf.cap)
+    Ok(buf.cap())
 }
 
 /// 取り戻した箱の操作の結果。`Ok` は運んだバイト数、`Err` は誤りの番号
@@ -870,8 +870,8 @@ impl Iocp {
         let s = sock.raw();
         self.issue(key, s, What::Send, stream_error, |over| {
             let wsabuf = WSABUF {
-                len: u32::try_from(buf.cap).unwrap_or(u32::MAX),
-                buf: buf.ptr,
+                len: u32::try_from(buf.cap()).unwrap_or(u32::MAX),
+                buf: buf.ptr(),
             };
             // SAFETY: `over` は `issue` が作った生きた箱で、番地は `&raw` で作る。`buf` の記憶は貸した側が操作の
             // 完了を取り出すまで生かし、OS は読むだけである。`wsabuf` は戻るまでの間だけ読まれる
@@ -1033,8 +1033,8 @@ impl Iocp {
             let ok = unsafe {
                 ReadFile(
                     h,
-                    buf.ptr,
-                    u32::try_from(buf.cap).unwrap_or(u32::MAX),
+                    buf.ptr(),
+                    u32::try_from(buf.cap()).unwrap_or(u32::MAX),
                     ptr::null_mut(),
                     &raw mut (*over).ov,
                 )
@@ -1060,8 +1060,8 @@ impl Iocp {
                 let ok = unsafe {
                     WriteFile(
                         h,
-                        buf.ptr,
-                        u32::try_from(buf.cap).unwrap_or(u32::MAX),
+                        buf.ptr(),
+                        u32::try_from(buf.cap()).unwrap_or(u32::MAX),
                         ptr::null_mut(),
                         &raw mut (*over).ov,
                     )
@@ -1294,7 +1294,7 @@ impl Backend for Iocp {
             }
             Step::Recv { sock, buf } => {
                 // SAFETY: `buf` は貸された記憶で、`cap` バイトまで書ける。OS が書くのは戻るまでの間だけである
-                match unsafe { recv(sock.raw(), buf.ptr, len(buf.cap), 0) } {
+                match unsafe { recv(sock.raw(), buf.ptr(), len(buf.cap()), 0) } {
                     SOCKET_ERROR => match last() {
                         WSAEWOULDBLOCK => self.zero_read(key, sock.net()),
                         code => Start::Done(Err(stream_error(code))),
@@ -1304,7 +1304,7 @@ impl Backend for Iocp {
             }
             Step::Send { sock, buf } => {
                 // SAFETY: `buf` は貸された記憶で、`cap` バイトまで読める。OS が読むのは戻るまでの間だけである
-                match unsafe { send(sock.raw(), buf.ptr, len(buf.cap), 0) } {
+                match unsafe { send(sock.raw(), buf.ptr(), len(buf.cap()), 0) } {
                     SOCKET_ERROR => match last() {
                         WSAEWOULDBLOCK => self.send_ex(key, sock.net(), buf),
                         code => Start::Done(Err(stream_error(code))),
@@ -2377,10 +2377,8 @@ mod tests {
         let mut data = *b"abcd";
         let mut b = backend();
         let (l, s, mut client) = served(&mut b);
-        let buf = RawBuf {
-            ptr: data.as_mut_ptr(),
-            cap: data.len(),
-        };
+        // SAFETY: `data`は`b`が落ちるまで生きて動かず、OSのほかには読み書きしない
+        let buf = unsafe { RawBuf::new(data.as_mut_ptr(), data.len()) };
         // 空のストリームへの書きは同期に終わるが、それでも packet で読む
         assert!(matches!(
             b.send_ex(2, s.net(), buf),
@@ -2403,10 +2401,8 @@ mod tests {
         let mut chunk = vec![7u8; 8 << 20];
         let mut b = backend();
         let (l, mut s, _client) = served(&mut b);
-        let buf = RawBuf {
-            ptr: chunk.as_mut_ptr(),
-            cap: chunk.len(),
-        };
+        // SAFETY: `chunk`は`b`が落ちるまで生きて動かず、OSのほかには読み書きしない
+        let buf = unsafe { RawBuf::new(chunk.as_mut_ptr(), chunk.len()) };
         let mut key = 10;
         while !matches!(
             b.start(key, Step::Send { sock: &mut s, buf }),

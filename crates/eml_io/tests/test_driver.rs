@@ -10,10 +10,8 @@ use eml_io::TestDriver;
 use eml_rt::{Completion, Done, IoDriver, IoHandle, Op, OpKey, RawBuf, Submit};
 
 fn raw(bytes: &mut [u8]) -> RawBuf {
-    RawBuf {
-        ptr: bytes.as_mut_ptr(),
-        cap: bytes.len(),
-    }
+    // SAFETY: このファイルのテストは、出した操作の完了を取り出すまで`bytes`を生かし、ほかから読み書きしない
+    unsafe { RawBuf::new(bytes.as_mut_ptr(), bytes.len()) }
 }
 
 /// テストが振る鍵。1 から数え、どの driver にも同じ鍵を2度渡さない。

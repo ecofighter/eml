@@ -1609,10 +1609,8 @@ mod tests {
 
         /// 相手の端から `bytes` を書く。テストの driver は受け付けの時点で書き終える。
         fn write_far(&mut self, bytes: &'static [u8]) {
-            let buf = eml_rt::RawBuf {
-                ptr: bytes.as_ptr().cast_mut(),
-                cap: bytes.len(),
-            };
+            // SAFETY: `bytes`は`'static`で、`Write`のdriverは読むだけである
+            let buf = unsafe { eml_rt::RawBuf::new(bytes.as_ptr().cast_mut(), bytes.len()) };
             let op = eml_rt::Op::Write {
                 handle: self.far,
                 buf,
