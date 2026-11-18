@@ -99,8 +99,12 @@ pub(crate) fn create() -> Result<Native, GuiError> {
     if !has_display(display.as_deref(), wayland.as_deref()) {
         return Err(GuiError::Backend(NO_DISPLAY.to_string()));
     }
-    // QApplicationはプロセスに1つで、backendはrunに1つだけ作る
-    debug_assert!(!ffi::app_exists(), "a QApplication is already alive");
+    // QApplicationはプロセスに1つで、2つ目は1つ目のdispatcherを壊す。Qt自身がこれを確かめるのはdebugのビルドだけである
+    if ffi::app_exists() {
+        return Err(GuiError::NotAvailable(
+            "cannot open the GUI: a QApplication is already alive".to_string(),
+        ));
+    }
     let queue = EventQueue::new();
     let shim = ffi::new_shim(Box::new(Events(queue.clone())));
     let bell = Arc::new(event_loop::Bell::new(shim.dispatcher()));
@@ -209,6 +213,23 @@ impl QtWidgets {
     }
 }
 
+/// QWIDGETSIZE_MAX
+const MAX_PX: f64 = 16_777_215.0;
+
+/// shimは長さを`int`に変える。C++では、NaNや範囲の外の値の変換は未定義の動作である。`QWIDGETSIZE_MAX`に収めれば、
+/// shimの和と差も`int`の範囲に収まる。
+fn px(v: f64) -> f64 {
+    if v.is_nan() {
+        0.0
+    } else {
+        v.clamp(-MAX_PX, MAX_PX)
+    }
+}
+
+/// shimの`Window`はshimの`Events`を指し、shimが消すのはウィンドウのidで登録したウィンドウだけである。使い回したidや
+/// 形の違うidは`Events`より長く生きる`Window`を残すので、backendはそれを断る。
+const ID_IN_USE: &str = "gui: the widget id is already in use";
+
 fn widget_kind(kind: Kind) -> Option<ffi::WidgetKind> {
     match kind {
         Kind::Window => None,
@@ -224,12 +245,18 @@ fn widget_kind(kind: Kind) -> Option<ffi::WidgetKind> {
 
 impl Widgets for QtWidgets {
     fn create_window(&mut self, id: Id, title: &str) -> Result<(), GuiError> {
+        if !id.is_window() || self.kinds.contains_key(&id) {
+            return Err(GuiError::Backend(ID_IN_USE.to_string()));
+        }
         self.shim().create_window(id.0, title);
         self.kinds.insert(id, Kind::Window);
         Ok(())
     }
 
     fn create(&mut self, id: Id, kind: Kind, parent: Id, init: &Init) -> Result<(), GuiError> {
+        if id.is_window() || self.kinds.contains_key(&id) {
+            return Err(GuiError::Backend(ID_IN_USE.to_string()));
+        }
         match self.kinds.get(&parent) {
             Some(Kind::Window | Kind::Grid) => {}
             Some(_) => return Err(GuiError::WrongKind),
@@ -298,7 +325,7 @@ impl Widgets for QtWidgets {
         let hints = self.shim().hints(w.0);
         let (natural_w, natural_h) = if kind == Kind::Label {
             let laid = self.label_width(w, width, &hints);
-            (laid, self.shim().height_for_width(w.0, laid))
+            (laid, self.shim().height_for_width(w.0, px(laid)))
         } else {
             let laid = match width {
                 Measure::Exact(v) => f64::from(v),
@@ -320,14 +347,15 @@ impl Widgets for QtWidgets {
 
     fn place(&mut self, w: Id, rect: Rect) {
         if self.kinds.contains_key(&w) {
-            let [x, y, width, height] = [rect.x, rect.y, rect.w, rect.h].map(f64::from);
+            let [x, y, width, height] = [rect.x, rect.y, rect.w, rect.h].map(|v| px(f64::from(v)));
             self.shim().place(w.0, x, y, width, height);
         }
     }
 
     fn show_window(&mut self, w: Id, size: Size, min: Size) {
         if self.kinds.get(&w) == Some(&Kind::Window) {
-            let [width, height, min_w, min_h] = [size.w, size.h, min.w, min.h].map(f64::from);
+            let [width, height, min_w, min_h] =
+                [size.w, size.h, min.w, min.h].map(|v| px(f64::from(v)));
             self.shim().show_window(w.0, width, height, min_w, min_h);
         }
     }
@@ -361,6 +389,20 @@ mod tests {
             ))
         );
         assert!(!ffi::app_exists());
+    }
+
+    #[test]
+    fn lengths_handed_to_qt_fit_its_widgets() {
+        assert_eq!(px(f64::NAN), 0.0);
+        assert_eq!(px(f64::INFINITY), MAX_PX);
+        assert_eq!(px(f64::NEG_INFINITY), -MAX_PX);
+        assert_eq!(px(MAX_PX), MAX_PX);
+        assert_eq!(px(-MAX_PX), -MAX_PX);
+        assert_eq!(px(MAX_PX + 1.0), MAX_PX);
+        assert_eq!(px(-MAX_PX - 1.0), -MAX_PX);
+        for v in [0.0, -0.5, 12.25, 4e6] {
+            assert_eq!(px(v), v);
+        }
     }
 
     #[test]

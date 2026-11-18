@@ -582,7 +582,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 新しい項は、`crates/`の下のファイル、`impl`のブロックの型、関数か欄を名指し、`Reason`を付ける。`Stores` (語を置くか返すだけで、語を通して記憶を読まない)、`Allocates` (物体を作るだけで、呼ぶ側の語を読まない)、`Address` (番地を返すか運ぶだけで、その先を読み書きしない)、`ReadsCtx` (`Ctx`の欄だけを読む)、`ReadsClock` (時計だけを読む。自分の時計か、渡されたdriverの時計である)、`CallsDriver` (呼ぶ側が渡したdriverの安全なメソッドだけを呼び、語を読まない)、`MakesDriver` (`eml_io`の自前のdriverを作る。そのdriverが読み書きするのは、出された`RawBuf`が貸す記憶だけである)、`Unrelated` (字句が同じ名前の別の型を名指す) のどれかである。どの理由にも合わない項目は一覧に足さず、規則に従って`unsafe fn`か`pub(crate)`にする。
 
-このテストは、`pub`のtraitのメソッドとtraitの実装を見ない。docs/spec/lir.md の「エンジンの約束」の一覧を見直すときに、走査するcrateの`pub`のtraitを手で読む。また、Rustの構文で書いた項目だけを読む。マクロが自分の構文から作る関数 (`eml_nrt`の`entries!`の`plain fn`と`shim fn`、可視性が`$v`の型板) は見ない。今はどの形も`unsafe extern "C" fn`に展開する。安全な`pub fn`に展開する新しい形は、マクロを読んで確かめる。
+このテストは、`pub`のtraitのメソッドとtraitの実装を見ない。docs/spec/lir.mdの「エンジンの約束」の一覧を見直すときに、走査するcrateの`pub`のtraitを手で読む。安全な関数がFFIを通して届く先も見ない。`eml_gui`のネイティブのbackendは、どの字句も名指さない安全なRustのシグネチャからC++とプラットフォームのtoolkitを呼ぶので、同じ見直しで手で読む。また、Rustの構文で書いた項目だけを読む。マクロが自分の構文から作る関数 (`eml_nrt`の`entries!`の`plain fn`と`shim fn`、可視性が`$v`の型板) は見ない。今はどの形も`unsafe extern "C" fn`に展開する。安全な`pub fn`に展開する新しい形は、マクロを読んで確かめる。
 
 ## CLI のテスト
 

@@ -130,7 +130,8 @@ Conformance criteria (every unit's review checks those that apply):
 | ET-5 | `Close the machine promises` | CP-A | D-ET-1 P2, P3, P4; ET-G3, G5 | Opus |
 | ET-6 | `Close the remaining engine promises` | ET-5 | D-ET-1 P5, R-1..R-6, UJ-18 F-2; 7.5; ET-G3, G5 | Opus |
 | ET-R1 | `Make the cells functions that take a Ctx unsafe` | ET-6 | D-RL-2, D-RL-5, D-RL-6; R-7; ET-G3, G7 | Opus |
-| ET-R2 | `Make RawBuf unforgeable` | ET-R1 | D-RL-3, D-RL-7; R-8; EG | Opus |
+| ET-R1b | `Close the GUI backends' promises` | ET-R1 | R-15 (user approval 2026-11-18); ET-G3 | Opus |
+| ET-R2 | `Make RawBuf unforgeable` | ET-R1b | D-RL-3, D-RL-7; R-8; EG | Opus |
 | CP-B | CI of ET-R2; ASan / TSan extras; Fable review of the ET-R1 and ET-R2 diffs | ET-R2 | | orchestrator |
 | ET-7 | `Close engine-trust` | CP-B | D-3; roadmap 「進め方」 | Sonnet |
 | CP-Z | CI of ET-7, then merge | ET-7 | | orchestrator |
@@ -257,6 +258,17 @@ Run 7.3.4; push `plan/engine-trust`; CI on ET-4's commit → every job `success`
 - Left to the implementer: `unsafe` blocks or `#[cfg(test)]` wrappers in `cells.rs`'s tests; the Japanese wording; the scanner's helper names.
 - Pitfalls: `unsafe_op_in_unsafe_fn` warns in edition 2024, so a call from one of the 49 to another needs its own block; no `#[allow]` for it.
 
+### ET-R1b: `Close the GUI backends' promises`
+
+- Added with the user's approval (2026-11-18) after ET-R1's survey found that `eml_gui`'s Qt backend guards a second `QApplication` only by a `debug_assert!` (Fable advice; K-10's "add a row and stop").
+- Purpose: R-15.
+- Files: `crates/eml_gui/src/qt/mod.rs` (no change to the cxx bridge or `shim.cpp`), `crates/eml_gui/src/winui/{mod,event_loop}.rs`; docs/spec/lir.md 「エンジンの約束」 (R-15), docs/spec/stdlib.md 「`Std.Gui`」 (failure table: a `QApplication` already alive), docs/implementation/architecture.md 「`eml_gui`の内部」 (the Qt checks and the WinUI flag, and why), docs/implementation/testing.md 「公開の面の検査」 (what it does not cover: what a safe function reaches through FFI, read by hand for `eml_gui`).
+- Work:
+  1. Qt: the `debug_assert!(!ffi::app_exists())` becomes an every-build check returning `NotAvailable("cannot open the GUI: a QApplication is already alive")`; a `px` helper (NaN → 0, clamp to ±16_777_215, `QWIDGETSIZE_MAX`) on every `f64` handed to `place`, `show_window` and `height_for_width`; `create_window` refuses `!id.is_window() || kinds.contains_key(&id)` and `create` refuses `id.is_window() || kinds.contains_key(&id)` with `Backend("gui: the widget id is already in use")` (`Toolkit` never reuses an id: window numbers and `next_seq` only grow, a failed `create_window` inserts nothing).
+  2. WinUI: `Shared::live` (`Cell<bool>`), set in `launched` before the first `step(Woken)` and cleared by `Running::drop`; while it is false, `create_window`, `create`, `add_item` and `set` return `Backend("gui: the WinUI application is not running")` and `measure`, `place`, `show_window` act as for an unknown widget. Every widget call of `Std.Gui` runs inside the loop (vm.md 「GUIのPark」); `destroy` after the loop keeps its `exited` path.
+- Tests: one new unit test in `qt/mod.rs` (`lengths_handed_to_qt_fit_its_widgets`), compiled and run only by CI's Linux `gui-native` job; the `QApplication` refusal, the id checks and the WinUI flag are review only (tests do not run on the main thread, CI has no display, no Windows run).
+- Completion: G (N unchanged on macOS); `cargo build --features eml_cli/gui-native` and `cargo clippy --features eml_cli/gui-native --all-targets -- -D warnings` (AppKit) → exit 0; 7.3.4's Windows cross clippy with and without `eml_cli/gui-native` → exit 0; Qt cannot compile on the dev machine: a read of the diff, then CI's Linux `gui-native` job (the orchestrator).
+
 ### ET-R2: `Make RawBuf unforgeable`
 
 - Purpose: R-8 (D-RL-3); the guarantee paragraph (D-RL-7). An `eml_rt` change: EG in full.
@@ -295,7 +307,7 @@ Roadmap 「進め方」, one commit:
 ### 7.3 Gates and standing checks
 
 #### 7.3.1 G (every unit, repository root, after `git add -A`)
-1. `cargo nextest run` → exit 0; `N tests run: N passed[ (k slow)], 23 skipped`, N = 5292 + the new tests so far (ET-5: +3, ET-6: + its 7.5 tests, ET-R1: +4, ET-R2: +1) [V: list 5292 at the base; run I].
+1. `cargo nextest run` → exit 0; `N tests run: N passed[ (k slow)], 23 skipped`, N = 5292 + the new tests so far (ET-5: +3, ET-6: + its 7.5 tests, ET-R1: +4, ET-R1b: +0 on macOS (+1 on Linux with `gui-native`), ET-R2: +1) [V: list 5292 at the base; run I].
 2. `cargo clippy --all-targets -- -D warnings` → exit 0.
 3. `cargo fmt --check` → exit 0.
 4. `bash nix/crate-graph.sh --check` → exit 0 and `git diff --exit-code 4a2954c1 -- nix/crate-graph.sh` → exit 0 (ET-G4).
@@ -380,6 +392,7 @@ Rule: a promise whose breach can reach undefined behaviour from safe code is clo
 | R-11 | a machine is not used after a run returned a broken error (`RuntimeError::is_broken`: internal, invalid, driver, heap and engine faults, `Unrecovered`) | `Machine` field doc lib.rs:126-128 ("回復しなかった誤りの後は `Drop` まで残す"), eml_sched/src/error.rs:138-154 ("ヒープを信用できない"); only the REPL keeps it (`self.broken`, repl.rs:216, 385) | decided at CP-A by 7.5's rule (amended after the ET-1 review): if no bad memory access is reachable, not a safety promise, its doc states the behaviour (leaks); if one is, `load` / `extend` / `run` / `run_shown` panic after a broken error in every build and `close` neither panics nor touches the untrusted heap's roots (the REPL closes after a broken input: repl.rs:312-315, terminal.rs:220, 244, tests/repl.rs:346), with test `machine::a_machine_after_a_broken_run_panics` | ET-6 | New row [I; reviewed at CP-A]. `run_recovering` returns a broken error without recovery (lib.rs:365-368), leaving the failed run's objects in the heap; after `Unrecovered` the old heap keeps them too (object-model.md 「回復」). The reading finds leaks, not a reachable bad access, for `Unrecovered` and `Driver` (abandoned frames' references only raise counts), but the docs call the heap untrusted and `close` decrefs roots on it (lib.rs:702-708), so by the rule's cheapest-close default it is closed by the check. Native: each run makes a fresh `Ctx` (eml_nrt/src/run.rs:105), no carried heap [I] |
 | R-12 | `eml_native::Options`: `stack` is the worker's stack, `masked` calls `body` once | eml_nrt/src/image.rs:192-201 | not a safety promise; documented | ET-6 | New row [V: read]: the limit is computed from the requested size (run.rs:108-109) and `std::thread::Builder::stack_size` never gives less, so a small or huge value gives a depth error or a guard-page abort; `masked` runs `body` through `Option::take` (run.rs:76-87), so zero or two calls are an internal error or a no-op, and `&mut dyn FnMut` is not `Send` |
 | R-13 | the `CFunction`s and `CHandleType`s given to `eml_clink::Linker::link` describe real C functions and libraries | eml_clink/src/linker.rs:55-100 (safe; `Linked::new` in `unsafe` with that justification), library.rs:57-59 (`Library::new` runs initializers) | outside 「保証」 by its second premise (a wrong declaration is the program author's breach, declarations.md 「宣言する側の約束」); no code change; 「エンジンの約束」 names `link`'s inputs as declarations under that premise | ET-6 (text only) | New row [V: read; reviewed at CP-A]. Safe code can pass any `CFunction` and get a `Linked` whose bridge does not fit the symbol, but the same UB is reachable from safe code through `Session` and any program with a wrong `extern "C"`, which 「保証」 already excludes; `with_symbols` is `unsafe` (linker.rs:47). For CP-A (ET-1 review): both engines compare a `Linked`'s declarations with the program's (`linked.fits`, jit.rs:261; `CodeBase::load`'s C-table check), so a forged `Linked` must match the program's own declarations; and the safe `link` can itself `dlopen` any path (library initializers run) |
+| R-15 | `eml_gui`'s Qt backend is made once while no `QApplication` lives, gets geometry Qt's `int`s can hold, and gets each widget id once with the window shape only for windows; the WinUI backend's widget calls come while its XAML `Application` runs | `crates/eml_gui/src/qt/mod.rs:103` (`debug_assert!` only), `qt/shim.cpp:41, 129, 288-292`; `crates/eml_gui/src/winui/mod.rs` (`create_window`, `create`, `add_item`, `set`, `measure`, `place`, `show_window` unchecked) | not a caller's promise: run-time checks in every build (`NotAvailable "cannot open the GUI: a QApplication is already alive"`; geometry clamped to ±16777215 px, NaN to 0; `Backend "gui: the widget id is already in use"`; WinUI: `Shared::live`, `Backend "gui: the WinUI application is not running"`). AppKit: no safe item reaches UB [V: read]. User approval 2026-11-18 | ET-R1b | Yes for the second `QApplication` [V: read; Qt's check is `Q_ASSERT_X`]; geometry is C++ UB by the standard; ids and the WinUI flag closed without a shown trigger |
 
 ### 7.6 CP-A decisions (Fable review, approved by the user 2026-11-18; they supersede the rows of 7.5 they name)
 
@@ -397,7 +410,7 @@ The advice is summarized here; where a row of 7.5 and this section differ, this 
 ## 8. Execution order
 
 ```
-ET-1 → ET-2 → ET-3 → ET-4 → [CP-A + Fable review] → ET-5 → ET-6 → ET-R1 → ET-R2 → [CP-B + Fable review] → ET-7 → [CP-Z] → merge
+ET-1 → ET-2 → ET-3 → ET-4 → [CP-A + Fable review] → ET-5 → ET-6 → ET-R1 → ET-R1b → ET-R2 → [CP-B + Fable review] → ET-7 → [CP-Z] → merge
 ```
 
 Order rationale: the type first, with no engine taking it, so ET-2 is pure plumbing; the VM before native because the shared helpers of `eml_cli` and `eml_test_support` switch arm by arm (the native tests' parsed programs move with the VM arm, ET-3); P2..P4 after both engines take `Trusted`, since `extend` and `Loaded` change the same call sites; ET-6 after the advisor's review of ET-1's verdicts; the runtime-layer cut last, on a surface whose engine entries are already closed (D-RL-7): ET-R1 before ET-R2 because ET-R2's `cells.rs` constructions sit inside functions ET-R1 made `unsafe`, and ET-R2 writes the guarantee paragraph, which is true only after both.
