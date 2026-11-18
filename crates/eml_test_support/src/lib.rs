@@ -474,7 +474,7 @@ pub fn execute_finished(
 /// ネイティブのテストの実行は、どれもこれを通る。
 #[cfg(feature = "run")]
 pub fn execute_native(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     linked: &Linked,
     config: &RunConfig,
     host: HostRef,

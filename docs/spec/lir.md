@@ -961,6 +961,8 @@ verifierは命令ごとに所有、Repr、印を確かめるが、値を作っ�
 
 VMのエントリ (`eml_vm::execute`、`Machine::load`、`AnyMachine::load`、`CodeBase::load`) は`&Trusted`を取る。verifierを通さない読み込み (`load_unverified`) は`&Program`を取り、`Trusted`を作らない。
 
+ネイティブのエントリ (`eml_native::execute`、`NativeMachine::load`) も`&Trusted`を取る。`eml_native::unsupported`はプログラムを調べるだけで読み込まないので、`&Program`を取る。
+
 ## 実行時エラー
 
 次の場合は実行を止めて実行時エラーにする。CLI の終了コードは 1 で、割り込みで止まったときは 130、SIGTERM で止まったときは 143 である ([VM](vm.md) の「上限と割り込み」)。

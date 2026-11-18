@@ -8,7 +8,7 @@ use cranelift_jit::JITModule;
 use cranelift_module::{Module, ModuleError};
 use eml_cabi::Linked;
 use eml_extern::ExternEffect;
-use eml_lir::{OpRet, Program, Repr};
+use eml_lir::{OpRet, Program, Repr, Trusted};
 use eml_nrt::image::{
     DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
     DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow, Slice,
@@ -247,13 +247,12 @@ impl NativeMachine {
     }
 
     /// `program`のすべての関数をコンパイルする。マシンは1回だけ読み込むので、2回目の呼び出しは、1回目が失敗していても
-    /// `LoadError::Loaded`を返す。`load`は`program`を信頼する。`program`は、型を検査したプログラムからコンパイラが作った
-    /// 最後のパスの後のLIRか、同じ規則を守る手書きのLIRでなければならない。ネイティブのコードは実行時に何も確かめないので、
-    /// ほかのプログラムの実行の振る舞いは、VMの速いモードと同じく未定義である (docs/spec/native.md の「関数の形」)。
+    /// `LoadError::Loaded`を返す。`load`は`program`を信頼する。その約束は`Trusted`を作った側が負う
+    /// (docs/spec/lir.mdの「エンジンの約束」)。ネイティブのコードは実行時に何も確かめない (docs/spec/native.mdの「関数の形」)。
     /// どのビルドも、この約束のうちverifierが確かめる部分を確かめ、破れていればpanicする。`unsupported`が断る形は、
     /// 下ろしの中でpanicする。`linked`はプログラムのCの関数をつないだ結果で、その宣言がプログラムの表と違えば、何も
     /// 作らずに`LoadError::LinkMismatch`を返す。
-    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, LoadError> {
+    pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<Loaded, LoadError> {
         if std::mem::replace(&mut self.asked, true) {
             return Err(LoadError::Loaded);
         }
@@ -702,7 +701,7 @@ fn prelude_shape(program: &Program) -> Result<(), LoadError> {
 
 /// `program`を新しいマシンで1回実行する。VMの`eml_vm::execute`に当たる。
 pub fn execute(
-    program: &Program,
+    program: &Trusted,
     linked: &Linked,
     config: &RunConfig,
     host: HostRef,

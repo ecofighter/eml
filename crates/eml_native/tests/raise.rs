@@ -8,7 +8,7 @@ use eml_native::LoadError;
 use eml_nrt::RunConfig;
 use eml_test_support::{Engine, capture, execute_finished};
 
-use crate::common::native::{agree, agree_source, machine, native, program};
+use crate::common::native::{agree, agree_source, machine, native, program, trust};
 
 /// `agree_source`と同じだが、ネイティブのrunの標準出力が`expected`であることも確かめる。ハンドラが失敗を捕まえたことを、
 /// VMと同じだというだけでなく文で確かめるためである。
@@ -397,6 +397,7 @@ fn main() -> unit {
         }
     }
     assert_eq!(emptied, 1);
+    let program = trust(program);
     let linked = eml_test_support::link(&program);
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut machine = machine();
