@@ -111,7 +111,8 @@ impl Session {
 
     /// REPL の受け付けた入力と今の入力を、入力ごとのモジュールとして読む
     /// (docs/spec/modules.md の「REPL のセッション」)。`entry_file` は `:load` のファイル名で、なければ空である。
-    /// 返す `ImportCache` は、この読み込みで新しく読んだモジュールで、`Repl` が入力を受け付けたときにだけ足す。
+    /// 返す`ImportCache`は、この読み込みで新しく読んだモジュールで、`Repl`は、入力を受け付けなかったときも、その入力の
+    /// プログラムをマシンに読み込んだなら足す。
     pub fn load_session(
         inputs: &[eml_hir::SessionInput],
         file: Option<&str>,
@@ -214,7 +215,8 @@ impl Session {
     /// reuse の後の LIR を作る。
     #[cfg(feature = "core")]
     pub fn compile(&self) -> Compiled<eml_lir::Trusted> {
-        self.compile_with(lower_trusted)
+        // SAFETY: `compile_with`は、このセッションのプログラムで診断に誤りがないものにだけ`lower`を呼ぶ
+        self.compile_with(|input| unsafe { lower_trusted(input) })
     }
 
     /// 検査が通れば、`lower` で IR を作る。パスの順番は `eml_core_ir` と `eml_lir` だけが知るので、IR を作る関数を
@@ -264,7 +266,8 @@ impl Session {
         let mut main_range = None;
         let mut compiled = self.compile_with(|input| {
             main_range = Some(input.hir[input.entry].name_range);
-            lower_trusted(input)
+            // SAFETY: `compile_with`は、このセッションのプログラムで診断に誤りがないものにだけ`lower`を呼ぶ
+            unsafe { lower_trusted(input) }
         });
         let (Some(program), Some(range)) = (&compiled.program, main_range) else {
             return compiled;
@@ -291,10 +294,15 @@ impl Session {
 }
 
 /// エンジンに渡すLIRを作るただ1つの関数。`Trusted::new`を呼ぶのはここだけにする。
+///
+/// # Safety
+///
+/// `input`は、このセッションが自分のパイプラインで検査した、誤りのないプログラムである。呼ぶ側は、診断に誤りがない
+/// ことを確かめてから呼ぶ。
 #[cfg(feature = "core")]
-pub(crate) fn lower_trusted(input: eml_core_ir::Input) -> eml_lir::Trusted {
+pub(crate) unsafe fn lower_trusted(input: eml_core_ir::Input) -> eml_lir::Trusted {
     let program = eml_core_ir::lower(input);
-    // SAFETY: 入力は誤りのない検査済みのプログラムで、LIRはコンパイラ自身のパイプラインが作る。verifierが確かめられない
+    // SAFETY: 呼ぶ側がこの関数の約束を守り、LIRはコンパイラ自身のパイプラインが作る。verifierが確かめられない
     // 「実行の前提」はこのパイプラインが守る (docs/spec/lir.mdの「エンジンの約束」)
     unsafe { eml_lir::Trusted::new(program) }
 }
@@ -387,8 +395,9 @@ pub fn repl_limits() -> Limits {
 }
 
 /// `eml_rt`はvstdだけに依存したままにするため、OSに問い合わせるのはここである。`src/`の`unsafe`の呼び出しは、
-/// この関数、`lower_trusted`、`Repl::run`、binの`interrupt`モジュールと`terminal.rs`の`stdout_width`の中だけに置く。
-/// `unsafe fn`は`Session::load_with_std`だけである。
+/// この関数、`lower_trusted`、`Session::compile`、`Session::compile_native`、`Repl::evaluate`、`Repl::run`、binの
+/// `interrupt`モジュールと`terminal.rs`の`stdout_width`の中だけに置く。`unsafe fn`は`Session::load_with_std`と
+/// `lower_trusted`だけである。
 #[cfg(all(feature = "run", unix))]
 fn physical_memory() -> Option<usize> {
     // sysconf は名前のほかに前提を持たず、読めなければ -1 を返す

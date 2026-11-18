@@ -2,7 +2,7 @@
 
 - Created: 2026-11-17 (design-level plan).
 - Base: the `Close std-par` commit. Facts and line numbers in 01 describe main @ 4a2954c1; the refresh re-checks them.
-- Status: design-level. `Start native-checked` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md`.
+- Status: design-level. `Start native-checked` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md` (deleted at its Close; read it with `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`).
 - Appendices: `docs/plans/2026-11-17-runtime/`; 00 wins; the design is 01 §9 (D-NC-1..D-NC-10), with 01 §14.1 P-5, §16 S-24, §18 G-6, G-7, G-22 (H-4), §15.2 H-4.
 
 ## 1. Goal and completion conditions
@@ -23,7 +23,7 @@
 
 ## 3. Received from earlier stages
 
-- `engine-trust`: `Trusted` at the native entries; the promise list in lir.md 「エンジンの約束」 (checked mode is not a sandbox: that sentence stays).
+- `engine-trust` (not a prerequisite: the roadmap gives `native-checked` 前提: なし; the group order closes it first): `Trusted` at the native entries; the promise list in lir.md 「エンジンの約束」 (checked mode is not a sandbox: that sentence stays).
 - `par-total`: no `child_abort` form; `JobEnd` is a value.
 
 ## 4. Decisions (01 §9)

@@ -179,10 +179,10 @@ Rejected and closed: dropping `transfer_back` (UJ-14); all `Async` tasks on one 
 ## 4. `engine-trust`
 
 Goal: every engine entry that takes a program takes `&eml_lir::Trusted`; caller-kept promises closed or itemized.
-- D-ET-1: docs/future/engine-trust.md as written (P1..P5).
+- D-ET-1: as written (P1..P5), now stated in docs/spec/lir.md 「エンジンの約束」 and docs/implementation/architecture.md 「公開の面と`unsafe`」.
 - D-ET-2: the promise list is re-checked at the Close of `jit-tasks`, `jit-repl` and `vm-retire`.
 
-- D-ET-3 (UJ-18 F-1): the guarantee covers every crate but `eml_test_support`; the runtime-layer cut is D-RL-1..D-RL-7 of the engine-trust plan (00 §D D-9): the 49 `pub fn` of `eml_sched::cells` that take a `Ctx` become `unsafe fn` under one contract; `eml_rt::RawBuf` becomes unforgeable (an `eml_rt` change under its gate); architecture.md 「公開の面と`unsafe`」 states the classification rule and `crates/eml_cli/tests/surface.rs` keeps it (S-26, G-24).
+- D-ET-3 (UJ-18 F-1): the guarantee covers every crate but `eml_test_support`; the runtime-layer cut is D-RL-1..D-RL-7 of the engine-trust plan (`git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`; 00 §D D-9): the 49 `pub fn` of `eml_sched::cells` that take a `Ctx` become `unsafe fn` under one contract; `eml_rt::RawBuf` becomes unforgeable (an `eml_rt` change under its gate); architecture.md 「公開の面と`unsafe`」 states the classification rule and `crates/eml_cli/tests/surface.rs` keeps it (S-26, G-24).
 
 Units: 1 plan; 2 `Trusted` and `Session::compile`; 3 VM entries; 4 native entries; 5 `extend` / `run_shown` / `Loaded` (two new tests; three by 00 §D D-8); 6 `load_with_std` and the remaining promises; 6a `cells` `unsafe fn` and the surface test; 6b `RawBuf`; 7 Close. Tests: kind 3. Spec: lir.md 「実行の前提」「エンジンの約束」, vm.md, object-model.md, architecture.md, testing.md.
 
@@ -393,7 +393,7 @@ Stays deferred (14.4). In this stage: the placement test of the three heap-store
 | JT-12 | CLI: lift the usage errors | 1: listed | - |
 | JT-13 | Harness: native `par/` / `async/` at 2 and 8 workers and under the two seeds, checked and fast, with census; parity (11.7); `ui::limit_depth_native`; the N = 8 stress test | new; 2 | testing.md |
 | JT-14 | CI lines (TSan, ASan on native task tests); bench rows: native `pfib 30` cutoff 2 at N = 1 (lock share; over 15 % of a fork schedules the CAS claim as a later item), `pfib` at N = 1, 2, 4, 8, balanced recursion at N = 4 (help-on-join's condition is read here), bytes per spine level | - | testing.md, benchmarks.md |
-| JT-15 | docs/future pruned; engine-trust promise re-check | - | - |
+| JT-15 | docs/future pruned; promise re-check (D-ET-2) against docs/spec/lir.md 「エンジンの約束」 | - | - |
 | JT-16 | Fable whole-branch review; Close | - | benchmarks.md |
 
 A form is accepted natively only when everything its files need at one worker is in place. A test of a switched file that asserts the VM's placement, preemption or `Seat` internals is listed at that unit and stays VM-only until deleted.
@@ -849,7 +849,7 @@ UJ-9 (E1, E3), UJ-10 (E2), UJ-11 (SC-1..SC-4), UJ-12 (help-on-join later), UJ-13
 
 ## 28. Additional checks
 
-1. [V: read] the verification rounds V4 and V5 in full; the user decisions (UJ-17); the earlier decision record of the 2026-11-11 group (its section H); the previous plan's sections on ready items, the task rows' context, the limit table, threads and the main loop, the native task entries, fatal errors and panics, native limits, blocking C, run orchestration, CLI and harness, the cost table and later items (their substance is inlined in sections 10, 11 and 17); CLAUDE.md; `nix/crate-graph.sh`; architecture.md 「crate の依存関係」; crates/eml_rt/CLAUDE.md; object-model.md 「`unsafe` の核」 rows T0..T18; roadmap 「進め方」, 「段の列」 and the items named in section 21; docs/future/engine-trust.md and verification.md; `cells.rs` L1-60, L1303-1322.
+1. [V: read] the verification rounds V4 and V5 in full; the user decisions (UJ-17); the earlier decision record of the 2026-11-11 group (its section H); the previous plan's sections on ready items, the task rows' context, the limit table, threads and the main loop, the native task entries, fatal errors and panics, native limits, blocking C, run orchestration, CLI and harness, the cost table and later items (their substance is inlined in sections 10, 11 and 17); CLAUDE.md; `nix/crate-graph.sh`; architecture.md 「crate の依存関係」; crates/eml_rt/CLAUDE.md; object-model.md 「`unsafe` の核」 rows T0..T18; roadmap 「進め方」, 「段の列」 and the items named in section 21; the engine-trust design doc under docs/future (deleted at the Close; now docs/spec/lir.md 「エンジンの約束」) and verification.md; `cells.rs` L1-60, L1303-1322.
 2. [V: wc / ls / grep] lines per crate and per file of `crates/eml_vm/tests` (11.10); the files of `crates/eml_rows/src` and `crates/eml_nrt/src` (13.3's map has no existing target; `eml_nrt/src/rows.rs` exists and stays the module root); `RunStats` has 23 fields; 2 UI files carry `-- workers: skip`; the pinned vstd's `VecDeque` specs include `push_back`, `pop_back`, `pop_front`, `len`; `unsafe impl Send for Word` (word.rs L363); no `force-frame-pointers` in the workspace; `preserve_frame_pointers` in `abi.rs` L26.
 3. [I], confirmed where named: U-1, U-2, U-9; every size; P-4b's feasibility; that a count inside `FnLower::cleanup` matches the VM's `unwound_frames` for function frames, and the two placements D-NC-7 leaves to NC-1; the per-OS sampling mechanisms of 15.3; the build time of two entry tables.
 4. Not done: no build, test, Verus run or prototype by the designer (V5 ran a Verus probe for P-1 and timed native runs). Not read: `eml_vm`'s scheduler files, `lower/*.rs`, multicore.md, testing.md's sanitizer sections, the Sonnet review itself (V5's rulings were used).

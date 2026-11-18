@@ -2,7 +2,7 @@
 
 - Created: 2026-11-17 (design-level plan).
 - Base: the `Close par-total` commit. Facts and line numbers in 01 describe main @ 4a2954c1; the refresh re-checks them.
-- Status: design-level. `Start task-limits` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md`.
+- Status: design-level. `Start task-limits` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md` (deleted at its Close; read it with `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`).
 - Appendices: `docs/plans/2026-11-17-runtime/`; 00 wins (00 §D D-5 restates G-4's check); the design is 01 §7 (D-TL-1..D-TL-4), with 01 §3 SC-8, §14.2 (the soft threshold's glue), §18 G-4.
 
 ## 1. Goal and completion conditions

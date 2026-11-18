@@ -134,7 +134,11 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 3. ほかのcrateが項目を名指さない。`pub(crate)`にする
 4. それ以外は、`# Safety`の節を持つ`unsafe fn`にする
 
+非公開の関数でも、その`unsafe`の操作が呼ぶ側だけが確かめる事実に頼るなら、`unsafe fn`にする (3はそうでなければ公開になる項目のためのもので、この関数には4を当てる)。
+
 実行系が記憶の安全をその実装に任せるtraitは、ほかのcrateからは`unsafe fn` (`Machine::with_driver`) を通してだけ受け取るか、`unsafe trait`にする。`eml_sched`では、`Ctx`を取る公開の関数は`unsafe fn`である。例外はfeature `testing`の`test_ctx`と`stream_on`で、物体を作るだけなので安全である。登録表に語を置くか返すだけの関数は安全なままにし、それを読む関数が、登録表の中身を自分の約束に書く。`Ctx`、`Heap`、`Word`、`RawBuf`、driverの`Op`、`IoDriver`、生のポインタを名指す安全な公開の関数と公開の欄は、理由とともに`crates/eml_cli/tests/surface.rs`に並べる ([テスト戦略](testing.md)の「公開の面の検査」)。`eml_rt`はこのテストの外にあり、Verusと自分の信頼の一覧が確かめる (docs/spec/object-model.md の「`unsafe` の核」)。
+
+`eml_rt`の構築子 (`Word::from_bits`、`Ctx::new`、`Heap::new`など) は安全なままにする。種類の違う語や放された語は安全な確保と`Copy`からどのみち作れるので、語を偽造できないようにしても役に立たず、語を通して読む`eml_rt`の関数はどれもすでに`unsafe fn`である。`unsafe fn Ctx::new`にすると、ほかのcrateについての約束を検証した核に持ち込むことになる。`IoDriver`は`unsafe trait`でなく、`IoDriver::submit`も`unsafe`でない。そうすると、すべての呼ぶ側、14の実装、`eml_io`の`deny(unsafe_code)`が変わり、代わりに`eml_io`のdriverの構築子を`unsafe`にすると、`Box<dyn IoDriver>`を返すどの関数にも広がる。偽のbufferは`RawBuf`を偽造できないようにして閉じ、VMの外で作ったdriverは`unsafe fn Machine::with_driver`を通してだけ入る。
 
 ## 各段階の規律
 

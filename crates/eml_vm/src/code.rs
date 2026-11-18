@@ -62,9 +62,9 @@ pub(crate) fn builtins() -> Vec<Op> {
     code
 }
 
-/// 実行中は読むだけの表。後の並列 VM の worker がそのまま共有できるように、`Sync` に保つ
-/// (docs/future/multicore.md の「VM の並列化の備え」の制約2)。入力の境目では `load` で追記する
-/// (docs/spec/vm.md の「追記」)。
+/// 実行中は読むだけの表。後の並列VMのworkerがそのまま共有できるように、`Sync`に保つ
+/// (docs/future/multicore.mdの「VM の並列化の備え」の制約2)。入力の境目では`extend`で追記する
+/// (docs/spec/vm.mdの「追記」)。
 pub struct CodeBase<M: Mode> {
     pub(crate) functions: Vec<FnEntry>,
     pub(crate) tables: Tables,

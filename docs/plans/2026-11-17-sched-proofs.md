@@ -2,7 +2,7 @@
 
 - Created: 2026-11-17 (design-level plan).
 - Base: the `Close vm-retire` commit (the stage needs only `sched-core`; it runs last in the listed order). Facts in 01 describe main @ 4a2954c1; the refresh re-checks them.
-- Status: design-level. `Start sched-proofs` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md`.
+- Status: design-level. `Start sched-proofs` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md` (deleted at its Close; read it with `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`).
 - Appendices: `docs/plans/2026-11-17-runtime/`; 00 wins; the design is 01 §12.3 and §14.1 P-4b, with 01 §10 D-SC-7 (the three assertions), §14.3, §22 U-4. This is the group's last stage: its Close deletes `docs/plans/2026-11-17-runtime/` (00 §D D-2; roadmap 「進め方」 step 8).
 
 ## 1. Goal and completion conditions
@@ -12,7 +12,7 @@
   - `init ==> inv`, `inv && next ==> inv'`, `inv ==> safe` verified (`cargo verus verify -p eml_steps`), with no `external_body`, `assume` or `assume_specification` (`trust.rs` unchanged).
   - The Close states which of D-SC-7's three assertions the invariant covers ((1) no listed job with every taker asleep and no wake in flight; (2) worker 0 never reaches the verdict's end while work remains; (3) every state with no enabled step is the verdict's end).
   - If the invariant is not found within the stage's four units (U-4), P-4a (the explorer) stays the standing check, the item returns to the roadmap's 「その後の項目」 with what was learned, and the Close says so.
-  - The roadmap item 「協調的な配置のVerusの証明」's wake-up half is closed (the item kept only its placement half at `Start engine-trust`).
+  - The roadmap item 「協調的な配置のVerusの証明」's wake-up half is closed (the roadmap item 「協調的な配置のVerusの証明」 in 「その後の項目」「マルチコア対応」 now holds only its placement half).
 
 ## 2. Scope
 

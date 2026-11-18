@@ -114,7 +114,8 @@ enum Cached {
 }
 
 impl ImportCache {
-    /// `other` の項目を足す。REPL は、入力を受け付けたときにだけ、その入力で読んだものを足す。
+    /// `other`の項目を足す。REPLは、入力を受け付けなかったときも、その入力のプログラムをマシンに読み込んだなら、その
+    /// 入力で読んだものを足す。
     pub fn extend(&mut self, other: ImportCache) {
         self.entries.extend(other.entries);
     }

@@ -301,7 +301,7 @@ impl<M: Mode> Machine<M> {
     /// - `Submit::Pending`で受け付けた鍵には、完了を高々1つ返す
     /// - driverが貸されたbufferを読み書きするのは、それを貸した`submit`からその操作の完了までの間だけである。`Op::Write`
     ///   のbufferも、完了の後はプログラムに戻って放されるか書き換えられる。`Submit::Done`の後、完了の後、`pending()`を
-    ///   0にした`quiesce`の後、落とされた後には触れない
+    ///   0にした`quiesce`の後、落とされた後には触れない。driverは、bufferもその写しも、その間の外で使うものに渡さない。
     pub unsafe fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
         self.run_clock = Some(RunClock::Injected);

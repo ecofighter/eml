@@ -2,7 +2,7 @@
 
 - Created: 2026-11-17 (design-level plan).
 - Base: the `Close native-checked` commit. Facts and line numbers in 01 describe main @ 4a2954c1; the refresh re-checks them.
-- Status: design-level. `Start sched-core` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md`. The `cells.rs` list of D-SC-3 is part of that plan and is approved with it (01 §22 U-1).
+- Status: design-level. `Start sched-core` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md` (deleted at its Close; read it with `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`). The `cells.rs` list of D-SC-3 is part of that plan and is approved with it (01 §22 U-1).
 - Appendices: `docs/plans/2026-11-17-runtime/`; 00 wins; the design is 01 §10 (D-SC-1..D-SC-10), with 01 §2 (the model, types, loop, publishing and the verdict, `fork_join`), §13.3 (the crate change), §14.1 P-1..P-4a, P-6, §14.3 ST-1..ST-3, §15.2 H-2, H-6, §16 S-1..S-8, S-12, S-23, S-25, §18 G-8, G-9, G-11, G-12, G-22 (H-2, H-6), G-23, G-24 (D-SC-3a). 00 §D D-6 moves `Finished.claims` / `join_waits` to `jit-tasks`.
 
 ## 1. Goal and completion conditions

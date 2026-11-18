@@ -2,7 +2,7 @@
 
 - Created: 2026-11-17 (design-level plan).
 - Base: the `Close engine-trust` commit. Facts and line numbers in 01 describe main @ 4a2954c1; the refresh re-checks them.
-- Status: design-level. `Start async-root` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md` (header, goal and S-n, scope, background with `file:line`, prerequisites, decisions and criteria, constraints, task table and units with exact completion commands, gates, test changes by kind with kind 1 one by one, execution order, verification with baseline, risks).
+- Status: design-level. `Start async-root` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md` (deleted at its Close; read it with `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`) (header, goal and S-n, scope, background with `file:line`, prerequisites, decisions and criteria, constraints, task table and units with exact completion commands, gates, test changes by kind with kind 1 one by one, execution order, verification with baseline, risks).
 - Appendices: `docs/plans/2026-11-17-runtime/`; 00 wins; the design is 01 §5 (D-AR-1..D-AR-7), with 01 §2.1 (root task), §3 E2, §16 S-21, §18 G-2.
 
 ## 1. Goal and completion conditions

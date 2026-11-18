@@ -855,7 +855,7 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 ### `FileIn.read_all` の読み方
 
 - 主張: `FileIn.read_all` と `FileIn.read_all_bytes` は、読み手の buffer に残ったバイトを `Vec` に移し、残りを `Vec` に読んでからヒープへ1回写す。ヒープに直接読む形は、空き領域を0で埋める費用が省いた写しとほぼ相殺するので 6〜10% しか速くならず、信頼する関数が4つ要る。mmap はファイルが縮むと SIGBUS で落ち、`Vec` をそのまま文字列にすると文字列の全操作が2つの形に分かれる。読み手を `StopOnInterrupt` で包むので、`read_to_end` は空き領域を0で埋めてから読む
-- 数値: 採った形は1 MiBで60.2 µs、64 MiBで7.0 ms (M4、ページキャッシュにあるファイル。設計のときの計測で、コミットの記録はない)。0で埋めるようにすると`read-all` +12.1%、`read-all-unsized` +10.0% (M4、1f36698と223d52f)。`read-all-bytes`は`read_to_end`の参照の2.00倍の命令である (「今の数値」の「予算を超えた行の既知の差」)
+- 数値: 採った形は1 MiBで60.2 µs、64 MiBで7.0 ms (M4、ページキャッシュにあるファイル。設計のときの計測で、コミットの記録はない)。0で埋めるようにすると`read-all` +12.1%、`read-all-unsized` +10.0% (M4、1f36698と223d52f)。`read-all-bytes`は`read_to_end`の参照の1.97倍の命令である (「今の数値」の「予算を超えた行の既知の差」)
 - 根拠にしている所: [オブジェクトモデル](../spec/object-model.md) の「読み手」
 - 受け入れた理由: `read_buf` が stable の Rust にないため、中断で止められる読みを優先した
 

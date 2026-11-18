@@ -256,12 +256,15 @@ impl Repl {
         // エントリから最初の呼び出しまでのexternと`root_set`が動く (docs/spec/repl.mdの「割り込み」)
         let program = match input {
             Some(entry) if !has_errors(&diagnostics) => Some((
-                crate::lower_trusted(eml_core_ir::Input {
-                    hir: &checked.program,
-                    typed: &checked.typed,
-                    entry,
-                    files: session.files(),
-                }),
+                // SAFETY: このセッションが検査したプログラムで、`diagnostics`に誤りがないときだけ動く
+                unsafe {
+                    crate::lower_trusted(eml_core_ir::Input {
+                        hir: &checked.program,
+                        typed: &checked.typed,
+                        entry,
+                        files: session.files(),
+                    })
+                },
                 shown(&checked.program, &checked.typed, entry, session.files()),
             )),
             _ => None,
