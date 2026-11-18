@@ -256,7 +256,7 @@ fn checked_session(session: Session) -> Checked {
 }
 
 #[cfg(feature = "core")]
-pub fn lir<'a>(sources: impl Into<Sources<'a>>) -> eml_lir::Program {
+pub fn lir<'a>(sources: impl Into<Sources<'a>>) -> eml_lir::Trusted {
     compiled(sources.into().session().compile())
 }
 

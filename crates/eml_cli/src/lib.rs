@@ -207,8 +207,8 @@ impl Session {
 
     /// reuse の後の LIR を作る。
     #[cfg(feature = "core")]
-    pub fn compile(&self) -> Compiled<eml_lir::Program> {
-        self.compile_with(eml_core_ir::lower)
+    pub fn compile(&self) -> Compiled<eml_lir::Trusted> {
+        self.compile_with(lower_trusted)
     }
 
     /// 検査が通れば、`lower` で IR を作る。パスの順番は `eml_core_ir` と `eml_lir` だけが知るので、IR を作る関数を
@@ -254,11 +254,11 @@ impl Session {
     /// `compile`の結果から、ネイティブのコードが断る形を誤りにする。形ごとに E0004 を1つ、エントリの`main`の名前に置く
     /// (docs/spec/native.md の「断る形」)。断る形があれば、プログラムは返さない。
     #[cfg(feature = "run")]
-    pub fn compile_native(&self) -> Compiled<eml_lir::Program> {
+    pub fn compile_native(&self) -> Compiled<eml_lir::Trusted> {
         let mut main_range = None;
         let mut compiled = self.compile_with(|input| {
             main_range = Some(input.hir[input.entry].name_range);
-            eml_core_ir::lower(input)
+            lower_trusted(input)
         });
         let (Some(program), Some(range)) = (&compiled.program, main_range) else {
             return compiled;
@@ -282,6 +282,15 @@ impl Session {
         compiled.program = None;
         compiled
     }
+}
+
+/// エンジンに渡すLIRを作るただ1つの関数。`Trusted::new`を呼ぶのはここだけにする。
+#[cfg(feature = "core")]
+pub(crate) fn lower_trusted(input: eml_core_ir::Input) -> eml_lir::Trusted {
+    let program = eml_core_ir::lower(input);
+    // SAFETY: 入力は誤りのない検査済みのプログラムで、LIRはコンパイラ自身のパイプラインが作る。verifierが確かめられない
+    // 「実行の前提」はこのパイプラインが守る (docs/spec/lir.mdの「エンジンの約束」)
+    unsafe { eml_lir::Trusted::new(program) }
 }
 
 /// 断る形の言い方。
@@ -371,8 +380,8 @@ pub fn repl_limits() -> Limits {
     }
 }
 
-/// `eml_rt` は vstd だけに依存したままにするため、OS に問い合わせるのはここである。`src/` の `unsafe` の呼び出しは、
-/// この関数と、bin の `interrupt` モジュールと `terminal.rs` の `stdout_width` の中だけに置く。
+/// `eml_rt`はvstdだけに依存したままにするため、OSに問い合わせるのはここである。`src/`の`unsafe`の呼び出しは、
+/// この関数、`lower_trusted`、binの`interrupt`モジュールと`terminal.rs`の`stdout_width`の中だけに置く。
 #[cfg(all(feature = "run", unix))]
 fn physical_memory() -> Option<usize> {
     // sysconf は名前のほかに前提を持たず、読めなければ -1 を返す

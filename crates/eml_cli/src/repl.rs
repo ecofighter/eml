@@ -256,7 +256,7 @@ impl Repl {
         // エントリから最初の呼び出しまでの extern と `root_set` が動く (docs/spec/repl.md の「割り込み」)
         let program = match input {
             Some(entry) if !has_errors(&diagnostics) => Some((
-                eml_core_ir::lower(eml_core_ir::Input {
+                crate::lower_trusted(eml_core_ir::Input {
                     hir: &checked.program,
                     typed: &checked.typed,
                     entry,
@@ -341,7 +341,7 @@ impl Repl {
             .collect()
     }
 
-    fn run(&mut self, program: &eml_lir::Program, shown: Option<Shown>) -> Outcome {
+    fn run(&mut self, program: &eml_lir::Trusted, shown: Option<Shown>) -> Outcome {
         // `load` の前につなぐので、つなげなければ `Machine` に何も書かない。入力は `Accepted` のときだけ受け付けるので、
         // セッションのモジュールの並びも変わらない
         let linked = match self.linker.link(&program.c_functions, &program.c_handles) {

@@ -21,6 +21,7 @@ mod prim;
 pub mod reuse;
 pub mod syntax;
 mod text;
+mod trusted;
 pub mod unwind;
 mod variants;
 mod verify;
@@ -35,6 +36,7 @@ pub use pretty::{pretty, pretty_with_positions};
 pub use prim::{Immediates, Prim, PrimRow, Step};
 pub use reuse::reuse;
 pub use text::parse;
+pub use trusted::Trusted;
 pub use verify::{verify, verify_borrowed, verify_flattened, verify_lowered, verify_scopes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

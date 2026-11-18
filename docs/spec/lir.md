@@ -953,7 +953,11 @@ LIRを実行する[VM](vm.md)とネイティブのコードは、次の意味に
 
 verifierは命令ごとに所有、Repr、印を確かめるが、値を作ったときの配置を追わず、`poly`の印が指す物体のKindも確かめられない (上の「Kind の印の検査」)。externの引数は、Reprと印でしか比べない。そのため、verifierを通ることは、verifierが確かめる規則を保証するが、上の前提は保証しない。
 
-エンジンのエントリ (`eml_vm::execute`、`Machine::load`、`eml_native::execute`、`NativeMachine::load`) はRustの安全な関数である。読み込みは、どのビルドでもverifierが確かめることを確かめ、verifierが拒むプログラムを断る (上の「verifier」)。残りの前提を約束するのは呼ぶ側である。`eml_cli`は、検査を通ったプログラムから自分で作ったLIRだけを渡す。テストは手書きのLIRを渡し、まず検査モードで実行する。verifierが拒むIRを読み込めるのは`eml_vm`のテストだけで、開発だけのfeature `testing`の後ろにある確かめない読み込み (`unsafe fn load_unverified`) を使う ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)。`Machine`に続けて読み込むときの約束は、[VM](vm.md)の「追記」にある。
+エンジンのエントリが受け取る約束と、残りの前提を約束するのが誰かは、次の「エンジンの約束」にある。読み込みは、どのビルドでもverifierが確かめることを確かめ、verifierが拒むプログラムを断る (上の「verifier」)。verifierが拒むIRを読み込めるのは`eml_vm`のテストだけで、開発だけのfeature `testing`の後ろにある確かめない読み込み (`unsafe fn load_unverified`) を使う ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)。`Machine`に続けて読み込むときの約束は、[VM](vm.md)の「追記」にある。
+
+## エンジンの約束
+
+エンジンはプログラムを`eml_lir::Trusted`としてだけ受け取る。`Trusted`は`Program`を包み、作る道は`unsafe fn Trusted::new`だけである。この関数の約束 (P1) は、渡す`Program`が上の「実行の前提」のうちverifierが確かめられない前提をすべて満たすことである。`Trusted`は中の`Program`を書き換える道を持たない。テストの外で`Trusted`を作るのは`eml_cli`の`Session`だけで、検査を通ったプログラムから自分のパイプラインで作ったLIRだけを包む ([アーキテクチャ](../implementation/architecture.md)の「CLI と lib API」)。テストは手書きのLIRを包み、まず検査モードで実行する。
 
 ## 実行時エラー
 

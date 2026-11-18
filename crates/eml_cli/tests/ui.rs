@@ -117,7 +117,7 @@ fn snapshot_settings(path: &Path, suffix: &str) -> insta::Settings {
 
 /// 診断のエラーなしでコンパイルし、LIR と、入力のファイルを置くディレクトリと、診断の表示を返す。入力のファイルは
 /// テストの隣に置く (docs/implementation/testing.md の「UI テスト」)。
-fn compile(path: &Path, suffix: &str) -> (eml_lir::Program, PathBuf, String) {
+fn compile(path: &Path, suffix: &str) -> (eml_lir::Trusted, PathBuf, String) {
     let session = load(path, suffix);
     let compiled = session.compile();
     let stderr = render(&compiled.diagnostics, session.files());
