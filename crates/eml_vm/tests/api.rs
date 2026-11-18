@@ -12,7 +12,7 @@ use eml_sched::park::ParkFactory;
 use eml_sched::{Control, Limits, Stop};
 use eml_vm::{CodeBase, Entry, Finished, Machine, Normal, Ready, RunConfig, RuntimeError, Task};
 
-use crate::common::parse;
+use crate::common::trusted;
 
 fn sync<T: Sync>() {}
 
@@ -140,7 +140,7 @@ fn a_seeded_run_of_one_task_does_not_preempt() {
     let run = |sched| {
         let config = RunConfig::default().with_debug_heap(true).with_sched(sched);
         let (host, _) = eml_vm::capture_host(Default::default());
-        eml_vm::execute(&parse(COUNT), &eml_vm::Linked::default(), &config, host).unwrap()
+        eml_vm::execute(&trusted(COUNT), &eml_vm::Linked::default(), &config, host).unwrap()
     };
     let sequential = run(Sched::Sequential);
     assert_eq!(sequential.preemptions, 0);
@@ -159,8 +159,8 @@ fn an_interrupted_control_stops_at_the_first_safepoint() {
             .with_debug_heap(debug_heap)
             .with_control(control);
         let (host, _) = eml_vm::capture_host(Default::default());
-        let error =
-            eml_vm::execute(&parse(COUNT), &eml_vm::Linked::default(), &config, host).unwrap_err();
+        let error = eml_vm::execute(&trusted(COUNT), &eml_vm::Linked::default(), &config, host)
+            .unwrap_err();
         assert_eq!(error.to_string(), "interrupted in `main`");
         assert!(error.interrupted());
     }
@@ -182,7 +182,7 @@ fn main() -> unit {
   return u.3
 }
 ";
-    let program = parse(text);
+    let program = trusted(text);
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
     let control = Arc::new(Control::new(Limits::default()));
     control.interrupt();
@@ -260,7 +260,7 @@ fn an_exit_is_written_to_the_end_field() {
             .with_control(Arc::clone(&control));
         let (host, _) = eml_vm::capture_host(Default::default());
         let finished =
-            eml_vm::execute(&parse(EXIT), &eml_vm::Linked::default(), &config, host).unwrap();
+            eml_vm::execute(&trusted(EXIT), &eml_vm::Linked::default(), &config, host).unwrap();
         assert_eq!(finished.exit, Some(3));
         assert_eq!(control.exit_code(), Some(3));
     }
@@ -279,13 +279,12 @@ fn second() -> unit {
     let control = Arc::new(Control::new(Limits::default()));
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host);
     let first = machine
-        .load(&parse(EXIT), &eml_vm::Linked::default())
+        .load(&trusted(EXIT), &eml_vm::Linked::default())
         .unwrap();
-    let second = machine
-        .load(&parse(quiet), &eml_vm::Linked::default())
-        .unwrap();
-    assert_eq!(machine.run(first.entry).unwrap().exit, Some(3));
-    assert_eq!(machine.run(second.entry).unwrap().exit, None);
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let second = unsafe { machine.extend(&trusted(quiet), &eml_vm::Linked::default()) }.unwrap();
+    assert_eq!(machine.run(first).unwrap().exit, Some(3));
+    assert_eq!(machine.run(second).unwrap().exit, None);
     assert_eq!(control.exit_code(), None);
     machine.close().unwrap();
 }
@@ -329,13 +328,12 @@ fn second() -> unit {
     let first = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
-    let second = machine
-        .load(&parse(quiet), &eml_vm::Linked::default())
-        .unwrap();
-    let finished = machine.run(first.entry);
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let second = unsafe { machine.extend(&trusted(quiet), &eml_vm::Linked::default()) }.unwrap();
+    let finished = machine.run(first);
     std::fs::remove_dir_all(&root).unwrap();
     assert_eq!(finished.unwrap().exit, Some(3));
-    assert_eq!(machine.run(second.entry).unwrap().exit, None);
+    assert_eq!(machine.run(second).unwrap().exit, None);
     machine.close().unwrap();
     assert_eq!(out.contents(), "exiting\n");
 }
@@ -448,13 +446,15 @@ main () = Async.run (fn () -> Async.sleep_ms 50)
     let driver = DeadlineRecorder::default();
     let calls = Arc::clone(&driver.calls);
     let (host, _) = eml_vm::capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `DeadlineRecorder`は操作を受け付けないので、完了も貸された記憶への書き込みもない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap();
     let calls = calls.lock().unwrap();
@@ -487,7 +487,7 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
                 .with_sched(Sched::Sequential)
                 .with_doorbell(doorbell);
             let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
-            machine.run(loaded.entry)
+            machine.run(loaded)
         })
     };
     let has_monitor = || {
@@ -528,11 +528,16 @@ type RealRun = (
 /// その文字列が出たときに別のスレッドが割り込む。どの run も、3 秒たって終わらなければ見張りのスレッドが割り込むので、
 /// 止まったテストも待ち続けない。
 fn run_real(src: &str, interrupt_on: Option<&'static str>) -> RealRun {
-    run_real_on(src, interrupt_on, None)
+    // SAFETY: R-3: driverを渡さないので、`Machine`が自分で作る
+    unsafe { run_real_on(src, interrupt_on, None) }
 }
 
-/// `run_real` を、`driver` があればその driver で流す。
-fn run_real_on(
+/// `run_real`を、`driver`があればそのdriverで流す。
+///
+/// # Safety
+///
+/// R-3: `driver`は`Machine::with_driver`の約束を守る (docs/spec/lir.mdの「エンジンの約束」)。
+unsafe fn run_real_on(
     src: &str,
     interrupt_on: Option<&'static str>,
     driver: Option<Box<dyn eml_rt::IoDriver>>,
@@ -545,7 +550,8 @@ fn run_real_on(
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host).with_clock(Clock::Real);
     if let Some(driver) = driver {
-        machine = machine.with_driver(driver);
+        // SAFETY: R-3: 呼ぶ側が`driver`について約束する
+        machine = unsafe { machine.with_driver(driver) };
     }
     let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     let (done, finished) = mpsc::channel::<()>();
@@ -562,7 +568,7 @@ fn run_real_on(
             }
         }
     });
-    let result = machine.run(loaded.entry);
+    let result = machine.run(loaded);
     let closed = machine.close();
     let elapsed = start.elapsed();
     drop(done);
@@ -746,7 +752,8 @@ fn a_real_read_after_a_finished_probe_does_not_wait() {
         inner: eml_io::RealDriver::new().unwrap(),
         calls: Arc::clone(&calls),
     };
-    let (out, result, closed, _) = run_real_on(&src, None, Some(Box::new(driver)));
+    // SAFETY: R-3: `ProbeRecorder`は操作と完了を`RealDriver`にそのまま渡す
+    let (out, result, closed, _) = unsafe { run_real_on(&src, None, Some(Box::new(driver))) };
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert!(out.ends_with("hello\n"), "{out}");
@@ -923,7 +930,9 @@ main () = Async.run (fn () ->
   Net.close (Async.await t))
 ";
     let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
-    let (out, result, closed, _) = run_real_on(src, Some("waiting"), Some(Box::new(driver)));
+    // SAFETY: R-3: 名前の解決だけを差し替えた`RealDriver`である
+    let (out, result, closed, _) =
+        unsafe { run_real_on(src, Some("waiting"), Some(Box::new(driver))) };
     let error = result.unwrap_err();
     assert!(error.interrupted(), "{error:?}");
     closed.unwrap_or_else(|error| panic!("{error}"));
@@ -946,7 +955,8 @@ main () = Async.run (fn () ->
     | None -> println \"None\")
 ";
     let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
-    let (out, result, closed, _) = run_real_on(src, None, Some(Box::new(driver)));
+    // SAFETY: R-3: 名前の解決だけを差し替えた`RealDriver`である
+    let (out, result, closed, _) = unsafe { run_real_on(src, None, Some(Box::new(driver))) };
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "None\n");

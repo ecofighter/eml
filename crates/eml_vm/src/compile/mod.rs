@@ -11,7 +11,7 @@ use std::sync::Arc;
 use eml_cabi::Linked;
 use eml_extern::{CFunction, CHandleId, CParam, CRet, Extern, RuntimeEntry};
 use eml_lir::unwind::Unwinds;
-use eml_lir::{FnIdx, Program, Rhs, Stmt};
+use eml_lir::{FnIdx, Program, Rhs, Stmt, Trusted};
 use eml_rt::{Control, Mode};
 
 use crate::code::{
@@ -56,13 +56,28 @@ impl<M: Mode> CodeBase<M> {
             entries: None,
             c_functions: Vec::new(),
             c_handles: Vec::new(),
+            spent: false,
         }
+    }
+
+    /// 空の表にプログラムを読み込み、エントリの関数の番号を返す。関数を持つ表に足すのは`extend`で、`load`はどのビルドでも
+    /// panicする。どの関数も変換するので、名前が同じ関数が同じコードであるという約束は要らない (docs/spec/vm.mdの「追記」)。
+    /// ほかは`extend`と同じである。
+    pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<u32, CompileError> {
+        self.refuse_spent();
+        assert!(
+            self.functions.is_empty(),
+            "internal error: load on a machine that has code; use extend"
+        );
+        self.load_verified(program, linked)
     }
 
     /// プログラムを追記し、エントリの関数の番号を返す。すでにある名前の関数は前の番号を使い、ない名前の関数だけを変換して
     /// 末尾に足す。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭を引くので、関数の先頭の位置が決まる前に
     /// 呼び出しを書ける。名前が同じ関数はいつも同じコードになるので (docs/spec/vm.md の「追記」)、debug ビルドでは
-    /// すでにある名前の関数も変換し直して比べる。誤りを返した後の表は途中まで書いたものなので、使い続けない。
+    /// すでにある名前の関数も変換し直して比べる。表を書き始めた後の誤りは表を使えなくし、この後の読み込みと実行は
+    /// どのビルドでもpanicする。何も書く前の誤り (`Invalid`、`MultiValueEntry`、Cの表の`Mismatch`) の後は、
+    /// 表を使い続けてよい。
     ///
     /// `linked` は、このプログラムの C の表をつないだ結果である。ポインタが組にした宣言を解決したものであることは
     /// `Linked::new` の約束で、ここでは `fits` でその宣言をプログラムの表と比べる。合わないのは呼び手の誤りなので、
@@ -71,7 +86,21 @@ impl<M: Mode> CodeBase<M> {
     /// `linked`を比べた後に、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムは
     /// `CodeBase`に何も書かずに`Invalid`で断る。たどるのは変換する関数だけで、debugのビルドでは変換し直す関数もたどる。プログラム全体の規則は
     /// プログラム全体に当てる (docs/spec/vm.mdの「追記」)。
-    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<u32, CompileError> {
+    ///
+    /// # Safety
+    ///
+    /// P2: `program`は、表がすでに持つ関数のプログラムと同じセッションから作ったものである。releaseのビルドは、名前が
+    /// 同じ関数を変換し直さずに前のコードを使う。Cの関数とハンドルの型の表は約束に入らない。どのビルドでも`c_links`が
+    /// 何も書く前に比べ、違えば`Mismatch`で断る (docs/spec/lir.mdの「エンジンの約束」)。
+    pub unsafe fn extend(
+        &mut self,
+        program: &Trusted,
+        linked: &Linked,
+    ) -> Result<u32, CompileError> {
+        self.load_verified(program, linked)
+    }
+
+    fn load_verified(&mut self, program: &Trusted, linked: &Linked) -> Result<u32, CompileError> {
         self.load_with(program, linked, |code| {
             eml_lir::unwind::verified_for(program, |index| code.walked(program, index))
                 .map_err(CompileError::Invalid)
@@ -85,7 +114,8 @@ impl<M: Mode> CodeBase<M> {
     /// # Safety
     ///
     /// プログラムは、呼ぶテストがわざと起こす誤りを除いて、verifierが確かめる規則をすべて含む実行の前提を満たす
-    /// (docs/spec/lir.mdの「実行の前提」)。テストは、VMの見張りと検査モードだけを守りとして受け入れる。
+    /// (docs/spec/lir.mdの「実行の前提」)。テストは、VMの見張りと検査モードだけを守りとして受け入れる。関数を持つ表に
+    /// 読み込むときは、`extend`のP2も約束する。
     #[cfg(feature = "testing")]
     pub unsafe fn load_unverified(
         &mut self,
@@ -125,6 +155,7 @@ impl<M: Mode> CodeBase<M> {
         linked: &Linked,
         tables: impl FnOnce(&Self) -> Result<Vec<Option<Unwinds>>, CompileError>,
     ) -> Result<u32, CompileError> {
+        self.refuse_spent();
         assert!(
             linked.fits(&program.c_functions, &program.c_handles),
             "the linked calls and dtors line up with the C tables of the program"
@@ -137,6 +168,29 @@ impl<M: Mode> CodeBase<M> {
             });
         }
         let c_links = self.c_links(program, linked)?;
+        // 書く途中のpanicも表を途中まで書いたまま残すので、書き終えるまでは使えないものとしておく
+        self.spent = true;
+        let written = self.write(program, &unwinds, c_links);
+        self.spent = written.is_err();
+        written
+    }
+
+    /// 表を書き始めた後の誤りで残る表は、前の読み込みのものでも今のプログラムのものでもないので、使い続けない
+    /// (docs/spec/vm.mdの「追記」)。
+    pub(crate) fn refuse_spent(&self) {
+        assert!(
+            !self.spent,
+            "internal error: a machine is used after a failed load wrote part of its code"
+        );
+    }
+
+    /// `c_links`の後の、表に書く読み込みの半分。
+    fn write(
+        &mut self,
+        program: &Program,
+        unwinds: &[Option<Unwinds>],
+        c_links: CLinks,
+    ) -> Result<u32, CompileError> {
         let known_c = self.c_functions.len();
         let known_handles = self.c_handles.len();
         self.c_functions.extend(c_links.new_functions);
@@ -157,6 +211,7 @@ impl<M: Mode> CodeBase<M> {
             entries,
             c_functions,
             c_handles,
+            spent: _,
         } = self;
         let mut pool = Constants::new(constants, index, region, control);
         let strings = &program.strings;
@@ -186,7 +241,7 @@ impl<M: Mode> CodeBase<M> {
         if result.is_ok() && cfg!(debug_assertions) {
             result = check_known(
                 program,
-                &unwinds,
+                unwinds,
                 &links,
                 functions,
                 known,

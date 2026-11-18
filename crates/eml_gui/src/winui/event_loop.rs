@@ -35,6 +35,9 @@ pub(super) struct Shared {
     pub(super) known: RefCell<HashMap<Id, Value>>,
     /// `Application::Start`が戻った。その後はWinUIのオブジェクトに触れない。
     pub(super) exited: Cell<bool>,
+    /// XAMLの`Application`が動いている。`OnLaunched`から`Application::Start`が戻るまでで、WinUIのオブジェクトはこの間に
+    /// だけ作って触れる。
+    pub(super) live: Cell<bool>,
     dispatcher: RefCell<Option<DispatcherQueue>>,
     timer: RefCell<Option<(DispatcherQueueTimer, EventRevoker)>>,
     /// callbackが積んだイベントのための`step`を、もう予約した。
@@ -60,6 +63,7 @@ impl Shared {
             }),
             known: RefCell::new(HashMap::new()),
             exited: Cell::new(false),
+            live: Cell::new(false),
             dispatcher: RefCell::new(None),
             timer: RefCell::new(None),
             nudged: Cell::new(false),
@@ -177,6 +181,7 @@ impl Shared {
         }
         // 最初の`step(Woken)`は、それより前に鳴った起こしもまとめて扱う
         self.bell.rang.store(false, Ordering::Release);
+        self.live.set(true);
         self.drive(Reason::Woken);
     }
 
@@ -261,6 +266,7 @@ impl Drop for Running<'_> {
         shared.dispatcher.borrow_mut().take();
         shared.step.set(None);
         shared.deferred.set(None);
+        shared.live.set(false);
         shared.exited.set(true);
     }
 }

@@ -1,0 +1,160 @@
+# Appendix 00: decisions of the runtime stage group
+
+- Created: 2026-11-17. Committed by `Start engine-trust` together with 01-design.md and the eleven plan files `docs/plans/2026-11-17-<stage>.md`.
+- Precedence: this file wins over 01-design.md and over every plan of the group; it also wins over everything the group supersedes (the 2026-11-11 jit group's appendix `docs/plans/2026-11-11-jit/` and its plans `2026-11-11-jit-tasks.md`, `2026-11-11-jit-repl.md`, all deleted by `Start engine-trust`, and the never-committed `2026-11-17-sched-exec.md` and `2026-11-11-jit/11-tasks.md`). A later stage that changes a decision adds a dated entry to §D in its first commit; it does not edit §A or §B.
+- The group: `engine-trust`, `async-root`, `par-total`, `task-limits`, `std-par`, `native-checked`, `sched-core`, `jit-tasks`, `jit-repl`, `vm-retire`, `sched-proofs`, in that order (01 §1). `native-aot` and `native-inline` are roadmap items, not in the group. This directory is deleted at the Close of `sched-proofs`, the group's last stage (roadmap 「進め方」 step 8).
+- Language: the plans and appendices are English (UJ-1, UJ-16). `docs/`, code comments and CLAUDE.md are Japanese, drafted in English and translated with PLaMo (`form: plain`), with no space between Japanese and Latin characters or inline code (CLAUDE.md).
+
+## A. User decisions
+
+Dates are 2026-11-17 unless stated. "Superseded" entries are kept so that nobody relitigates them; the entry that supersedes them is named.
+
+| ID | Decision | What it settles | State |
+|---|---|---|---|
+| UJ-1 | One Fable designer, a Sonnet adversarial review and a separate Fable soundness and performance verification; the plans are in English | the design process | in force (restated by UJ-16) |
+| UJ-2 | Split the old `jit-tasks` into `sched-exec` (VM only, 18 units) then `jit-tasks` (native, 19 units) | the old stage list | superseded by UJ-17 (no `sched-exec`) |
+| UJ-3 | `rt-concurrent-proofs` stays deferred; review condition "`native-par` starts; or generated code gets a fourth heap-store site or an inline shared-count or cross-worker operation; or TSan / Miri finds a T0 / T14 error"; a placement test pins the three heap-store sites and a CLIF pin | deferral of the concurrent proof | restated by UJ-13 and UJ-17 (condition of 01 §14.4) |
+| UJ-4 | The design that left the main worker's `Park` unserved during a nested `Async.run` is not accepted; redesign | GUI `Park` during nested runs | superseded by UJ-6, then met by UJ-10 (no nested run exists) |
+| UJ-5 | Amendments of the shared layer: the limit table in `eml_sched`; no re-raise requests; the `reenter` entry form; the end of a native run on the calling thread and `Options.masked` deleted; `Policy::MEMORY` as a method; `eml_vm` keeps `eml_io` only as a dev-dependency; a `par` child's fatal returns `Err` through `par`; the VM gate +0.5 % on paired medians through `bench/run-gate.sh` with three task rows | the shared layer of the old design | amended by UJ-11, UJ-14, UJ-17 (01 §21 A-5 in §B) |
+| UJ-6 | Green threads: chose "strands" (tasks are heap continuations; a stack is held only while running or by a wait that holds frames; nothing started migrates) | task execution natively | reversed by UJ-10 |
+| UJ-7 | Accepted the costs of UJ-6 (stack switching asm, three VM differences, 1 GiB per waiting `Async.run`, park-on-join in `native-par`), plus the multicore.md correction, the `par-steal` deque note and a Fable whole-branch review before `jit-tasks`' Close | costs of strands | reversed by UJ-10, except the Fable whole-branch review at `jit-tasks`' Close, which is kept |
+| UJ-8 | Reconsider the runtime fundamentally, anticipating `par` parking, a native data-parallel library and the API; all scheduled stages may be removed or replaced; aggressive ideas are tried (hiding `par`, migrating encapsulated jobs) | the scope of the redesign | done (its results are UJ-9..UJ-17) |
+| UJ-9 | Adopt E1 (a join owns its job; idle workers claim the oldest open job under the slot lock; no Chase-Lev deque; joins wait in place natively) and E3 (no block written by several threads; `std/Par` stitches chunk results with one pure row) | 01 §3 E1, E3 | in force |
+| UJ-10 | Adopt E2 (`main` is the root task; `Async.run` removed; no wait holds frames but a join; native code has no strands). Hiding `par` is not adopted. E4 rejected as model (the task-isolation invariant is written in spec; stealing frameless tasks is a later item). The VM is the oracle, not a parallel speed target | 01 §3 E2; reverses UJ-6, UJ-7 | in force |
+| UJ-11 | Adopt SC-1 (a runtime error in a `par` child ends the run), SC-2 (an untaken right child runs in its parent's frames), SC-3 (two-level spine split in `std/Par`), SC-4 (a too-small calling thread gets its own run error); "dive deeper and more aggressively" | 01 §3 SC-1..SC-4 | in force (SC-2 natively only, UJ-17) |
+| UJ-12 | Help-on-join is a later item; review condition: speed-up below 0.8 N at N = 4 on a measured program | 01 §3 "Rejected and closed" | in force |
+| UJ-13 | The 8 MiB main-stack cap applies on Linux only; `rt-concurrent-proofs` stays deferred under the restated condition, with a CLIF pin on the local-range count compare and a repeated native N = 8 stress run | 01 §11.1, §11.8, §14.4 | in force |
+| (note) | Interim stage order "engine-trust -> async-root -> par-claim -> std-par -> sched-exec -> jit-tasks -> jit-repl -> native-aot -> native-inline" | - | superseded by UJ-17 (01 §1) |
+| UJ-14 | Adopt SC-5 (total children), SC-6 + SC-8 (children at `Stops`; no soft memory limit), SC-7 (a taken join blocks), SC-9 (one worker loop; `Seeded` permutes entries). Dropping `transfer_back` is rejected | 01 §3 SC-5..SC-9 | in force (SC-7, SC-9 natively only, UJ-17) |
+| UJ-15 | Adopt JIT-only: native is the default when `jit-repl` closes; `native-checked` gives native code the checked mode; `vm-retire` behind a precondition gate. "Dig deeper: optimise the crate structure, add and migrate proofs, aim for a simpler structure" | 01 §3 JIT-only, §12.2 | in force |
+| UJ-16 | Next steps: fold the verification into the design, a Fable check, then Opus writes the executable plan of `engine-trust` and design-level plans of the other stages, then Fable verifies the plans | this group's plan files | in force |
+| UJ-17 | Approve the five decisions with the fifth verification's changes: (1) the VM's scheduler is not reshaped or moved; the new scheduler is written once in `eml_sched` for native code (`par-claim`, `vm-entries`, `sched-exec` dropped; the verdict and `running` in the verified kernel; `sched-core` about 15 units; every test file gets a fate); (2) `native-checked` before the native scheduler (the audit proof restated, the four audit-scheme fixes); (3) end-state crates: `eml_vm` deleted, `eml_rows` merged into `eml_nrt` by a per-file map, `eml_cabi` and `eml_sched` kept, new Verus crate `eml_steps`; (4) proofs: `Open`, `plan::next`, `limit::hit`, `idle::step`, `verdict::step` in `eml_steps`; `sched-proofs` for every N; `rt-concurrent-proofs` deferred; (5) the profiler cut and the dropped meta items | 01 as a whole (§1, §10..§15) | in force |
+| UJ-18 (2026-11-18) | After the Fable verification of the plans: (F-1) close in `engine-trust` the runtime layers' safe `pub` items that reach undefined behaviour (`eml_sched::cells`, `eml_rows`, the non-entry `pub` items of `eml_nrt`, `eml_cabi`, `eml_vm`'s re-exported scheduler types): they become `unsafe fn` or `pub(crate)`, so the guarantee covers every non-test crate (the cut is designed separately and integrated into the engine-trust plan); (F-2) option B: `pub unsafe fn Machine::with_driver`, whose promise is "a read completion `Ok(n)` means `n <= cap` bytes were written from the lent pointer; one completion per pending key; no write after the completion"; (F-6) approve D-1: §C is filled before the plans are committed, over every file of the old appendix, and `Start engine-trust` deletes `docs/plans/2026-11-11-jit/` and the two old jit plans; (F-5.4) the orchestrator discards the four uncommitted plan files of the working tree when it installs these files | `engine-trust`'s scope (01 §4 widened); §C; §D D-1 | in force |
+
+No decision is open (01 §24, as widened by UJ-18). The defaults of 01 §22 (U-1..U-9) are settled by the stages named there.
+
+## B. Amendments against earlier settled decisions ("entry: old -> new")
+
+From 01 §21, restated without the locations that this group deletes. "Old" names the decision as it stood; "new" is what holds now. Every entry is approved by the listed decisions.
+
+| # | Entry | Old | New | Approved by |
+|---|---|---|---|---|
+| A-1 | Design process | one Fable designer, Sonnet review, Fable verification; plans in English | unchanged | UJ-1, UJ-16 |
+| A-2 | The old stage split | `sched-exec` (VM only, 18 units) then `jit-tasks` (19 units) | no `sched-exec`; `sched-core` (15) writes the scheduler new; `jit-tasks` (16) | UJ-17 |
+| A-3 | `rt-concurrent-proofs` | deferred; condition "`native-par` starts; or ..." | deferred; the condition of 01 §14.4; the pins and the N = 8 stress run of 01 §11.8 | UJ-13, UJ-17 |
+| A-4 | GUI `Park` during a nested run | redesign so the `Park` is served during a nested run | met by having no nested run | UJ-10 |
+| A-5 | The shared layer of the old design | limit table in `eml_sched`; no re-raise requests; `Options.masked` deleted; `Policy::MEMORY` as a method; `eml_vm` keeps `eml_io` as a dev-dependency; a `par` child's fatal returns through `par`; VM gate +0.5 % with three task rows through `bench/run-gate.sh` | the limit table is `eml_steps::limit::hit`; no re-raise of any kind; `Options.masked` deleted; no `Policy::MEMORY` or `memory`; `eml_vm`'s dependencies are not changed; a child's error ends the run; the VM gate is `bench/run.sh` +0.5 % in stages 2-4 only | UJ-11, UJ-14, UJ-17 |
+| A-6 | Strands | strands; amended N-35 / N-11; three VM differences; 1 GiB per waiting `Async.run`; park-on-join in `native-par`; the `par-steal` deque note | withdrawn; the Fable whole-branch review at `jit-tasks`' Close is kept | UJ-10 |
+| A-7 | The `raw` entry form and the `reraise` slot | one `raw` entry; one slot | neither exists | UJ-10, UJ-14 |
+| A-8 | native.md 「目的と範囲」: "the VM is the reference engine for checking and development" | two engines | one engine; the sentence is deleted at `vm-retire`; "frame pointers and name-keyed symbols are kept for a future profiler" stays | UJ-15 |
+| A-9 | The list of native differences from the VM (spec/native.md 「VMとの違い」) | the old difference list | the two items of 01 §11.7 until `vm-retire`, then no list | UJ-15, UJ-17 |
+| A-10 | The rules "no stack switching inside eml code" and "asm is only the entry stubs" (amended for strands) | as amended for stack switching | the originals: no stack switching inside eml code; no asm but the stubs (01 G-10) | UJ-10 |
+| A-11 | "Native runs fast mode only" | native is fast mode only | native has checked mode from `native-checked` | UJ-15, UJ-17 |
+| A-12 | `stack_limit` written only by `limits::set` | - | unchanged (01 S-14, G-16) | - |
+| A-13 | Native stacks | stacks of `Options.stack` per strand | 01 §11.1; the 4 MiB condition as a run error; the 8 MiB cap on Linux only | UJ-11, UJ-13 |
+| A-14 | Stage structure of the old contract | two stages; `eml_vm` keeps `eml_io` as a dev-dependency | 01 §1 | UJ-17 |
+| A-15 | Profiler hooks | task attribution written at each native entry | H-1..H-7 of 01 §15.2 | UJ-17 |
+| A-16 | `Seeded` natively | refused natively | runs natively | UJ-14 |
+| A-17 | `jit-repl`'s moves | session thread; three moves (`c_links`, `renumbered`, recovery) | session thread unchanged; the three are written in place (`eml_nrt/src/rows/blocking.rs`, `eml_sched/src/recover.rs`) | UJ-17 |
+| A-18 | The previous design of `sched-exec` / `jit-tasks` and its plan files | the design and its plans | replaced by 01; the plans are written from it; the `sched-exec` plan file is never committed | UJ-16, UJ-17 |
+| A-19 | roadmap 「段の列」 | `jit-tasks`, `jit-repl`, `engine-trust`, `native-aot`, `native-inline`, `par-steal`, `std-par`, `native-par` | 01 §1; `par-steal` and `native-par` deleted; `engine-trust` first | UJ-9, UJ-12, UJ-17 |
+| A-20 | roadmap `jit-tasks` text | moves into `eml_sched` / `eml_rows`; native `Async.run` nesting; `BuriedRun`; `par` on one worker per parent; "`eml_vm`は`eml_io`への依存を外し" | 01 §10 and §11 | UJ-10, UJ-17 |
+| A-21 | roadmap 「その後の項目」 | - | closed: 「`par` の右の子を置く粒度」; split: 「協調的な配置のVerusの証明」; restated: `rt-concurrent-proofs`, 「ネイティブのプロファイラ」 (three items), 「実行時エラーの backtrace」, 「workerの間でのタスクの移動」 (stealing unstarted, then ready frameless tasks), `--stack-size` (the option of D-VR-4); new: help-on-join, `Raw` lending, `concat` moves, the `<never e>` bound, "a child result without a handler", the CAS claim, `perf` map, tracing, AOT debug info, `:stats`; deleted at `vm-retire`: 「JIT (投機的)」, the max-bytes item. The text is in the engine-trust plan, Appendix R (`git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`) | UJ-12, UJ-17 |
+| A-22 | stdlib.md 「`Std.Async`」「起動」「メインのworker」; async.md decision 2; multicore.md 「`Async.run` と入れ子」 | `Async.run` nests; error at `run_result`'s position | D-AR-1..D-AR-5; an uncaught failure names `main` | UJ-10 |
+| A-23 | stdlib.md 「`Std.Par`」「`compute`」; core-ir.md 「`par` の子の中断」; lir.md (`par` as an unwind point, `child_abort`); vm.md 「`par` の fork と join」「子の誤り」; multicore.md 「`par` の意味」; types.md E2020 | `<never e>` children; aborts re-raised leftmost; errors recorded at the join, left first | SC-5, SC-1; "first written" at N >= 2 | UJ-11, UJ-14 |
+| A-24 | vm.md 「深さ」「タスクの上限」「上限と割り込み」; stdlib.md 「タスクの上限」 | `class.inherit()`; `soft_bytes` | SC-6, SC-8 | UJ-14 |
+| A-25 | multicore.md 「データ並列での使い勝手」, 「`par` の印付け」 | range primitives; rc-1 elements unmarked; halving | D-SP-1..D-SP-6 | UJ-9, UJ-11 |
+| A-26 | multicore.md decision 14, 「workerのループ」, 「`par` の子」, 「テスト」, 「未決」, 「1つの worker での実行」, constraints 5-7; vm.md 「タスクとスケジュール」 | Chase-Lev deque; helping natively; `Seeded` preempts | 01 §2 (in runtime.md; vm.md's text stays until `vm-retire`) | UJ-9, UJ-14, UJ-17 |
+| A-27 | multicore.md decision 6, 「VM も並列にする理由」; docs/future/native.md decisions | the VM is the reference and the only checked engine | JIT-only | UJ-15 |
+| A-28 | native.md 「並列の実行」, 「エントリ」, 「安全点」 (docs/future and docs/spec) | nested loops, helping, a `JmpBuf` per child; `ACTION_UNWIND` | 01 §11 | UJ-10, UJ-17 |
+| A-29 | native.md (new) 「検査モード」; object-model.md 「検査モード」「核の操作」 | checked mode is the VM's | 01 §9; operations are "audit, then body" | UJ-15, UJ-17 |
+| A-30 | object-model.md | - | the isolation invariant (01 §2.1); T18's `jmp` written by the stub only; 「evidence の3つの物体」 without fork evidence; the trust list without the soft threshold | UJ-10, UJ-14, UJ-17 |
+| A-31 | stdlib.md 「起動」 `max_depth`; testing.md `-- max-depth:` | a word-count depth limit | a stack size in bytes, at `vm-retire` | UJ-15 |
+| A-32 | testing.md 「seed で流す」, 「ネイティブで流す」, 「`eml_sched`のテスト」, 「`eml_vm` のテスト」 | `par/` and `async/` seeds; parity; `testing` features | `async/` seeds only; checked then fast native; no `testing` features (at `vm-retire`) | UJ-14, UJ-17 |
+| A-33 | vm.md | the VM's spec | docs/spec/runtime.md is born at `sched-core`; vm.md is merged into it and deleted at `vm-retire` | UJ-15, UJ-17 |
+| A-34 | architecture.md 「crate の依存関係」 and the per-crate sections; CLAUDE.md Overview / Commands / Architecture / Testing; `nix/crate-graph.sh` | `eml_vm`, `eml_rows`; `eml_rows` declares `tls` / `gui` / `gui-native`; `eml_sched` and `eml_vm` declare `testing` | 01 §13 (`eml_steps` at `sched-core`; the rest at `vm-retire`) | UJ-17 |
+| A-35 | crates/eml_rt/CLAUDE.md | "The runtime core under the VM" | "under native code"; a pointer to `eml_steps`' rule | UJ-17 |
+| A-36 | docs/future/verification.md 「順序」 item 2 | "LIR の verifier と VM の証明" | "the LIR verifier and the code generator"; `eml_steps` named as the precedent for the Kind solver's leaf crate | UJ-17 |
+| A-37 | docs/future/native.md, roadmap 「ネイティブのプロファイラ」 | positions on LIR statements; one item after `native-aot` | positions on LIR calls; D-MT-1; three items | UJ-17 |
+| A-38 | the engine-trust design doc (`engine-trust.md` under docs/future, deleted at the Close; now docs/spec/lir.md 「エンジンの約束」), roadmap `engine-trust` | after `jit-repl`; names the VM's entries and `load_unverified`; the guarantee covers the engine entries | first; the guarantee covers every non-test crate (UJ-18); the promise list moves into docs/spec/lir.md at `engine-trust`'s Close (§D D-3), and at `vm-retire` that text names the native entries only | UJ-15, UJ-17, UJ-18 |
+| A-39 | docs/implementation/status.md, benchmarks.md, docs/README.md 「読む順」 | two engines; `bench/run.sh` on the VM | one engine (at `vm-retire`) | UJ-15 |
+| A-40 | eml_extern `Extern::is_gui()` (planned) | to be added | not added | UJ-10 |
+
+## C. Carried from the 2026-11-11 jit group
+
+`Start engine-trust` deletes `docs/plans/2026-11-11-jit/` and the two old plan files (UJ-18; §D D-1). This deletion departs from roadmap 「進め方」 step 8, which deletes a shared appendix at the Close of its group's last stage: here that group's open stages (`jit-tasks`, `jit-repl`, `engine-trust`) are re-planned in this group. Before the deletion every rule and open item of every file of that appendix at 4a2954c1 (`00-decisions.md` §A-§G, `01-contract.md` §5.1, §5.4, §1.6's "Before any native stage closes" list (L216) and §8 N-1..N-43, `02`..`07`, `08-effects.md`'s G-1..G-18 and "Left for jit-tasks / jit-repl", `09-evidence-redesign.md`) that still binds a stage not yet closed was classified (planning, 2026-11-18): (a) stated in `docs/` (section named); (b) stated in 01 (ID); (c) superseded by §B (entry); (d) none of these, carried here. Rules that bound only the closed stages (`jit-rt`, `sched-split`, `jit-core`, `jit-apply`, `jit-externs`, `jit-effects`) and are implemented are class (a) by those stages' Closes and are not listed one by one. ET-1 re-checks that every (d) line still holds and that the (a) sections still exist; it does not reclassify.
+
+| Old item | Class | Where it holds now |
+|---|---|---|
+| 01 §5.1 "a function's code depends on its name only" | a | CLAUDE.md invariant "A function's name fixes its code and ABI"; spec/native.md 「関数の形」 |
+| 01 §5.1 `unsupported` is the single statement of rejection; N-20 | b | 01 §11.6 (deleted at JT-10) |
+| 01 §5.1 `--native` conflicts with `--debug-heap` / `--stats`; N-6 | c | A-11 (lifted by `native-checked`, D-NC-8) |
+| 01 §5.1 `RuntimeError` defined once; N-23 | a | spec/vm.md 「置き場所」 ("実行時エラーの型は1つだけ"; citation corrected at ET-1 with the user's approval, 2026-11-18) and `eml_sched::error` (CLAUDE.md `eml_sched` row) |
+| 01 §5.1 one memory-access module; N-15, N-31 | a | CLAUDE.md `eml_native` row ("memory access goes through mem.rs, the only module naming eml_rt"); D-NC-3 keeps it |
+| 01 §5.1 a std row is "table row + one `extern_rows!` line + std declaration"; `exit` / `panic` are the engine-specific exceptions; N-22 | a | CLAUDE.md `eml_rows` row and the externs invariant; becomes `rows!` at `vm-retire` (D-VR-5) |
+| 01 §5.4 native-aot: `eml_nrt` Cranelift-free; lowering generic over `Module`; symbol-only references; `Image` `repr(C)`; Win64 stub; N-13, N-14 | a | CLAUDE.md `eml_nrt` / `eml_native` rows; spec/native.md 「エントリ」「Image」「関数の形」 |
+| 01 §5.4 native-aot: the ABI identifier computed from `eml_rt`'s consts, `Native`'s offsets and the entry descriptor table | a | roadmap `native-aot` item ("識別子を`eml_rt`の定数からどう導くかは、この段で決める") |
+| 01 §5.4 native-aot: the C symbol `eml_run_pending` with its first C caller; N-8 | a | spec/native.md L18 (the reserved symbol), docs/future/native.md L47 |
+| 01 §5.4 native-aot: "called rows become direct calls (no address load)" | d | carried into the roadmap `native-aot` item by ET-1 (engine-trust plan Appendix R item 12; `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`) |
+| 01 §5.4 native-inline: the row-lowering table, the borrowed-parameter contract, the one memory module | a | spec/native.md 「行の下ろし方」; spec/lir.md 「extern の借用」; CLAUDE.md `eml_native` row |
+| 01 §5.4 native-par; 02 / 07 notes on `par-steal`, `native-par` | c | A-19 (both stages deleted) |
+| 01 L216 "Before any native stage closes": gates, census, stub and ABI tests on four targets, `RunStats` untouched unless listed, the `eml_rt` gate, native numbers re-measured | a | CLAUDE.md (gates; "A native stage's Close also replaces 「ネイティブの数値」"); testing.md 「CI」「テストの変更の運用」; crates/eml_rt/CLAUDE.md; the rejection-snapshot clause ends with the counting at JT-10 (b) |
+| N-1, N-2 crates and edges | a | architecture.md 「crate の依存関係」; `nix/crate-graph.sh` (replaces the CI grep) |
+| N-3, N-4, N-7, N-9, N-10, N-16, N-19, N-27, N-32..N-37 (entries, `Native`, failure protocols, shim rule, `tail` convention, stubs, frame records, symbols, flags) | a | spec/native.md 「エントリ」「`eml_enter`」「`eml_fatal`」「関数の形」; spec/object-model.md T18 |
+| N-5 per-worker state: generated-code fields in `Native` at their first reader; Rust-only state in the worker struct | b | 01 §11.1 (`Worker<M>`), §11.5 (no new `Native` field for limits) |
+| N-11, N-35 asm only in the stubs; no stack switching | b | G-10 (A-10) |
+| N-12 what a longjmp may cross | b | S-11, §11.3 |
+| N-17, N-18 safepoint and later stages changing service bodies only | b | 01 §11.5 |
+| N-21 the extern / task boundary and the partition test; old 00 E-7 / F.3 M-6 (the partition test's async clause changes when task rows get entries) | d | `jit-tasks` JT-6 changes `rows::the_rows_are_partitioned`'s task clause to "every task row has an entry" (kind 2, listed by JT-1) |
+| N-24 no generated code reads evidence fields | a | spec/native.md 「エフェクト」; fork evidence goes in `par-total` (c, A-23) |
+| N-25, N-26, N-28 native UI tests, census, timing | a | testing.md 「ネイティブで流す」「性能のテスト」; replaced at `vm-retire` (D-VR-3) |
+| N-29, N-30 the `eml_rt` gate; spec in the implementing commit | a | crates/eml_rt/CLAUDE.md; roadmap 「進め方」 |
+| N-38 each native stage's design carries a cost model, forgone optimisations and the native-speed trade-offs | d | binds `native-aot` and `native-inline`: carried into those roadmap items by ET-1 (one sentence each); 01 §17 is this group's cost model (b) |
+| N-39 native measurement is a record from the first native stage | a | CLAUDE.md (bench/native.sh; 「ネイティブの数値」); benchmarks.md |
+| N-40 the profiler roadmap item | c | A-37, A-21 |
+| N-41 the `testing` feature of `eml_sched`; old 00 U-12 | c | D-VR-5 (deleted at `vm-retire`, not `jit-tasks`) |
+| N-42 `stack_limit`'s one writer | b | S-14, G-16 (A-12) |
+| N-43 the native differences list; old 00 U-10 | c | A-9 |
+| old 00 U-13 JIT memory region | a | spec/native.md 「関数の形」 (`JIT_REGION`); architecture.md |
+| old 00 C-6 data symbol `c:<Module.f>` | b | 01 §11.6 (`DATUM_C`) |
+| old 00 C-7, C-11 usage errors under `--native` until `jit-tasks` | b | 01 §11.6 (JT-12 lifts them) |
+| old 00 E-1 `ACTION_RAISE` to `eml$raise` | b | 01 §11.5 |
+| old 00 E-4 REPL appending across loads | b | D-JR-1 |
+| old 00 E-5 one `WORKER_STACK`; the main worker's margin | b | 01 §11.1, §11.5 (`eml_nrt/src/limits.rs`); the VM's constant goes with `eml_vm` |
+| 02 U-5 the `detached` assert at the worker hand-back | b | S-17 |
+| 02 U-6, 06 U-5, 04 U-S3-1 `#[no_mangle]` / exported entries and binding `eml_c$` / `eml_cd$` at link | a | roadmap `native-aot` item ("エントリを公開の記号にし、`eml_c$`と`eml_cd$`をリンクのときに結ぶ") |
+| 03 open items: `--stack-size`; the 5 `max-bytes` files; single-load safepoint, leaf elision, compare-branch fusion | a | roadmap 「その後の項目」 (`--stack-size` restated by ET-1; the `max-bytes` item; L551-560) |
+| 04 D-11 / U-S3-2 native-inline candidates (container rows, `ChanToCell` / `AsyncJobCell`, C pointer arguments) | a | roadmap 「externの行とCの関数の呼び出しの速い形」 and the `native-inline` item |
+| 04 U-S3-4 `GateHost` vs `WorkerCore` | b | 01 §11.6 (second implementation), D-VR-5 (deleted) |
+| 05 D-7..D-19, the old `jit-tasks` / `jit-repl` designs | c | A-2, A-5, A-6, A-7, A-17, A-20 (replaced by 01 §10-§12) |
+| 05 "native-aot uses the same key function for its cache" | a | docs/future/native.md 「AOT と配布」; roadmap 「ネイティブのコードの使い回し」 |
+| 06 §5.12: a stage that loads more than once must replace the `JITBuilder::symbol` registration of C callees made at `load`, not add to it | d | `jit-repl` JR-2 (`NativeMachine::extend`) |
+| 06 §5.12 the blocking-C path (`Image` C table of `{ CFunction, CCall }`, `c:` datum) | b | 01 §11.6 |
+| 07 G-C15..G-C17, U-3, U-7, U-8, `eml_rtlib`, notices, the driver factory | a | roadmap `native-aot` item |
+| 07 residue: `Box<dyn IoDriver>` and `HostRef` keep the real driver and `StdHost` in every app through their vtables | d | carried into the roadmap `native-aot` item by ET-1 (one sentence, next to the driver factory) |
+| 07 "split `eml_native` into lowering / JIT host / AOT crates: revisit in native-aot" | d | carried into the roadmap `native-aot` item by ET-1 (as a 論点) |
+| 08 G-3 the abort-byte check at a `par` site | c | D-PT-6, G-13 (`par` is no unwind point) |
+| 08 G-4 the safepoint never unwinds while a yield or abort is in flight | b | S-14, P-3, §11.5 |
+| 08 G-5 the landing frame's cold block order | a | spec/native.md 「巻き戻しの地点」 |
+| 08 G-6, G-7 effect numbers by name through `Image` (jit-repl, native-aot) | a | spec/native.md 「エフェクト」 |
+| 08 G-8's `child_abort` exception | c | A-23 (`child_abort` deleted) |
+| 08 G-10, G-11 `eml$raise` program-independent; operands only through `out` | a | spec/native.md 「externの失敗」; 01 §11.5 calls it unchanged (b) |
+| 08 G-13 and "Left for jit-tasks" (a) fork tables and `fork_evv` into `eml_sched`, (b) re-raise requests in `eml_nrt_failed` | c | A-23, A-5, A-7 |
+| 08 "Left for jit-repl": root prim entries, effects by name across loads | a | spec/native.md 「エフェクト」 |
+| 09 the shape of `Trusted` (`unsafe fn Trusted::new`, every engine entry takes `&Trusted`) | a | docs/spec/lir.md 「エンジンの約束」, docs/implementation/architecture.md 「公開の面と`unsafe`」 (D-ET-1) |
+
+Class (d) count: 6. Four become roadmap text in ET-1 (three in the `native-aot` item, N-38 in both the `native-aot` and `native-inline` items); two bind `jit-tasks` (JT-6) and `jit-repl` (JR-2), whose plans name them.
+
+## D. Resolutions of the plan writer
+
+Decisions taken while writing the plans, consistent with §A and §B. Each later stage may restate one by a dated entry here.
+
+- D-1 (2026-11-17; approved by the user, UJ-18): `Start engine-trust` deletes `docs/plans/2026-11-11-jit-tasks.md`, `docs/plans/2026-11-11-jit-repl.md` and the directory `docs/plans/2026-11-11-jit/`, after §C. No code or `docs/` file cites `docs/plans` (`grep -rn 'docs/plans' crates docs --include='*.rs' --include='*.md'` hits only `docs/README.md`, `docs/future/roadmap.md`, `docs/implementation/testing.md`, `docs/implementation/benchmarks.md` and `crates/eml_cli/tests/citations.rs`, all about the directory in general [V: grep at 4a2954c1]). The commit message records the departure from 「進め方」 step 8.
+- D-2 (2026-11-17): the sentence of the old `jit-repl` design that its Close deletes `docs/plans/2026-11-11-jit/` is withdrawn by D-1 (01-design.md does not carry it); `jit-repl`'s Close deletes only its own plan file. This directory, `2026-11-17-runtime/`, is deleted at the Close of `sched-proofs`.
+- D-3 (2026-11-17): `engine-trust`'s promise list (P1..P5 and the other caller-kept promises, each with how it is closed or which roadmap item holds it) lives in docs/spec/lir.md, in a new section 「エンジンの約束」 after 「実行の前提」. The design doc `engine-trust.md` under docs/future is deleted at `engine-trust`'s Close (it survives at commit 97cd579c); its rejected alternatives go to docs/implementation/architecture.md 「CLI と lib API」 as one short paragraph, and its AOT sentence to the roadmap's `native-aot` item. D-ET-2's re-checks (at the Close of `jit-tasks`, `jit-repl`, `vm-retire`) read that spec section; at `vm-retire` it names the native entries only (A-38).
+- D-4 (2026-11-17): the single place outside tests that calls `Trusted::new` is one private function of `eml_cli` (`fn lowered(input: eml_core_ir::Input) -> eml_lir::Trusted`, the name left to the implementer), used by `Session::compile`, `Session::compile_native` and the REPL's per-input lowering (`crates/eml_cli/src/repl.rs:259`).
+- D-5 (2026-11-17): G-4's grep (01 §18) as written matches unrelated items (`Status::Pending` in `eml_core_ir`, `PendingBody` in `eml_hir`, `Control::pressure` until deleted) [V: grep at 4a2954c1]. `task-limits` replaces it by a grep scoped to the limit classes and the soft-limit items (its plan states the default).
+- D-6 (2026-11-18): `Finished.claims` and `Finished.join_waits` (01 §2.2, SC-13) are added at `jit-tasks` JT-5, not at `sched-core`. `sched-core` keeps the counts inside `WorkerCore` and exposes them to its own tests. Reason: `Finished` is built by exhaustive struct literals in `crates/eml_vm/src/lib.rs:624`, `crates/eml_nrt/src/run.rs:239` and `crates/eml_cli/tests/ui.rs:574, 624` [V: read by the plan verification]; adding the fields in `sched-core` would need an exception to D-SC-10 / G-12 (no VM edit beyond the `cells.rs` adapter, no change to an existing test). JT-5 already rewrites `eml_nrt`'s `run.rs` and the harness, so the literals change there as kind 3 with no exception.
+- D-7 (2026-11-18): 01 §11.9's JT-1 lists "roadmap" as its spec column; `Start engine-trust` already rewrote the roadmap's stage list (engine-trust plan Appendix R; `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`), so JT-1 only updates `jit-tasks`' own item if its design moved.
+- D-8 (2026-11-18): `engine-trust` adds three tests for P2 / P3 where 01 §4 says "two": P3 applies to both engines, so the VM pair (load on a machine with code; a foreign `Loaded`) gains a native `Loaded` test. Native machines load once (`LoadError::Loaded`), so the first test is VM-only.
+- D-9 (2026-11-18): the runtime-layer cut of UJ-18 F-1 is D-RL-1..D-RL-7 of the engine-trust plan (Fable design; `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`): `eml_rt`'s constructors (`Word::from_bits`, `Ctx::new`, ...) stay safe; the 49 `pub fn` of `eml_sched::cells` that take a `Ctx` become `pub unsafe fn` under one contract (ET-R1); `eml_rt::RawBuf` becomes unforgeable, an `eml_rt` change under its full gate that the cut found and UJ-18 did not name (ET-R2; without it the guarantee is false for `eml_io`, so it cannot be itemized); `eml_rows`, `eml_nrt`, `eml_cabi` and `eml_vm`'s re-exports need no change; `crates/eml_cli/tests/surface.rs` keeps the rule written in docs/implementation/architecture.md 「公開の面と`unsafe`」 (01 §16 S-26, §18 G-24). UJ-18 is unchanged; the user is told that F-1's list was wider than the holes and that one hole outside it (`RawBuf`) was found. This supersedes the engine-trust plan's earlier statements that the stage changes no `eml_rt` file.

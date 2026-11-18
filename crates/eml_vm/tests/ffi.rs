@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use eml_lir::Program;
+use eml_lir::Trusted;
 use eml_rt::{
     Checked, Completion, Control, Done, Fast, HandleBin, IoDriver, IoHandle, IoWaker, Limits, Op,
     OpKey, Submit,
@@ -21,15 +21,15 @@ use eml_vm::{
 use crate::common::c::{
     ADD_I32_CALLS, calls, dtors, linked, published, rs_frees, rs_gate_open, rs_gate_wait,
 };
-use crate::common::parse;
+use crate::common::trusted;
 
-fn linked_all(program: &Program) -> Linked {
+fn linked_all(program: &Trusted) -> Linked {
     linked(program, &calls(), &dtors())
 }
 
 /// 1つのモードで1回流し、出力と結果を返す。
 fn run_mode(
-    program: &Program,
+    program: &Trusted,
     debug_heap: bool,
     control: Arc<Control>,
 ) -> (String, Result<Finished, RuntimeError>) {
@@ -43,7 +43,7 @@ fn run_mode(
 
 /// 検査モード、次に速いモードで流し、どちらも通って同じ出力になることを確かめる。出力と、2つの run の `Finished`
 /// を返す。
-fn run_both_on(program: &Program, workers: usize) -> (String, Vec<Finished>) {
+fn run_both_on(program: &Trusted, workers: usize) -> (String, Vec<Finished>) {
     let (outputs, finished): (Vec<String>, Vec<Finished>) = [true, false]
         .into_iter()
         .map(|debug_heap| {
@@ -248,11 +248,11 @@ fn loading_the_same_c_function_twice_keeps_one_entry() {
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
     let mut entries = Vec::new();
     for text in [ABS_FIRST, ABS_SECOND, ABS_FIRST] {
-        let program = parse(text);
-        let loaded = machine
-            .load(&program, &linked_all(&program))
+        let program = trusted(text);
+        // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+        let loaded = unsafe { machine.extend(&program, &linked_all(&program)) }
             .unwrap_or_else(|error| panic!("{error:?}"));
-        entries.push(loaded.entry);
+        entries.push(loaded);
     }
     let text = disassemble(machine.code());
     assert_eq!(text.matches("cfn ").count(), 1, "{text}");
@@ -291,27 +291,31 @@ fn {f}(n.0: int) -> int {{
     };
     let (host, out) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
-    let first = parse(ABS_FIRST);
+    let first = trusted(ABS_FIRST);
     machine.load(&first, &linked_all(&first)).unwrap();
-    let with_drop = parse(&handle(" drop \"rs_handle_free\"", "keep"));
-    machine.load(&with_drop, &linked_all(&with_drop)).unwrap();
-    let second = parse(other);
+    let with_drop = trusted(&handle(" drop \"rs_handle_free\"", "keep"));
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    unsafe { machine.extend(&with_drop, &linked_all(&with_drop)) }.unwrap();
+    let second = trusted(other);
     assert_eq!(
-        machine.load(&second, &linked_all(&second)),
+        // SAFETY: P2: 名前が同じ関数はなく、根も使わない。Cの表の宣言は前と違うが、Cの表はP2に入らず、`extend`がどのビルドでも何も書く前に`Mismatch`で断る
+        unsafe { machine.extend(&second, &linked_all(&second)) },
         Err(CompileError::Mismatch {
             function: "Main.abs".into()
         })
     );
-    let without_drop = parse(&handle("", "other"));
+    let without_drop = trusted(&handle("", "other"));
     assert_eq!(
-        machine.load(&without_drop, &linked_all(&without_drop)),
+        // SAFETY: P2: 名前が同じ関数はなく、根も使わない。Cの表の宣言は前と違うが、Cの表はP2に入らず、`extend`がどのビルドでも何も書く前に`Mismatch`で断る
+        unsafe { machine.extend(&without_drop, &linked_all(&without_drop)) },
         Err(CompileError::Mismatch {
             function: "Main.Handle".into()
         })
     );
     // `Mismatch` は何も書かないので、同じ `Machine` に前のプログラムをもう一度読み込んで流せる
-    let loaded = machine.load(&first, &linked_all(&first)).unwrap();
-    machine.run(loaded.entry).unwrap();
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let loaded = unsafe { machine.extend(&first, &linked_all(&first)) }.unwrap();
+    machine.run(loaded).unwrap();
     machine.close().unwrap();
     assert_eq!(out.contents(), "5\n");
 }
@@ -319,11 +323,11 @@ fn {f}(n.0: int) -> int {{
 #[test]
 #[should_panic(expected = "line up with the C tables")]
 fn a_misaligned_linked_table_is_a_programming_error() {
-    let load = |program: &Program, linked: &Linked| {
+    let load = |program: &Trusted, linked: &Linked| {
         let mut code = CodeBase::<Fast>::new(Arc::new(Control::new(Limits::default())));
         let _ = code.load(program, linked);
     };
-    let rejected = |program: &Program, linked: &Linked, why: &str| {
+    let rejected = |program: &Trusted, linked: &Linked, why: &str| {
         let payload =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load(program, linked)))
                 .expect_err(why);
@@ -337,14 +341,14 @@ fn a_misaligned_linked_table_is_a_programming_error() {
             "{why}: {message}"
         );
     };
-    let first = parse(ABS_FIRST);
+    let first = trusted(ABS_FIRST);
     rejected(&first, &Linked::default(), "a table of the wrong length");
     // 長さが同じでも、別の宣言でつないだ `Linked` は読み込まない。`int64_t` の橋渡しで `int32_t` の関数を呼ばない
     // ためである。橋渡しの語が同じ `Text` と `Int` も見分ける。`Int` の宣言で引いた関数に文字列の位置を渡さない
     // ためである
-    let narrower = parse(&ABS_FIRST.replace("(i64) -> i64", "(i32) -> i64"));
+    let narrower = trusted(&ABS_FIRST.replace("(i64) -> i64", "(i32) -> i64"));
     rejected(&narrower, &linked_all(&first), "another word type");
-    let text = parse(&ABS_FIRST.replace("(i64) -> i64", "(text) -> i64"));
+    let text = trusted(&ABS_FIRST.replace("(i64) -> i64", "(text) -> i64"));
     rejected(
         &text,
         &linked_all(&first),
@@ -364,8 +368,8 @@ fn keep(n.0: int) -> int {{
 "
         )
     };
-    let freed = parse(&handle("rs_handle_free"));
-    let other = parse(&handle("free"));
+    let freed = trusted(&handle("rs_handle_free"));
+    let other = trusted(&handle("free"));
     load(&other, &linked_all(&freed));
 }
 
@@ -405,7 +409,7 @@ main () =
 
 #[test]
 fn the_disassembly_names_the_c_function() {
-    let program = parse(ABS_FIRST);
+    let program = trusted(ABS_FIRST);
     let mut code = CodeBase::<Fast>::new(Arc::new(Control::new(Limits::default())));
     code.load(&program, &linked_all(&program)).unwrap();
     insta::assert_snapshot!(disassemble(&code), @"
@@ -519,11 +523,13 @@ fn run_counting(main: &str, refuse: bool) -> (String, (usize, usize)) {
     let program = eml_test_support::lir(&format!("{BLOCKING}{main}"));
     let (driver, log) = Jobs::new(refuse);
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `Jobs`は仕事を受け付けで断るか、操作と完了を`TestDriver`にそのまま渡す
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     let counts = *log.lock().unwrap();
@@ -665,10 +671,8 @@ main () = Async.run (fn () ->
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
     let entries: Vec<_> = (0..2)
         .map(|_| {
-            machine
-                .load(&program, &linked)
-                .unwrap_or_else(|error| panic!("{error:?}"))
-                .entry
+            // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+            unsafe { machine.extend(&program, &linked) }.unwrap_or_else(|error| panic!("{error:?}"))
         })
         .collect();
     for entry in entries {
@@ -691,7 +695,7 @@ fn run_real(src: &str, workers: usize) -> (String, Finished) {
         .with_job_budget(Duration::from_millis(20));
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     (out.contents(), finished)
@@ -899,7 +903,7 @@ main () = Async.run body
         );
         rs_gate_open(100026);
     });
-    let result = machine.run(loaded.entry);
+    let result = machine.run(loaded);
     opener.join().unwrap();
     let error = result.unwrap_err();
     assert!(!error.interrupted(), "{error:?}");

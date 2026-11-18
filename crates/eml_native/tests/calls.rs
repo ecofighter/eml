@@ -112,7 +112,8 @@ fn a_self_tail_call_runs_in_constant_stack() {
         ..native_options()
     };
     assert_eq!(
-        m.call("count", &[Arg::I64(1_000_000), Arg::I64(0)], options)
+        // SAFETY: R-5: `count`はエフェクトを使わず、`int`の引数に前提はない
+        unsafe { m.call("count", &[Arg::I64(1_000_000), Arg::I64(0)], options) }
             .unwrap_or_else(|error| panic!("{error}")),
         [Arg::I64(2_000_000)]
     );

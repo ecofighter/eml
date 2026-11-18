@@ -81,10 +81,8 @@ fn wait_for(driver: &mut RealDriver, stash: &mut Vec<Completion>, key: OpKey) ->
 }
 
 fn raw(bytes: &mut [u8]) -> RawBuf {
-    RawBuf {
-        ptr: bytes.as_mut_ptr(),
-        cap: bytes.len(),
-    }
+    // SAFETY: このファイルのテストは、出した操作の完了を取り出すまで`bytes`を生かし、ほかから読み書きしない
+    unsafe { RawBuf::new(bytes.as_mut_ptr(), bytes.len()) }
 }
 
 #[test]

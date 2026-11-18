@@ -6,6 +6,7 @@ use eml_vm::CompileError;
 
 use crate::common::{
     compile, disasm_lowered, parse, run_lir, run_lir_stats, run_lowered_stats, run_unverified,
+    trusted,
 };
 
 const V: &str = "Vec3{float, float, float}";
@@ -403,7 +404,7 @@ fn main() -> (float, float) {
   return (1.0, 2.0)
 }
 ";
-    let error = compile(&parse(text)).err();
+    let error = compile(&trusted(text)).err();
     assert_eq!(
         error,
         Some(CompileError::MultiValueEntry {

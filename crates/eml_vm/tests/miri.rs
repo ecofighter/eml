@@ -11,17 +11,16 @@ use eml_sched::error::RunFault;
 use eml_vm::{AnyMachine, RunConfig, RuntimeError, capture_host, execute};
 
 fn run_both(text: &str) -> String {
-    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let program = crate::common::verified(text);
     run_program(&program, Sched::Sequential)
 }
 
-fn run_program(program: &eml_lir::Program, sched: Sched) -> String {
+fn run_program(program: &eml_lir::Trusted, sched: Sched) -> String {
     run_counting_preemptions(program, sched).0
 }
 
 /// 両方のモードで流し、出力と、検査モードの横取りの数を返す。
-fn run_counting_preemptions(program: &eml_lir::Program, sched: Sched) -> (String, u64) {
+fn run_counting_preemptions(program: &eml_lir::Trusted, sched: Sched) -> (String, u64) {
     let mut outputs = Vec::new();
     let mut preemptions = Vec::new();
     for debug_heap in [true, false] {
@@ -187,13 +186,12 @@ fn second() -> unit {
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
         for text in [first, second] {
-            let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-            eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-            let loaded = machine
-                .load(&program, &eml_vm::Linked::default())
+            let program = crate::common::verified(text);
+            // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+            let loaded = unsafe { machine.extend(&program, &eml_vm::Linked::default()) }
                 .unwrap_or_else(|error| panic!("{error:?}"));
             machine
-                .run(loaded.entry)
+                .run(loaded)
                 .unwrap_or_else(|error| panic!("{error}"));
         }
         machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -212,14 +210,14 @@ fn shown() -> obj {
   return t.2
 }
 ";
-    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let program = crate::common::verified(text);
     for debug_heap in [true, false] {
         let (host, _) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
         let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
-        let (_, shown) = machine.run_shown(loaded.entry, 10).unwrap();
+        // SAFETY: P4: エントリは`String.++`の結果の文字列を返す
+        let (_, shown) = unsafe { machine.run_shown(loaded, 10) }.unwrap();
         assert_eq!(shown.as_deref(), Some("é7"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
     }
@@ -255,8 +253,7 @@ fn bottom(n.0: int) -> unit {
   return z.1
 }
 ";
-    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let program = crate::common::verified(text);
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
@@ -506,8 +503,7 @@ fn spin_one(p.0: unit) -> tobj {
   return n.2
 }
 ";
-    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let program = crate::common::verified(text);
     let (out, preemptions) = run_counting_preemptions(&program, Sched::Seeded(1));
     assert_eq!(out, "1\n6\n5\n5\n");
     // スケジュールがずれて横取りが起きなくなると、横取りの切り替えを Miri で通らなくなる
@@ -549,8 +545,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
   return r.2
 }
 ";
-    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let program = crate::common::verified(text);
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
@@ -595,8 +590,7 @@ fn main() -> unit {
 /// 外の引数で、C の関数を呼ばずに `Panic` を上げる。捕まえる handler がないので実行時エラーになる。
 #[test]
 fn a_c_call_passes_scalars_in_both_modes() {
-    let program = eml_lir::parse(C_SCALARS).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let program = crate::common::verified(C_SCALARS);
     let linked = crate::common::c::linked(&program, &crate::common::c::calls(), &[]);
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
@@ -661,7 +655,7 @@ fn a_blocking_call_runs_on_the_test_driver() {
 fn blocking_run() -> &'static str {
     static OUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     OUT.get_or_init(|| {
-        let program = eml_lir::parse(BLOCKING_LIR).unwrap_or_else(|error| panic!("{error}"));
+        let program = crate::common::trusted(BLOCKING_LIR);
         let linked = crate::common::c::linked(&program, &crate::common::c::calls(), &[]);
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(true);
@@ -701,8 +695,7 @@ fn value(n.0: int) -> int {
   return v.2
 }
 ";
-    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let program = crate::common::verified(text);
     let linked = crate::common::c::linked(
         &program,
         &crate::common::c::calls(),

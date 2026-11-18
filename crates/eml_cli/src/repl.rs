@@ -34,7 +34,7 @@ pub struct Repl {
     /// 受け付けた定義と `let` の入力。式の入力は後の入力から参照されないので持たない。
     accepted: Vec<Accepted>,
     cache: ImportCache,
-    /// 最後に受け付けた時点の一様な位置。
+    /// 最後に受け付けた入力か、実行のコードに入った最後の入力の時点の一様な位置。
     uniform: BTreeMap<UniformKey, Positions>,
     /// 受け付けた入力までに読んだファイルのパス。セッション全体を入力ごとに検査し直すので、前の入力の警告を繰り返さない
     /// ために使う。
@@ -113,7 +113,7 @@ pub enum Outcome {
     Failed(RuntimeError),
     /// C の関数をつなげなかった。何も読み込まず、セッションは変わらない (docs/spec/repl.md の「C の関数」)。
     Unlinked(LinkError),
-    /// 続けられない誤り (ヒープの誤り、内部の誤り、`Machine::load` の誤り)。後の `eval` も実行しない。
+    /// 続けられない誤り (ヒープの誤り、内部の誤り、`Machine::extend`の誤り)。後の`eval`も実行しない。
     Broken(RuntimeError),
 }
 
@@ -252,16 +252,19 @@ impl Repl {
             FunctionKind::Input(kind) => kind,
             _ => unreachable!("`Program::input` is an input function"),
         });
-        // 止める語は lowering の後、`load` の前に1回だけ読む。VM はエントリでは安全点を通らないので、ここで止めないと、
-        // エントリから最初の呼び出しまでの extern と `root_set` が動く (docs/spec/repl.md の「割り込み」)
+        // 止める語はloweringの後、`extend`の前に1回だけ読む。VMはエントリでは安全点を通らないので、ここで止めないと、
+        // エントリから最初の呼び出しまでのexternと`root_set`が動く (docs/spec/repl.mdの「割り込み」)
         let program = match input {
             Some(entry) if !has_errors(&diagnostics) => Some((
-                eml_core_ir::lower(eml_core_ir::Input {
-                    hir: &checked.program,
-                    typed: &checked.typed,
-                    entry,
-                    files: session.files(),
-                }),
+                // SAFETY: このセッションが検査したプログラムで、`diagnostics`に誤りがないときだけ動く
+                unsafe {
+                    crate::lower_trusted(eml_core_ir::Input {
+                        hir: &checked.program,
+                        typed: &checked.typed,
+                        entry,
+                        files: session.files(),
+                    })
+                },
                 shown(&checked.program, &checked.typed, entry, session.files()),
             )),
             _ => None,
@@ -275,15 +278,33 @@ impl Repl {
         } else {
             Outcome::Accepted
         };
-        if outcome == Outcome::Accepted {
+        let accepted = outcome == Outcome::Accepted;
+        // 実行のコードに入った入力が読んだものは、受け付けなかった入力のものでも残す。後の入力が別のテキストや別の
+        // 一様な位置から同じ名前の関数を作り、違うコードを追記しないためである (docs/spec/modules.mdの「REPL のセッション」)
+        let loaded = matches!(
+            outcome,
+            Outcome::Exited(_) | Outcome::Failed(_) | Outcome::Broken(_)
+        );
+        if accepted || loaded {
             self.cache.extend(read);
-            self.shown
-                .extend(session.files().paths().map(str::to_string));
-            if kind == Some(InputKind::Expr) {
-                // 式の入力のモジュールは次の入力にないので、その item を覚えておくと、変わったと誤って判断する
+            if !accepted || kind == Some(InputKind::Expr) {
+                // 式の入力と受け付けなかった入力のモジュールは次の入力にないので、そのitemを覚えておくと、変わったと
+                // 誤って判断する
                 let module = &checked.program.modules[checked.program.entry].name;
                 uniform.retain(|key, _| &key.module != module);
-            } else {
+            }
+            // 読み込むモジュールの集合は入力ごとに単調に増えるので、前の入力の関数と instance はこの入力の表にもある
+            // (docs/spec/modules.md の「REPL のセッション」)。表にないのは、この入力のプログラムが使わなかった組の
+            // instance の位置だけなので、前の位置のまま覚えておく
+            for (key, positions) in std::mem::take(&mut self.uniform) {
+                uniform.entry(key).or_insert(positions);
+            }
+            self.uniform = uniform;
+        }
+        if accepted {
+            self.shown
+                .extend(session.files().paths().map(str::to_string));
+            if kind != Some(InputKind::Expr) {
                 self.accepted.push(Accepted {
                     number,
                     text: text.to_string(),
@@ -293,13 +314,6 @@ impl Repl {
                     },
                 });
             }
-            // 読み込むモジュールの集合は入力ごとに単調に増えるので、前の入力の関数と instance はこの入力の表にもある
-            // (docs/spec/modules.md の「REPL のセッション」)。表にないのは、この入力のプログラムが使わなかった組の
-            // instance の位置だけなので、前の位置のまま覚えておく
-            for (key, positions) in std::mem::take(&mut self.uniform) {
-                uniform.entry(key).or_insert(positions);
-            }
-            self.uniform = uniform;
         }
         Evaluated {
             diagnostics,
@@ -341,14 +355,18 @@ impl Repl {
             .collect()
     }
 
-    fn run(&mut self, program: &eml_lir::Program, shown: Option<Shown>) -> Outcome {
-        // `load` の前につなぐので、つなげなければ `Machine` に何も書かない。入力は `Accepted` のときだけ受け付けるので、
+    fn run(&mut self, program: &eml_lir::Trusted, shown: Option<Shown>) -> Outcome {
+        // `extend`の前につなぐので、つなげなければ`Machine`に何も書かない。入力は`Accepted`のときだけ受け付けるので、
         // セッションのモジュールの並びも変わらない
         let linked = match self.linker.link(&program.c_functions, &program.c_handles) {
             Ok(linked) => linked,
             Err(error) => return Outcome::Unlinked(error),
         };
-        let loaded = match self.machine.load(program, &linked) {
+        // SAFETY: P2: どの入力のプログラムも、このセッションの受け付けた入力とキャッシュしたimportから同じloweringで
+        // 作る。読み込んだ入力が読んだモジュールのテキストと一様な位置は、受け付けたかによらず後の入力に残すので、
+        // 後の入力の同じ名前の関数は同じコードになる (docs/spec/modules.mdの「REPL のセッション」)。最初の入力でも
+        // `extend`を使う。空の`Machine`への`extend`は`load`と同じである
+        let loaded = match unsafe { self.machine.extend(program, &linked) } {
             Ok(loaded) => loaded,
             // コード生成の誤りは正しいプログラムでは起きない。`CodeBase` が途中まで書き換わっているかもしれないので、
             // 続けない
@@ -358,13 +376,13 @@ impl Repl {
             }
         };
         let result = match &shown {
-            Some(_) => self
-                .machine
-                .run_shown(loaded.entry, pretty::LIMIT + 1)
+            // SAFETY: P4: `shown`が`Some`なのは値を書く式の入力だけで、その入力の関数は値を書いた文字列を返す
+            // (docs/spec/core-ir.mdの「REPL の入力」)
+            Some(_) => unsafe { self.machine.run_shown(loaded, pretty::LIMIT + 1) }
                 .map(|(finished, text)| (finished.exit, text)),
             None => self
                 .machine
-                .run(loaded.entry)
+                .run(loaded)
                 .map(|finished| (finished.exit, None)),
         };
         match (result, shown) {

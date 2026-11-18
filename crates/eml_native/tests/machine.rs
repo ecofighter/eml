@@ -131,7 +131,8 @@ fn a_second_load_is_refused() {
     // 断った後も、読み込んだプログラムはそのまま動く
     assert_eq!(m.run(loaded, native_options()).unwrap().exit, None);
     assert_eq!(
-        m.call("f", &[Arg::I64(4)], native_options()).unwrap(),
+        // SAFETY: R-5: `f`はエフェクトを使わず、`int`の引数に前提はない
+        unsafe { m.call("f", &[Arg::I64(4)], native_options()) }.unwrap(),
         [Arg::I64(4)]
     );
     m.close();
@@ -145,6 +146,27 @@ fn a_second_load_is_refused() {
     ));
     assert_eq!(m.load(&program, &Linked::default()), Err(LoadError::Loaded));
     m.close();
+}
+
+/// マシンはほかのマシンの`load`が返した`Loaded`を内部の誤りで断り、その後も自分の`Loaded`を実行する
+/// (docs/spec/native.mdの「関数の形」)。
+#[test]
+fn a_loaded_of_another_machine_is_refused() {
+    let program = program(MAIN);
+    let mut m = machine();
+    let mut other = machine();
+    let own = m.load(&program, &Linked::default()).unwrap();
+    let foreign = other.load(&program, &Linked::default()).unwrap();
+    let error = m.run(foreign, native_options()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("a loaded entry of another machine"),
+        "{error}"
+    );
+    assert_eq!(m.run(own, native_options()).unwrap().exit, None);
+    m.close();
+    other.close();
 }
 
 #[test]
@@ -165,7 +187,8 @@ fn symbols_cover_every_function() {
     let loaded = m.load(&program, &Linked::default()).unwrap();
     // runと`call`が作るthunkも記号を持つ
     m.run(loaded, native_options()).unwrap();
-    m.call("f", &[Arg::I64(1)], native_options()).unwrap();
+    // SAFETY: R-5: `f`はエフェクトを使わず、`int`の引数に前提はない
+    unsafe { m.call("f", &[Arg::I64(1)], native_options()) }.unwrap();
 
     let image = m.image().unwrap();
     // SAFETY: マシンが生きている間、`Image`の表は生きていて変わらない
@@ -196,7 +219,8 @@ fn symbols_cover_every_function() {
     let mut fresh = machine();
     let loaded = fresh.load(&program, &Linked::default()).unwrap();
     fresh.run(loaded, native_options()).unwrap();
-    fresh.call("f", &[Arg::I64(1)], native_options()).unwrap();
+    // SAFETY: R-5: `f`はエフェクトを使わず、`int`の引数に前提はない
+    unsafe { fresh.call("f", &[Arg::I64(1)], native_options()) }.unwrap();
     assert_eq!(names(&m), names(&fresh));
     m.close();
     fresh.close();

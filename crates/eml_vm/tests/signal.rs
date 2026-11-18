@@ -136,7 +136,7 @@ fn run_real_on(
         true
     });
     let start = Instant::now();
-    let result = machine.run(loaded.entry);
+    let result = machine.run(loaded);
     let elapsed = start.elapsed();
     drop(done);
     let poked = poker.join().unwrap();
@@ -289,9 +289,13 @@ main () = Async.run (fn () -> Signal.wait Signal.Terminate)
     );
     let control = Arc::new(Control::new(Limits::default()));
     let (host, _) = eml_vm::capture_host(Default::default());
-    let mut machine = Machine::<Checked>::new(Arc::clone(&control), host)
-        .with_clock(Clock::Real)
-        .with_driver(Box::new(eml_io::TestDriver::new(None)));
+    // SAFETY: R-3: `TestDriver`は読みに書いたバイト数だけを報告し、鍵ごとに完了を高々1つ返し、
+    // 完了の後に貸された記憶に書かない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(Arc::clone(&control), host)
+            .with_clock(Clock::Real)
+            .with_driver(Box::new(eml_io::TestDriver::new(None)))
+    };
     let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     // 番犬は失敗の条件にだけ使う。回り続ければ割り込みで止まり、下の検査が落ちる
     let (done, finished) = mpsc::channel::<()>();
@@ -306,7 +310,7 @@ main () = Async.run (fn () -> Signal.wait Signal.Terminate)
             }
         }
     });
-    let result = machine.run(loaded.entry);
+    let result = machine.run(loaded);
     drop(done);
     watchdog.join().unwrap();
     let error = result.unwrap_err();

@@ -242,7 +242,7 @@ fn write_result(r: &mut Row, key: OpKey, result: io::Result<Outcome>) -> Start {
 fn recv_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> {
     // SAFETY: `RawBuf` の約束 (docs/spec/vm.md の「時計と driver」) により、`start` の間 `buf` は `cap` バイトの一意の
     // 記憶を指す。カーネルは `cap` バイトまでしか書かず、呼び出しは同期なので、戻った後にポインタを持たない
-    let n = syscall(|| unsafe { libc::recv(fd.as_raw_fd(), buf.ptr.cast(), buf.cap, flags) })?;
+    let n = syscall(|| unsafe { libc::recv(fd.as_raw_fd(), buf.ptr().cast(), buf.cap(), flags) })?;
     Ok(n as usize)
 }
 
@@ -250,26 +250,26 @@ fn recv_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> 
 fn send_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> {
     // SAFETY: `RawBuf` の約束により、`start` の間 `buf` は `cap` バイトの読める記憶を指す。カーネルは読むだけで、
     // 呼び出しは同期である
-    let n = syscall(|| unsafe { libc::send(fd.as_raw_fd(), buf.ptr.cast(), buf.cap, flags) })?;
+    let n = syscall(|| unsafe { libc::send(fd.as_raw_fd(), buf.ptr().cast(), buf.cap(), flags) })?;
     Ok(n as usize)
 }
 
 /// パイプの端から貸された記憶へ1回読む。
 fn read_raw(fd: BorrowedFd<'_>, buf: RawBuf) -> io::Result<usize> {
-    let len = buf.cap.min(FILE_IO_LIMIT);
+    let len = buf.cap().min(FILE_IO_LIMIT);
     // SAFETY: `recv_raw` と同じく、`start` の間 `buf` は `cap` バイトの一意の記憶を指す。カーネルは `len <= cap`
     // バイトまでしか書かず、呼び出しは同期である
-    let n = syscall(|| unsafe { libc::read(fd.as_raw_fd(), buf.ptr.cast(), len) })?;
+    let n = syscall(|| unsafe { libc::read(fd.as_raw_fd(), buf.ptr().cast(), len) })?;
     Ok(n as usize)
 }
 
 /// 貸された記憶からパイプの端へ1回書く。読む側が閉じていれば `EPIPE` で、プロセスは SIGPIPE を無視するので
 /// シグナルでなく `BrokenPipe` の誤りになる (docs/spec/vm.md の「時計と driver」)。
 fn write_raw(fd: BorrowedFd<'_>, buf: RawBuf) -> io::Result<usize> {
-    let len = buf.cap.min(FILE_IO_LIMIT);
+    let len = buf.cap().min(FILE_IO_LIMIT);
     // SAFETY: `send_raw` と同じく、`start` の間 `buf` は `cap` バイトの読める記憶を指す。カーネルは読むだけで、
     // 呼び出しは同期である
-    let n = syscall(|| unsafe { libc::write(fd.as_raw_fd(), buf.ptr.cast(), len) })?;
+    let n = syscall(|| unsafe { libc::write(fd.as_raw_fd(), buf.ptr().cast(), len) })?;
     Ok(n as usize)
 }
 
@@ -345,21 +345,21 @@ const FILE_IO_LIMIT: usize = isize::MAX as usize;
 
 /// ファイルの読みの仕事の本体。プールのスレッドの上で、貸された記憶に1回読む。
 fn read_file(fd: RawFd, buf: RawBuf) -> io::Result<usize> {
-    let len = buf.cap.min(FILE_IO_LIMIT);
+    let len = buf.cap().min(FILE_IO_LIMIT);
     // SAFETY: `RawBuf` の約束により、仕事が答えるまで `buf` は `cap` バイトの一意の記憶を指し、核は仕事が終わるまで
     // `fd` を閉じない。仕事はプールの列の mutex を通ってこのスレッドへ来て、答えは受け箱の mutex を通って戻るので、
     // 貸す側の読みと確定はこの書きの後になる (docs/spec/vm.md の「時計と driver」)。カーネルは `len <= cap` バイトまで書く
-    let n = syscall(|| unsafe { libc::read(fd, buf.ptr.cast(), len) })?;
+    let n = syscall(|| unsafe { libc::read(fd, buf.ptr().cast(), len) })?;
     Ok(n as usize)
 }
 
 /// ファイルの書きの仕事の本体。プールのスレッドの上で、貸された記憶の `cap` バイトをすべて書く。
 fn write_file(fd: RawFd, buf: RawBuf) -> io::Result<usize> {
     let mut written = 0;
-    while written < buf.cap {
+    while written < buf.cap() {
         // 残りの位置は貸した記憶の中にあり、指すだけで読み書きしない
-        let at = buf.ptr.wrapping_add(written);
-        let len = (buf.cap - written).min(FILE_IO_LIMIT);
+        let at = buf.ptr().wrapping_add(written);
+        let len = (buf.cap() - written).min(FILE_IO_LIMIT);
         // SAFETY: `read_file` と同じく、仕事が答えるまで `buf` は `cap` バイトの読める記憶を指し、`fd` は開いている。
         // `at` から `len <= cap - written` バイトはその中にある。カーネルは読むだけである
         let n = syscall(|| unsafe { libc::write(fd, at.cast(), len) })?;
@@ -368,7 +368,7 @@ fn write_file(fd: RawFd, buf: RawBuf) -> io::Result<usize> {
         }
         written += n as usize;
     }
-    Ok(buf.cap)
+    Ok(buf.cap())
 }
 
 fn setsockopt_int(fd: BorrowedFd<'_>, level: c_int, name: c_int, value: c_int) -> io::Result<()> {
@@ -725,10 +725,9 @@ impl<P: Poller> Unix<P> {
             return Start::Done(Ok(Outcome::Size(0)));
         }
         let mut byte = MaybeUninit::<u8>::uninit();
-        let buf = RawBuf {
-            ptr: byte.as_mut_ptr(),
-            cap: 1,
-        };
+        // SAFETY: `byte`はこの関数の終わりまで生きて動かない。この値は、このdriver自身のbackendのすぐ下の1回の同期の
+        // `recv`にだけ渡し、操作はそれが結果を返したときに終わる。書くのはその`recv`だけで、初期化されていなくてよい
+        let buf = unsafe { RawBuf::new(byte.as_mut_ptr(), 1) };
         // 1バイトか EOF が読めれば終わる。覗いた誤りは消費される
         let result = recv_raw(sock.fd.as_fd(), buf, PEEK).map(|_| Outcome::Size(0));
         read_result(self.rows.of(sock), key, result)
@@ -1035,10 +1034,8 @@ mod tests {
     }
 
     fn buf(bytes: &mut [u8]) -> RawBuf {
-        RawBuf {
-            ptr: bytes.as_mut_ptr(),
-            cap: bytes.len(),
-        }
+        // SAFETY: このテストは、渡した操作が終わるまで`bytes`を生かし、ほかから読み書きしない
+        unsafe { RawBuf::new(bytes.as_mut_ptr(), bytes.len()) }
     }
 
     /// `key` に `Retry` が届くまで待つ。1 秒で届かなければ落ちる。

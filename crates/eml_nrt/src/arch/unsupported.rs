@@ -22,6 +22,9 @@ pub struct JmpBuf {
 /// # Safety
 /// `ctx`はこのworkerの生きている`Ctx`で、呼ぶ側はそれへの`&`も`&mut`も持たない。`thunk`は`entry`と`argv`を受ける
 /// 既定の規約の関数で、`argv`はその引数と結果の語の数だけ読み書きできる (docs/spec/native.md の「`eml_enter`」)。
+/// `thunk`が実行系のエントリを呼ぶなら (コンパイルしたemlのコードは呼ぶ)、`ctx.runtime()`は`worker::of`の約束の
+/// とおりに置いた生きている`Worker`を指し、`ctx.stack_limit()`はこのスレッドのスタックの番地で、その下に
+/// docs/spec/native.mdの「安全点」が名指す余白がある。`run`はどちらもそのとおりに置く。
 pub unsafe extern "C" fn eml_enter(
     _ctx: *mut Ctx<Fast>,
     _thunk: Thunk,

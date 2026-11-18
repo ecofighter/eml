@@ -101,7 +101,7 @@ fn exit_keeps_its_code(src: &str, workers: usize, gates: &[i64]) {
     let program = eml_test_support::lir(src);
     let (mut machine, _) = machine(workers);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
-    let finished = machine.run(loaded.entry);
+    let finished = machine.run(loaded);
     let closed = machine.close();
     for &gate in gates {
         rs_gate_open(gate);
@@ -153,7 +153,7 @@ fn an_interrupt_recovers(workers: usize, ready: i64, gate: i64) {
     let (mut machine, control) = machine(workers);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     let interrupter = interrupt_after(ready, &control);
-    let result = machine.run(loaded.entry);
+    let result = machine.run(loaded);
     let closed = machine.close();
     rs_gate_open(gate);
     interrupter.join().unwrap();
@@ -184,7 +184,7 @@ fn a_machine_that_abandoned_a_job_runs_again() {
     let (mut machine, control, out) = capturing_machine(1);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     let interrupter = interrupt_after(100044, &control);
-    let first = machine.run(loaded.entry);
+    let first = machine.run(loaded);
     rs_gate_open(100045);
     interrupter.join().unwrap();
     let error = first.unwrap_err();
@@ -196,7 +196,7 @@ fn a_machine_that_abandoned_a_job_runs_again() {
     // 割り込みのビットは`clear`でしか下りないので、REPLと同じく次のrunの前に下ろす
     control.clear();
     // 名前が同じなら同じコードでなければならないので、`entry$main`を持たない手書きのLIRにする
-    let program2 = crate::common::parse(
+    let program2 = crate::common::trusted(
         "\
 fn main() -> unit {
   let s.0: obj = const \"again\"
@@ -205,11 +205,11 @@ fn main() -> unit {
 }
 ",
     );
-    let loaded = machine
-        .load(&program2, &Linked::default())
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let loaded = unsafe { machine.extend(&program2, &Linked::default()) }
         .unwrap_or_else(|error| panic!("{error:?}"));
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "again\n");
@@ -249,7 +249,7 @@ main () = Async.run body
     let program = eml_test_support::lir(&src);
     let (mut machine, _) = machine(1);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
-    let finished = machine.run(loaded.entry);
+    let finished = machine.run(loaded);
     let closed = machine.close();
     let frees_before = rs_frees(100110);
     rs_gate_open(100112);
@@ -293,7 +293,7 @@ main () = Async.run body
     let program = eml_test_support::lir(&src);
     let (mut machine, _) = machine(1);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
-    let finished = machine.run(loaded.entry);
+    let finished = machine.run(loaded);
     let closed = machine.close();
     rs_gate_open(100121);
     let written = rs_gate_wait(100122);
@@ -351,7 +351,7 @@ fn a_large_array_keeps_its_page(workers: usize, gate: i64) {
     let program = eml_test_support::lir(&exits_during_a_large_fill(gate));
     let (mut machine, _) = machine(workers);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
-    let finished = machine.run(loaded.entry);
+    let finished = machine.run(loaded);
     let closed = machine.close();
     // 鍵を開けるとCが戻って留めを落とすので、取り置きはその前に見る
     let parked = published(gate).map(|at| eml_rt::PagePin::parked(at as usize));
@@ -394,11 +394,11 @@ main () = Async.run (fn () -> sum_gated (grow 10 \"ab\") 2048 100156)
     let (mut machine, control, out) = capturing_machine(1);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     let interrupter = interrupt_after(100156, &control);
-    let first = machine.run(loaded.entry);
+    let first = machine.run(loaded);
     interrupter.join().unwrap();
     control.clear();
     // 名前が同じなら同じコードでなければならないので、`entry$main`を持たない手書きのLIRにする
-    let program2 = crate::common::parse(
+    let program2 = crate::common::trusted(
         "\
 fn main() -> unit {
   let s.0: obj = const \"again\"
@@ -407,10 +407,10 @@ fn main() -> unit {
 }
 ",
     );
-    let second = machine
-        .load(&program2, &Linked::default())
+    // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+    let second = unsafe { machine.extend(&program2, &Linked::default()) }
         .map_err(|error| format!("{error:?}"))
-        .and_then(|loaded| machine.run(loaded.entry).map_err(|error| error.to_string()));
+        .and_then(|loaded| machine.run(loaded).map_err(|error| error.to_string()));
     // 鍵を開けるとCが戻って留めを落とすので、取り置きはその前に見る
     let parked = published(100156).map(|at| eml_rt::PagePin::parked(at as usize));
     rs_gate_open(100157);

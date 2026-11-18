@@ -32,7 +32,7 @@ pub use alloc::PagePin;
 pub use control::{Control, Limits, Stop};
 pub use driver::{
     Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, OsHandle, OsSocket,
-    PipePair, RawBuf, RawFile, RawPipe, RawProcess, RawResource, RawSocket, Submit,
+    PipePair, RawFile, RawPipe, RawProcess, RawResource, RawSocket, Submit,
 };
 pub use error::HeapError;
 pub use externs::{
@@ -52,6 +52,7 @@ pub use host::{
 };
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};
+pub use text::RawBuf;
 pub use word::Word;
 
 /// `Heap` と `Ctx` が `Sync` でないことをコンパイルの時点で確かめる。`Sync` なら下の2つの実装のどちらを選ぶかが
@@ -115,5 +116,22 @@ mod tests {
         send::<Heap<Checked>>();
         send::<Ctx<Fast>>();
         send::<Ctx<Checked>>();
+    }
+
+    #[test]
+    fn raw_buf_head_and_tail_stay_inside() {
+        let mut bytes = [0u8; 8];
+        let at = bytes.as_mut_ptr();
+        // SAFETY: `bytes`は生きたまま動かず、この値はどのdriverにも渡さない
+        let buf = unsafe { RawBuf::new(at, 8) };
+        for (n, inside) in [(0, 0), (3, 3), (8, 8), (9, 8), (usize::MAX, 8)] {
+            let head = buf.head(n);
+            assert_eq!((head.ptr(), head.cap()), (at, inside));
+            let tail = buf.tail(n);
+            assert_eq!(
+                (tail.ptr(), tail.cap()),
+                (at.wrapping_add(inside), 8 - inside)
+            );
+        }
     }
 }

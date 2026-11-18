@@ -7,7 +7,7 @@ use eml_rt::{Ctx, Fast, Fault, HeapError, Word};
 
 use crate::common::native::{
     Visit, Visits, agree, agree_source, call_visited, call_visited_at, clif, machine, native,
-    program, visit, visit_each,
+    program, trust, visit, visit_each,
 };
 
 /// 即値の数。`evv_mask`は項目の列とその長さ、`root_get`と`root_set`は番号である。
@@ -851,7 +851,7 @@ fn fail() -> float {
 
 /// verifierを通さずに読んだ`text`のプログラムを読み込み、`load`のpanicの文を返す。
 fn load_panic(text: &str) -> String {
-    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    let program = trust(eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}")));
     let linked = eml_test_support::link(&program);
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut machine = machine();

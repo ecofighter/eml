@@ -299,9 +299,9 @@ impl IoDriver for HoldingDriver {
         if let Some(at) = self.held.iter().position(|&(k, _)| k == key) {
             let (result, cancelled) = match self.held.remove(at).1 {
                 Some(buf) => {
-                    assert!(buf.cap >= 2);
+                    assert!(buf.cap() >= 2);
                     // 記録が完了を受け取るまで、貸された記憶に書いてよい
-                    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), buf.ptr, 2) };
+                    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), buf.ptr(), 2) };
                     (Ok(Done::Size(2)), false)
                 }
                 None => (Err(io::Error::other("cancelled")), true),
@@ -377,13 +377,17 @@ main () = Async.run (fn () ->
   Net.close b)
 ";
     let (host, out) = capture_host(Default::default());
-    let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
-        .with_driver(Box::new(HoldingDriver::default()));
+    // SAFETY: R-3: `HoldingDriver`が貸された記憶に書くのは取り消した読みの先頭2バイトだけで、
+    // `cap`が2以上であることを確かめ、`Done::Size(2)`の完了を1つ返す。`quiesce`で捨てた操作にはもう触れない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host)
+            .with_driver(Box::new(HoldingDriver::default()))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "Cancelled: task was cancelled\n");
@@ -425,13 +429,17 @@ main () = Async.run (fn () ->
   Net.close a)
 ";
     let (host, out) = capture_host(Default::default());
-    let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
-        .with_driver(Box::new(HoldingDriver::default()));
+    // SAFETY: R-3: `HoldingDriver`が貸された記憶に書くのは取り消した読みの先頭2バイトだけで、
+    // `cap`が2以上であることを確かめ、`Done::Size(2)`の完了を1つ返す。`quiesce`で捨てた操作にはもう触れない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host)
+            .with_driver(Box::new(HoldingDriver::default()))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "Cancelled: task was cancelled\n");
@@ -467,7 +475,7 @@ main () = Async.run (fn () ->
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(finished.exit, Some(3));
@@ -511,7 +519,7 @@ impl IoDriver for Recorder {
         let kind = match op {
             Op::Readable { .. } => "readable",
             Op::Read { buf, .. } => {
-                log.lent.push(buf.cap);
+                log.lent.push(buf.cap());
                 "read"
             }
             Op::Write { .. } => "write",
@@ -597,13 +605,15 @@ main () = Async.run (fn () ->
         log: Arc::clone(&log),
     };
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "hi\n");
@@ -645,13 +655,15 @@ main () = Async.run (fn () ->
         log: Arc::clone(&log),
     };
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     let finished = machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "0\n");
@@ -706,7 +718,7 @@ main () = Async.run (fn () ->
             .load(&eml_test_support::lir(&src), &eml_vm::Linked::default())
             .unwrap();
         let finished = machine
-            .run(loaded.entry)
+            .run(loaded)
             .unwrap_or_else(|error| panic!("{error}"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
         finished.stats
@@ -983,8 +995,11 @@ fn a_spent_budget_looks_at_the_os_and_goes_on_alone() {
             log: Arc::clone(&log),
         };
         let (host, _) = capture_host(Default::default());
-        let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
-            .with_driver(Box::new(driver));
+        // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+        let mut machine = unsafe {
+            Machine::<Checked>::new(RunConfig::default().control, host)
+                .with_driver(Box::new(driver))
+        };
         let loaded = machine
             .load(
                 &eml_test_support::lir(src.as_str()),
@@ -992,7 +1007,7 @@ fn a_spent_budget_looks_at_the_os_and_goes_on_alone() {
             )
             .unwrap();
         let finished = machine
-            .run(loaded.entry)
+            .run(loaded)
             .unwrap_or_else(|error| panic!("{error}"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
         let waits = log.lock().unwrap().waits;
@@ -1046,12 +1061,14 @@ main () = Async.run (fn () ->
     let driver = Box::new(driver);
     if fast {
         run_to_close(
-            Machine::<eml_rt::Fast>::new(control, host).with_driver(driver),
+            // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+            unsafe { Machine::<eml_rt::Fast>::new(control, host).with_driver(driver) },
             &program,
         );
     } else {
         run_to_close(
-            Machine::<Checked>::new(control, host).with_driver(driver),
+            // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+            unsafe { Machine::<Checked>::new(control, host).with_driver(driver) },
             &program,
         );
     }
@@ -1060,10 +1077,10 @@ main () = Async.run (fn () ->
 }
 
 /// `machine` で `program` を流して閉じる。
-fn run_to_close<M: eml_rt::Mode>(mut machine: Machine<M>, program: &eml_lir::Program) {
+fn run_to_close<M: eml_rt::Mode>(mut machine: Machine<M>, program: &eml_lir::Trusted) {
     let loaded = machine.load(program, &eml_vm::Linked::default()).unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
 }
@@ -1772,13 +1789,15 @@ impl IoDriver for FileWatch {
 /// `driver` の上で `src` を検査モードで流し、出力を返す。
 fn run_on_watch(src: &str, driver: FileWatch) -> String {
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `FileWatch`が預かるのは取り込みの完了だけで、ほかの操作と完了は`TestDriver`にそのまま渡す
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
     machine
-        .run(loaded.entry)
+        .run(loaded)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     out.contents()

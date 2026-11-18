@@ -12,13 +12,13 @@ use vstd::utf8::{
 };
 
 use super::*;
-use crate::driver::RawBuf;
 #[cfg(verus_only)]
 use crate::heap::inv::body_wf;
 #[cfg(verus_only)]
 use crate::meta::{field_ptr, slot_offset};
 use crate::text::{
-    bytes, bytes_commit, bytes_lend, bytes_ptr, text, text_ptr, write_byte, write_bytes, write_text,
+    RawBuf, bytes, bytes_commit, bytes_lend, bytes_ptr, text, text_ptr, write_byte, write_bytes,
+    write_text,
 };
 
 verus! {
@@ -873,6 +873,7 @@ impl<M: Mode> Heap<M> {
     /// # Safety
     /// `w` はこのヒープの生きているバイト列の物体を指し、呼ぶ側がその唯一の参照を持つ。返す位置に書いてよいのは、
     /// `bytes_commit` を呼ぶまで、物体を生かし、一意に保ち、このヒープの操作でその物体を書き換えない間だけである。
+    /// 返す`RawBuf`については、呼ぶ側が`RawBuf::new`の約束を守る。
     pub unsafe fn bytes_lend(&mut self, w: Word) -> (r: Result<RawBuf, HeapError>)
         requires
             old(self).wf(),
@@ -882,7 +883,7 @@ impl<M: Mode> Heap<M> {
         ensures
             *final(self) == *old(self),
             !M::CHECKED ==> r is Ok,
-            r matches Ok(b) ==> b.cap == old(self).capacity(w) - old(self).text_of(w).len(),
+            r matches Ok(b) ==> b.cap_spec() == old(self).capacity(w) - old(self).text_of(w).len(),
     {
         let h = self.header_of(w);
         proof {
@@ -914,7 +915,9 @@ impl<M: Mode> Heap<M> {
         }
         let tracked p = self.core.tracked_perm(h@.addr);
         let ptr = bytes_lend(h, cap, len, Tracked(p));
-        Ok(RawBuf { ptr, cap: 8 * (cap - 1) - len })
+        // SAFETY: 返す位置から`8 * (cap - 1) - len`バイトは、このブロックという1つの確保の、長さの後ろの空きである。
+        // `RawBuf::new`の約束 (渡す先、期間、ほかに触れるもの) は、この関数の`# Safety`とともに呼ぶ側へ渡る
+        Ok(unsafe { RawBuf::new(ptr, 8 * (cap - 1) - len) })
     }
 
     /// `bytes_lend` で貸した空きに外が書いた `n` バイトを確定する。長さの語だけを書き、バイト列の語は書かない。`Bytes`

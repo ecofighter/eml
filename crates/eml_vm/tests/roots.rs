@@ -6,7 +6,7 @@ use eml_sched::config::Sched;
 use eml_sched::error::RunFault;
 use eml_vm::{AnyMachine, RunConfig, RuntimeError, capture_host};
 
-use crate::common::{disasm, parse, run_lir_merged};
+use crate::common::{disasm, run_lir_merged, trusted};
 
 /// 根に置いた文字列と整数を読み直して表示する。整数は `tobj` に box して置き、文字列はそのまま `obj` で読む。
 #[test]
@@ -181,12 +181,12 @@ fn run_inputs(inputs: &[&str]) -> (String, Vec<Result<(), String>>) {
             let mut machine = AnyMachine::new(&config, host);
             let mut results = Vec::new();
             for input in inputs {
-                let program = parse(&format!("{LAYOUT}{input}{READERS}"));
+                let program = trusted(&format!("{LAYOUT}{input}{READERS}"));
                 eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-                let loaded = machine
-                    .load(&program, &eml_vm::Linked::default())
+                // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
+                let loaded = unsafe { machine.extend(&program, &eml_vm::Linked::default()) }
                     .unwrap_or_else(|error| panic!("{error:?}"));
-                results.push(machine.run(loaded.entry).map(|_| ()).map_err(|error| {
+                results.push(machine.run(loaded).map(|_| ()).map_err(|error| {
                     assert!(!error.is_broken(), "{error}");
                     error.to_string()
                 }));

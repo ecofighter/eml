@@ -2560,8 +2560,10 @@ impl<M: Mode> Heap<M> {
     }
 
     /// # Safety
-    /// `w` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側が参照を持っているか、生きている持ち主から
-    /// 借りている。物体は `lin` ビットを持たない。rc が正なら、持ち主は今の worker である。
+    /// `w`は即値か、このヒープか付けた塊か同じ`Control`のほかのヒープのページの生きている物体を指し、呼ぶ側が参照を
+    /// 持っているか、生きている持ち主から借りている。ほかのヒープのページの物体は、共有の物体か、数えない不死の物体か、
+    /// 持ち主が今のworkerの局所の物体である (docs/spec/object-model.mdの「核の操作」)。物体は`lin`ビットを持たない。
+    /// rcが正なら、持ち主は今のworkerである。
     #[inline]
     pub unsafe fn dup(&mut self, w: Word) -> (r: Result<(), HeapError>)
         requires
@@ -2780,9 +2782,10 @@ impl<M: Mode> Heap<M> {
     /// 参照を1つ手放す。LIR の `decref` と `drop` は、どちらもこれで実行する (docs/spec/object-model.md の「核の操作」)。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ持っている。不死の物体なら、その
-    /// 参照は `acquire_immortal` か `dup` で作ったものである。共有の物体は `lin` ビットを持たない。rc が正なら、
-    /// 持ち主は今の worker である。
+    /// `w`は即値か、このヒープか付けた塊か同じ`Control`のほかのヒープのページの生きている物体を指し、呼ぶ側がその参照を
+    /// 1つ持っている。ほかのヒープのページの物体は、共有の物体か、数えない不死の物体か、持ち主が今のworkerの局所の
+    /// 物体である (docs/spec/object-model.mdの「核の操作」)。不死の物体なら、その参照は`acquire_immortal`か`dup`で
+    /// 作ったものである。共有の物体は`lin`ビットを持たない。rcが正なら、持ち主は今のworkerである。
     #[inline]
     pub unsafe fn decref(&mut self, w: Word) -> (r: Result<(), HeapError>)
         requires

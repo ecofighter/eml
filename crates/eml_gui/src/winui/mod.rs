@@ -113,6 +113,8 @@ fn os_build() -> u32 {
     if status == 0 { info.build } else { 0 }
 }
 
+const NOT_RUNNING: &str = "gui: the WinUI application is not running";
+
 fn winui_error(e: windows_core::Error) -> GuiError {
     GuiError::Backend(format!("gui: WinUI failed: {e}"))
 }
@@ -310,6 +312,16 @@ impl WinUiWidgets {
         })
     }
 
+    /// XAMLのオブジェクトは動いている`Application`の中でだけ働き、その外でWinUIが安全に失敗するとは確かめられないので、
+    /// 外でのウィジェットの呼び出しはどれも断る。
+    fn live(&self) -> Result<(), GuiError> {
+        if self.shared.live.get() {
+            Ok(())
+        } else {
+            Err(GuiError::Backend(NOT_RUNNING.to_string()))
+        }
+    }
+
     /// プログラムが値を置く前に呼ぶ。
     fn remember(&self, id: Id, value: Value) {
         self.shared.known.borrow_mut().insert(id, value);
@@ -473,6 +485,7 @@ fn desired(element: &UIElement, width: f32) -> windows_core::Result<Size> {
 
 impl Widgets for WinUiWidgets {
     fn create_window(&mut self, id: Id, title: &str) -> Result<(), GuiError> {
+        self.live()?;
         let window = Window::new().map_err(winui_error)?;
         let part = (|| {
             window.SetTitle(title)?;
@@ -524,6 +537,7 @@ impl Widgets for WinUiWidgets {
     }
 
     fn create(&mut self, id: Id, kind: Kind, parent: Id, init: &Init) -> Result<(), GuiError> {
+        self.live()?;
         let canvas = match self.parts.get(&parent) {
             Some(held) => held.part.container().ok_or(GuiError::WrongKind)?.clone(),
             None => return Err(GuiError::UnknownId),
@@ -547,6 +561,7 @@ impl Widgets for WinUiWidgets {
     }
 
     fn add_item(&mut self, w: Id, item: &str) -> Result<(), GuiError> {
+        self.live()?;
         match self.parts.get(&w).map(|h| &h.part) {
             Some(Part::Choice(choice)) => (|| {
                 let entry = ComboBoxItem::new()?;
@@ -565,6 +580,7 @@ impl Widgets for WinUiWidgets {
     }
 
     fn set(&mut self, w: Id, prop: &Prop) -> Result<(), GuiError> {
+        self.live()?;
         let held = self.parts.get(&w).ok_or(GuiError::UnknownId)?;
         let applied = self.set_part(&held.part, w, prop)?;
         applied.map_err(winui_error)
@@ -573,7 +589,10 @@ impl Widgets for WinUiWidgets {
     /// 折り返すラベルは並べる幅を決めてから、その幅での高さを測る。ほかのウィジェットは制約によらない自然な大きさで、
     /// `Exact`の軸は与えた値を返す。
     fn measure(&mut self, w: Id, width: Measure, height: Measure) -> Size {
-        let natural = self.natural(w, width).unwrap_or_default();
+        let natural = match self.live() {
+            Ok(()) => self.natural(w, width).unwrap_or_default(),
+            Err(_) => Size::default(),
+        };
         let exact = |m: Measure, v: f32| match m {
             Measure::Exact(e) => e,
             Measure::AtMost(_) | Measure::Unbounded => v,
@@ -585,6 +604,9 @@ impl Widgets for WinUiWidgets {
     }
 
     fn place(&mut self, w: Id, rect: Rect) {
+        if self.live().is_err() {
+            return;
+        }
         if let Some(held) = self.parts.get(&w) {
             let _ = held.part.element().and_then(|e| {
                 Canvas::SetLeft(&e, f64::from(rect.x))?;
@@ -597,6 +619,9 @@ impl Widgets for WinUiWidgets {
     }
 
     fn show_window(&mut self, w: Id, size: Size, min: Size) {
+        if self.live().is_err() {
+            return;
+        }
         if let Some(Held {
             part: Part::Window { window, .. },
             ..

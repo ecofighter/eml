@@ -1888,6 +1888,7 @@ main () =
 | Windows 11より古いWindows | `NotAvailable "cannot open the GUI: WinUI needs Windows 11 or later"` |
 | 2.6.4以降のWindows App SDK 2のruntimeがない (Windows) | `NotAvailable "cannot open the GUI: the Windows App SDK 2 runtime is not installed (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)"` |
 | 画面がない (Linuxで`DISPLAY`も`WAYLAND_DISPLAY`もない) | `Other "cannot open the GUI: no display (DISPLAY and WAYLAND_DISPLAY are unset)"` |
+| ほかのQApplicationが生きている (Linux) | `NotAvailable "cannot open the GUI: a QApplication is already alive"` |
 | ほかのbackendの誤り | backendの文言の`Other` |
 | GUIのタスクの`post`で、channelが満ちている | `ResourceLimit "cannot post: the GUI's message queue is full"` |
 

@@ -151,7 +151,8 @@ impl Sources<'_> {
     pub fn session(self) -> Session {
         let source = eml_hir::MemorySource(self.modules);
         match self.std {
-            Some(std) => Session::load_with_std(std, ENTRY_PATH, self.entry, &source),
+            // SAFETY: P5: テストが差し替える標準ライブラリは、表の型を宣言する
+            Some(std) => unsafe { Session::load_with_std(std, ENTRY_PATH, self.entry, &source) },
             None => Session::load(ENTRY_PATH, self.entry, &source),
         }
     }
@@ -256,7 +257,7 @@ fn checked_session(session: Session) -> Checked {
 }
 
 #[cfg(feature = "core")]
-pub fn lir<'a>(sources: impl Into<Sources<'a>>) -> eml_lir::Program {
+pub fn lir<'a>(sources: impl Into<Sources<'a>>) -> eml_lir::Trusted {
     compiled(sources.into().session().compile())
 }
 
@@ -436,7 +437,7 @@ impl eml_rt::Host for RecordingHost {
 /// LIR を `capture()` の Host で実行する。上限の値に頼るテストは、`RunConfig` を自分で作って渡す。
 #[cfg(feature = "run")]
 pub fn execute(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     config: &RunConfig,
 ) -> (String, Result<RunStats, RuntimeError>) {
     execute_on(program, config, capture(), Engine::Vm)
@@ -445,7 +446,7 @@ pub fn execute(
 /// LIR を `engine` で `host` に実行し、捕まえた標準出力を返す。ネイティブは数えないので、`RunStats` は既定の値になる。
 #[cfg(feature = "run")]
 pub fn execute_on(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     config: &RunConfig,
     host: CaptureHost,
     engine: Engine,
@@ -459,7 +460,7 @@ pub fn execute_on(
 /// `execute_on` と同じく流し、`Finished` のまま返す。終了コードを両方の実行系で比べるテストのため。
 #[cfg(feature = "run")]
 pub fn execute_finished(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     config: &RunConfig,
     host: HostRef,
     engine: Engine,
@@ -474,7 +475,7 @@ pub fn execute_finished(
 /// ネイティブのテストの実行は、どれもこれを通る。
 #[cfg(feature = "run")]
 pub fn execute_native(
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     linked: &Linked,
     config: &RunConfig,
     host: HostRef,

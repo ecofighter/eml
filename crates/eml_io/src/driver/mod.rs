@@ -235,10 +235,7 @@ fn step_of<'a, S>(
         } => Step::Send {
             sock: sock(handles, *handle),
             // 残りの位置は貸した記憶の中にあり、指すだけで読み書きしない (docs/spec/vm.md の「時計と driver」)
-            buf: RawBuf {
-                ptr: buf.ptr.wrapping_add(*written),
-                cap: buf.cap - *written,
-            },
+            buf: buf.tail(*written),
         },
         Kind::Accept { listener } => Step::Accept {
             listener: sock(handles, *listener),
@@ -393,8 +390,8 @@ impl<B: Backend> Driver<B> {
                 Ok(Outcome::Size(n)),
             ) => {
                 let written = written + n;
-                if written >= buf.cap {
-                    Flow::Finish(Ok(Done::Size(buf.cap)), false)
+                if written >= buf.cap() {
+                    Flow::Finish(Ok(Done::Size(buf.cap())), false)
                 } else if n == 0 {
                     // 何も書けない送りを出し直すと終わらない
                     Flow::Finish(Err(io::Error::from(io::ErrorKind::WriteZero)), false)

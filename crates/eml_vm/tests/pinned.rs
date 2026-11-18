@@ -233,10 +233,7 @@ main () = Async.run (fn () ->
     );
     let (host, _) = RecordingHost::new(None);
     let mut machine = Machine::<Checked>::new(limits(2), host.host_ref());
-    let entry = machine
-        .load(&program, &eml_vm::Linked::default())
-        .unwrap()
-        .entry;
+    let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     let finished = finished(machine.run(entry));
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     let lines = host.lines();

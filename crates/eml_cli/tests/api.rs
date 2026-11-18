@@ -45,12 +45,15 @@ fn each_stage_collects_the_diagnostics_of_the_stages_before_it() {
 #[test]
 fn load_with_std_reads_the_given_standard_library() {
     let prelude = format!("{}\npub extra : Int\nextra = 1\n", eml_hir::PRELUDE_SOURCE);
-    let session = Session::load_with_std(
-        &[("Prelude.em", &prelude), eml_hir::STD[1]],
-        "a.em",
-        "f : Int\nf = extra",
-        &MemorySource(&[]),
-    );
+    // SAFETY: P5: 差し替えた標準ライブラリは、埋め込んだものに`extern`でない項目を足しただけである
+    let session = unsafe {
+        Session::load_with_std(
+            &[("Prelude.em", &prelude), eml_hir::STD[1]],
+            "a.em",
+            "f : Int\nf = extra",
+            &MemorySource(&[]),
+        )
+    };
     assert!(session.check().diagnostics.is_empty());
 }
 

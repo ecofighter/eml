@@ -3,12 +3,13 @@
 #![allow(unsafe_code)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cranelift_jit::JITModule;
 use cranelift_module::{Module, ModuleError};
 use eml_cabi::Linked;
 use eml_extern::ExternEffect;
-use eml_lir::{OpRet, Program, Repr};
+use eml_lir::{OpRet, Program, Repr, Trusted};
 use eml_nrt::image::{
     DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
     DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow, Slice,
@@ -29,11 +30,16 @@ pub struct Symbol {
     pub size: u32,
 }
 
-/// `load`の結果。実行の入口の`Program.functions`での添字である。
+/// `load`の結果。実行の入口の`Program.functions`での添字と、返したマシンの印を隠して持つので、`run`はほかのマシンの
+/// `Loaded`を断る (docs/spec/native.mdの「関数の形」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Loaded {
-    pub entry: u32,
+    machine: u64,
+    entry: u32,
 }
+
+/// マシンの印を配る。印は`Loaded`を返したマシンを見分けるだけなので、順序づけは要らない。
+static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadError {
@@ -202,6 +208,8 @@ impl Tables {
 /// JITのホスト。マシン1つがmodule 1つと領域1つを持ち、`load`で作り、マシンが終わるときに`close`でも`Drop`でも返す。
 /// マシンのworkerはそれを共有し、プロセス全体のmoduleはない (docs/spec/native.md の「関数の形」)。
 pub struct NativeMachine {
+    /// このマシンの印。`Loaded`に入れ、`run`が自分の返した`Loaded`かを見分ける。
+    id: u64,
     config: RunConfig,
     host: HostRef,
     keep_clif: bool,
@@ -224,6 +232,7 @@ pub struct NativeMachine {
 impl NativeMachine {
     pub fn new(config: &RunConfig, host: HostRef) -> NativeMachine {
         NativeMachine {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
             config: config.clone(),
             host,
             keep_clif: false,
@@ -247,13 +256,12 @@ impl NativeMachine {
     }
 
     /// `program`のすべての関数をコンパイルする。マシンは1回だけ読み込むので、2回目の呼び出しは、1回目が失敗していても
-    /// `LoadError::Loaded`を返す。`load`は`program`を信頼する。`program`は、型を検査したプログラムからコンパイラが作った
-    /// 最後のパスの後のLIRか、同じ規則を守る手書きのLIRでなければならない。ネイティブのコードは実行時に何も確かめないので、
-    /// ほかのプログラムの実行の振る舞いは、VMの速いモードと同じく未定義である (docs/spec/native.md の「関数の形」)。
+    /// `LoadError::Loaded`を返す。`load`は`program`を信頼する。その約束は`Trusted`を作った側が負う
+    /// (docs/spec/lir.mdの「エンジンの約束」)。ネイティブのコードは実行時に何も確かめない (docs/spec/native.mdの「関数の形」)。
     /// どのビルドも、この約束のうちverifierが確かめる部分を確かめ、破れていればpanicする。`unsupported`が断る形は、
     /// 下ろしの中でpanicする。`linked`はプログラムのCの関数をつないだ結果で、その宣言がプログラムの表と違えば、何も
     /// 作らずに`LoadError::LinkMismatch`を返す。
-    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, LoadError> {
+    pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<Loaded, LoadError> {
         if std::mem::replace(&mut self.asked, true) {
             return Err(LoadError::Loaded);
         }
@@ -408,11 +416,13 @@ impl NativeMachine {
             raise_effects,
         ));
         Ok(Loaded {
+            machine: self.id,
             entry: program.entry.0,
         })
     }
 
-    /// 読み込んだプログラムの入口を実行する。入口は引数を取らない。
+    /// 読み込んだプログラムの入口を実行する。入口は引数を取らない。ほかのマシンが返した`loaded`は、何も実行せずに
+    /// 内部の誤りで断る。
     pub fn run(&mut self, loaded: Loaded, options: Options) -> Result<Finished, RuntimeError> {
         let (thunk, code, results, counted) = self.prepare(loaded)?;
         let mut argv = vec![0u64; results];
@@ -421,6 +431,11 @@ impl NativeMachine {
 
     /// 入口を呼ぶ準備をする。入口のthunkを定義し、thunk、コードのアドレス、結果の数、結果を数えるかどうかを返す。
     fn prepare(&mut self, loaded: Loaded) -> Result<(Thunk, *const u8, usize, bool), RuntimeError> {
+        if loaded.machine != self.id {
+            // ほかのマシンの添字は、このマシンの引数のないどの関数も指しうる。その関数は、入口でないので`evv`に
+            // 要る証拠がないまま動く (docs/spec/native.mdの「関数の形」)
+            return Err(internal("", "a loaded entry of another machine"));
+        }
         let tables = self.tables.as_ref().expect("a program is loaded");
         let entry = &tables.functions[loaded.entry as usize];
         let (name, rets, code, counted) = (
@@ -440,10 +455,17 @@ impl NativeMachine {
     }
 
     /// コード生成器のテストのために、読み込んだ関数`name`を`args`で呼び、結果を返す。どの引数も`int`、`float`、`enum`に
-    /// 限るので、引数が偽の参照になることはない。数える結果が1つなら、runが入口の結果を手放すのと同じく手放す。読み込んで
+    /// 限るので、引数が偽の参照になることはないが、スカラーの値も関数の前提を崩しうる。型の範囲の外の`enum`の引数は、
+    /// コンパイルした`switch`のコードに届く。数える結果が1つなら、runが入口の結果を手放すのと同じく手放す。読み込んで
     /// いない名前と、合わない引数ではpanicする。
+    ///
+    /// # Safety
+    ///
+    /// R-5: 関数は、空の`evv`とこれらの引数で入っても、docs/spec/lir.mdの「実行の前提」を満たす。`call`は関数を
+    /// プログラムのエントリからでなく新しいrunの先頭で動かすので、関数の中の`clause`が要るevidenceは、関数が自分で
+    /// 入れない限りない (docs/spec/lir.mdの「エンジンの約束」)。
     #[doc(hidden)]
-    pub fn call(
+    pub unsafe fn call(
         &mut self,
         name: &str,
         args: &[Arg],
@@ -489,7 +511,8 @@ impl NativeMachine {
     /// コード生成器のテストのために、読み込んだ関数`name`のthunkとコードのアドレスを返す。`call`と違い、関数は物体の引数を
     /// 取ってよい。読み込んでいない名前ではpanicする。
     ///
-    /// `thunk(ctx, code, argv)`を呼ぶことはemlのコードへの呼び出しで、呼ぶ側は、`call`ならそれ自身が保証することを約束する。
+    /// `thunk(ctx, code, argv)`を呼ぶことはemlのコードへの呼び出しで、呼ぶ側は、`call`の約束 (R-5) と、
+    /// `call`ならそれ自身が保証することを約束する。
     /// 呼び出しは、マシンが生きている間に、このマシンの`Image`のrun (`eml_nrt::run::run`) の中で、そのrunのworkerの上で
     /// その`Ctx`を使って行う。`argv`は引数と結果ごとにslotを持ち、各引数の種類の語を入れてある。物体の語はどれも、即値か、
     /// その`Ctx`の (ヒープか付けた塊の) 生きている物体で、所有の引数なら、呼び出しが消費する参照を1つ持つ。数える結果は
@@ -611,9 +634,9 @@ impl NativeMachine {
         // SAFETY: `image`の表は`self`のもので、呼び出しの間生きていて変わらない。どの`Str`も`String`から作る。どの
         // データのslotも、moduleが値ごとに1つ定義した8バイトにそろえた書ける語で、領域はマシンが終わるまで返さない。
         // ここを呼ぶ`run`と`call`は`&mut self`を取るので、同じslotを使うrunは重ならない。`thunk`は`code`の関数の
-        // 種類の並びのthunkである。その関数は`load`に渡したプログラムからコンパイルしたもので、`load`の呼び手はそれが
-        // 正しいLIRであることを約束する (`load`を見る)。debugのビルドでは、それにverifierを通してある。`argv`は
-        // その関数の引数と結果ごとにslotを持ち、引数を入れてある
+        // 種類の並びのthunkである。その関数は`load`に渡した`Trusted`のプログラムからコンパイルしたもので、どのビルドの
+        // `load`もverifierを通してある (P1)。`run`は入口を空の`evv`で動かし、`call`は呼び手がR-5で、空の`evv`と
+        // 渡した引数で関数が前提を満たすことを約束する。`argv`はその関数の引数と結果ごとにslotを持ち、引数を入れてある
         unsafe {
             eml_nrt::run::run(
                 &tables.image,
@@ -702,7 +725,7 @@ fn prelude_shape(program: &Program) -> Result<(), LoadError> {
 
 /// `program`を新しいマシンで1回実行する。VMの`eml_vm::execute`に当たる。
 pub fn execute(
-    program: &Program,
+    program: &Trusted,
     linked: &Linked,
     config: &RunConfig,
     host: HostRef,

@@ -7,7 +7,7 @@ use eml_rt::{Control, Limits, Stop};
 use eml_sched::error::RunFault;
 use eml_vm::RuntimeError;
 
-use crate::common::{parse, run_lir, run_unverified};
+use crate::common::{run_lir, run_unverified, trusted};
 
 /// `first` は2つの引数のうち最初のものを返す。
 const FIRST: &str = "\
@@ -218,7 +218,7 @@ fn a_self_tail_loop_runs_in_constant_depth() {
     }));
     let (host, _) = eml_vm::capture_host(Default::default());
     let result = eml_vm::execute(
-        &parse(COUNT),
+        &trusted(COUNT),
         &eml_vm::Linked::default(),
         &eml_vm::RunConfig::default()
             .with_debug_heap(true)
@@ -235,7 +235,7 @@ fn a_self_tail_loop_stops_on_an_interrupt() {
     control.interrupt();
     let (host, _) = eml_vm::capture_host(Default::default());
     let result = eml_vm::execute(
-        &parse(COUNT),
+        &trusted(COUNT),
         &eml_vm::Linked::default(),
         &eml_vm::RunConfig::default()
             .with_debug_heap(true)
@@ -276,7 +276,7 @@ b2:
     }));
     let (host, _) = eml_vm::capture_host(Default::default());
     let result = eml_vm::execute(
-        &parse(text),
+        &trusted(text),
         &eml_vm::Linked::default(),
         &eml_vm::RunConfig::default()
             .with_debug_heap(true)
@@ -507,7 +507,7 @@ fn a_growing_heap_hits_the_memory_limit() {
             }));
             let (host, _) = eml_vm::capture_host(Default::default());
             eml_vm::execute(
-                &parse(&cons_loop(n)),
+                &trusted(&cons_loop(n)),
                 &eml_vm::Linked::default(),
                 &eml_vm::RunConfig::default()
                     .with_debug_heap(debug_heap)

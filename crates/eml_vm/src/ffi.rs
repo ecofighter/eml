@@ -315,7 +315,9 @@ pub(crate) fn take<R: Exec>(
     let c = ops[0];
     let entry = &code.c_functions[c as usize];
     let (token, wake) = (task.raw(ops[2] as Slot), task.raw(ops[3] as Slot));
-    let taken = cells::take_job(shared, ctx, token, task.worker)?;
+    // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。語は`Trusted`のプログラムの命令が渡すもので、
+    // コンパイラが決めたReprを持つ。`ctx`はこのworkerの`Ctx`で、登録表とdriverはこのrunのものである
+    let taken = unsafe { cells::take_job(shared, ctx, token, task.worker) }?;
     if taken.from != JobSource::C(c) {
         return Err(RunFault::Internal("an op is taken by another function"));
     }

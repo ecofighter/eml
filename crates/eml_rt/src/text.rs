@@ -9,8 +9,6 @@
 //! `str` で読み書きする `write_text`、`text`、`text_ptr` は、vstd の `str::as_bytes` と `str::from_utf8_unchecked` の
 //! 約束を使って、この4つの上に検証して書く。
 
-#[cfg(verus_only)]
-use crate::driver::RawBuf;
 use crate::meta::{BlockPerm, Header, slot_ptr};
 use vstd::prelude::*;
 #[cfg(verus_only)]
@@ -20,11 +18,77 @@ use vstd::utf8::valid_utf8;
 
 verus! {
 
-/// `RawBuf` の欄を Verus に見せる。`Heap::bytes_lend` の約束が、返す容量を言うのに使う。欄はふつうの構造体のままで、
-/// Verus は rustc の定義を読むので、何も仮定しない。Verus のためだけの宣言なので、ふつうのビルドには入れない。
-#[cfg(verus_only)]
-#[verifier::external_type_specification]
-pub struct ExRawBuf(RawBuf);
+/// カーネルとプールのスレッドが読み書きする記憶。貸す側のスレッドで作り、driverを持つスレッドと、そのdriverのプールの
+/// スレッドで使うので`Send`である。番地を持つだけで、生かし続ける責めは持たない。その責めは`new`の約束が負う。
+/// `cap == 0`は記憶がないことを表し、`ptr`は任意の番地で、読みも書きもしない。`Op::Read`ではバイトは初期化されて
+/// いなくてよく、driverはポインタを通して書き、そのバイトへの参照を作らない。作れるのは`unsafe fn new`だけなので、
+/// 安全なコードはdriverに好きな番地を読み書きさせられない (docs/spec/vm.mdの「時計と driver」)。
+#[derive(Clone, Copy)]
+pub struct RawBuf {
+    pub(crate) ptr: *mut u8,
+    pub(crate) cap: usize,
+}
+
+impl RawBuf {
+    /// 貸す記憶のバイト数。
+    pub closed spec fn cap_spec(self) -> usize {
+        self.cap
+    }
+
+    /// `ptr`から`cap`バイトを貸す。
+    ///
+    /// # Safety
+    /// `cap == 0`なら、`ptr`はnullも含む任意の番地でよく、何もそれを通して読まず、書かず、参照を作らない。そうでなければ、
+    /// `ptr`は1つの確保の`cap`バイトを指し、呼ぶ側はこの値とその写しとその一部 (`head`、`tail`) について次を約束する。
+    /// - 渡す先。呼ぶ側はこの値をdriverにだけ渡す。`IoDriver::submit`に渡す`Op::Read`か`Op::Write`の`buf`として渡すか、
+    ///   driverの中で、そのdriver自身のbackendに渡す。この約束の外でこの値を出しうるコードには届かない。
+    /// - 期間。そのバイトは、この値で始めたどの操作も終わるまで、確保されたまま動かない。`submit`に渡した操作が
+    ///   終わるのは、`submit`が`Submit::Done`を返したとき、その完了を`completions`から取り出したとき、`pending()`を0に
+    ///   した`quiesce`が戻ったとき、driverを落としたときである。backendに直に渡した操作は、backendがその結果を
+    ///   知らせたときに終わる。
+    /// - ほかに触れるもの。それまで、driverのほかには何もそのバイトを書かない。`Op::Read`が持つ間はほかの何も読まず、
+    ///   バイトは初期化されていなくてよい。`Op::Write`のバイトは初期化されている。
+    ///
+    /// (docs/spec/lir.mdの「エンジンの約束」のR-8)
+    #[inline]
+    pub unsafe fn new(ptr: *mut u8, cap: usize) -> (r: RawBuf)
+        ensures
+            r.cap_spec() == cap,
+    {
+        RawBuf { ptr, cap }
+    }
+
+    #[inline]
+    pub fn ptr(self) -> *mut u8 {
+        self.ptr
+    }
+
+    #[inline]
+    pub fn cap(self) -> (r: usize)
+        ensures
+            r == self.cap_spec(),
+    {
+        self.cap
+    }
+
+    /// 前の`min(n, cap)`バイト。
+    #[inline]
+    pub fn head(self, n: usize) -> (r: RawBuf)
+        ensures
+            r.cap_spec() == if n < self.cap_spec() {
+                n
+            } else {
+                self.cap_spec()
+            },
+    {
+        let cap = if n < self.cap {
+            n
+        } else {
+            self.cap
+        };
+        RawBuf { ptr: self.ptr, cap }
+    }
+}
 
 /// `h` のペイロードの `at` バイト目 (長さの語の後ろから数える) から `b` を写す。`at` は今の ghost のバイト列の
 /// 長さで、写した後の ghost のバイト列は連結になる。長さの語と、ほかの欄は書かない。

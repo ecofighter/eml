@@ -571,6 +571,19 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 見出しのない引用 (`(docs/spec/core-ir.md)` など) は検査できないので、文書全体を指すときだけに使う。同じファイルの中の「上の「…」」も検査しないので、節を動かすときはそのファイルの中を grep する。`docs/plans` は段の設計と計画で、段を閉じるときに消すので、検査から外し、コードと文書からも引かない ([ロードマップ](../future/roadmap.md) の「進め方」)。引く見出しは題名の見出しに限り、段の名前の見出しは作らない。見出しを引く文は、その見出しがあるコミットに入れる ([文書の地図](../README.md) の「文書の扱い」)。
 
+## 公開の面の検査
+
+`crates/eml_cli/tests/surface.rs`は、公開の面の分け方の規則 ([コンパイラの構成](architecture.md)の「公開の面と`unsafe`」) を保つ。引用の検査と同じく、ソースを実行時に読む。走査するのは`crates/*/src/**/*.rs`のすべてで、`crates/eml_rt`、`crates/eml_test_support`、生成したWinUIのbinding、外に置いたテストのmoduleのファイルを除く。まずコメント、文字列、テストだけの項目 (`#[cfg(test)]`、`#[cfg(all(test, ..))]`) を空白に置き換える。字句は識別子の`Ctx`、`Heap`、`Word`、`RawBuf`、`Op`、`IoDriver`で、識別子全体として照らす。このほかに`*mut`と`*const`を照らす。型の別名は表す字句を隠すので、定義が字句を名指す別名の名前も字句に数える。数えるのは別名を名指せる範囲で、非公開の別名はそのファイル、`pub(crate)`の別名はそのcrate、`pub`の別名はどこでもである。
+
+- `a_safe_function_that_names_runtime_memory_is_listed`: 本体までのシグネチャが字句を名指す安全な`pub fn`は、`SAFE`の項とちょうど同じである
+- `a_public_field_that_names_runtime_memory_is_listed`: 型が字句を名指す、構造体の`pub`の欄と`pub enum`の変種の欄は、`FIELDS`の項とちょうど同じである
+- `an_unsafe_function_states_its_promise`: 名前に`$`のない`pub unsafe fn`は、どれも上のdocコメントに`# Safety`を持つ
+- `the_scanner_sees_only_code`: 空白への置き換え、識別子全体の照らし方、項目の読み方を、書いた見本で確かめる
+
+新しい項は、`crates/`の下のファイル、`impl`のブロックの型、関数か欄を名指し、`Reason`を付ける。`Stores` (語を置くか返すだけで、語を通して記憶を読まない)、`Allocates` (物体を作るだけで、呼ぶ側の語を読まない)、`Address` (番地を返すか運ぶだけで、その先を読み書きしない)、`ReadsCtx` (`Ctx`の欄だけを読む)、`ReadsClock` (時計だけを読む。自分の時計か、渡されたdriverの時計である)、`CallsDriver` (呼ぶ側が渡したdriverの安全なメソッドだけを呼び、語を読まない)、`MakesDriver` (`eml_io`の自前のdriverを作る。そのdriverが読み書きするのは、出された`RawBuf`が貸す記憶だけである)、`Unrelated` (字句が同じ名前の別の型を名指す) のどれかである。今は`Unrelated`の理由の項はない。どの理由にも合わない項目は一覧に足さず、規則に従って`unsafe fn`か`pub(crate)`にする。
+
+このテストは、`pub`のtraitのメソッドとtraitの実装を見ない。docs/spec/lir.mdの「エンジンの約束」の一覧を見直すときに、走査するcrateの`pub`のtraitを手で読む。安全な関数がFFIを通して届く先も見ない。`eml_gui`のネイティブのbackendは、どの字句も名指さない安全なRustのシグネチャからC++とプラットフォームのtoolkitを呼ぶので、同じ見直しで手で読む。また、Rustの構文で書いた項目だけを読む。マクロが自分の構文から作る関数 (`eml_nrt`の`entries!`の`plain fn`と`shim fn`、可視性が`$v`の型板、`eml_rows`の`extern_rows!`の行の関数) は見ない。今は`entries!`のどの形も`unsafe extern "C" fn`に、`extern_rows!`の行は`pub unsafe fn`に展開する。安全な`pub fn`に展開する新しい形は、マクロを読んで確かめる。どの字句も名指さない`NonNull`、`usize`、包む型で運ぶ番地も見ないので、そういう項目も同じ見直しで手で読む。
+
 ## CLI のテスト
 
 `crates/eml_cli/tests/cli.rs` は `eml` バイナリを起動し、終了コードが [コンパイラの構成](architecture.md) の「CLI と lib API」の定めに合うことを確認する。`run` のテストのうち、速いモード (`--debug-heap` なし) で走るのは、成功と実行時エラーの2本と、下の4つの worker の run である。

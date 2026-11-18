@@ -79,7 +79,11 @@ fn take_async<M: Mode>(
             Notice::Submit(op) => cells.take_submit(op, here.me, work)?,
             Notice::CancelIo(op) => cells.cancel_hosted(op, here.me, work)?,
             Notice::Completion(op) => {
-                woken.extend(cells.take_completion(ctx, depth_offset, op, here, work)?);
+                // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
+                // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである。yieldの状態は、
+                // `take_slot`から`exit`の後に来たときは`exit_abort`が置いたヒープの不死のダミーだけを持ち、ほかの
+                // ときは空である
+                woken.extend(unsafe { cells.take_completion(ctx, depth_offset, op, here, work) }?);
             }
             Notice::Limit(cell) => limited.extend(cells.limit_forwarded(cell, here.me)),
             Notice::Child(_) | Notice::Joined { .. } => {
@@ -700,15 +704,19 @@ impl<P: Policy> Scheduler<P> {
             (cells.in_flight(k), *own_deadline, cells.unheard)
         };
         // host として受けた操作を driver に出し、取り消しを頼む。driver がその場で終えた操作は短い区間で結果を置く
-        cells::run_io(
-            shared,
-            &here,
-            ctx,
-            driver.as_deref_mut(),
-            depth_offset,
-            &mut work,
-            &mut out,
-        )?;
+        // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
+        // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである
+        unsafe {
+            cells::run_io(
+                shared,
+                &here,
+                ctx,
+                driver.as_deref_mut(),
+                depth_offset,
+                &mut work,
+                &mut out,
+            )
+        }?;
         if look {
             *since_poll = 0;
             if in_flight > 0 {
@@ -719,29 +727,37 @@ impl<P: Policy> Scheduler<P> {
                     .map_err(|e| RunFault::Driver(e.to_string()))?;
             }
         }
-        let drained = cells::drain(
-            shared,
-            &here,
-            ctx,
-            driver.as_deref_mut(),
-            depth_offset,
-            &mut out,
-            limited,
-        )?;
-        // bin に印のあるハンドルは、driver が bin を空にするまで閉じない。完了がなくても driver に完了を問わせて空に
-        // させる (docs/spec/vm.md の「時計と driver」)
-        let closing = run.slots[k].bin.get().is_some_and(|bin| bin.take_dropped());
-        // mail の処理は driver の数を変えない
-        if in_flight > 0 || closing {
-            cells::complete(
+        // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
+        // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである
+        let drained = unsafe {
+            cells::drain(
                 shared,
                 &here,
                 ctx,
-                driver_mut(driver)?,
+                driver.as_deref_mut(),
                 depth_offset,
-                completed,
                 &mut out,
-            )?;
+                limited,
+            )
+        }?;
+        // binに印のあるハンドルは、driverがbinを空にするまで閉じない。完了がなくてもdriverに完了を問わせて空に
+        // させる (docs/spec/vm.mdの「時計と driver」)
+        let closing = run.slots[k].bin.get().is_some_and(|bin| bin.take_dropped());
+        // mailの処理はdriverの数を変えない
+        if in_flight > 0 || closing {
+            // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
+            // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである
+            unsafe {
+                cells::complete(
+                    shared,
+                    &here,
+                    ctx,
+                    driver_mut(driver)?,
+                    depth_offset,
+                    completed,
+                    &mut out,
+                )
+            }?;
         }
         // 最初の区間の後に登録表を変えたときだけ、満期と見張りの語のためにもう1回取る。タイマーのない run は時計を
         // 読まない
@@ -856,15 +872,20 @@ impl<P: Policy> Scheduler<P> {
             &mut work,
             &mut Vec::new(),
         )?;
-        cells::run_io(
-            shared,
-            &here,
-            ctx,
-            driver.as_deref_mut(),
-            depth_offset,
-            &mut work,
-            out,
-        )?;
+        // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
+        // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである。呼ぶのは`finish`だけで、
+        // yieldの状態は、`exit`の後なら`exit_abort`が置いたヒープの不死のダミーだけを持ち、ほかのときは空である
+        unsafe {
+            cells::run_io(
+                shared,
+                &here,
+                ctx,
+                driver.as_deref_mut(),
+                depth_offset,
+                &mut work,
+                out,
+            )
+        }?;
         Ok(())
     }
 
@@ -1388,7 +1409,9 @@ mod tests {
         let (host, _) = crate::capture_host(Default::default());
         let mut home = Ctx::<eml_rt::Checked>::new(Arc::clone(&control), host);
         let x = unsafe { home.heap_mut() }.fork_worker();
-        let value = cells::with_worker(&mut home, x, 0, |ctx| ctx.fresh_string("left"));
+        // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+        // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+        let value = unsafe { cells::with_worker(&mut home, x, 0, |ctx| ctx.fresh_string("left")) };
         let scope = shared.lock().open_root(None, None).unwrap();
         let cell = cells::member_task(&shared, scope, x);
         {
@@ -1553,27 +1576,35 @@ mod tests {
                 mail: &self.shared.mail,
                 post: &post,
             };
-            let token = cells::submit_read(
-                &self.shared,
-                &here,
-                &mut self.owner_ctx,
-                None,
-                worker,
-                0,
-                buf,
-                stream,
-            )
+            // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+            // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+            let token = unsafe {
+                cells::submit_read(
+                    &self.shared,
+                    &here,
+                    &mut self.owner_ctx,
+                    None,
+                    worker,
+                    0,
+                    buf,
+                    stream,
+                )
+            }
             .unwrap();
-            let run = cells::park_io(
-                &self.shared,
-                &here,
-                &mut self.owner_ctx,
-                None,
-                0,
-                token,
-                me,
-                Word::UNIT,
-            )
+            // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+            // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+            let run = unsafe {
+                cells::park_io(
+                    &self.shared,
+                    &here,
+                    &mut self.owner_ctx,
+                    None,
+                    0,
+                    token,
+                    me,
+                    Word::UNIT,
+                )
+            }
             .unwrap();
             assert!(run.is_none());
             token
@@ -1581,10 +1612,8 @@ mod tests {
 
         /// 相手の端から `bytes` を書く。テストの driver は受け付けの時点で書き終える。
         fn write_far(&mut self, bytes: &'static [u8]) {
-            let buf = eml_rt::RawBuf {
-                ptr: bytes.as_ptr().cast_mut(),
-                cap: bytes.len(),
-            };
+            // SAFETY: `bytes`は`'static`で、`Write`のdriverは読むだけである
+            let buf = unsafe { eml_rt::RawBuf::new(bytes.as_ptr().cast_mut(), bytes.len()) };
             let op = eml_rt::Op::Write {
                 handle: self.far,
                 buf,
@@ -1645,7 +1674,9 @@ mod tests {
             [Runnable::ResumeIo { cell, wake: cells::WOKE, op: o, .. }] if cell == me && o == token
         ));
         f.owner.runnables.clear();
-        let buf = cells::take_bytes(&f.shared, &mut f.owner_ctx, token, worker).unwrap();
+        // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+        // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+        let buf = unsafe { cells::take_bytes(&f.shared, &mut f.owner_ctx, token, worker) }.unwrap();
         assert_eq!(unsafe { &*f.owner_ctx.heap().bytes(buf).unwrap() }, b"ab");
         unsafe { f.owner_ctx.heap_mut().decref(buf) }.unwrap();
         let leaks = f.owner_ctx.leaks();
@@ -1675,7 +1706,9 @@ mod tests {
             [Runnable::ResumeIo { cell, wake: cells::CANCELLED, .. }] if cell == me
         ));
         f.owner.runnables.clear();
-        let taken = cells::take_op(&f.shared, &mut f.owner_ctx, token, worker).unwrap();
+        // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+        // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+        let taken = unsafe { cells::take_op(&f.shared, &mut f.owner_ctx, token, worker) }.unwrap();
         assert!(taken.cancelling && taken.result.is_err());
         unsafe { f.owner_ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
         let leaks = f.owner_ctx.leaks();
@@ -1698,16 +1731,20 @@ mod tests {
             mail: &f.shared.mail,
             post: &post,
         };
-        let token = cells::submit_control(
-            &f.shared,
-            &here,
-            &mut f.owner_ctx,
-            None,
-            worker,
-            0,
-            Some(true),
-            stream,
-        )
+        // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+        // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+        let token = unsafe {
+            cells::submit_control(
+                &f.shared,
+                &here,
+                &mut f.owner_ctx,
+                None,
+                worker,
+                0,
+                Some(true),
+                stream,
+            )
+        }
         .unwrap();
         f.host.gather(&mut f.host_ctx, 0, false).unwrap();
         assert_eq!(cells::arrival_of(&f.shared, token), Some(false));
@@ -1723,16 +1760,20 @@ mod tests {
             mail: &f.shared.mail,
             post: &host_post,
         };
-        let local = cells::submit_control(
-            &f.shared,
-            &host_here,
-            &mut f.host_ctx,
-            f.host.driver.as_deref_mut(),
-            host_worker,
-            0,
-            None,
-            stream,
-        )
+        // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+        // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+        let local = unsafe {
+            cells::submit_control(
+                &f.shared,
+                &host_here,
+                &mut f.host_ctx,
+                f.host.driver.as_deref_mut(),
+                host_worker,
+                0,
+                None,
+                stream,
+            )
+        }
         .unwrap();
         assert!(f.shared.lock().op_done(local, host_worker).unwrap());
     }
@@ -1787,11 +1828,15 @@ mod tests {
             post: &post,
         };
         let (shared, near, bin) = (&f.shared, f.near, &f.bin);
-        let token = cells::with_worker(&mut f.owner_ctx, worker, 0, |ctx| {
-            let buf = unsafe { ctx.heap_mut() }.alloc_bytes_room(64);
-            let stream = cells::stream_on(ctx, near, Arc::clone(bin));
-            cells::submit_read(shared, &here, ctx, None, worker, 0, buf, stream).unwrap()
-        });
+        // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+        // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+        let token = unsafe {
+            cells::with_worker(&mut f.owner_ctx, worker, 0, |ctx| {
+                let buf = ctx.heap_mut().alloc_bytes_room(64);
+                let stream = cells::stream_on(ctx, near, Arc::clone(bin));
+                cells::submit_read(shared, &here, ctx, None, worker, 0, buf, stream).unwrap()
+            })
+        };
         f.host.gather(&mut f.host_ctx, 0, false).unwrap();
         f.write_far(b"ab");
         f.host.gather(&mut f.host_ctx, 0, true).unwrap();
@@ -1799,7 +1844,9 @@ mod tests {
         assert_eq!(cells::arrival_of(&f.shared, token), Some(false));
         assert_eq!(f.shared.lock().in_flight(0), 0);
         assert!(!cells::op_left(&f.shared, token));
-        cells::sweep_all(&f.shared, &mut f.host_ctx, 0).unwrap();
+        // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+        // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+        unsafe { cells::sweep_all(&f.shared, &mut f.host_ctx, 0) }.unwrap();
         f.owner_ctx.reclaim();
         f.host_ctx.reclaim();
         let leaks = f.owner_ctx.leaks();

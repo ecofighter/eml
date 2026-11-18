@@ -191,12 +191,15 @@ pub enum Census {
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     pub census: Census,
-    /// workerのスタックに予約するバイト数。
+    /// workerのスタックに予約するバイト数。スタックの上限はこの値から決めるので、どの値も安全の約束を破らない。
+    /// 小さすぎる値は深さの誤りかガードページでの中止になり、大きすぎる値はworkerを作れない内部の誤りになる
+    /// (docs/spec/lir.mdの「エンジンの約束」)。
     pub stack: usize,
     /// 呼んだスレッドでSIGINTとSIGTERMを塞いだまま`body`を動かすフック。`body`を1回呼ぶ。既定は何も塞がない。
     /// `run`はこの中でworker 0の門を開けてjoinするので、worker 0は呼んだスレッドが塞ぐまでコードを動かさない
     /// (docs/spec/native.md の「実行の始めと終わり」)。塞ぐことは呼ぶ側に任せ、`eml_nrt`はOSのシグナルの関数を
-    /// 呼ばない。
+    /// 呼ばない。フックが`body`を呼ばなければrunは内部の誤りで終わり、2回目からの呼び出しは何もしない。これは安全の
+    /// 約束ではない。
     pub masked: fn(&mut dyn FnMut()),
 }
 

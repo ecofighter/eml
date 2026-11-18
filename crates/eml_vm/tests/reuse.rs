@@ -7,11 +7,11 @@ use eml_sched::config::RunStats;
 use eml_test_support::execute;
 use eml_vm::{RunConfig, capture_host};
 
-use crate::common::{parse, run_lir};
+use crate::common::{run_lir, trusted};
 
 /// 検査モードの回数。出力を確かめた後に読む。
 fn checked_stats(text: &str) -> RunStats {
-    let program = parse(text);
+    let program = trusted(text);
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
     let (_, result) = execute(&program, &RunConfig::default().with_debug_heap(true));
     result.unwrap_or_else(|error| panic!("{error}"))
@@ -184,7 +184,7 @@ fn a_live_token_is_dropped_on_exit() {
 }}
 "
     );
-    let program = parse(&text);
+    let program = trusted(&text);
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());

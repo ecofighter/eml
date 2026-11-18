@@ -10,6 +10,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::text::RawBuf;
+
 /// 呼ぶ側が振る操作の名前。1つの driver の中で、保留の操作 (`submit` が `Submit::Pending` を返し、まだ
 /// `completions` で返していない操作) の鍵は互いに違う。`Submit::Done` を返した鍵と、完了を `completions` で
 /// 返した鍵は、すぐに次の操作に使い回してよい。
@@ -17,23 +19,25 @@ pub type OpKey = u64;
 /// driver が持つハンドル (リスナー、ストリーム)。1つの driver の寿命の間は使い回さない。
 pub type IoHandle = u64;
 
-/// カーネルとプールのスレッドが読み書きする記憶。貸す側のスレッドで作り、driver を持つスレッドと、その driver の
-/// プールのスレッドで使うので `Send` である。番地を持つだけで、生かし続ける責めは持たない。その責めは下の貸す側の
-/// 約束が負う。`cap == 0` は記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側は、
-/// `submit` が `Submit::Done` を返すか、その操作の完了を `completions` から取り出すまで、物体を生かし、動かさない。
-/// `Read` に貸した記憶は一意に保ち、`Write` に貸した記憶は書き換えない。
-#[derive(Clone, Copy)]
-pub struct RawBuf {
-    pub ptr: *mut u8,
-    pub cap: usize,
+impl RawBuf {
+    /// 前の`min(n, cap)`バイトの後ろ。Verusは`wrapping_add`を扱わないので、これだけ`verus!`の外に置く。
+    #[inline]
+    pub fn tail(self, n: usize) -> RawBuf {
+        let n = n.min(self.cap);
+        RawBuf {
+            ptr: self.ptr.wrapping_add(n),
+            cap: self.cap - n,
+        }
+    }
 }
 
-// SAFETY: `ptr` は、貸す側のスレッドで操作の記録が持つ物体から作る。記録は、`submit` が `Submit::Done` を返すか
-// 完了を記録に当てるまで、その物体を生かし、動かさず、`Read` に貸した記憶は一意に保つ。その間 `RawBuf` を読み書きする
-// のは、driver を持つスレッドと、その操作のファイルの仕事を走らせるプールのスレッドだけである。仕事はプールの列の
-// mutex を通ってプールのスレッドへ渡り、答えは受け箱の mutex と `wait` と `completions` を通って戻るので、どちらの
-// 受け渡しも happens-before の辺になり、貸す側が完了の後に読むか確定するのは仕事の書きの後になる
-// (docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)。
+// SAFETY: 値は`RawBuf::new`の約束の下で作る。そのバイトは、この値で始めたどの操作も終わるまで確保されたまま動かず、
+// その間driverのほかには何も書かない。操作が終わるのは、`Submit::Done`、完了の取り出し、`pending()`を0にした
+// `quiesce`、driverを落とすことのどれかで、backendに直に渡した操作ではbackendが結果を知らせたときである。その間
+// `RawBuf`を読み書きするのは、driverを持つスレッドと、カーネルと、その操作のファイルの仕事を走らせるプールの
+// スレッドだけである。仕事はプールの列のmutexを通ってプールのスレッドへ渡り、答えは受け箱のmutexと`wait`と
+// `completions`を通って戻るので、どちらの受け渡しもhappens-beforeの辺になり、貸す側が完了の後に読むか確定するのは
+// 仕事の書きの後になる (docs/spec/vm.mdの「時計と driver」、docs/spec/object-model.mdのT10の行)。
 unsafe impl Send for RawBuf {}
 
 /// driver に出す操作。

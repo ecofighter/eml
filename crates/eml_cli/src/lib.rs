@@ -92,9 +92,15 @@ impl Session {
         Session::new(eml_hir::load(entry_path, entry_text, source))
     }
 
-    /// 標準ライブラリを `(ファイル名, 本文)` の並びに差し替えて読む。標準ライブラリの中の item の扱いを確かめるテストの
-    /// ためのインターフェースである。並びの条件は `eml_hir::load_with_std` と同じである。
-    pub fn load_with_std(
+    /// 標準ライブラリを`(ファイル名, 本文)`の並びに差し替えて読む。標準ライブラリの中のitemの扱いを確かめるテストの
+    /// ためのインターフェースである。並びの条件は`eml_hir::load_with_std`と同じである。
+    ///
+    /// # Safety
+    ///
+    /// P5: 差し替えた標準ライブラリのどの`extern`の宣言も、組み込みの表の行が前提にする型を持つ。標準ライブラリを
+    /// 差し替えることは、信頼するコードを差し替えることである。externの行は標準ライブラリのシグネチャの型の値を
+    /// 受け取り、差し替えた宣言を表と比べるものはない (docs/spec/lir.mdの「エンジンの約束」)。
+    pub unsafe fn load_with_std(
         std: &[(&str, &str)],
         entry_path: &str,
         entry_text: &str,
@@ -105,7 +111,8 @@ impl Session {
 
     /// REPL の受け付けた入力と今の入力を、入力ごとのモジュールとして読む
     /// (docs/spec/modules.md の「REPL のセッション」)。`entry_file` は `:load` のファイル名で、なければ空である。
-    /// 返す `ImportCache` は、この読み込みで新しく読んだモジュールで、`Repl` が入力を受け付けたときにだけ足す。
+    /// 返す`ImportCache`は、この読み込みで新しく読んだモジュールで、`Repl`は、入力を受け付けなかったときも、その入力の
+    /// プログラムをマシンに読み込んだなら足す。
     pub fn load_session(
         inputs: &[eml_hir::SessionInput],
         file: Option<&str>,
@@ -207,8 +214,9 @@ impl Session {
 
     /// reuse の後の LIR を作る。
     #[cfg(feature = "core")]
-    pub fn compile(&self) -> Compiled<eml_lir::Program> {
-        self.compile_with(eml_core_ir::lower)
+    pub fn compile(&self) -> Compiled<eml_lir::Trusted> {
+        // SAFETY: `compile_with`は、このセッションのプログラムで診断に誤りがないものにだけ`lower`を呼ぶ
+        self.compile_with(|input| unsafe { lower_trusted(input) })
     }
 
     /// 検査が通れば、`lower` で IR を作る。パスの順番は `eml_core_ir` と `eml_lir` だけが知るので、IR を作る関数を
@@ -254,11 +262,12 @@ impl Session {
     /// `compile`の結果から、ネイティブのコードが断る形を誤りにする。形ごとに E0004 を1つ、エントリの`main`の名前に置く
     /// (docs/spec/native.md の「断る形」)。断る形があれば、プログラムは返さない。
     #[cfg(feature = "run")]
-    pub fn compile_native(&self) -> Compiled<eml_lir::Program> {
+    pub fn compile_native(&self) -> Compiled<eml_lir::Trusted> {
         let mut main_range = None;
         let mut compiled = self.compile_with(|input| {
             main_range = Some(input.hir[input.entry].name_range);
-            eml_core_ir::lower(input)
+            // SAFETY: `compile_with`は、このセッションのプログラムで診断に誤りがないものにだけ`lower`を呼ぶ
+            unsafe { lower_trusted(input) }
         });
         let (Some(program), Some(range)) = (&compiled.program, main_range) else {
             return compiled;
@@ -282,6 +291,20 @@ impl Session {
         compiled.program = None;
         compiled
     }
+}
+
+/// エンジンに渡すLIRを作るただ1つの関数。`Trusted::new`を呼ぶのはここだけにする。
+///
+/// # Safety
+///
+/// `input`は、このセッションが自分のパイプラインで検査した、誤りのないプログラムである。呼ぶ側は、診断に誤りがない
+/// ことを確かめてから呼ぶ。
+#[cfg(feature = "core")]
+pub(crate) unsafe fn lower_trusted(input: eml_core_ir::Input) -> eml_lir::Trusted {
+    let program = eml_core_ir::lower(input);
+    // SAFETY: 呼ぶ側がこの関数の約束を守り、LIRはコンパイラ自身のパイプラインが作る。verifierが確かめられない
+    // 「実行の前提」はこのパイプラインが守る (docs/spec/lir.mdの「エンジンの約束」)
+    unsafe { eml_lir::Trusted::new(program) }
 }
 
 /// 断る形の言い方。
@@ -309,7 +332,7 @@ pub enum Engine {
 #[cfg(feature = "run")]
 pub fn execute_on(
     engine: Engine,
-    program: &eml_lir::Program,
+    program: &eml_lir::Trusted,
     linked: &Linked,
     config: &RunConfig,
     host: HostRef,
@@ -371,8 +394,10 @@ pub fn repl_limits() -> Limits {
     }
 }
 
-/// `eml_rt` は vstd だけに依存したままにするため、OS に問い合わせるのはここである。`src/` の `unsafe` の呼び出しは、
-/// この関数と、bin の `interrupt` モジュールと `terminal.rs` の `stdout_width` の中だけに置く。
+/// `eml_rt`はvstdだけに依存したままにするため、OSに問い合わせるのはここである。`src/`の`unsafe`の呼び出しは、
+/// この関数、`lower_trusted`、`Session::compile`、`Session::compile_native`、`Repl::evaluate`、`Repl::run`、binの
+/// `interrupt`モジュールと`terminal.rs`の`stdout_width`の中だけに置く。`unsafe fn`は`Session::load_with_std`と
+/// `lower_trusted`だけである。
 #[cfg(all(feature = "run", unix))]
 fn physical_memory() -> Option<usize> {
     // sysconf は名前のほかに前提を持たず、読めなければ -1 を返す
