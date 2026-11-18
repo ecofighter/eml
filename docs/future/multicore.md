@@ -109,7 +109,7 @@ worker のループは、ほかに仕事がなくなるまで次の順に見る�
 
 - `par` の fork と join は実行系 (VM ではタスクと join の節点を持つ `eml_vm`) が行い、印付けと移し戻しは `eml_rt` の `share` と `transfer_back` を呼ぶ ([VM](../spec/vm.md) の「`par` の fork と join」)。fork はまだ始まっていない右の子を自分の deque に積み、左の子を自分で動かす。空いた worker は deque の上から盗む
 - dequeを入れるまでのVMでは、forkは空いているworkerがあれば右の子をその受け箱に置き、なければ自分の実行待ちに積む。置いた子の終わりは、結果ごと親のworkerの受け箱に知らせる ([VM](../spec/vm.md)の「`par`のforkとjoin」)。`Async`のタスクは、`start`のときにworker 1..N-1を順に回して置き、`Place`の知らせで運ぶ (下の「`Async`のタスク」)
-- `compute` の仕事は join するフレームを持たない fork の子で、`par-steal` では deque の項になり、終わりで仕事のセルを終える ([VM](../spec/vm.md) の「`compute` の仕事」)
+- `compute`の仕事はjoinするフレームを持たないforkの子で、ネイティブのスケジューラ (`sched-core`) では、workerが取るまで開いた仕事の一覧にあり、終わりで仕事のセルを終える ([VM](../spec/vm.md)の「`compute` の仕事」)
 - VMでは、joinで待つ親の`Task`はjoinの節点で待ち、workerのループはほかの仕事 (先に`par`の子、次に`Async`のタスク) を動かす。待つ`Task`はデータなので、待つ費用はない。子が終わると、親は実行待ちに戻る
 - ネイティブのコードはスタックを切り替えられないので、join で待つ worker は待たずに手伝う。手伝えるのは、待つ join より深い fork の子だけで、ほかに手伝えるものがなければ join の節点で待つ ([ネイティブ化の設計](native.md) の「並列の実行」)。これで待ちが輪になることはない。まだ始まっていない子のうち最も浅いものを深さ d の c とすると、c を fork した親は動いているか、深さ d - 1 の自分の join で待っていて c を取れる。盗まれた子を待つ worker は動いている worker を待っている。`par` の子は有限である
 - メインのworkerは盗まず、自分のjoinだけを手伝う
@@ -150,7 +150,7 @@ worker のループは、ほかに仕事がなくなるまで次の順に見る�
 
 ### タスクはworkerから動かない
 
-- タスクは置かれたworkerで終わるまで動く。workerをまたぐ受け渡しは、`start`での配置、forkでの`par`の子と`compute`の仕事の配置 (`par-steal`では、まだ始まっていない子を盗むことも)、channelの品物、プールの仕事、joinか`take`での結果だけである
+- タスクは置かれたworkerで終わるまで動く。workerをまたぐ受け渡しは、`start`での配置、forkでの`par`の子と`compute`の仕事の配置 (ネイティブのコードでは、空いたworkerがまだ始まっていない仕事を取ることも)、channelの品物、プールの仕事、joinか`take`での結果だけである
 - workerが忙しいときの手立ては、`compute`、`blocking`、`Std.Stream`、`Std.Exec`、`--workers`である。Nが2以上のとき、`start`はworker 0にタスクを置かないので、`main`の同期の読みはタスクを止めない
 - 待ったタスクの継続に触れるのはそのworkerだけなので、印を付けない。その場の読みが同じworkerのタスクを通してしか終わらないプログラムは止まり、処理系はそれを見つけない
 
