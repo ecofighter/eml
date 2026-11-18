@@ -47,8 +47,8 @@ pub fn call(text: &str, name: &str, args: &[Arg]) -> Vec<Arg> {
     machine
         .load(&program, &eml_test_support::link(&program))
         .unwrap_or_else(|error| panic!("{error:?}"));
-    let results = machine
-        .call(name, args, native_options())
+    // SAFETY: R-5: 手書きのLIRの約束はテストが負う。呼ぶテストの関数は、空の`evv`と渡す引数で前提を満たす
+    let results = unsafe { machine.call(name, args, native_options()) }
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close();
     results

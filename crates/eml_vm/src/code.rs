@@ -84,6 +84,9 @@ pub struct CodeBase<M: Mode> {
     pub(crate) c_functions: Vec<CEntry>,
     /// C の関数の引数と結果が番号で指すハンドルの型。
     pub(crate) c_handles: Vec<CHandleEntry>,
+    /// 表を書き始めた後の読み込みが誤りを返した。表は途中まで書いたものなので、この後の読み込みと実行はpanicする
+    /// (docs/spec/vm.mdの「追記」)。
+    pub(crate) spent: bool,
 }
 
 /// `CodeBase` の C の関数の1項。

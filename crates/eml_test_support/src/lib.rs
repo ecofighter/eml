@@ -151,7 +151,8 @@ impl Sources<'_> {
     pub fn session(self) -> Session {
         let source = eml_hir::MemorySource(self.modules);
         match self.std {
-            Some(std) => Session::load_with_std(std, ENTRY_PATH, self.entry, &source),
+            // SAFETY: P5: テストが差し替える標準ライブラリは、表の型を宣言する
+            Some(std) => unsafe { Session::load_with_std(std, ENTRY_PATH, self.entry, &source) },
             None => Session::load(ENTRY_PATH, self.entry, &source),
         }
     }

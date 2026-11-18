@@ -259,6 +259,63 @@ fn main() -> unit {
     let _ = machine.load(&trusted(text), &eml_vm::Linked::default());
 }
 
+/// 表を書き始めた後の読み込みの誤りは`Machine`を使えなくする。その後の`load`、`extend`、`run`、`run_shown`は、
+/// どのビルドでもpanicする。誤りは`MissingEntry`で、`Async`の行を持つのにタスクのエントリの関数を持たない
+/// プログラムが、関数を書いた後に起こす (docs/spec/vm.mdの「追記」)。
+#[test]
+fn a_machine_after_a_failed_load_panics() {
+    let first = "\
+fn main() -> unit {
+  return ()
+}
+";
+    let failing = "\
+fn second() -> unit {
+  return ()
+}
+fn detach(t.0: obj) -> unit {
+  let u.1: unit = extern Std.Async.detach(t.0)
+  return u.1
+}
+";
+    let (host, _) = capture_host(Default::default());
+    let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
+    let loaded = machine
+        .load(&trusted(first), &eml_vm::Linked::default())
+        .unwrap();
+    let error =
+        // SAFETY: P2: 2つのプログラムは同じ名前の関数を持たない
+        unsafe { machine.extend(&trusted(failing), &eml_vm::Linked::default()) }.unwrap_err();
+    assert!(
+        matches!(error, CompileError::MissingEntry { .. }),
+        "{error:?}"
+    );
+    let mut panics = |what: &str, call: &mut dyn FnMut(&mut Machine<Fast>)| {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut machine)))
+            .expect_err(what);
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(message.contains("after a failed load"), "{what}: {message}");
+    };
+    panics("load", &mut |machine| {
+        let _ = machine.load(&trusted(first), &eml_vm::Linked::default());
+    });
+    panics("extend", &mut |machine| {
+        // SAFETY: P2: 同じプログラムを読み直す
+        let _ = unsafe { machine.extend(&trusted(first), &eml_vm::Linked::default()) };
+    });
+    panics("run", &mut |machine| {
+        let _ = machine.run(loaded);
+    });
+    panics("run_shown", &mut |machine| {
+        // SAFETY: P4: エントリの`ret`はRCのReprでないので約束に入らない。この`Machine`は実行する前にpanicする
+        let _ = unsafe { machine.run_shown(loaded, 10) };
+    });
+}
+
 /// マシンはほかのマシンの`load`が返した`Loaded`を内部の誤りで断り、その後も自分の`Loaded`を実行する
 /// (docs/spec/vm.mdの「追記」)。
 #[test]
@@ -711,6 +768,88 @@ fn a_shown_entry_must_return_an_object() {
     );
 }
 
+/// 操作を受け付けず、`quiesce`で`Control`の終わりの欄を消すdriver。`Finish`の後、`run_shown`が結果を写す前に、
+/// ほかの`Machine`のrunの始まりか`Control::clear`が欄を開いた形を作る。
+struct ClearingDriver {
+    control: Arc<Control>,
+}
+
+impl IoDriver for ClearingDriver {
+    fn now(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    fn wait(&mut self, _deadline_ms: Option<u64>) -> io::Result<bool> {
+        Ok(false)
+    }
+
+    fn submit(&mut self, _key: OpKey, _op: Op) -> Submit {
+        unreachable!("the program submits no ops")
+    }
+
+    fn cancel(&mut self, _key: OpKey) {}
+
+    fn completions(&mut self, _out: &mut Vec<Completion>) {}
+
+    fn pending(&self) -> usize {
+        0
+    }
+
+    fn waker(&self) -> Arc<dyn IoWaker> {
+        Arc::new(NoWaker)
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        Arc::new(HandleBin::default())
+    }
+
+    fn close(&mut self, _handle: IoHandle) {}
+
+    fn adopt(&mut self, _res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    fn pipe(&mut self, _parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    fn quiesce(&mut self, _jobs: Duration) {
+        self.control.clear();
+    }
+}
+
+/// `exit`で終わった`run_shown`は、`Control`の終わりの欄が後で消えても、エントリの結果のダミーを文字列として写さない。
+/// 写すかどうかはタスク自身の`exit`の記録で決める。欄はほかの持ち主が安全な関数で開けるためである
+/// (docs/spec/vm.mdの「追記」)。
+#[test]
+fn a_shown_run_ended_by_exit_copies_nothing_after_the_end_field_is_cleared() {
+    let control = RunConfig::default().control;
+    let driver = ClearingDriver {
+        control: Arc::clone(&control),
+    };
+    let (host, _) = capture_host(Default::default());
+    // SAFETY: R-3: `ClearingDriver`は操作を受け付けないので、完了も貸された記憶への書き込みもない
+    let mut machine =
+        unsafe { Machine::<Checked>::new(control, host).with_driver(Box::new(driver)) };
+    let loaded = machine
+        .load(
+            &trusted(
+                "\
+fn shown() -> tobj {
+  let x.0: tobj = extern Prelude.exit(3)
+  return x.0
+}
+",
+            ),
+            &eml_vm::Linked::default(),
+        )
+        .unwrap();
+    // SAFETY: P4: エントリは`exit`で終わり、結果を返さない
+    let (_, text) =
+        unsafe { machine.run_shown(loaded, 10) }.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(text, None);
+}
+
 /// 完了を返さない driver。`wait` はいつも壊れた driver の誤りを返す。`quiesce` は呼ばれた回数を数え、`drains` のときだけ
 /// 保留の操作を空にする。落とされると`dropped`を立てる。
 struct FakeDriver {
@@ -799,8 +938,10 @@ impl IoDriver for FakeDriver {
 fn every_run_quiesces_its_driver() {
     let (driver, quiesces) = FakeDriver::new(true);
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `FakeDriver`は完了を返さず、貸された記憶に書かない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(
             &trusted(&format!(
@@ -828,8 +969,10 @@ fn main() -> unit {{
 fn a_failed_run_quiesces_its_driver_before_recovery() {
     let (driver, quiesces) = FakeDriver::new(true);
     let (host, _) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `FakeDriver`は完了を返さず、貸された記憶に書かない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(
             &trusted(
@@ -863,8 +1006,10 @@ main () = Async.run (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))
 fn a_failing_driver_breaks_the_run() {
     let (driver, _) = FakeDriver::new(true);
     let (host, _) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `FakeDriver`は完了を返さず、貸された記憶に書かない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(
             &eml_test_support::lir(WAITS_ON_A_LISTEN),
@@ -888,8 +1033,10 @@ fn a_driver_left_pending_is_dropped_with_the_run() {
     let (driver, _) = FakeDriver::new(false);
     let dropped = Arc::clone(&driver.dropped);
     let (host, _) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `FakeDriver`は完了を返さず、貸された記憶に書かない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(
             &eml_test_support::lir(WAITS_ON_A_LISTEN),
@@ -1003,8 +1150,10 @@ fn run_on_stub(src: &str) -> (String, eml_vm::Finished, Vec<String>) {
     let driver = StubDriver::default();
     let log = Arc::clone(&driver.log);
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `StubDriver`は貸された記憶に書かず、受け付けた鍵ごとに完了を高々1つ返す
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
@@ -1134,8 +1283,11 @@ fn every_quiesce_gets_the_job_budget() {
     let quiesced = |budget: Option<Duration>, src: &str| {
         let (driver, jobs) = BudgetDriver::new(true);
         let (host, _) = capture_host(Default::default());
-        let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
-            .with_driver(Box::new(driver));
+        // SAFETY: R-3: `BudgetDriver`は完了を返さず、貸された記憶に書かない
+        let mut machine = unsafe {
+            Machine::<Checked>::new(RunConfig::default().control, host)
+                .with_driver(Box::new(driver))
+        };
         if let Some(budget) = budget {
             machine = machine.with_job_budget(budget);
         }
@@ -1174,8 +1326,10 @@ fn main() -> unit {
 fn exit_keeps_its_code(src: &str) {
     let (driver, _) = BudgetDriver::new(false);
     let (host, _) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `BudgetDriver`は完了を返さず、貸された記憶に書かない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
@@ -1212,8 +1366,10 @@ main () = Async.run body
 fn a_machine_runs_again_after_its_injected_driver_kept_an_op() {
     let (driver, _) = BudgetDriver::new(false);
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `BudgetDriver`は完了を返さず、貸された記憶に書かない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(
             &eml_test_support::lir(

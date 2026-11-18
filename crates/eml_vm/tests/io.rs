@@ -377,8 +377,12 @@ main () = Async.run (fn () ->
   Net.close b)
 ";
     let (host, out) = capture_host(Default::default());
-    let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
-        .with_driver(Box::new(HoldingDriver::default()));
+    // SAFETY: R-3: `HoldingDriver`が貸された記憶に書くのは取り消した読みの先頭2バイトだけで、
+    // `cap`が2以上であることを確かめ、`Done::Size(2)`の完了を1つ返す。`quiesce`で捨てた操作にはもう触れない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host)
+            .with_driver(Box::new(HoldingDriver::default()))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
@@ -425,8 +429,12 @@ main () = Async.run (fn () ->
   Net.close a)
 ";
     let (host, out) = capture_host(Default::default());
-    let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
-        .with_driver(Box::new(HoldingDriver::default()));
+    // SAFETY: R-3: `HoldingDriver`が貸された記憶に書くのは取り消した読みの先頭2バイトだけで、
+    // `cap`が2以上であることを確かめ、`Done::Size(2)`の完了を1つ返す。`quiesce`で捨てた操作にはもう触れない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host)
+            .with_driver(Box::new(HoldingDriver::default()))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
@@ -597,8 +605,10 @@ main () = Async.run (fn () ->
         log: Arc::clone(&log),
     };
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
@@ -645,8 +655,10 @@ main () = Async.run (fn () ->
         log: Arc::clone(&log),
     };
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
@@ -983,8 +995,11 @@ fn a_spent_budget_looks_at_the_os_and_goes_on_alone() {
             log: Arc::clone(&log),
         };
         let (host, _) = capture_host(Default::default());
-        let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
-            .with_driver(Box::new(driver));
+        // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+        let mut machine = unsafe {
+            Machine::<Checked>::new(RunConfig::default().control, host)
+                .with_driver(Box::new(driver))
+        };
         let loaded = machine
             .load(
                 &eml_test_support::lir(src.as_str()),
@@ -1046,12 +1061,14 @@ main () = Async.run (fn () ->
     let driver = Box::new(driver);
     if fast {
         run_to_close(
-            Machine::<eml_rt::Fast>::new(control, host).with_driver(driver),
+            // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+            unsafe { Machine::<eml_rt::Fast>::new(control, host).with_driver(driver) },
             &program,
         );
     } else {
         run_to_close(
-            Machine::<Checked>::new(control, host).with_driver(driver),
+            // SAFETY: R-3: `Recorder`は操作と完了を`TestDriver`にそのまま渡すので、`TestDriver`と同じく約束を守る
+            unsafe { Machine::<Checked>::new(control, host).with_driver(driver) },
             &program,
         );
     }
@@ -1772,8 +1789,10 @@ impl IoDriver for FileWatch {
 /// `driver` の上で `src` を検査モードで流し、出力を返す。
 fn run_on_watch(src: &str, driver: FileWatch) -> String {
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `FileWatch`が預かるのは取り込みの完了だけで、ほかの操作と完了は`TestDriver`にそのまま渡す
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();

@@ -139,8 +139,8 @@ fn count_in_8_mib(text: &str) -> i64 {
         stack: 8 << 20,
         ..native_options()
     };
-    let result = m
-        .call("start", &[Arg::I64(1_000_000)], options)
+    // SAFETY: R-5: `start`はエフェクトを使わず、`int`の引数に前提はない
+    let result = unsafe { m.call("start", &[Arg::I64(1_000_000)], options) }
         .unwrap_or_else(|error| panic!("{error}"));
     m.close();
     let [Arg::I64(n)] = result[..] else {
@@ -467,8 +467,8 @@ fn a_wide_over_application_checks_the_stack() {
         stack: (3 << 20) + (256 << 10),
         ..native_options()
     };
-    let error = m
-        .call(start, &[Arg::I64(0)], options)
+    // SAFETY: R-5: `start`はエフェクトを使わず、`int`の引数に前提はない
+    let error = unsafe { m.call(start, &[Arg::I64(0)], options) }
         .expect_err("the nested helpers run out of stack");
     assert_eq!(
         error.to_string(),
@@ -490,8 +490,8 @@ fn a_very_wide_over_application_stops_with_the_depth_error() {
         stack: (3 << 20) + (32 << 10),
         ..native_options()
     };
-    let error = m
-        .call(start, &[Arg::I64(0)], options)
+    // SAFETY: R-5: `start`はエフェクトを使わず、`int`の引数に前提はない
+    let error = unsafe { m.call(start, &[Arg::I64(0)], options) }
         .expect_err("the nested helpers run out of stack");
     assert_eq!(
         error.to_string(),

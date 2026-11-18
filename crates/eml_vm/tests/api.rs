@@ -446,8 +446,10 @@ main () = Async.run (fn () -> Async.sleep_ms 50)
     let driver = DeadlineRecorder::default();
     let calls = Arc::clone(&driver.calls);
     let (host, _) = eml_vm::capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `DeadlineRecorder`は操作を受け付けないので、完了も貸された記憶への書き込みもない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine
         .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
         .unwrap();
@@ -526,11 +528,16 @@ type RealRun = (
 /// その文字列が出たときに別のスレッドが割り込む。どの run も、3 秒たって終わらなければ見張りのスレッドが割り込むので、
 /// 止まったテストも待ち続けない。
 fn run_real(src: &str, interrupt_on: Option<&'static str>) -> RealRun {
-    run_real_on(src, interrupt_on, None)
+    // SAFETY: R-3: driverを渡さないので、`Machine`が自分で作る
+    unsafe { run_real_on(src, interrupt_on, None) }
 }
 
-/// `run_real` を、`driver` があればその driver で流す。
-fn run_real_on(
+/// `run_real`を、`driver`があればそのdriverで流す。
+///
+/// # Safety
+///
+/// R-3: `driver`は`Machine::with_driver`の約束を守る (docs/spec/lir.mdの「エンジンの約束」)。
+unsafe fn run_real_on(
     src: &str,
     interrupt_on: Option<&'static str>,
     driver: Option<Box<dyn eml_rt::IoDriver>>,
@@ -543,7 +550,8 @@ fn run_real_on(
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host).with_clock(Clock::Real);
     if let Some(driver) = driver {
-        machine = machine.with_driver(driver);
+        // SAFETY: R-3: 呼ぶ側が`driver`について約束する
+        machine = unsafe { machine.with_driver(driver) };
     }
     let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     let (done, finished) = mpsc::channel::<()>();
@@ -744,7 +752,8 @@ fn a_real_read_after_a_finished_probe_does_not_wait() {
         inner: eml_io::RealDriver::new().unwrap(),
         calls: Arc::clone(&calls),
     };
-    let (out, result, closed, _) = run_real_on(&src, None, Some(Box::new(driver)));
+    // SAFETY: R-3: `ProbeRecorder`は操作と完了を`RealDriver`にそのまま渡す
+    let (out, result, closed, _) = unsafe { run_real_on(&src, None, Some(Box::new(driver))) };
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert!(out.ends_with("hello\n"), "{out}");
@@ -921,7 +930,9 @@ main () = Async.run (fn () ->
   Net.close (Async.await t))
 ";
     let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
-    let (out, result, closed, _) = run_real_on(src, Some("waiting"), Some(Box::new(driver)));
+    // SAFETY: R-3: 名前の解決だけを差し替えた`RealDriver`である
+    let (out, result, closed, _) =
+        unsafe { run_real_on(src, Some("waiting"), Some(Box::new(driver))) };
     let error = result.unwrap_err();
     assert!(error.interrupted(), "{error:?}");
     closed.unwrap_or_else(|error| panic!("{error}"));
@@ -944,7 +955,8 @@ main () = Async.run (fn () ->
     | None -> println \"None\")
 ";
     let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
-    let (out, result, closed, _) = run_real_on(src, None, Some(Box::new(driver)));
+    // SAFETY: R-3: 名前の解決だけを差し替えた`RealDriver`である
+    let (out, result, closed, _) = unsafe { run_real_on(src, None, Some(Box::new(driver))) };
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "None\n");

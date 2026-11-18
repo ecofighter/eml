@@ -119,7 +119,8 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 /// 入力をまたいで`CodeBase`と`Ctx`を持つ実行の状態 (docs/spec/vm.mdの「追記」)。`load`と`extend`でプログラムを読み込み、
 /// `run`でエントリの関数を実行する。モードごとの確かめは、作るときに`Machine<Fast>::new`と`Machine<Checked>::new`が
 /// 決める。渡す`Control`を同時に使う`Machine`は1つだけにする。IDの表と数が`Control`にあるためである
-/// (docs/spec/object-model.mdの「実行の制御」)。
+/// (docs/spec/object-model.mdの「実行の制御」)。2つの`Machine`が1つの`Control`を同時に使っても、狂うのは止める語、
+/// 確保量の数、検査モードの確かめだけで、安全の約束ではない (docs/spec/lir.mdの「エンジンの約束」)。
 pub struct Machine<M: Mode> {
     /// 時計と待ち。`with_driver` が渡すか、最初の run が `clock` と方針の seed から作り、run の間は `Scheduler` に
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
@@ -171,8 +172,8 @@ pub struct Machine<M: Mode> {
     counters: Arc<Counters>,
     /// driver を作るときの時計。
     clock: Clock,
-    /// 実行ごとの `Scheduler` に渡す自己パイプ。1つの自己パイプは1つの `Machine` だけに渡す
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 実行ごとの`Scheduler`に渡す自己パイプ。1つの自己パイプは1つの`Machine`だけに渡す。共有しても、起こしが
+    /// 失われるか重なるだけで、安全の約束ではない (docs/spec/vm.mdの「タスクとスケジュール」)。
     doorbell: Option<Arc<Doorbell>>,
     /// 次の run だけに渡す仮想のシグナルの予定。run が取り出すので、後の run は再生しない
     /// (docs/spec/vm.md の「時間の待ち」)。
@@ -285,11 +286,23 @@ impl<M: Mode> Machine<M> {
         self
     }
 
-    /// 次の run から使う driver を渡す。後の `with_clock` と `with_sched` はこれを捨てる。driver は `Machine` を使う
-    /// スレッドの上で作る。渡すのは眠る driver に限る。VM はその run の空きの待ちを 10 ms ごとに切るので、期限まで
-    /// 時計を進める driver では、終わらない保留のある run がデッドロックで止まらない (docs/spec/vm.md の
-    /// 「時計と driver」)。
-    pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
+    /// 次のrunから使うdriverを渡す。後の`with_clock`と`with_sched`はこれを捨てる。driverは`Machine`を使うスレッドの
+    /// 上で作る。渡すのは眠るdriverに限る。VMはそのrunの空きの待ちを10 msごとに切るので、期限まで時計を進めるdriver
+    /// では、終わらない保留のあるrunがデッドロックで止まらない。この規則はrunが終わるかだけに関わり、安全の約束では
+    /// ない (docs/spec/vm.mdの「時計と driver」)。
+    ///
+    /// # Safety
+    ///
+    /// R-3: driverは自分がしたことだけを報告する。VMは完了が報告するバイト数を、確かめずに貸したbufferに確定するので、
+    /// driverは次のことを守る (docs/spec/lir.mdの「エンジンの約束」)。
+    ///
+    /// - `Op::Read`の完了`Ok(Done::Size(n))`は、`submit`が`Submit::Done`で返すものも`completions`が返すものも、
+    ///   driverが完了を返す前に`buf.ptr`から`n`バイトを書いたことを表す。`n`は`buf.cap`以下である
+    /// - `Submit::Pending`で受け付けた鍵には、完了を高々1つ返す
+    /// - driverが貸されたbufferを読み書きするのは、それを貸した`submit`からその操作の完了までの間だけである。`Op::Write`
+    ///   のbufferも、完了の後はプログラムに戻って放されるか書き換えられる。`Submit::Done`の後、完了の後、`pending()`を
+    ///   0にした`quiesce`の後、落とされた後には触れない
+    pub unsafe fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
         self.run_clock = Some(RunClock::Injected);
         self
@@ -300,8 +313,9 @@ impl<M: Mode> Machine<M> {
     }
 
     /// コードのない`Machine`にプログラムを読み込む。`linked`は`eml_clink`がこのプログラムのCの表をつないだ結果である。
-    /// コードを持つ`Machine`に足すのは`extend`で、`load`はどのビルドでもpanicする (`CodeBase::load`)。誤りを返した後の
-    /// `Machine`は使い続けない。
+    /// コードを持つ`Machine`に足すのは`extend`で、`load`はどのビルドでもpanicする (`CodeBase::load`)。表を書き
+    /// 始めた後に誤りを返したら、その後の`load`、`extend`、`run`、`run_shown`はどのビルドでもpanicする。何も書く前の
+    /// 誤りの後は、`Machine`を使い続けてよい (`CodeBase::extend`)。
     pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<Loaded, CompileError> {
         self.refuse_after_panic();
         let entry = self.code.load(program, linked)?;
@@ -309,7 +323,7 @@ impl<M: Mode> Machine<M> {
     }
 
     /// コードを持つ`Machine`にプログラムを追記する。コードのない`Machine`では`load`と同じである
-    /// (`CodeBase::extend`)。誤りを返した後の`Machine`は使い続けない。
+    /// (`CodeBase::extend`)。誤りの後は`load`と同じである。
     ///
     /// # Safety
     ///
@@ -364,7 +378,10 @@ impl<M: Mode> Machine<M> {
     /// エントリの関数を`()`で実行する。統計は`Machine`を作ってからの積算で、`peak_stack`だけがこの実行の値である。
     /// 根は手放さず、次の実行に残す。続けられる誤りの後と`exit`が実行を捨てた後は、根から届く物体を新しいヒープに
     /// 写して古いヒープを捨て、元の誤りか`exit`の`Finished`を返す。回復が失敗したら`Unrecovered`を返す。
-    /// ほかの`Machine`が返した`loaded`は、何も実行せずに内部の誤りで断る (docs/spec/vm.mdの「追記」)。
+    /// ほかの`Machine`が返した`loaded`は、何も実行せずに内部の誤りで断る。壊れた誤り (`is_broken`) の後も`Machine`は
+    /// 使えるが、失敗したrunの物体とほかのworkerのヒープを、落とすまで持つ。後のrunは失敗するか、壊れたdriverで
+    /// 止まったままになるか、検査モードで数とリークの誤りを返しうる。`close`はいつもどおり根を手放す。これは安全の約束
+    /// ではない (docs/spec/vm.mdの「追記」)。
     pub fn run(&mut self, loaded: Loaded) -> Result<Finished, RuntimeError> {
         self.run_recovering(loaded, None)
             .map(|(finished, _)| finished)
@@ -403,6 +420,7 @@ impl<M: Mode> Machine<M> {
         shown: Option<usize>,
     ) -> Result<(Finished, Option<String>), RuntimeError> {
         self.refuse_after_panic();
+        self.code.refuse_spent();
         if loaded.machine != self.id {
             // ほかの`Machine`の番号は、この`CodeBase`のどの関数も指しうる。引数のない関数として実行すれば、速いモードは
             // 物体の引数の代わりに`()`を読む (docs/spec/vm.mdの「追記」)
@@ -620,7 +638,9 @@ impl<M: Mode> Machine<M> {
         // `exit` で終わった実行のエントリの結果はダミーなので写さない
         let exit = ctx.heap().control().exit_code();
         let copied = match (&result, shown, exit) {
-            (Ok(()), Some(max_chars), None) => {
+            // 写すかどうかはタスク自身の`exit`の記録で決める。`Control`の終わりの欄は、ほかの持ち主が安全な関数で
+            // 開けるので、`unsafe`の前提の守りにならない (docs/spec/vm.mdの「追記」)
+            (Ok(()), Some(max_chars), None) if task.exit.is_none() => {
                 Some(unsafe { ctx.copy_string(task.get(0), max_chars) })
             }
             _ => None,

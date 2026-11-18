@@ -61,9 +61,13 @@ fn keep() -> unit {
 fn a_separate_machine_refuses_an_injected_driver() {
     let program = eml_test_support::lir(HELLO);
     let (host, out) = eml_vm::capture_host(Default::default());
-    let mut machine = Machine::<Checked>::new(control(), host)
-        .with_driver(Box::new(eml_io::TestDriver::new(None)))
-        .with_seat(Seat::Separate);
+    // SAFETY: R-3: `TestDriver`は読みに書いたバイト数だけを報告し、鍵ごとに完了を高々1つ返し、
+    // 完了の後に貸された記憶に書かない
+    let mut machine = unsafe {
+        Machine::<Checked>::new(control(), host)
+            .with_driver(Box::new(eml_io::TestDriver::new(None)))
+            .with_seat(Seat::Separate)
+    };
     let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     assert_eq!(
         internal(machine.run(entry)),

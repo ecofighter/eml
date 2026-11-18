@@ -357,8 +357,9 @@ fn every_inline_row_agrees_with_its_shared_function() {
     } in every_case()
     {
         let Ok(expected) = expected else { continue };
-        let got = m
-            .call(&name, &args, native_options())
+        // SAFETY: R-5: `r<i>`は物体を取らないインラインの行を1つ呼ぶだけで、エフェクトを使わない。
+        // `Bool`の行には範囲の外の値も渡すが、その行は語を比べるだけで`switch`を持たない
+        let got = unsafe { m.call(&name, &args, native_options()) }
             .unwrap_or_else(|error| panic!("`{ext:?}` {args:?}: {error}"));
         assert_eq!(
             got.iter().copied().map(bits).collect::<Vec<_>>(),
@@ -401,8 +402,9 @@ mod fatal {
         } in every_case()
         {
             let Err(fault) = expected else { continue };
-            let got = m
-                .call(&name, &args, native_options())
+            // SAFETY: R-5: `r<i>`は物体を取らないインラインの行を1つ呼ぶだけで、エフェクトを使わない。
+            // `Bool`の行には範囲の外の値も渡すが、その行は語を比べるだけで`switch`を持たない
+            let got = unsafe { m.call(&name, &args, native_options()) }
                 .map_err(|error| error.to_string());
             assert_eq!(
                 got,

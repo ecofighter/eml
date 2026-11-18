@@ -963,11 +963,26 @@ VMのエントリ (`eml_vm::execute`、`Machine`、`AnyMachine`、`CodeBase`の`
 
 ネイティブのエントリ (`eml_native::execute`、`NativeMachine::load`) も`&Trusted`を取る。`eml_native::unsupported`はプログラムを調べるだけで読み込まないので、`&Program`を取る。
 
-マシンのエントリには、ほかに次の約束と規則がある ([VM](vm.md)の「追記」)。
+エンジンのエントリには、ほかに次の約束と規則がある ([VM](vm.md)の「追記」)。
 
 - P2: VMのマシンの`unsafe fn extend` (`Machine`、`AnyMachine`、`CodeBase`) がコードを持つマシンに追記するプログラムは、マシンがすでに持つプログラムと同じセッションから作ったものである。名前が同じ関数は同じコードで、根は書いたときの型のまま読む。releaseのビルドは、名前が同じ関数の命令列を比べない。Cの関数とハンドルの型の表は約束に入らない。`extend`はどのビルドでも、何も書く前にそれを前の表と比べ、違えば`Mismatch`で断る ([VM](vm.md)の「C の関数の命令」)。`load`はコードを持たないマシンだけに読み込み、コードを持つマシンではどのビルドでもpanicする
 - P3: 呼ぶ側の約束ではない。`run`と`run_shown`は、同じマシンの`load`か`extend`が返した`Loaded`を受け取る。`Loaded`は欄を隠してマシンの印を持ち、マシンはどのビルドでも、ほかのマシンの`Loaded`を内部の誤りで断る。ネイティブのマシンも同じである ([ネイティブの実行系](native.md)の「関数の形」)
 - P4: VMのマシンの`unsafe fn run_shown` (`Machine`、`AnyMachine`) に渡す`Loaded`のエントリの関数が結果をRCのReprで返すなら、その結果は文字列である。速いモードは、確かめずに結果を文字列として写す。結果がRCのReprでないエントリは約束に入らず、`run_shown`はどのビルドでも、実行する前に内部の誤りで断る
+- P5: `unsafe fn Session::load_with_std`は標準ライブラリを差し替える。差し替えた標準ライブラリのどの`extern`の宣言も、組み込みの表の行が前提にする型を持つ。埋め込んだ標準ライブラリはテストが表と結び付けるが、差し替えたものを確かめるものはない (上の「実行の前提」の最後の項目)
+- R-2: 呼ぶ側の約束ではない。`load`か`extend`が表を書き始めた後 (Cの表を比べた後) に返す誤りは、マシンを使えなくする。その後の`load`、`extend`、`run`、`run_shown`は、どのビルドでもpanicする。何も書く前に返す誤り (`Invalid`、`MultiValueEntry`、Cの表の`Mismatch`) の後は、マシンを使い続けてよい
+- R-3: `unsafe fn Machine::with_driver`は、VMが作っていないdriverをVMに渡す。driverは自分がしたことだけを報告する。`Op::Read`の完了`Ok(Done::Size(n))`は、driverがその前に`buf.ptr`から`n`バイトを書いたことを表し、`n`は`buf.cap`以下である。`Submit::Pending`で受け付けた鍵には、完了を高々1つ返す。driverが貸されたbufferを読み書きするのは、それを貸した`submit`からその操作の完了までの間だけで、`Submit::Done`の後、完了の後、`pending()`を0にした`quiesce`の後、落とされた後には触れない。`Op::Write`のbufferも、完了の後はプログラムに戻るためである ([VM](vm.md)の「時計と driver」)。ほかのエントリはdriverを自分で作る
+- R-5: コード生成器のテストのための`unsafe fn NativeMachine::call`は、読み込んだ関数を、空の`evv`を持つ新しいrunの先頭で動かす。関数は、空の`evv`と渡した引数で入っても「実行の前提」を満たす。引数はスカラーだが、型の範囲の外の`enum`はコンパイルした`switch`のコードに届き、`clause`は関数が自分で入れないevidenceを見つけない。`entry_of`は`unsafe`の関数ポインタを返し、その呼び出しも同じ約束を負う
+
+次のものは安全の約束ではない。破っても、未定義の振る舞いでなく、誤った結果、panic、止まったままのrunになる。それぞれのdocコメントが振る舞いを書く。
+
+- R-1: 1つの`Control`を同時に使う2つのマシン (`RunConfig.control`を通すものも含む)。共有するのは止める語、確保量の数、検査モードのworker IDとページの表なので、狂うのはこれらだけである。`Control`から読んだ値は、どの`unsafe`の操作も守らない。`run_shown`が結果を写すかは、`Control`の終わりの欄でなく、タスク自身の`exit`の記録で決める
+- R-4: `Host`と`Park`の実装。その結果は、確かめる安全なコードを通してだけエンジンに入る
+- R-6: `with_driver`は眠るdriverだけを受け取る。期限まで時計を進めるdriverでは、終わらない保留の操作を持つrunがデッドロックで止まらない
+- R-10: `Machine`ごとに1つの`Doorbell`。共有した自己パイプは、起こしを失うか重ねるだけである
+- R-11: 壊れた誤り (`is_broken`) の後に使うマシン。マシンは、失敗したrunの物体とほかのworkerのヒープを、落とすまで持つ。後のrunは失敗するか、壊れたdriverで止まったままになるか、検査モードで数とリークの誤りを返しうる。`close`はいつもどおり根を手放す
+- R-12: `eml_native::Options`。スタックの上限は`stack`から決めるので、小さすぎる`stack`は深さの誤りかガードページでの中止になり、大きすぎる`stack`はworkerを作れない内部の誤りになる。`body`を呼ばない`masked`はrunを内部の誤りで終わらせ、2回目からの`body`の呼び出しは何もしない
+
+プログラムのCの宣言が正しいことは、プログラムを書く人の約束で ([宣言](declarations.md)の「宣言する側の約束」)、エンジンのRustのAPIが運ぶ約束ではない。この約束は、`link`のitemか`--link`の値が名指すライブラリも覆う。ライブラリを開くとそのコードが走り、その中身は信頼される。Rustのコードが作って`eml_clink::Linker::link`に渡す`CFunction`と`CHandleType`も同じ約束の下の宣言なので、`link`は安全な関数のままである。どちらのエンジンも、どのビルドでも`Linked`をプログラム自身の宣言と比べる。
 
 ## 実行時エラー
 

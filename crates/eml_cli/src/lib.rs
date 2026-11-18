@@ -92,9 +92,15 @@ impl Session {
         Session::new(eml_hir::load(entry_path, entry_text, source))
     }
 
-    /// 標準ライブラリを `(ファイル名, 本文)` の並びに差し替えて読む。標準ライブラリの中の item の扱いを確かめるテストの
-    /// ためのインターフェースである。並びの条件は `eml_hir::load_with_std` と同じである。
-    pub fn load_with_std(
+    /// 標準ライブラリを`(ファイル名, 本文)`の並びに差し替えて読む。標準ライブラリの中のitemの扱いを確かめるテストの
+    /// ためのインターフェースである。並びの条件は`eml_hir::load_with_std`と同じである。
+    ///
+    /// # Safety
+    ///
+    /// P5: 差し替えた標準ライブラリのどの`extern`の宣言も、組み込みの表の行が前提にする型を持つ。標準ライブラリを
+    /// 差し替えることは、信頼するコードを差し替えることである。externの行は標準ライブラリのシグネチャの型の値を
+    /// 受け取り、差し替えた宣言を表と比べるものはない (docs/spec/lir.mdの「エンジンの約束」)。
+    pub unsafe fn load_with_std(
         std: &[(&str, &str)],
         entry_path: &str,
         entry_text: &str,
@@ -382,6 +388,7 @@ pub fn repl_limits() -> Limits {
 
 /// `eml_rt`はvstdだけに依存したままにするため、OSに問い合わせるのはここである。`src/`の`unsafe`の呼び出しは、
 /// この関数、`lower_trusted`、`Repl::run`、binの`interrupt`モジュールと`terminal.rs`の`stdout_width`の中だけに置く。
+/// `unsafe fn`は`Session::load_with_std`だけである。
 #[cfg(all(feature = "run", unix))]
 fn physical_memory() -> Option<usize> {
     // sysconf は名前のほかに前提を持たず、読めなければ -1 を返す

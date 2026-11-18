@@ -56,7 +56,8 @@ pub trait Pending {
     fn release_gate(&mut self, gate: i64);
 }
 
-/// メインのworkerの眠る道。`Machine`を持つスレッドで作り、そのスレッドから動かない。
+/// メインのworkerの眠る道。`Machine`を持つスレッドで作り、そのスレッドから動かない。実装が下の規則を破っても、runが
+/// 止まったままになるか誤った待ちになるだけで、安全の約束ではない (docs/spec/lir.mdの「エンジンの約束」)。
 pub trait Park {
     /// wakerが鳴るか、`timeout`が過ぎるか、`run`が`Stopping`を返すまで止まる。`pending.run()`を呼んでよい。待ちを
     /// 始める前に鳴っていれば、その待ちは戻るか`run`を呼ぶ。`run`が`Stopping`を返した後は戻る。それより早く、何も

@@ -523,8 +523,10 @@ fn run_counting(main: &str, refuse: bool) -> (String, (usize, usize)) {
     let program = eml_test_support::lir(&format!("{BLOCKING}{main}"));
     let (driver, log) = Jobs::new(refuse);
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    // SAFETY: R-3: `Jobs`は仕事を受け付けで断るか、操作と完了を`TestDriver`にそのまま渡す
+    let mut machine = unsafe {
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver))
+    };
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     machine
         .run(loaded)
