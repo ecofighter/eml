@@ -39,6 +39,7 @@
 - `sched-proofs`: `eml_steps`の空きの手順とデッドロックの判定が、どのworkerの数と公開の数でも、取り手がみな眠っている間に一覧の仕事を残すことがなく、仕事が残っている間にrunを終えることもないことを、ステップの関数の上の帰納的な不変条件としてVerusで証明する。不変条件がこの段の中で見つからなければ、探索器を確かめとして残し、この項目を「その後の項目」に戻す。前提: `sched-core`。設計: [Verus で検証する範囲](verification.md)
 - `native-aot`: 3つのOSで`eml build`を動かす。`cranelift-object`でobjectを書き、システムのリンカでつなぐ。ビルドのプロファイル (`console`と`gui`)、実行系の静的ライブラリ、実行系の通知のファイルもこの段で作る。決めたこと: 実行系の静的ライブラリは、互いに独立したfeature `tls`と`gui`を持つ成果物のcrate `eml_rtlib`が、自分のプロファイル (ライブラリの中のLTO、`panic = "unwind"`) で4つの変種 (`base`、`tls`、`gui`、`tls+gui`) に組む。`gui`の軸はプロファイルが、`tls`の軸はモジュールのグラフに`Std.Tls`が (直接か`Std.Http`を通して) あるかが決め、アプリはこの規則が選ぶ変種だけをリンクする。`eml build`はリンカにdead-stripの指定 (`--gc-sections`、`-dead_strip`、`/OPT:REF`) を渡す。変種ごとに通知のファイルが1つあり、その変種のcrate、Rustの標準ライブラリとそれが取り込むcrate、`gui`の変種ではシステムのライブラリの節の3つの部分からなる。CIが生成した結果と比べ、どの通知も自分の変種にないcrateを挙げない。ツール自身の`THIRD-PARTY-LICENSES.md`にも標準ライブラリの節を足す。割り込みの扱いと物理メモリの問い合わせは`eml_cli`から`eml_io`へ移す。`blocking`のCの呼び出しの橋渡しは`eml_clink::define_bridge`でアプリのobjectに組む。成果物が渡すdriverの工場で、アプリから`TestDriver`を外す。`Box<dyn IoDriver>`と`HostRef`は、そのvtableを通して、どのアプリにも本物のdriverと`StdHost`を残す。そのうち何をアプリがリンクするかも、driverの工場が決める。エントリを公開の記号にし、`eml_c$`と`eml_cd$`をリンクのときに結ぶ。テストは、hello-worldのアプリに`aws_lc`、`rustls`、`eml_x_Tls`、`eml_x_Gui`の記号も、呼ばない行の`eml_x_`の記号もないこと、`gui`のアプリがQt 6かAppKitに動的にリンクすること、出力の大きさを確かめる。記号のテストは、アプリに`_checked`の記号も`eml_rt_audit_`の記号もないことも確かめる。実行系のライブラリは`eml_nrt` (feature `tls`と`gui`) から組む。関数の公開の記号は、そのLIRの名前を1対1にエスケープしたもので、[ネイティブの実行系](../spec/native.md)に書く。呼ぶ行は、アドレスを読まない直接の呼び出しにする。dead-stripはaarch64のmacOSでしか確かめていないので、この段でELFとCOFFでも確かめる。論点: 静的ライブラリのプロファイルの`codegen-units`と`opt-level` (測って決める)。`eml_native`を、下ろし、JITのホスト、AOTのcrateに分けるか。出したobjectと実行系の静的ライブラリが、`eml_rt`の同じネイティブのABI (物体の配置、`Ctx`のずれ、エントリのシンボル、externの語のABI) から来たことを、リンクのときに確かめる。識別子を`eml_rt`の定数からどう導くかは、この段で決める。Windowsでは、AOTのバイナリにも`/STACK:8388608`を付ける。`eml build`は、JITと同じ`eml_lir::Trusted`をコード生成器に渡す。ファイルのコードをコンパイラのプロセスに置く関数は、`unsafe fn`にする。この段の設計は、ネイティブの費用のモデル、見送る最適化、ネイティブの速さとの引き換えをすべて書く。前提: `vm-retire`。設計: [ネイティブ化の設計](native.md)の「AOT と配布」
 - `native-inline`: `String`と`Bytes`のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトがRustの実装の2倍以内、スクリプトと数値のbenchがPythonの1.5倍以内であることである。`eml_rt::layout`に、`Raw`と`String`と`Bytes`の本体のための、種類ごとの語の添字の定数を2つ (長さの語は0、中身の最初の語は1) 足す。`Data`の項目は変えない。`eml_rt`の本体の箇所 (`slot_ptr(h, 1)`、`1 + i`、長さの語の読み、`8 * (cap - 1)`) はこの定数へ付け替える。`Array`の長さと要素の読みは`COUNT_WORD`と`EXTENDED_FIRST`を使う。検査モードの下ろし方では、どのインラインのアクセスの前にもその監査を置き、速いモードのCLIFを固定するテストと対になるテストを置く。この段の設計は、ネイティブの費用のモデルと見送る最適化を書く。前提: `native-aot`。設計: [ネイティブ化の設計](native.md)の「展開と最適化の前提」
+- `par-direct`: panicしない`par`の子に、`try_panic`とその`Result`の箱を通らない道を与える。全域の子の上のstdの`par`では、カットオフ2の`pfib 30`はworker 1つで19,886,982,836命令を実行し、中断の終わりを持っていた`par`の13,006,260,379命令の1.53倍である ([計測の基準](../implementation/benchmarks.md)の「`par`のforkの費用」)。仕組みと、この列の中の位置は、この段の設計で決める。前提: なし
 
 ## その後の項目
 
@@ -382,9 +383,6 @@
   - 見直す条件: 計測したプログラムの速さの伸びが、N = 4で0.8 Nを下回るとき。
 - CASでの仕事の取り: 開いた仕事を、slotのlockの代わりにCASで取る
   - 見直す条件: N = 1でcutoffを2にした`pfib 30`をネイティブで計測し、forkのうちlockの占める割合が15 %を超えるとき。
-- handlerを持たない子の結果: panicしない`par`の子に、`try_panic`とその`Result`の箱を通らない道を与える
-  - 後に回した理由: 費用はVMで空のfork 1回あたり約+0.38 µsで、1024要素の葉の0.1 %に満たない。
-  - 見直す条件: forkあたり100単位より小さい仕事でcutoffする、利用者が書いた`par`の再帰の`bench/`の行が、中断の終わりを持っていた`par`の計測 (カットオフ2の`pfib 30`、worker 1つで13,006,260,379命令。[計測の基準](../implementation/benchmarks.md)の「`par`のforkの費用」) の1.2倍を超えるとき。
 - `concat`での塊の移動: `Array.concat`は、数が1の塊の語を写さずに移す
   - 見直す条件: 箱にした安いmapの行が、箱にしない行の1.3倍を超えるとき。
 - `Raw`のペイロードを`par`の木に貸すこと: `for_mut_unboxed`は、子に貸したペイロードを通してその場で書き換える
