@@ -8,7 +8,7 @@ use eml_test_support::{capture, lir, run_stats, run_stats_on, schedule_independe
 use eml_vm::RunConfig;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 42] = [
+const PROGRAMS: [&str; 43] = [
     "apply_float",
     "apply_int",
     "byte_loop",
@@ -30,6 +30,7 @@ const PROGRAMS: [&str; 42] = [
     "orders",
     "orders_by_hand",
     "par_tree",
+    "pfib",
     "push_fold",
     "push_fold_by_hand",
     "rbtree",
@@ -1498,6 +1499,38 @@ fn par_tree() {
     ");
 }
 
+/// forkごとの仕事がほとんどない`par`の再帰。forkとjoinの回数を確かめる。
+#[test]
+fn pfib() {
+    insta::assert_debug_snapshot!(stats("pfib", "6765\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 4,
+        rc_increments: 0,
+        rc_decrements: 32836,
+        boxes: 32836,
+        unboxes: 32836,
+        allocations: 32837,
+        reuses: 0,
+        peak_objects: 3481,
+        peak_stack: 205,
+        tasks: 0,
+        parks: 0,
+        dropped_failures: 0,
+        cancels: 0,
+        timers: 0,
+        shared_objects: 10945,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
+        completions: 0,
+    }
+    ");
+}
+
 /// `var` の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。`var` で書いたプログラムと、`MutArray` を線形に
 /// 受け渡して手で書いたプログラムの組と、両方の出力。
 const VAR_PAIRS: [(&str, &str, &str); 2] = [
@@ -1642,6 +1675,7 @@ fn unwind_points() {
     orders: 13
     orders_by_hand: 13
     par_tree: 37
+    pfib: 23
     push_fold: 4
     push_fold_by_hand: 4
     rbtree: 15
@@ -1727,6 +1761,7 @@ fn owned_variants() {
     orders:
     orders_by_hand:
     par_tree:
+    pfib:
     push_fold:
     push_fold_by_hand:
     rbtree:
