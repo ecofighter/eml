@@ -2590,7 +2590,7 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
     assert_eq!(check_scopes(&put), Ok(()));
 }
 
-/// `State`の節の関数`get`と、捕獲を1つ持つ`put`、`Counter.put`の節`g`、節でない`h`、`State.get`のforkのエントリ。
+/// `State`の節の関数`get`と、捕獲を1つ持つ`put`、`Counter.put`の節`g`、節でない`h`。
 /// Perceusの前の段の形である。
 const EVIDENCE_ENTRIES: &str = "\
 internal clause State.get fn get(e.0: cev, u.1: unit) -> tobj {
@@ -2605,12 +2605,9 @@ internal clause Counter.put fn g(e.0: cev, n.1: int) -> unit {
 fn h(e.0: cev, u.1: unit) -> tobj {
   return ()
 }
-clause State.get fn fork$State.get(e.0: fev, u.1: unit) -> tobj {
-  return ()
-}
 ";
 
-/// evidenceは操作ごとに1つのエントリを操作の順に持ち、エントリiは`clause E.i`の印を持ち、forkのevidenceを取らない関数で、
+/// evidenceは操作ごとに1つのエントリを操作の順に持ち、エントリiは`clause E.i`の印を持つ関数で、
 /// その関数がとる数だけ捕まえる。捕獲は文脈のReprでない。境界の段では、束縛は`ev`、状態は`tobj`、外側のリストは`evv`で、
 /// 捕獲は関数の引数に収まり`unr`に渡せる (docs/spec/lir.mdの「verifier」)。
 #[test]
@@ -2640,10 +2637,6 @@ fn an_evidence_names_one_clause_function_per_operation() {
         (
             entries("closure put(a.2), &get"),
             "entry 0 of an evidence of `State` is `put`, a clause of `State.put`",
-        ),
-        (
-            entries("&fork$State.get, closure put(a.2)"),
-            "entry 0 of an evidence of `State` is `fork$State.get`, which takes a fork evidence",
         ),
         (
             entries("&get, &put"),
@@ -3425,29 +3418,6 @@ fn a_call_between_a_prompted_apply_and_prompt_is_refused() {
 #[test]
 fn an_extern_row_between_a_prompted_apply_and_prompt_is_refused() {
     let text = between_landing_and_prompt("let z.9: int = extern \"Prelude.Num Int.+\"(1, 2)");
-    assert_eq!(
-        check(&text),
-        Err(
-            "the apply with the prompt marker `ev.3` is not followed by `prompt$` in `try_panic`"
-                .to_string()
-        )
-    );
-}
-
-#[test]
-fn a_child_abort_between_a_prompted_apply_and_prompt_is_refused() {
-    // `prim child_abort`も巻き戻しの地点なので、着地と`prompt$`の間に置けない
-    let text = between_landing_and_prompt(
-        "let q.41: tobj = box 1\n  let u.42: unit = prim child_abort(e.40, q.41)\n  decref e.40",
-    )
-    .replace(
-        "fn try_panic(f.0: tobj, c.1: tobj)",
-        "fn try_panic(f.0: tobj, c.1: tobj, e.40: fev)",
-    )
-    .replace(
-        "  let r.1: tobj = call try_panic(&boom, c.0)\n",
-        "  decref c.0\n  let r.1: tobj = box 0\n",
-    );
     assert_eq!(
         check(&text),
         Err(
@@ -4315,7 +4285,7 @@ fn f(w.0: obj) -> obj {{
     );
 }
 
-// `par` と `child_abort`
+// `par`
 
 /// `a` と `b` を子にする `par` の結果を返す `f`。`call` は `par` の文で、`after` はその後の文である。
 fn par(params: &str, call: &str, after: &str) -> String {
@@ -4405,101 +4375,6 @@ fn a_lin_child_of_a_par_is_consumed_once() {
     );
 }
 
-/// 起こし直す閉包を親に渡し、evidence は借りる。
-const CHILD_ABORT: &str = "fn main() -> unit {\n  return ()\n}\nfn g(e.0: fev, c.1: tobj poly) -> obj poly {\n  let u.2: unit = prim child_abort(e.0, c.1)\n  decref e.0\n  let d.3: obj poly = prim dummy()\n  return d.3\n}\n";
-
-#[test]
-fn child_abort_borrows_the_evidence() {
-    assert_eq!(check(CHILD_ABORT), Ok(()));
-}
-
-#[test]
-fn child_abort_takes_a_fork_evidence_and_a_closure() {
-    let arity = CHILD_ABORT.replace("(e.0, c.1)", "(e.0)");
-    assert_eq!(
-        check(&arity),
-        Err("`prim child_abort` takes 2 arguments but is given 1 in `g`".to_string())
-    );
-    let evidence = CHILD_ABORT
-        .replace("e.0: fev", "e.0: int")
-        .replace("  decref e.0\n", "");
-    assert_eq!(
-        check(&evidence),
-        Err(
-            "argument 0 of `prim child_abort` is `e.0` (int), but the primitive takes fev in `g`"
-                .to_string()
-        )
-    );
-}
-
-/// 子を fork しうるプログラムの、fork の関数を持つエフェクト `Fail` とその fork の関数。`main` の本体と、fork の
-/// 関数のうち書くものを選ぶ。`reperform$` を書かないとき、`fork$` は代わりに `main` を渡す。
-fn forking(main: &str, fork: bool, clause: bool, reperform: bool) -> String {
-    let mut text = format!(
-        "{PAIR}effect Fail {{ never fail(tobj poly) -> never }}\nfn main(a.0: tobj, b.1: tobj) -> obj {{\n{main}}}\n"
-    );
-    if fork {
-        let clause = if clause { "clause Fail.fail " } else { "" };
-        let target = if reperform {
-            "reperform$Fail.fail"
-        } else {
-            "main"
-        };
-        text.push_str(&format!(
-            "{clause}fn fork$Fail.fail(ev.0: fev, a.1: tobj poly) -> obj poly {{
-  let c.2: tobj poly = closure {target}(a.1)
-  let u.3: unit = prim child_abort(ev.0, c.2)
-  decref ev.0
-  let d.4: obj poly = prim dummy()
-  return d.4
-}}
-"
-        ));
-    }
-    if reperform {
-        text.push_str(
-            "uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
-  tail clause Fail.fail(a.0)
-}
-",
-        );
-    }
-    text
-}
-
-/// `par` か `root_get` を含むプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を
-/// 持つ `fork$` と、`reperform$` を持つ (docs/spec/lir.md の「verifier」)。どちらも含まないプログラムには求めない。
-#[test]
-fn a_program_that_may_fork_has_every_fork_entry() {
-    const PAR: &str = "  let t.2: obj = par (,) #0(a.0, b.1)\n  return t.2\n";
-    const ROOT: &str = "  decref a.0\n  decref b.1\n  let r.2: tobj = prim root_get[0]()\n  decref r.2\n  let d.3: obj = prim dummy()\n  return d.3\n";
-    const NEITHER: &str =
-        "  decref a.0\n  decref b.1\n  let d.2: obj = prim dummy()\n  return d.2\n";
-    assert_eq!(check(&forking(PAR, true, true, true)), Ok(()));
-    assert_eq!(check(&forking(NEITHER, false, false, false)), Ok(()));
-    let missing = "`Fail.fail` has no fork entry, but the program may fork in `fork$Fail.fail`";
-    for main in [PAR, ROOT] {
-        for program in [
-            forking(main, false, false, true),
-            forking(main, false, false, false),
-        ] {
-            assert_eq!(check(&program), Err(missing.to_string()));
-            assert_eq!(check_lowered(&program), Err(missing.to_string()));
-        }
-    }
-    assert_eq!(
-        check(&forking(PAR, true, false, true)),
-        Err("the fork entry is not a clause of `Fail.fail` in `fork$Fail.fail`".to_string())
-    );
-    assert_eq!(
-        check(&forking(ROOT, true, true, false)),
-        Err(
-            "`Fail.fail` has no reperform entry, but the program may fork in `reperform$Fail.fail`"
-                .to_string()
-        )
-    );
-}
-
 #[test]
 fn a_c_call_with_the_wrong_arity_is_rejected() {
     let text = "\
@@ -4566,7 +4441,7 @@ fn borrowed_parameters_are_accepted_from_the_borrow_pass_on() {
 #[test]
 fn a_borrowed_parameter_is_reference_counted() {
     let text = "fn f(x.0: obj, borrowed n.1: int) -> int {\n  return n.1\n}\n";
-    let message = "`n.1` (int) is a borrowed parameter, but only obj, tobj, ev, cev, fev, rev and evv can be in `f`";
+    let message = "`n.1` (int) is a borrowed parameter, but only obj, tobj, ev, cev, rev and evv can be in `f`";
     assert_eq!(check_borrowed(text), Err(message.to_string()));
     assert_eq!(check(text), Err(message.to_string()));
 }
@@ -5031,7 +4906,7 @@ fn the_owner_of_an_evidence_is_linear() {
     );
 }
 
-/// クロージャは`resume$`が新しくする退いたevidenceを捕獲できるが、実行中のevidence、節やforkのevidence、リストは捕獲で
+/// クロージャは`resume$`が新しくする退いたevidenceを捕獲できるが、実行中のevidence、節、リストは捕獲で
 /// きない (docs/spec/core-ir.mdの「EP が作る補助の関数」)。
 #[test]
 fn a_closure_captures_only_a_retired_evidence() {
@@ -5048,12 +4923,7 @@ fn f(h.0: {repr}) -> tobj {{
         )
     };
     assert_eq!(check_scopes(&capture("rev")), Ok(()));
-    for (repr, name) in [
-        ("ev lin", "ev"),
-        ("cev", "cev"),
-        ("fev", "fev"),
-        ("evv", "evv"),
-    ] {
+    for (repr, name) in [("ev lin", "ev"), ("cev", "cev"), ("evv", "evv")] {
         assert_eq!(
             check_scopes(&capture(repr)),
             Err(format!(
@@ -5062,96 +4932,4 @@ fn f(h.0: {repr}) -> tobj {{
             "{repr}"
         );
     }
-}
-
-/// 規則Fは、forkするかどうかによらずどのプログラムでも成り立つ。forkの名前の関数はその操作の節で、evidenceと引数を受け、
-/// evidenceを`fev`で受ける。`fev`を受けるのはforkの名前の関数だけである。
-#[test]
-fn a_fork_entry_is_checked_under_its_name() {
-    let program = |fork: &str| {
-        format!(
-            "effect Fail {{ never fail(tobj poly) -> never }}
-fn main() -> unit {{
-  return ()
-}}
-{fork}"
-        )
-    };
-    let entry = "clause Fail.fail fn fork$Fail.fail(ev.0: fev, a.1: tobj poly) -> obj poly {
-  let c.2: tobj poly = closure reperform$Fail.fail(a.1)
-  let u.3: unit = prim child_abort(ev.0, c.2)
-  decref ev.0
-  let d.4: obj poly = prim dummy()
-  return d.4
-}
-uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
-  tail clause Fail.fail(a.0)
-}
-";
-    assert_eq!(check(&program(entry)), Ok(()));
-    let unmarked = entry.replacen("clause Fail.fail fn fork$", "fn fork$", 1);
-    assert_eq!(
-        check(&program(&unmarked)),
-        Err("the fork entry is not a clause of `Fail.fail` in `fork$Fail.fail`".to_string())
-    );
-    let extra = entry
-        .replace(
-            "a.1: tobj poly) -> obj poly",
-            "a.1: tobj poly, b.5: tobj) -> obj poly",
-        )
-        .replace("  decref ev.0\n", "  decref ev.0\n  decref b.5\n");
-    assert_eq!(
-        check(&program(&extra)),
-        Err("the fork entry has 3 parameters, but it takes the evidence and 1 arguments of the operation in `fork$Fail.fail`".to_string())
-    );
-    let clause_evidence = entry.replace("ev.0: fev", "ev.0: cev");
-    assert_eq!(
-        check(&program(&clause_evidence)),
-        Err("the fork entry takes its evidence as cev, not fev in `fork$Fail.fail`".to_string())
-    );
-    let renamed = entry.replace("fn fork$Fail.fail(", "fn g(");
-    assert_eq!(
-        check(&program(&renamed)),
-        Err("`g` takes a fork evidence, but its name is not `fork$Fail.fail` in `g`".to_string())
-    );
-}
-
-#[test]
-fn a_fork_entry_does_not_go_into_a_handler_table() {
-    let program = |entry: &str| {
-        format!(
-            "effect Land {{ land(tobj) -> tobj }}
-fn entry$main() -> unit {{
-  return ()
-}}
-clause Land.land fn fork$Land.land(ev.0: fev, a.1: tobj) -> tobj {{
-  let u.2: unit = prim child_abort(ev.0, a.1)
-  decref ev.0
-  return ()
-}}
-clause Land.land fn g(ev.0: cev, a.1: tobj) -> tobj {{
-  decref ev.0
-  return a.1
-}}
-fn f(b.0: tobj, w.1: evv) -> tobj poly {{
-  let ev.2: ev lin = evidence Land((), w.1) [&{entry}]
-  let x.4: tobj poly = yields apply b.0(()) prompt ev.2
-  let r.5: tobj poly = call prompt$(ev.2, x.4)
-  return r.5
-}}
-yields fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {{
-  let u.2: unit = drop ev.0
-  return x.1
-}}
-"
-        )
-    };
-    assert_eq!(check(&program("g")), Ok(()));
-    assert_eq!(
-        check(&program("fork$Land.land")),
-        Err(
-            "entry 0 of an evidence of `Land` is `fork$Land.land`, which takes a fork evidence in `f`"
-                .to_string()
-        )
-    );
 }

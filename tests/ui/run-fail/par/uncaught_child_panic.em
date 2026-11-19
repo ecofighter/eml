@@ -1,5 +1,5 @@
--- 捕まえられなかった子の `Panic` は、両方の子が終わった後で、いちばん左の子のものを起こし直す。起こし直す関数の
--- 名前で報告し、ソースの位置を持たない (docs/implementation/status.md の「`par`」)。
+-- 捕まえられなかった子の`Panic`は、両方の子が終わった後で`par`が起こし直す。左の子のものが先になる。誤りは
+-- stdの`panic`の位置を持つ (docs/spec/stdlib.mdの「`Std.Par`」)。
 import Std.Par
 
 spin : Int -> <Panic> Int

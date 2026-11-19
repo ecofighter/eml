@@ -149,7 +149,7 @@ fn yield_points(
                 Call::Clause { effect, op, .. } => {
                     operation(&program.effects, *effect, *op).resumable
                 }
-                // 子が起こせるのは `never` の操作だけで、親では継続を作らずに起こし直すので、`par` も地点にしない
+                // 子は全域で、子の外の操作を起こさず、親では継続も作らないので、`par`も地点にしない
                 // (docs/spec/core-ir.md の「Core IR の命令」)
                 Call::Par { .. } => false,
                 Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => false,

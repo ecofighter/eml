@@ -1,6 +1,6 @@
 -- native: skip (the depth limit is the thread's stack, not a word count)
 -- max-depth: 4096
--- `shield` の中の深さの超過も `ResourceLimit` になり、`shield` の `reraise` が外の `try_all` に届ける
+-- `shield`の中の深さの超過も`ResourceLimit`になり、`shield`の`raise_failure`が外の`try_all`に届ける
 -- (docs/spec/stdlib.md の「取り消し」)。
 import Async (Async)
 import String

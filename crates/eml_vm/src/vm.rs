@@ -11,11 +11,11 @@ use eml_rows::rows::{Args, Value};
 use eml_rows::{gui, tls};
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::layout::data_first;
-use eml_rt::{Ctx, MaskItem, Mode, PipeEnd, RawResource, Stop, Token, Word};
+use eml_rt::{Ctx, Mode, PipeEnd, RawResource, Stop, Token, Word};
 
 use crate::apply;
 use crate::cells::{self, CellRef, JobSource, Raise, Runnable, Take, WaitToken};
-use crate::code::{CodeBase, ForkTable, UnwindEntry};
+use crate::code::{CodeBase, UnwindEntry};
 use crate::data;
 use crate::driver::DriverKind;
 use crate::error::RunFault;
@@ -24,8 +24,7 @@ use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::park::{Guard, Park, Pending, PollSource, Progress};
 use crate::sched::{
-    ENTRY, JOB, JoinId, JoinNode, Memory, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId,
-    TaskState,
+    ENTRY, JOB, JoinId, JoinNode, Memory, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
 };
 use crate::workers::{Entry, EntryKind, Notice, Ready};
 use crate::{RunCounts, RuntimeError};
@@ -100,8 +99,8 @@ pub struct Task {
     /// `finish_*` が預けたタスクの終わり方。エントリの `Task` の `Finish` が核の `finish` に渡す。タスクの ID の物体が
     /// すべて片付く前に待ち手を起こさないためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) outcome: Option<cells::Outcome>,
-    /// ほかの worker に置いた右の子の、親の側の記録。join の節点は親の worker にあるので、子の終わりと誤りは
-    /// `home` へ知らせで送る (docs/spec/vm.md の「`par` の fork と join」)。
+    /// ほかのworkerに置いた右の子の、親の側の記録。joinの節点は親のworkerにあるので、子の値は
+    /// `home`へ知らせで送る。誤りは知らせでなくrunの致命的な誤りの欄に書く (docs/spec/vm.mdの「`par`のforkとjoin」)。
     pub(crate) placed: Option<Placed>,
     /// `compute` の仕事の `Task` の、仕事のセルと `fork_job` の位置。仕事は join の節点を持たず、終わりを仕事のセルに
     /// 置く (docs/spec/vm.md の「`compute` の仕事」)。
@@ -119,7 +118,7 @@ pub struct Task {
 /// (docs/spec/vm.md の「タスクの上限」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Limit {
-    /// タスクの外 (`main`、`compute` の仕事、タスクの外の `par` の子)。上限は本当の限度で、超えたら run を止める。
+    /// タスクの外、`compute`の仕事、すべての`par`の子。上限は本当の限度で、超えたらrunを止める。
     Stops,
     /// `Async` のタスクの中で、保留はない。上限は本当の限度である。
     Task,
@@ -131,18 +130,8 @@ pub(crate) enum Limit {
 }
 
 impl Limit {
-    /// `par` の右の子が受け継ぐ状態。子は保留も猶予も持たずに始まる。子の `evv` に `IO` の evidence はないので、
-    /// `Task` の子の深さの超過も `limit_hit` の手順の終わりで run を止め、`Stops` の子と結果は変わらない。右の子は
-    /// セルを持たず旗も受けないので、`Task` はタスクの中の子であることの印である (docs/spec/vm.md の「深さ」)。
-    fn inherit(self) -> Limit {
-        match self {
-            Limit::Stops => Limit::Stops,
-            _ => Limit::Task,
-        }
-    }
-
-    /// 上限の旗を受けた後の状態。`Task` は保留に、中断の間は着地の後に保留へ戻す印だけを付ける。`Pending` はそのままで、
-    /// `Stops` のタスクはセルを持たないので旗を受けない。上限の値は呼び手が当てる (docs/spec/vm.md の「タスクの上限」)。
+    /// 上限の旗を受けた後の状態。`Task`は保留に、中断の間は着地の後に保留へ戻す印だけを付ける。`Pending`と`Stops`は
+    /// そのままで、`Stops`はセルを持たないタスクか、内側のforkが退避した状態である。上限の値は呼び手が当てる (docs/spec/vm.mdの「タスクの上限」)。
     fn flagged(self) -> Limit {
         match self {
             Limit::Task => Limit::Pending,
@@ -273,20 +262,15 @@ impl Task {
 
     /// まだ始まっていない右の子。いちばん下のフレームが子の境目のフレームで、始めるときに閉包 `g` をその上で呼ぶ。
     /// 境目のフレームの戻り先は `Finish` だが、`ChildDone` がフレームを外さずにタスクを捨てるので、戻ることはない
-    /// (docs/spec/vm.md の「`par` の fork と join」)。`limit` は親の状態から `Limit::inherit` で決める。
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the parts of a child a fork starts from"
-    )]
+    /// (docs/spec/vm.mdの「`par`のforkとjoin」)。子の`evv`は`()`、上限の状態は`Stops`である
+    /// (docs/spec/vm.mdの「深さ」)。
     fn right_child(
         entry: u32,
         worker: u32,
-        evv: Word,
         depth_offset: usize,
         max_depth: usize,
         j: JoinId,
         g: Word,
-        limit: Limit,
     ) -> Task {
         let base = ROOT_BASE + ROOT_SIZE + 2;
         let mut stack = vec![Word::UNIT; base + BOUNDARY_SIZE];
@@ -300,11 +284,11 @@ impl Task {
             frame_size: BOUNDARY_SIZE,
             last_ret: FINISH,
             scratch: Vec::new(),
-            stack_limit: task_stack_limit(max_depth.saturating_sub(depth_offset), limit),
+            stack_limit: stack_limit(max_depth.saturating_sub(depth_offset)),
             entry,
             keep_result: false,
             exit: None,
-            evv,
+            evv: Word::UNIT,
             worker,
             depth_offset,
             boundaries: vec![j],
@@ -313,7 +297,7 @@ impl Task {
             outcome: None,
             placed: None,
             job: None,
-            limit,
+            limit: Limit::Stops,
             counted: 0,
             added: 0,
         }
@@ -321,10 +305,10 @@ impl Task {
 
     /// まだ始まっていない `compute` の仕事。右の子と同じ形で、境目の join は番兵 `JOB` である。深さはエントリの `Task`
     /// と同じく 0 から数える (docs/spec/vm.md の「`compute` の仕事」)。
-    fn job(entry: u32, worker: u32, evv: Word, max_depth: usize, job: JobRef, g: Word) -> Task {
+    fn job(entry: u32, worker: u32, max_depth: usize, job: JobRef, g: Word) -> Task {
         Task {
             job: Some(job),
-            ..Task::right_child(entry, worker, evv, 0, max_depth, JOB, g, Limit::Stops)
+            ..Task::right_child(entry, worker, 0, max_depth, JOB, g)
         }
     }
 
@@ -650,7 +634,7 @@ fn limit_hit<R: Exec>(
         ]
     })?;
     if !caught {
-        // IO の evidence がない (`par` の子の中、底の `try_all` の外)。本当の超過なら run を止める。旗だけなら捨てずに
+        // IOのevidenceがない (底の`try_all`の外)。本当の超過ならrunを止める。旗だけなら捨てずに
         // 保留へ戻し、evidence のある所の次のエントリで起こす。旗はまだ下ろしていないので、セルにも立ったままである
         if real_over {
             task.limit = Limit::Task;
@@ -730,18 +714,32 @@ fn mark_pending<M: Mode>(ctx: &mut Ctx<M>, task: &mut Task) {
 /// 退いたタスクは状態だけを変え、上限は切り替えで入るときに `switch_to` が当てる。同じセルの `Task` は、待ちに入った
 /// 後で `Finish` へ戻る前のエントリの `Task` と次のエントリの `Task` の2つがありうるので、すべてに付ける。前のほうは
 /// 底の `try_all` の外にいて IO の evidence がないので、旗では起こさない。どれもなければ何もしない。`Finish` に着いた
-/// エントリの `Task` で、旗は次の `started` か `resumed` が返すか、セルと一緒に消える (docs/spec/vm.md の「タスクの上限」)。
+/// エントリの`Task`で、旗は次の`started`か`resumed`が返すか、セルと一緒に消える。子の中のタスクの旗は、子に当てずに
+/// 最も外のforkが節点に退避した状態に付け、joinが親に戻す (docs/spec/vm.mdの「タスクの上限」「深さ」)。
 #[cold]
 #[inline(never)]
 fn mark_limited<P: Policy, M: Mode>(ctx: &mut Ctx<M>, task: &mut Task, sched: &mut Scheduler<P>) {
     for cell in std::mem::take(&mut sched.limited) {
+        // `par`の子の中のタスクは`Stops`で動くので、タスク自身の状態は最も外のforkが退避したものである
+        // (docs/spec/vm.mdの「深さ」)
+        let mut saved = Vec::new();
         if task.cell == Some(cell) {
-            mark_pending(ctx, task);
+            match task.boundaries.first() {
+                Some(&j) => saved.push(j),
+                None => mark_pending(ctx, task),
+            }
         }
         for waiting in sched.tasks.iter_mut().flatten() {
             if waiting.cell == Some(cell) {
-                waiting.limit = waiting.limit.flagged();
+                match waiting.boundaries.first() {
+                    Some(&j) => saved.push(j),
+                    None => waiting.limit = waiting.limit.flagged(),
+                }
             }
+        }
+        for j in saved {
+            let join = sched.join(j);
+            join.parent_limit = join.parent_limit.flagged();
         }
     }
 }
@@ -819,9 +817,7 @@ fn work_loop<R: Exec>(
     // 動くタスクのない `Task` は `ENTRY` の欄に退避し、その番号をどのタスクにも振らない
     if let Err(fault) = switch_away::<R>(code, ctx, task, sched, Some(TaskState::Ready)) {
         let pc = task.pc;
-        if let Err(error) = task_failed::<R>(code, ctx, task, sched, Failure { fault, pc }) {
-            return error;
-        }
+        return task_failed(code, task, sched, Failure { fault, pc });
     }
     match run_tasks::<R>(code, ctx, task, sched, counts) {
         Ok(()) => code.error(
@@ -1070,7 +1066,7 @@ fn drive<R: Exec>(
         Ok(()) => Ok(()),
         Err(fault) => {
             let pc = task.pc;
-            task_failed::<R>(code, ctx, task, sched, Failure { fault, pc })
+            Err(task_failed(code, task, sched, Failure { fault, pc }))
         }
     };
     if ran.is_ok() {
@@ -1106,7 +1102,7 @@ fn run_tasks<R: Exec>(
             Ok(false) => return Ok(()),
             Err(fault) => {
                 if let Err(fault) = step_failed::<R>(code, ctx, task, pc, fault) {
-                    task_failed::<R>(code, ctx, task, sched, Failure { fault, pc })?;
+                    return Err(task_failed(code, task, sched, Failure { fault, pc }));
                 }
             }
         }
@@ -1166,7 +1162,7 @@ fn step<R: Exec>(
         }
         Op::ChildDone => {
             let value = task.get(0);
-            child_done::<R>(code, ctx, task, sched, Outcome::Value(value))?;
+            child_done::<R>(code, ctx, task, sched, value)?;
         }
         Op::Par { dst, at } => par::<R>(code, ctx, task, sched, dst, at)?,
         Op::Async { dst, at } => async_op::<R>(code, ctx, task, sched, dst, at)?,
@@ -1491,7 +1487,6 @@ fn step<R: Exec>(
             let w = unsafe { ctx.root_get(root) }?;
             task.set(dst, w);
         }
-        Op::ChildAbort { ev, c } => child_abort::<R>(code, ctx, task, sched, counts, ev, c)?,
         Op::RootSet { dst, at } => {
             let o = ops(at);
             unsafe { ctx.root_set(o[0], task.get(o[1] as Slot)) }?;
@@ -1744,12 +1739,7 @@ fn unwind<R: Exec>(
                     "an abort reached the bottom of the task",
                 ));
             }
-            // 子の中の handler は子の中に着地するので、子の境目に着くのは `child_abort` の巻き戻しだけである。宛先は
-            // 不死のダミーで、どの着地の印とも合わない
-            CHILD_DONE if task.exit.is_none() && target == ctx.heap().dummy() => {
-                landed(ctx, task);
-                return Ok(());
-            }
+            // 子の中のhandlerは子の中に着地するので、巻き戻しは子の境目に着かない
             CHILD_DONE => {
                 return Err(RunFault::Internal(
                     "an abort reached the boundary of a par child",
@@ -1810,15 +1800,15 @@ fn unwind<R: Exec>(
 // `par` の fork と join は呼び出しや戻りに比べてまれなので、`step` に展開しない。値が1つの呼び出しと戻りの速い道の
 // 命令の列を変えないためである (docs/spec/vm.md の「`par` の fork と join」)
 
-/// join が見つけた子の誤りを `Scheduler::failed` に置いたことを、実行の繰り返しに伝える印。外には出ない。
+/// `par`の位置を持つ誤りが`Scheduler::failed`で待っている印。実行の繰り返しに伝える。外には出ない。
 const CHILD_FAILED: RunFault = RunFault::Internal("a child failure is waiting in the scheduler");
 
 /// メインのworkerの走れるタスクがなくなったことを、実行の繰り返しに伝える印。`drive`が受け取り、外には出ない
 /// (docs/spec/vm.mdの「メインのworker」)。
 const HOST_IDLE: RunFault = RunFault::Internal("the main worker has nothing to run");
 
-/// `par` の fork。親の文脈で、右の子に ID を出して閉包と子の `evv` に印を付け、右の子をまだ始めずに列に入れ、左の子を
-/// 親のスタックの上で始める。mask は evidence passing の包みがすでに当てている。
+/// `par`のfork。親の文脈で、右の子にIDを出して閉包に印を付け、親の`evv`と上限の状態をjoinの節点に預けて空の`evv`と
+/// `Stops`に切り替え、右の子をまだ始めずに列に入れ、左の子を親のスタックの上で始める。
 #[inline(never)]
 fn par<R: Exec>(
     code: &CodeBase<R::M>,
@@ -1831,36 +1821,31 @@ fn par<R: Exec>(
     let o = &code.tables.operands[at as usize..];
     // 2つの閉包は `par` が消費する、VM の持つ参照である
     let (f, g) = (task.get(o[0] as Slot), task.get(o[1] as Slot));
-    let (child, fork_evv) = fork_child::<R>(code, ctx, sched, g)?;
-    // 2つの子が1つずつ参照を持つ。左の子は `Ctx` に入れ、右の子はタスクに退避する。入れ替えで出る親の `evv` の参照は
-    // join の節点に移す
+    let child = fork_child::<R>(ctx, sched, g)?;
+    // 子は全域で、空の`evv`と`Stops`で動く。親の`evv`と状態はjoinの節点に預ける (docs/spec/vm.mdの「fork」)
     let parent_evv = unsafe {
-        ctx.heap_mut().dup(fork_evv)?;
-        ctx.heap_mut().share(fork_evv, child)?;
-        switch_to(ctx, fork_evv, task.worker, task.depth_offset, task.limit)
+        switch_to(
+            ctx,
+            Word::UNIT,
+            task.worker,
+            task.depth_offset,
+            Limit::Stops,
+        )
     };
+    let parent_limit = std::mem::replace(&mut task.limit, Limit::Stops);
     let ret = task.pc;
     let j = sched.add_join(JoinNode {
         parent: sched.current,
         right: ENTRY,
         right_worker: child,
         parent_evv,
+        parent_limit,
         left: None,
-        right_outcome: None,
+        right_value: None,
         ret,
         dst,
-        orphan: false,
     });
-    let mut right = Task::right_child(
-        task.entry,
-        child,
-        fork_evv,
-        task.depth(),
-        sched.max_depth,
-        j,
-        g,
-        task.limit.inherit(),
-    );
+    let mut right = Task::right_child(task.entry, child, task.depth(), sched.max_depth, j, g);
     // 空いている worker があれば右の子をその受け箱に置き、なければこの worker の列に入れる
     // (docs/spec/vm.md の「fork」)
     let home = idle_home::<R>(ctx, sched)?;
@@ -1894,13 +1879,12 @@ fn par<R: Exec>(
     safepoint::<R>(code, ctx, task, sched)
 }
 
-/// 右の子の worker ID を出し、子が読む語に印を付ける。`g` の後で子の `evv` を作って返すが、その印は呼び手が付ける。
+/// 右の子のworker IDを出し、子が読む語に印を付ける。
 fn fork_child<R: Exec>(
-    code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     sched: &mut Scheduler<R::P>,
     g: Word,
-) -> Result<(u32, Word), RunFault> {
+) -> Result<u32, RunFault> {
     // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
     // 触れない
     let child = unsafe { ctx.heap_mut() }.fork_worker();
@@ -1909,12 +1893,9 @@ fn fork_child<R: Exec>(
     for r in unshared_roots(ctx, sched) {
         unsafe { ctx.heap_mut().share(r, child) }?;
     }
-    // 値から届く evidence は退いたものだけなので、`g` の `share` は親がその場で書き換える evidence に届かない
-    // (docs/spec/object-model.md の「evidence の3つの物体」)
+    // 子の`evv`は`()`なので、印を付けるのは`g`だけである
     unsafe { ctx.heap_mut().share(g, child) }?;
-    let parent = ctx.evv_word();
-    let fork_evv = fork_evv::<R>(code, ctx, parent)?;
-    Ok((child, fork_evv))
+    Ok(child)
 }
 
 /// 右の子か `compute` の仕事を置く、空いている worker の添字。置かないときは `None`。
@@ -1952,7 +1933,7 @@ fn unshared_roots<M: Mode, P: Policy>(ctx: &Ctx<M>, sched: &mut Scheduler<P>) ->
     fresh
 }
 
-/// 閉包 `f` に `()` を適用し、戻り先 `ret` で結果を `dst` に受ける。`par` の2つの子の始まりと join の起こし直しは、
+/// 閉包`f`に`()`を適用し、戻り先`ret`で結果を`dst`に受ける。`par`の2つの子の始まりは、
 /// どれもこの形である (docs/spec/vm.md の「`par` の fork と join」)。
 fn apply_to_unit<R: Exec>(
     code: &CodeBase<R::M>,
@@ -1967,72 +1948,14 @@ fn apply_to_unit<R: Exec>(
     apply::apply::<R>(code, ctx, task, f, apply::Target::Frame { ret, dst })
 }
 
-/// 右の子の `evv`。mask を当てた後の親の `evv` を頭からたどり、`Panic` を除く never-only のエフェクトの evidence ごとに、
-/// そのエフェクトの evidence のうち何番目かを状態の欄に持つ fork evidence と節点を作り、凍結した末尾につなぐ。子の列が
-/// 親の列と同じ形になるので、子の中の `mask` は親の中と同じだけ evidence を飛ばす。該当する evidence がなければ、末尾
-/// そのものを返して確保しない (docs/spec/vm.md の「`par` の fork と join」)。
-fn fork_evv<R: Exec>(
-    code: &CodeBase<R::M>,
-    ctx: &mut Ctx<R::M>,
-    parent: Word,
-) -> Result<Word, RunFault> {
-    let forks = &code.forks;
-    let mut mirrored: Vec<(u16, Word, u32)> = Vec::new();
-    let mut ranks: Vec<(u16, u32)> = Vec::new();
-    let mut node = parent;
-    while let Some((effect, rest)) =
-        // SAFETY: `node`は`parent`か、そこから辿った節点で、`parent`は`Ctx`が参照を持つ`evv`のリストなので、
-        // 節点もevidenceも生きている。読むだけなので`heap_mut`の前提を守る
-        unsafe { ctx.evv_step(node) }?
-    {
-        if Some(effect) != forks.panic {
-            match forks.tables.get(usize::from(effect)) {
-                Some(ForkTable::Resumable) => {}
-                Some(&ForkTable::Table(table)) => {
-                    let depth = match ranks.iter_mut().find(|(e, _)| *e == effect) {
-                        Some((_, rank)) => {
-                            *rank += 1;
-                            *rank
-                        }
-                        None => {
-                            ranks.push((effect, 0));
-                            0
-                        }
-                    };
-                    mirrored.push((effect, table, depth));
-                }
-                _ => {
-                    return Err(RunFault::Internal(
-                        "a never-only evidence of a par parent has no fork table",
-                    ));
-                }
-            }
-        }
-        node = rest;
-    }
-    // 下の呼び出しは`heap_mut`の前提を守る。作る物体だけに書き、`Ctx`の持つ語には触れない。表と末尾は凍結した塊の
-    // 物体なので、参照を数えない
-    let mut next = forks.tail;
-    for &(effect, table, depth) in mirrored.iter().rev() {
-        // SAFETY: `table`は`alloc_fork_table`が作って凍結した表で、凍結した領域の物体である。`effect`は
-        // 親の`evv`の節点のtagから求めた番号で、65535より小さい
-        let ev = unsafe { ctx.fork_ev(effect, table, depth) }?;
-        // SAFETY: `next`は凍結した末尾か、直前に作った節点で、`ev`は作ったばかりのfork evidenceである。どちらも
-        // 参照を1つずつ持ち、不死の物体の参照は数えない。子のリストは親のリストより長くても節点1つ分で、VMは`max_evv`に
-        // 上限を置かないので (docs/spec/vm.mdの「上限と割り込み」)、長さは上限より短い
-        next = unsafe { ctx.evv_push(next, ev) }?;
-    }
-    Ok(next)
-}
-
-/// 子の本体が値で戻ったか (`ChildDone`)、中断した (`child_abort`)。`task.base` は子の境目のフレームである。
+/// 子の本体が値で戻った (`ChildDone`)。`task.base`は子の境目のフレームである。
 #[inline(never)]
 fn child_done<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
-    outcome: Outcome,
+    value: Word,
 ) -> Result<(), RunFault> {
     // 子は親の handler に yield できないので、yield の途中で終わる子はない
     if ctx.yielding() != 0 {
@@ -2047,17 +1970,17 @@ fn child_done<R: Exec>(
     if task.boundaries.is_empty()
         && let Some(job) = task.job
     {
-        return job_done::<R>(code, ctx, task, sched, job, outcome);
+        return job_done::<R>(code, ctx, task, sched, job, value);
     }
     // 置いた右の子の join は親の worker にあるので、この worker の表を引かない
     if task.boundaries.is_empty()
         && let Some(placed) = task.placed
     {
-        return placed_done::<R>(code, ctx, task, sched, placed, j, outcome);
+        return placed_done::<R>(code, ctx, task, sched, placed, j, value);
     }
     if sched.current == sched.join(j).right {
         let join = sched.join(j);
-        join.right_outcome = Some(outcome);
+        join.right_value = Some(value);
         let right_worker = join.right_worker;
         // 子の残りの `evv` を、子の ID のまま手放す
         let rest =
@@ -2067,10 +1990,11 @@ fn child_done<R: Exec>(
         return switch_away::<R>(code, ctx, task, sched, None);
     }
     let join = sched.join(j);
-    join.left = Some(outcome);
+    join.left = Some(value);
     let parent_evv = std::mem::replace(&mut join.parent_evv, Word::UNIT);
-    let right_done = join.right_outcome.is_some();
-    // 境目のフレームを外す。組か起こし直しの結果は join が `par` の結果のスロットに書く
+    task.limit = join.parent_limit;
+    let right_done = join.right_value.is_some();
+    // 境目のフレームを外す。組はjoinが`par`の結果のスロットに書く
     task.pop_frame();
     let rest = unsafe { switch_to(ctx, parent_evv, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
@@ -2096,7 +2020,7 @@ fn placed_done<R: Exec>(
     sched: &mut Scheduler<R::P>,
     placed: Placed,
     j: JoinId,
-    outcome: Outcome,
+    value: Word,
 ) -> Result<(), RunFault> {
     let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
@@ -2105,7 +2029,7 @@ fn placed_done<R: Exec>(
     let control = std::sync::Arc::clone(&sched.watcher.control);
     sched
         .run
-        .send(&control, placed.home, Notice::Joined { join: j, outcome });
+        .send(&control, placed.home, Notice::Joined { join: j, value });
     switch_away::<R>(code, ctx, task, sched, None)
 }
 
@@ -2118,21 +2042,8 @@ fn job_done<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     job: JobRef,
-    outcome: Outcome,
+    end: Word,
 ) -> Result<(), RunFault> {
-    let end = match outcome {
-        Outcome::Value(w) => cells::JobEnd::Value(w),
-        Outcome::Abort {
-            effect,
-            depth,
-            clause,
-        } => cells::JobEnd::Abort {
-            effect,
-            depth,
-            clause,
-        },
-        Outcome::Error(_) => return Err(RunFault::Internal("a job ends with an error")),
-    };
     let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     // `()` を入れ替えるだけで、返る語も `()` である
@@ -2180,7 +2091,7 @@ fn switch_away<R: Exec>(
         // 置いた右の子の終わりは知らせで届く。待とうとする親はまだ表にいないので、集めた知らせが親の join に
         // 終わりを届けても起こされない。そのときは待たずにここで join を完了する (docs/spec/vm.md の「子の終わりと join」)
         if let Some(TaskState::Waiting(j)) = keep
-            && sched.join(j).right_outcome.is_some()
+            && sched.join(j).right_value.is_some()
         {
             sched.keep_running(task);
             let at = complete_join::<R>(code, ctx, task, sched, j)?;
@@ -2414,7 +2325,7 @@ fn complete_join<R: Exec>(
 ) -> Result<Pc, RunFault> {
     let join = sched.take_join(j);
     let at = join.ret - 1;
-    let result = join_outcomes::<R>(code, ctx, task, sched, join);
+    let result = join_outcomes::<R>(code, ctx, task, join);
     // join の後にも、ほかのスレッドから受けた解放が溜まっていれば取り込む (docs/spec/vm.md の「子の終わりと join」)
     ctx.reclaim_if_due();
     at_par(code, task, sched, at, result).map(|()| at)
@@ -2440,252 +2351,60 @@ fn at_par<M: Mode, P: Policy>(
     }
 }
 
-/// join の解決の順 (docs/spec/vm.md の「`par` の fork と join」)。誤りは左、右の順に報告し、中断でも値でも救わない。
-/// 右の側の語はすべて親の局所に戻してから右の子の ID を退かせ、その後で捨てる語を手放す。ヒープの誤りはそこで実行を
-/// 止めるので、退かせも手放しもしない。
+/// joinの解決 (docs/spec/vm.mdの「`par`のforkとjoin」)。右の側の語は親の局所に戻してから右の子のIDを退かせる。
+/// ヒープの誤りはそこで実行を止めるので、退かせはしない。
 fn join_outcomes<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
-    sched: &mut Scheduler<R::P>,
     join: JoinNode,
 ) -> Result<(), RunFault> {
-    let (Some(left), Some(right)) = (join.left, join.right_outcome) else {
+    let (Some(l), Some(r)) = (join.left, join.right_value) else {
         return Err(RunFault::Internal(
             "a join completes before both children end",
         ));
     };
-    let (left, right) = match (left, right) {
-        (Outcome::Error(error), _) | (_, Outcome::Error(error)) => {
-            sched.failed = Some(error);
-            return Err(CHILD_FAILED);
-        }
-        outcomes => outcomes,
-    };
-    // 右の側の語は右の子が残した参照で、親だけが持つ
+    // 右の値は右の子が残した参照で、持つのは親だけである
     let heap = unsafe { ctx.heap_mut() };
-    if let Some(w) = right.word() {
-        unsafe { heap.transfer_back(w, join.right_worker) }?;
-    }
+    unsafe { heap.transfer_back(r, join.right_worker) }?;
     heap.retire_worker(join.right_worker)?;
-    let (abort, dropped) = match (left, right) {
-        (Outcome::Value(l), Outcome::Value(r)) => {
-            let Op::Par { at, .. } = code.tables.code[join.ret as usize - 1] else {
-                return Err(RunFault::Internal(
-                    "a join returns after something other than a par",
-                ));
-            };
-            let tag = code.tables.operands[at as usize + 2] as u16;
-            const PAIR: usize = data_first(2, false);
-            let pair = heap.alloc_data(tag, 2, 0, false);
-            // 組は今作った局所の物体で、2つの語の参照は組に移る
-            unsafe {
-                heap.set_field(pair, PAIR, l)?;
-                heap.set_field(pair, PAIR + 1, r)?;
-            }
-            task.set(join.dst, pair);
-            return Ok(());
-        }
-        (Outcome::Error(_), _) | (_, Outcome::Error(_)) => {
-            return Err(RunFault::Internal(
-                "a join raises an error after reporting it",
-            ));
-        }
-        // いちばん左の中断を起こし直し、中断しなかった側の値は捨てる
-        (abort @ Outcome::Abort { .. }, other) | (other @ Outcome::Value(_), abort) => {
-            (abort, other)
-        }
-    };
-    if let Some(w) = dropped.word() {
-        unsafe { heap.decref(w) }?;
-    }
-    let Outcome::Abort {
-        effect,
-        depth,
-        clause,
-    } = abort
-    else {
+    let Op::Par { at, .. } = code.tables.code[join.ret as usize - 1] else {
         return Err(RunFault::Internal(
-            "a join raises again something other than an abort",
+            "a join returns after something other than a par",
         ));
     };
-    reraise::<R>(code, ctx, task, (effect, depth, clause), join.ret, join.dst)
-}
-
-/// 中断した子の handler の節を、親の `evv` を mask してから起こし直す。
-fn reraise<R: Exec>(
-    code: &CodeBase<R::M>,
-    ctx: &mut Ctx<R::M>,
-    task: &mut Task,
-    abort: (u16, u32, Word),
-    ret: Pc,
-    dst: Slot,
-) -> Result<(), RunFault> {
-    let (effect, depth, clause) = abort;
-    // 子が見た `depth` 番目の evidence に届くように、親の `evv` を mask する。`reperform$` は今の `evv` の最初の
-    // evidence で perform して戻らないので、mask した `evv` は handler の `prompt$` が手放す
-    // (docs/spec/core-ir.md の「`par` の子の中断」)
-    if depth > 0 {
-        unsafe {
-            let w = ctx.evv_get()?;
-            let item = MaskItem {
-                effect,
-                keep: 0,
-                skip: depth,
-            };
-            let m = ctx.evv_mask(&[item], w)?;
-            ctx.heap_mut().decref(w)?;
-            ctx.evv_set(m)?;
-        }
+    let tag = code.tables.operands[at as usize + 2] as u16;
+    const PAIR: usize = data_first(2, false);
+    let pair = heap.alloc_data(tag, 2, 0, false);
+    // 組は今作った局所の物体で、2つの語の参照は組に移る
+    unsafe {
+        heap.set_field(pair, PAIR, l)?;
+        heap.set_field(pair, PAIR + 1, r)?;
     }
-    apply_to_unit::<R>(code, ctx, task, clause, ret, dst)
+    task.set(join.dst, pair);
+    Ok(())
 }
 
-/// `prim child_abort(ev, c)`。fork evidence `ev` からエフェクトと深さを読み、子の境目まで巻き戻す。`ev` は借りる。
-#[inline(never)]
-fn child_abort<R: Exec>(
-    code: &CodeBase<R::M>,
-    ctx: &mut Ctx<R::M>,
-    task: &mut Task,
-    sched: &mut Scheduler<R::P>,
-    counts: &mut RunCounts,
-    ev: Slot,
-    c: Slot,
-) -> Result<(), RunFault> {
-    if task.boundaries.is_empty() {
-        return Err(RunFault::Internal("a child abort outside a par child"));
-    }
-    let ev = task.get(ev);
-    // SAFETY: `ev`は節のエントリが持つfork evidenceで、状態の欄は深さの即値である。読むだけなので`heap_mut`の前提を守る
-    let (effect, depth) = unsafe { ctx.fork_of(ev) }?;
-    let clause = task.get(c);
-    let dummy = ctx.heap().dummy();
-    unwind::<R>(code, ctx, task, counts, dummy)?;
-    let outcome = Outcome::Abort {
-        effect,
-        depth,
-        clause,
-    };
-    child_done::<R>(code, ctx, task, sched, outcome)
-}
-
-/// 実行時エラーの後。すぐに実行を止める誤りと、エントリのタスクの誤り (左の子の誤りを含む) と、`compute` の仕事の誤りは
-/// 実行の誤りにする。右の子の
-/// 誤りは join に記録し、右のタスクはスタックを巻き戻さずに捨てて、ほかのタスクに切り替える。止めたスタックは
-/// 巻き戻しの表のない位置で止まっていて解放できない。記録した誤りは join が必ず報告するので、実行は誤りで終わる
-/// (docs/spec/vm.md の「`par` の fork と join」)。
+/// 実行時エラーの後。どのタスクの誤りもrunの誤りで、子に誤りの終わりはないので、joinは誤りを見ない
+/// (docs/spec/vm.mdの「子の誤り」)。止まったスタックは巻き戻さずに捨てる。
 #[cold]
 #[inline(never)]
-fn task_failed<R: Exec>(
-    code: &CodeBase<R::M>,
-    ctx: &mut Ctx<R::M>,
-    task: &mut Task,
-    sched: &mut Scheduler<R::P>,
-    mut failure: Failure,
-) -> Result<(), RuntimeError> {
-    loop {
-        if failure.fault == HOST_IDLE {
-            return Err(RuntimeError::Fault {
-                fault: HOST_IDLE,
-                function: String::new(),
-                at: None,
-            });
-        }
-        let error = match sched.failed.take() {
-            Some(error) => error,
-            None => code.error(failure, task),
+fn task_failed<M: Mode, P: Policy>(
+    code: &CodeBase<M>,
+    task: &Task,
+    sched: &mut Scheduler<P>,
+    failure: Failure,
+) -> RuntimeError {
+    if failure.fault == HOST_IDLE {
+        return RuntimeError::Fault {
+            fault: HOST_IDLE,
+            function: String::new(),
+            at: None,
         };
-        // `Async` のタスクの失敗は底の `try_all` が捕まえるので、ここに来るのは捕まえられない誤りで、run を止める
-        // (docs/spec/vm.md の「`Async` のタスク」)。仕事のセルは誤りを持たないので、仕事の誤りもその場で run を止める
-        // (docs/spec/vm.md の「`compute` の仕事」)
-        if sched.current == ENTRY
-            || task.cell.is_some()
-            || task.job.is_some()
-            || stops_the_run(&error)
-        {
-            return Err(error);
-        }
-        let boundaries = std::mem::take(&mut task.boundaries);
-        // 右の子が開いていた入れ子の `par` の子は、結果を受ける親がもういないので、走らせずに捨てる
-        for &inner in &boundaries[1..] {
-            cancel(sched, inner);
-        }
-        let j = boundaries[0];
-        match task.placed {
-            // 置いた右の子の join は親の worker にあるので、誤りを知らせで送る
-            Some(placed) => {
-                let control = std::sync::Arc::clone(&sched.watcher.control);
-                let joined = Notice::Joined {
-                    join: j,
-                    outcome: Outcome::Error(error),
-                };
-                sched.run.send(&control, placed.home, joined);
-            }
-            None => {
-                sched.join(j).right_outcome = Some(Outcome::Error(error));
-                sched.wake_parent(j);
-            }
-        }
-        match switch_away::<R>(code, ctx, task, sched, None) {
-            Ok(()) => return Ok(()),
-            Err(fault) => failure = Failure { fault, pc: task.pc },
-        }
     }
-}
-
-/// 子の誤りのうち、評価だけでなく実行そのものを止めるもの (docs/spec/vm.md の「`par` の fork と join」)。
-fn stops_the_run(error: &RuntimeError) -> bool {
-    matches!(
-        error,
-        RuntimeError::Fault {
-            fault: RunFault::Stopped(
-                Stop::Interrupted | Stop::Terminated | Stop::MemoryLimit | Stop::Ended
-            ) | RunFault::Extern(eml_rt::Fault::Heap(_))
-                | RunFault::Internal(_),
-            ..
-        } | RuntimeError::Leak(_)
-            | RuntimeError::Deadlock
-            | RuntimeError::Unrecovered { .. }
-    )
-}
-
-/// 親が誤りで止まった join の右の子を、その子孫ごと表と列から外す。持つ語は触れずに捨てる。子孫は作業の列でたどり、
-/// Rust の再帰を使わない (docs/spec/vm.md の「並列化への備え」)。
-fn cancel<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
-    let mut pending = vec![j];
-    while let Some(j) = pending.pop() {
-        let node = sched.join(j);
-        // 置いた右の子はほかの worker で走り続け、終わりの知らせが必ず届く。届くまで番号を取っておく
-        if node.right == PLACED && node.right_outcome.is_none() {
-            node.orphan = true;
-            continue;
-        }
-        let join = sched.take_join(j);
-        if join.right_outcome.is_some() {
-            continue;
-        }
-        let right = join.right;
-        sched.run.retain_ready(
-            sched.index,
-            |item| !matches!(item, Ready::Task(id) if *id == right),
-        );
-        if let Some(task) = sched.tasks[right].take() {
-            sched.free_task(right);
-            pending.extend_from_slice(&task.boundaries[1..]);
-            if let TaskState::Waiting(waited) = task.state {
-                pending.push(waited);
-            }
-        }
-    }
-}
-
-impl Outcome {
-    /// 子が残した語。値か、起こし直しの閉包である。
-    fn word(&self) -> Option<Word> {
-        match *self {
-            Outcome::Value(w) | Outcome::Abort { clause: w, .. } => Some(w),
-            Outcome::Error(_) => None,
-        }
+    match sched.failed.take() {
+        Some(error) => error,
+        None => code.error(failure, task),
     }
 }
 
@@ -2900,20 +2619,10 @@ fn async_op<R: Exec>(
             let me = current_cell(task)?;
             // 閉包は `fork_job` が消費する、VM の持つ参照で、仕事として動く
             let g = task.get(arg(0));
-            let (child, evv) = fork_child::<R>(code, ctx, sched, g)?;
-            // 子の `evv` の持ち手は仕事の `Task` だけなので、`par` と違って `dup` しない。`Ctx` の `evv` には触れない
-            // (docs/spec/vm.md の「`compute` の仕事」)
-            unsafe { ctx.heap_mut().share(evv, child) }?;
+            let child = fork_child::<R>(ctx, sched, g)?;
             let cell = sched.cells.lock().new_job(child, me);
             let at = task.pc - 1;
-            let job = Task::job(
-                task.entry,
-                child,
-                evv,
-                sched.max_depth,
-                JobRef { cell, at },
-                g,
-            );
+            let job = Task::job(task.entry, child, sched.max_depth, JobRef { cell, at }, g);
             // `par` の右の子と同じく、空いた worker の受け箱に置き、なければこの worker の列に入れる。終わりは
             // 仕事のセルを通って出したタスクを起こすので、`in_flight` には数えない (docs/spec/vm.md の「`compute` の仕事」)
             match idle_home::<R>(ctx, sched)? {
@@ -2931,28 +2640,19 @@ fn async_op<R: Exec>(
         }
         ext @ (Extern::AsyncTakeJob | Extern::AsyncDropJob) => {
             let me = current_cell(task)?;
-            let (worker, end) = sched.cells.lock().take_job(task.raw(arg(0)), me)?;
+            let (worker, w) = sched.cells.lock().take_job(task.raw(arg(0)), me)?;
             // 終わりの語は仕事のセルが持っていた、仕事の ID の物体である。登録表の lock を放してから今の ID へ戻し、
             // その後で仕事の ID を退かせる (docs/spec/object-model.md の「`transfer_back`」)
-            let w = end.word();
             let heap = unsafe { ctx.heap_mut() };
             unsafe { heap.transfer_back(w, worker) }?;
             heap.retire_worker(worker)?;
             ctx.reclaim_if_due();
-            match end {
-                // 取り消されたタスクは結果を受け取らない。中断も起こし直さずに落とす
-                _ if ext == Extern::AsyncDropJob => {
-                    unsafe { ctx.heap_mut().decref(w) }?;
-                    task.set(dst, Word::UNIT);
-                }
-                cells::JobEnd::Value(w) => task.set(dst, w),
-                // join の起こし直しと同じく、次の命令を戻り先にして呼んだタスクのフレームで起こし直す
-                // (docs/spec/vm.md の「`compute` の仕事」)
-                cells::JobEnd::Abort {
-                    effect,
-                    depth,
-                    clause,
-                } => return reraise::<R>(code, ctx, task, (effect, depth, clause), task.pc, dst),
+            if ext == Extern::AsyncDropJob {
+                // 取り消されたタスクは結果を受け取らない
+                unsafe { ctx.heap_mut().decref(w) }?;
+                task.set(dst, Word::UNIT);
+            } else {
+                task.set(dst, w);
             }
         }
         ext @ (Extern::AsyncDetach | Extern::AsyncCancelRaw) => {
@@ -4633,7 +4333,7 @@ fn leaks(a.0: obj) -> unit {
 
     /// タスクの外で深さの上限を超えたら、run を止める。
     #[test]
-    fn a_depth_hit_outside_a_task_stops_the_run() {
+    fn a_depth_hit_outside_a_task_ends_the_run() {
         let (code, mut ctx, mut sched) = limit_fixture(CALL);
         let mut task = Task::new(&code, function(&code, "main"), DEPTH);
         task.pc = code.functions[function(&code, "f") as usize].start;
@@ -4751,7 +4451,7 @@ fn \"prompt$\"(p.0: unit) -> unit {
     /// 補助の関数のエントリでも、深さが本当の限度と猶予の和を超えていれば run を止める。起こすのを延ばしても限度は
     /// なくならない。起こすエントリ (`main`) でも、起こさずに run を止める (docs/spec/vm.md の「タスクの上限」)。
     #[test]
-    fn a_helper_entry_beyond_the_headroom_stops_the_run() {
+    fn a_helper_entry_beyond_the_headroom_ends_the_run() {
         let (code, mut ctx, mut sched) = limit_fixture(HELPERS);
         for name in ["compose$", "main"] {
             for limit in [Limit::Task, Limit::Pending] {
@@ -4783,7 +4483,7 @@ fn \"prompt$\"(p.0: unit) -> unit {
             "mask$[State]",
             "mask$[Yield@1]",
         ];
-        let raises = ["f", "$cont$@[X]", "fork$E.op", "compose$x"];
+        let raises = ["f", "$cont$@[X]", "compose$x"];
         let text: String = defers
             .iter()
             .chain(&raises)
@@ -4804,7 +4504,7 @@ fn \"prompt$\"(p.0: unit) -> unit {
 
     /// 猶予の間に深さの上限を超えたら、安全点が run を止める。
     #[test]
-    fn a_depth_hit_while_aborting_stops_the_run() {
+    fn a_depth_hit_while_aborting_ends_the_run() {
         let (code, mut ctx, mut sched) = limit_fixture(CALL);
         let mut task = Task::new(&code, function(&code, "main"), DEPTH);
         task.worker = ctx.heap().worker();
@@ -5194,11 +4894,11 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             right,
             right_worker: ctx.heap().worker(),
             parent_evv: Word::UNIT,
+            parent_limit: Limit::Task,
             left: None,
-            right_outcome: None,
+            right_value: None,
             ret: task.pc,
             dst: 0,
-            orphan: false,
         });
         sched.run.push_ready(0, Ready::Task(right));
         let base = task.push_frame(task.pc, 0, BOUNDARY_SIZE);
@@ -5208,14 +4908,7 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
         sched.publish(&task);
         let held = ctx.fresh_string(&"x".repeat(200 << 10));
         assert!(control.pressure().is_some());
-        child_done::<Checked>(
-            &code,
-            &mut ctx,
-            &mut task,
-            &mut sched,
-            Outcome::Value(Word::imm(1)),
-        )
-        .unwrap();
+        child_done::<Checked>(&code, &mut ctx, &mut task, &mut sched, Word::imm(1)).unwrap();
         assert!(
             task.cell.is_none(),
             "the switch does not reach the right child"
@@ -5227,28 +4920,110 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
         unsafe { ctx.heap_mut().decref(held) }.unwrap();
     }
 
-    /// `par` の右の子は、タスクの外の親からは `Stops` を、タスクの中の親からは保留も猶予もない `Task` を受け継ぐ。
+    /// `par`の子を実行するタスクに旗が届いても、子の状態も深さの上限も変わらない。旗はforkが退避した状態に付き、joinが
+    /// それを親に戻す。
     #[test]
-    fn a_right_child_inherits_the_kind_of_its_parent() {
-        for (parent, child) in [
-            (Limit::Stops, Limit::Stops),
-            (Limit::Task, Limit::Task),
-            (Limit::Pending, Limit::Task),
-            (Limit::Aborting { pending: true }, Limit::Task),
-            (Limit::Aborting { pending: false }, Limit::Task),
-        ] {
-            let right = Task::right_child(
-                0,
-                0,
-                Word::UNIT,
-                0,
-                DEPTH,
-                JOB,
-                Word::UNIT,
-                parent.inherit(),
-            );
-            assert_eq!(right.limit, child, "{parent:?}");
-        }
+    fn a_flag_during_a_child_reaches_the_class_the_fork_saved() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Stops;
+        ctx.set_depth_limit(DEPTH);
+        let mut right = Task::new(&code, function(&code, "main"), DEPTH);
+        right.worker = ctx.heap().worker();
+        right.state = TaskState::Ready;
+        let right = sched.add_task(right);
+        let parent = sched.current;
+        let j = sched.add_join(JoinNode {
+            parent,
+            right,
+            right_worker: ctx.heap().worker(),
+            parent_evv: Word::UNIT,
+            parent_limit: Limit::Task,
+            left: None,
+            right_value: None,
+            ret: task.pc,
+            dst: 0,
+        });
+        sched.run.push_ready(0, Ready::Task(right));
+        let base = task.push_frame(task.pc, 0, BOUNDARY_SIZE);
+        task.stack[base + 1] = Word::from_bits(j);
+        task.boundaries.push(j);
+        sched.cells.mail.push(MailItem::Limit(cell));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Stops);
+        assert_eq!(ctx.depth_limit(), DEPTH);
+        assert_eq!(sched.join(j).parent_limit, Limit::Pending);
+        child_done::<Checked>(&code, &mut ctx, &mut task, &mut sched, Word::imm(1)).unwrap();
+        let waiting = sched.tasks[parent].as_ref().unwrap();
+        assert_eq!(waiting.cell, Some(cell));
+        assert_eq!(waiting.limit, Limit::Pending);
+    }
+
+    /// 左の子の中にさらに`par`があるとき、旗は最も外のforkが退避した状態に付く。内側のforkが退避したのは`Stops`
+    /// で、旗はこれを変えない。
+    #[test]
+    fn a_flag_in_a_nested_child_reaches_the_outermost_saved_class() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Stops;
+        ctx.set_depth_limit(DEPTH);
+        let node = |parent_limit| JoinNode {
+            parent: ENTRY,
+            right: ENTRY,
+            right_worker: 0,
+            parent_evv: Word::UNIT,
+            parent_limit,
+            left: None,
+            right_value: None,
+            ret: 0,
+            dst: 0,
+        };
+        let outer = sched.add_join(node(Limit::Task));
+        let inner = sched.add_join(node(Limit::Stops));
+        task.boundaries.extend([outer, inner]);
+        sched.cells.mail.push(MailItem::Limit(cell));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Stops);
+        assert_eq!(sched.join(outer).parent_limit, Limit::Pending);
+        assert_eq!(sched.join(inner).parent_limit, Limit::Stops);
+    }
+
+    /// 表で待つタスクが子の中で止まっているときも、旗は最も外のforkが退避した状態に付く。待つタスクの`limit`は`Stops`の
+    /// ままである。
+    #[test]
+    fn a_flag_for_a_waiting_task_inside_a_child_reaches_the_saved_class() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        let mut waiting = Task::new(&code, function(&code, "main"), DEPTH);
+        waiting.worker = ctx.heap().worker();
+        waiting.cell = Some(cell);
+        waiting.limit = Limit::Stops;
+        waiting.state = TaskState::Ready;
+        let j = sched.add_join(JoinNode {
+            parent: ENTRY,
+            right: ENTRY,
+            right_worker: 0,
+            parent_evv: Word::UNIT,
+            parent_limit: Limit::Task,
+            left: None,
+            right_value: None,
+            ret: 0,
+            dst: 0,
+        });
+        waiting.boundaries.push(j);
+        let waiting = sched.add_task(waiting);
+        sched.cells.mail.push(MailItem::Limit(cell));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(sched.tasks[waiting].as_ref().unwrap().limit, Limit::Stops);
+        assert_eq!(sched.join(j).parent_limit, Limit::Pending);
     }
 
     /// 保留のタスクの安全点で `NOTICE` も立っていれば、上限を扱う前に知らせを集める。`poll` し直す前に下ろしたビットの

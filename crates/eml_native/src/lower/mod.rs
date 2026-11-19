@@ -100,7 +100,6 @@ pub fn kind(repr: Repr) -> Kind {
         | Repr::TObj
         | Repr::Ev
         | Repr::Cev
-        | Repr::Fev
         | Repr::Rev
         | Repr::Evv
         | Repr::Int

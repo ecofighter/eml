@@ -1220,7 +1220,10 @@ fn entry_body<M: Mode, P: Policy>(
                 0 => Workers::Denied,
                 n => Workers::Started(n),
             };
-            vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts)
+            let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
+            // worker 0は、ほかのworkerを止める前に自分の誤りを書く。後で失敗するworkerは欄が埋まっているのを見る。ここから
+            // `settle`までは、書いた誤りの`Ok`は穴埋めなので、間で`result`を読まない (docs/spec/vm.mdの「子の誤り」)
+            sched.run.record(result)
         }));
         // 終わりを決めたのはworker 0のループか、ほかのworkerの致命的な誤りか、worker 0のpanicである。どれでも`END`を
         // 立ててすべてのworkerを起こし、`Ctx`を返させてからjoinする (docs/spec/vm.mdの「タスクとスケジュール」)
@@ -1681,7 +1684,6 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         CompileError::TooManySlots { ref function }
         | CompileError::Mismatch { ref function }
         | CompileError::MultiValueEntry { ref function }
-        | CompileError::MissingFork { ref function }
         | CompileError::MissingEntry { ref function } => {
             (RunFault::Internal(error.what()), function.clone())
         }

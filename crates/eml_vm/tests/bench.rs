@@ -8,7 +8,7 @@ use eml_test_support::{capture, lir, run_stats, run_stats_on, schedule_independe
 use eml_vm::RunConfig;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 42] = [
+const PROGRAMS: [&str; 43] = [
     "apply_float",
     "apply_int",
     "byte_loop",
@@ -30,6 +30,7 @@ const PROGRAMS: [&str; 42] = [
     "orders",
     "orders_by_hand",
     "par_tree",
+    "pfib",
     "push_fold",
     "push_fold_by_hand",
     "rbtree",
@@ -1476,20 +1477,52 @@ fn par_tree() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 7,
-        rc_increments: 0,
-        rc_decrements: 7977,
+        rc_increments: 30,
+        rc_decrements: 8161,
         boxes: 0,
         unboxes: 0,
-        allocations: 7978,
-        reuses: 4354,
-        peak_objects: 4101,
-        peak_stack: 141,
+        allocations: 8132,
+        reuses: 4350,
+        peak_objects: 4133,
+        peak_stack: 165,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
         cancels: 0,
         timers: 0,
         shared_objects: 3851,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
+        completions: 0,
+    }
+    ");
+}
+
+/// forkごとの仕事がほとんどない`par`の再帰。forkとjoinの回数を確かめる。
+#[test]
+fn pfib() {
+    insta::assert_debug_snapshot!(stats("pfib", "6765\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 4,
+        rc_increments: 21890,
+        rc_decrements: 164176,
+        boxes: 32836,
+        unboxes: 32836,
+        allocations: 142287,
+        reuses: 0,
+        peak_objects: 21922,
+        peak_stack: 338,
+        tasks: 0,
+        parks: 0,
+        dropped_failures: 0,
+        cancels: 0,
+        timers: 0,
+        shared_objects: 10945,
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
@@ -1641,7 +1674,8 @@ fn unwind_points() {
     nbody: 93
     orders: 13
     orders_by_hand: 13
-    par_tree: 37
+    par_tree: 43
+    pfib: 29
     push_fold: 4
     push_fold_by_hand: 4
     rbtree: 15
@@ -1727,6 +1761,7 @@ fn owned_variants() {
     orders:
     orders_by_hand:
     par_tree:
+    pfib:
     push_fold:
     push_fold_by_hand:
     rbtree:

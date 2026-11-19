@@ -4,7 +4,6 @@ expression: checked.render()
 input_file: crates/eml_cli/tests/repl/par/recover.repl
 ---
 > import Std.Par (par)
-> import Fail (Fail(..))
 > upto : Int -> List Int -> <Panic> List Int
 . upto n acc = if n == 0 then acc else upto (n - 1) (n :: acc)
 .
@@ -15,17 +14,11 @@ input_file: crates/eml_cli/tests/repl/par/recover.repl
 .   | y :: rest -> y + total rest
 .
 > par (fn () -> total xs) (fn () -> 1 / 0)
-runtime error: panicked: division by zero in `reperform$Prelude.Panic.panicked`
+runtime error: panicked: division by zero
+  at <std>/Par.em:15:21
 > par (fn () -> total xs) (fn () -> total xs + 1)
 (5050, 5051)
-> Fail.to_result (fn () -> par (fn () -> Fail.fail "l") (fn () -> total xs))
+> try_panic (fn () -> par (fn () -> (panic "l" : Int)) (fn () -> total xs))
 Err "l"
-> effect Stop where
-.   never stop : Int -> a
-.
-> handle par (fn () -> stop 1) (fn () -> 2) with
-.   | ctl stop n -> (n, n)
-.
-(1, 1)
 --- close ---
 no leaks

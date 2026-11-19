@@ -70,7 +70,7 @@ pub(super) fn counted(
             b.ins().brif(imm, done, &[], object, &[]);
             b.switch_to_block(object);
         }
-        Repr::Obj | Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev => {}
+        Repr::Obj | Repr::Ev | Repr::Cev | Repr::Rev => {}
         _ => unreachable!("only reference counted words are counted"),
     }
     let rc = mem::load_rc(b, w);

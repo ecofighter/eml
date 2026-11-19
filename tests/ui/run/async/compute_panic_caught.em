@@ -1,4 +1,4 @@
--- 仕事の中の捕まえない `Panic` は、仕事が終わった後に呼んだタスクで起こし直し、`try_all` には `Panicked` として、
+-- 仕事の中の捕まえない`Panic`は、仕事が終わった後に`compute`が呼んだタスクで起こし直し、`try_all`には`Panicked`として、
 -- `try_panic` には文言として届く (docs/spec/stdlib.md の「`compute`」)。
 import Async (Async)
 

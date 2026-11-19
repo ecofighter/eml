@@ -557,10 +557,11 @@ mod tests {
         assert_eq!(
             input_effect_helps(&[
                 "import Async",
-                "Async.compute (fn () -> Async.yield_now ())"
+                "twice : Unit -> <Async.Async, Async.Async> Unit\ntwice () = ()",
+                "twice ()"
             ]),
             [(
-                "`compute` performs `Async`, but an input may perform only `IO`, `Panic` and `Async`"
+                "`twice` performs `Async`, but an input may perform only `IO`, `Panic` and `Async`"
                     .to_string(),
                 Vec::new()
             )]

@@ -85,10 +85,6 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         name: &function.name,
         clause: function.clause,
         params: function.params().len(),
-        takes_fork: function
-            .params()
-            .iter()
-            .any(|&param| function.repr(param) == Repr::Fev),
         landed: None,
     });
     with_tables(

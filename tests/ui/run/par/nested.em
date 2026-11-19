@@ -1,8 +1,7 @@
--- 木の和を、深さ 4 まで `par` で分けて求める。右の子の中の `par` の左の子の中断は、その右の子の中の `to_result` が
+-- 木の和を、深さ4まで`par`で分けて求める。右の子の中の`par`の左の子の`Panic`は、その右の子の中の`try_panic`が
 -- 捕まえる。join は内側から順に終わり、終わった子の worker ID は次の fork で使い回す
 -- (docs/spec/object-model.md の「論理的な worker ID」)。
 import Std.Par
-import Fail (Fail(..))
 
 data Tree =
   | Leaf
@@ -35,5 +34,5 @@ main () =
   println (show (total t))
   let (x, r) =
     Par.par (fn () -> spin 40 + 1) (fn () ->
-      Fail.to_result (fn () -> Par.par (fn () -> spin 40 + Fail.fail "inner") (fn () -> 2)))
+      try_panic (fn () -> Par.par (fn () -> spin 40 + panic "inner") (fn () -> 2)))
   println (show (x, r))

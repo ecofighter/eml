@@ -3,33 +3,12 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/types/compute_performs_async.em
 ---
-[E2002] Error: `compute` performs `Async`, which the signature of `main` does not allow
-   ╭─[ check-fail/types/compute_performs_async.em:7:3 ]
+[E2002] Error: `yield_now` performs `IO`, `Async`, which this lambda does not allow
+   ╭─[ check-fail/types/compute_performs_async.em:6:27 ]
    │
- 7 │   Async.compute (fn () -> Async.yield_now ())
-   │   ─────────────────────┬─────────────────────  
-   │                        ╰─────────────────────── this call performs `Async`
-   │
-   ├─[ check-fail/types/compute_performs_async.em:7:3 ]
-   │
- 5 │ main : Unit -> <IO, Panic, Async> Unit
-   │        ───────────────┬───────────────  
-   │                       ╰───────────────── the row of this signature does not include it
+ 6 │   Async.compute (fn () -> Async.yield_now ())
+   │   ──────┬──────           ─────────┬────────  
+   │         ╰───────────────────────────────────── argument 1 of `compute` does not allow it
+   │                                    │          
+   │                                    ╰────────── this call performs `IO`, `Async`
 ───╯
-[E2020] Error: the row passed to `compute` may perform `IO`, but `compute` allows only `never` operations
-     ╭─[ check-fail/types/compute_performs_async.em:7:3 ]
-     │
-   7 │   Async.compute (fn () -> Async.yield_now ())
-     │   ──────┬──────           ─────────┬────────  
-     │         ╰───────────────────────────────────── `compute` is used here
-     │                                    │          
-     │                                    ╰────────── `IO` is performed here
-     │
-     ├─[ <std>/Async.em:164:25 ]
-     │
- 164 │ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
-     │                         ──┬──  
-     │                           ╰──── `compute` bounds this row variable by `never`
-     │ 
-     │ Note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
-─────╯

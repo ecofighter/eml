@@ -327,7 +327,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             Stmt::Let {
                 var,
                 rhs: Rhs::Prim(prim, args),
-            } if *prim != Prim::ChildAbort => self.prim(block, position, *var, prim, args),
+            } => self.prim(block, position, *var, prim, args),
             Stmt::Let {
                 var,
                 rhs: Rhs::Con { ctor, args, reuse },

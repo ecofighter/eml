@@ -1,4 +1,4 @@
--- E2020: `par` の子の row に `Async` は入らない (docs/spec/stdlib.md の「`Std.Par`」)。
+-- E2001: `par`の子のrowに`Async`は入らない (docs/spec/stdlib.mdの「`Std.Par`」)。
 -- 子の row を `<Async>` だけにして、診断が `Async` を名指すことを確かめる。
 import Std.Par
 import Async (Async)

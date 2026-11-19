@@ -190,14 +190,12 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 - エフェクトの数の上限は、16 ビットの tag から 0 を除いた 65535 になる
 - VMの関数の値`&f`は関数の番号の即値なので (上の「語」)、関数0の値と`()`は同じ語である。そのため、エントリの欄やκの欄が空 (`()`) かを確かめる検査モードの確かめは、関数0の値が入った欄を空と見て、誤りを見逃しうる。空の欄を空でないと見ることはないので、正しい呼び出しを誤って断ることはない
 - 物体の欄の役割は、`eml_rt`の`heap/ctx.rs`のcrateの中だけの定数として、1か所で名前を付ける。evidenceは`EV_TABLE` (エントリの表)、`EV_STATE` (状態)、`EV_OUTER` (外側の`evv`)、走査する語の数は`EV_WORDS`である。`evv`の節点は`NODE_EV` (evidence)、`NODE_NEXT` (次の節点)、走査する語の数は`NODE_WORDS`である。これらは公開せず、`layout`にも置かない。evidenceと節点の欄を読み書きするコードは、番号でなくこの名前を使う
-- fork evidenceのエントリの表 (forkの表) と、`par`の子の`evv`の`Panic`の末尾は、`Heap::alloc_fork_table(entries)`と`Heap::alloc_fork_tail(panic, table)`だけが作る。forkの表は、走査する語にエントリを操作の順に並べたtag 0の不死の`Data`である。末尾は、tagが`panic + 1`の不死のfork evidence `[table, 即値 0, ()]`と、それを指す同じtagの不死の節点`[ev, ()]`である。VMはどちらもロードで作業用のヒープに作って凍結するので、どのworkerも読める ([VM](vm.md)の「`par` の fork と join」)。エントリはどれも即値か`lin`ビットのない不死の物体で、`table`は`alloc_fork_table`が作った表でなければならない。2つの関数はどちらのモードでも確保の前に不死かを確かめ、違えば`NotImmortal`を返す。`alloc_fork_tail`は、tagのないエフェクトの番号65535を`BadEvidence`で断る。不死でないエントリがあると、凍結した物体が空きうるメモリを指したまま残るので、この確かめはrelease buildでも走る。表はロードで1回だけ作るので、forkごとの費用はない
-- fork evidenceは`Ctx::fork_ev(effect, table, depth)`だけが作る。tagが`effect + 1`で、エントリの表がforkの表の局所のevidence `[table, 即値 depth, ()]`である。`ev_shape`を満たすので、`evv_push`はほかのevidenceと同じに受け取る。evidenceは表の参照を1つ持つ。検査モードは表を`dup`し、このヒープの不死の物体の表はこれで数え、凍結した領域の表は数えない (下の「不死の物体の数え方」)。速いモードは`dup`を省く。不死の物体の`dup`は何もしないためである。エフェクトの番号と表を確かめるのは検査モードだけである。`fork_ev`は、forkのたびに写すevidenceごとに1回走るためである。`Ctx::fork_of(ev)`はfork evidenceのエフェクトの番号 (tagから1を引いた値) と深さを読み、`Ctx::evv_step(w)`は`evv`のリストの節点を1つ読む。`()`なら`None`を、そうでなければその節点のエフェクトの番号と次の節点を返す。どちらも引数を借り、RCに触れない。evidenceをほかのworkerに渡す (`par`のforkは共有の印を付けて渡す) なら、表は数える不死の物体でなく、凍結した領域の物体でなければならない (下の「核の操作」)
 - 3つの物体を別の種類にしない。速いモードの振る舞いは `Data` と同じで、分けて得られるのは、リークの報告の名前と検査モードの種類の検査だけだからである。リークの報告では、クロージャと evidence の物体も `Data` と数える
-- `ev_set_state` と `ev_take_state` は状態の欄を、`ev_take_evv` は外側の欄を、`set_field` でその場で書き換える。`set_field` の前提 (ほかのスレッドが読めない) は成り立つ。ほかの worker で動く eml のコードは `par` の右の子だけで、`par` は、これらの操作が書く evidence を子のタスクに渡さず、共有の印も付けないためである。`par` の子の `evv` は、fork のときに作る fork evidence の列で、親の evidence を含まない。fork の `share` が届くのは値から届く物体だけで、そこには退いた evidence しかない (次の項目)。fork evidence の状態の欄は深さを持つが、fork evidence は `ev_take_state`、`ev_set_state`、`ev_take_evv` の宛先にならない。fork evidence を包む `prompt$` はなく、`fork$E.op` の節は状態の欄を書かず、`prim child_abort` が深さを読むだけだからである。fork evidence は凍結した物体か、fork で共有の印を付けた物体なので、`set_field` の前提も満たさない ([VM](vm.md) の「`par` の fork と join」)
+- `ev_set_state`と`ev_take_state`は状態の欄を、`ev_take_evv`は外側の欄を、`set_field`でその場で書き換える。`set_field`の前提 (ほかのスレッドが読めない) は成り立つ。ほかのworkerで動くemlのコードは`par`の右の子だけで、`par`は、これらの操作が書くevidenceを子のタスクに渡さず、共有の印も付けないためである。`par`の子の`evv`は空である。forkの`share`が届くのは値から届く物体だけで、そこには退いたevidenceしかない (次の項目、[VM](vm.md) の「`par`のforkとjoin」)。
 - 値 (閉包、データ、根) から届くevidenceは、退いたevidenceだけである。`prompt$`は、どの道でも初めに`ev_take_evv`で外側の`evv`をevidenceから取り出して`Ctx`に戻し、状態を`ev_last_state`で取り出す。状態1と3の道は、その後`ev_retire`で退いたevidenceを作り、継続はそれだけを捕まえる ([Core IR](core-ir.md)の「handle と `prompt$`」)。そのため、退いたevidenceはエントリの表とtagだけを持ち、状態と外側の欄は`()`である。`resume$`と`rewind$`は`ev_renew`で表とtagだけを使うので、退いたevidenceの外側を読む操作はない。走っているevidenceに届く道は、値から始まらず、フレームかVMの構造から始まる。たとえば、`Ctx`の`evv`、yieldの状態、handleのフレーム (handleの場所と`prompt$`)、`apply κ`の間の`resume$`、`yield_to`までの再開する節のエントリ、in-placeのエントリ、フレームが持つ`evv` (`mask`の包みの`w0`、underの形のエントリの`w`)、`par`のjoinの節点が持つ親の`evv`、止まっているタスクが退避した`evv`である。ほかの走っているevidenceの外側の欄も、これらからたどって届く
 - 退いたevidenceを作るのは`ev_retire`だけで、`ev_retire`は状態と外側のリストが`()`でないevidenceを断る。値から届くevidenceが退いたものだけであることはverifierの規則である。どのクロージャも、実行中のevidenceもリストも捕獲しない ([LIR](lir.md)の「verifier」)
 - この不変条件があるので、`par`のforkが値に呼ぶ`share` (`par`の引数の閉包と根) は、前提でrcが正であることを求める物体に届かない。その物体は、`ev_take_state`、`ev_take_evv`、`ev_set_state`のevidenceと、`ev_set_clause`のエントリの表である (下の「基本操作の契約」)。エントリの表を書くのは`ev_new`から`evv_enter`までで、その間はまだ値が表に届かない。退いたevidenceが外側の欄を持ち続けると、継続が捕まえた退いたevidenceから、親で走っているevidenceに`share`が届く。その後の親のその場の書き換えは、検査モードでは`NotWritable`になり、速いモードでは契約の外の呼び出しになる。値を公開する新しい基本操作も、この不変条件に頼る
-- handlerのevidenceは`CodeBase`の不死の定数にしない。不死のevidenceの物体は、上のforkの表と`Panic`の末尾だけである。空の`evv`は即値の`()`である
+- 不死のevidenceの物体はない。handlerのevidenceは`CodeBase`の定数にしないためである。空の`evv`は即値の`()`である
 
 ## 確保器
 
@@ -436,7 +434,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 
 `Err` を作らない操作は、呼ぶ側に展開すれば、最適化で `Result` の分岐が消える。そのため、`dup` と `decref` は、局所の rc を書き換えるだけの速い道を `#[inline]` にし、残り (共有、不死、張り付いた数、検査モードの仕事) を、`#[cold]` と `#[inline(never)]` を付けた遅い道の関数に出す。速いモードの `decref` の速い道は、rc が 1 なら解放の連鎖を直に呼ぶ。解放の連鎖は `#[inline(never)]` にするが、一意な物体を空けることはよく起きるので、`#[cold]` にはしない。確保と箱の解放の速い道、`release`、`release_reuse`、`con_at`、`into_token`、`drop_token` と、語とヘッダの小さい関数も `#[inline]` にする。VM は `eml_rt` の外の crate なので、付けないと、総称でない関数は crate をまたぐ呼び出しになりうるためである。`Ctx::poll` が読む `Control::stop_bits` も、同じ理由で `#[inline]` にする。`field`、`set_field`、`meta`、`scanned`、`string_push` と、`string_push` の中で呼ぶ `push_unchecked` と、`release` と `release_reuse` の子の処理 (`release_children`) が呼ぶ `release_unkept` も `#[inline]` にする。総称な関数の実体は、使う側の crate のコード生成単位の1つにしかできず、ほかの単位からは展開できないためである ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)。確保器の遅い道 (ページを替えること、大きい物体の確保と返却) は `#[cold]` にする。`decref` の解放の道を選んだ計測は [計測の基準](../implementation/benchmarks.md) の「`decref` が一意な物体を空ける道」に、今の命令の数は同じ文書の「今の数値」にある。
 
-ペイロードを呼ぶ側が書く`alloc`と`alloc_immortal`も`unsafe fn`である。`meta`の種類は`Foreign`、`String`、`Bytes`、`Raw`、`Free`のどれでもなく、`scan`は255でない。呼ぶ側は、ほかのヒープの操作の前に`meta`に合うペイロードを書く。`scan`が255の物体は走査する語の数をペイロードの先頭の数の語から読むので、数の語を書く前には、走査する語と生の語の境目が決まらない。走査する語が255個以上の物体と配列は`alloc_data`か`alloc_data_ext`で作る。ペイロードの形が正しいかはVMが受け持ち、確保のたびに実行時に確かめると速い道の費用になるためである。ペイロードを自分で書く`alloc_data`、`alloc_data_ext`、`alloc_array_immortal`、`alloc_int`、`alloc_foreign`、`alloc_string`、`alloc_string_room`、`alloc_string_immortal`、`alloc_bytes`、`alloc_bytes_room`、`alloc_bytes_immortal`、`alloc_unboxed`は安全な関数である。`String`と`Bytes`の物体を作れるのは、下の「バイト列と文字列」の操作だけで、`Raw`の物体を作れるのは`alloc_unboxed`だけである。forkの表と`Panic`の末尾を作る`alloc_fork_table`と`alloc_fork_tail`は、語を受けるので`unsafe fn`である (上の「evidence の3つの物体」)。
+ペイロードを呼ぶ側が書く`alloc`と`alloc_immortal`も`unsafe fn`である。`meta`の種類は`Foreign`、`String`、`Bytes`、`Raw`、`Free`のどれでもなく、`scan`は255でない。呼ぶ側は、ほかのヒープの操作の前に`meta`に合うペイロードを書く。`scan`が255の物体は走査する語の数をペイロードの先頭の数の語から読むので、数の語を書く前には、走査する語と生の語の境目が決まらない。走査する語が255個以上の物体と配列は`alloc_data`か`alloc_data_ext`で作る。ペイロードの形が正しいかはVMが受け持ち、確保のたびに実行時に確かめると速い道の費用になるためである。ペイロードを自分で書く`alloc_data`、`alloc_data_ext`、`alloc_array_immortal`、`alloc_int`、`alloc_foreign`、`alloc_string`、`alloc_string_room`、`alloc_string_immortal`、`alloc_bytes`、`alloc_bytes_room`、`alloc_bytes_immortal`、`alloc_unboxed`は安全な関数である。`String`と`Bytes`の物体を作れるのは、下の「バイト列と文字列」の操作だけで、`Raw`の物体を作れるのは`alloc_unboxed`だけである。
 
 | 操作 | 動作 |
 |---|---|
@@ -664,7 +662,7 @@ left が一意 (is_unique)
 - `attach` は、`region` の親を順にたどり、今付けている塊が `region` かその祖先であることを、`Arc` の番地を比べて実行時に確かめる。2つの塊のブロックが重ならないことを示せるのは、鎖でつながる塊だけだからである。子の塊のブロックは作り手のヒープが確保したので、作り手が付けていた塊のブロックと重ならない
 - ヒープ自身のブロックと付けた塊のブロックが重ならないことは、付けるときにヒープの権限と塊の権限から示す。その後の確保でも、新しいブロックと塊の権限から同じことを示す
 - 付け替えても、前の塊は新しい塊の鎖が生かすので、ヒープの物体は前の塊の定数を指し続けてよい
-- プログラムのコードを実行するヒープは、動かす前に塊の鎖の先頭を付ける。VMではworker 0が`load`で付け、メインのworkerを含むほかのすべてのworkerは`Ctx`を作るときに付ける。付けるのは`Arc`を1つ持つだけで何も確保しない。そのため、forkの表、末尾、定数は、コードを実行するどのヒープでも付けた塊の物体として届き、`fork_ev`、`evv_push`、`evv_step`、`fork_of`の前提 (上の「核の操作」) が成り立つ
+- プログラムのコードを実行するヒープは、動かす前に塊の鎖の先頭を付ける。VMではworker 0が`load`で付け、メインのworkerを含むほかのすべてのworkerは`Ctx`を作るときに付ける。付けるのは`Arc`を1つ持つだけで何も確保しない。そのため、定数は、コードを実行するどのヒープでも付けた塊の物体として届く
 
 ### 寿命
 
@@ -762,7 +760,7 @@ token (`Token`) はどちらのモードでも1語である。VM のレジスタ
 - `alloc_immortal` の物体は、数を 0 にして作る。`acquire_immortal` が数を1つ増やし、`dup` が1つ増やし、`decref` が1つ減らす。数が 0 になっても解放しない
 - 誤りにするのは、数が 0 の物体への `decref` (作っていない参照を手放すこと) と、不死でない物体への `acquire_immortal` である。読む操作 (`field`、`raw`、`scanned`) と `set_field` と `dup` は、数を見ない。`dup` を断らないのは、不死の親から借りた子を `dup` して所有するのが正しい形だからである
 - リークの報告では、数が 0 でない不死の物体の数を、件数に足す
-- 数を書くのは、物体を作ったヒープのスレッドだけである。workerをまたぐ値 (送る側が`share`で印を付ける`par`のfork、`compute`の仕事、タスクの始めと結果、channelの送りと、受ける側が`transfer_back`で受け取る`par`のjoin、`compute`の仕事、タスクの始めと結果、channelの受け取り) は、数える不死の物体に届いてはならない。届かせるなら、先にその物体を作ったヒープを凍結する。どちらのエンジンも、定数とforkの表をどれも作業用のヒープに作って凍結するので、実行のヒープは数える不死の物体を持たない (上の「核の操作」)
+- 数を書くのは、物体を作ったヒープのスレッドだけである。workerをまたぐ値 (送る側が`share`で印を付ける`par`のfork、`compute`の仕事、タスクの始めと結果、channelの送りと、受ける側が`transfer_back`で受け取る`par`のjoin、`compute`の仕事、タスクの始めと結果、channelの受け取り) は、数える不死の物体に届いてはならない。届かせるなら、先にその物体を作ったヒープを凍結する。どちらのエンジンも、定数をどれも作業用のヒープに作って凍結するので、実行のヒープは数える不死の物体を持たない (上の「核の操作」)
 - 検査モードは、workerをまたぐ数える不死の物体を、送る側でも受ける側でも`CountedImmortal`で断る。送る側では、`share`は、たどりが数える不死の物体に届けば、自分のヒープの物体でも断る。その物体をほかのworkerから届くようにするのが共有だからである。受ける側では、`transfer_back`が、たどりが数える不死の物体に届けば断る。`dup`、`decref`、`acquire_immortal`は、ほかのヒープのページの数える不死の物体を、数を書く前に断る
 - 持ち主のほかのスレッドは、数を書かない。`dup`、`decref`、`acquire_immortal`は、書く前に物体のページを確かめる。断りは数を読む。物体が操作を走らせるヒープのもの (`share`が自分の不死の物体に届くとき) なら、その読みは持ち主のスレッドで行う。物体がほかのヒープのページにある (受け取った値の`transfer_back`、すでに数える不死の物体を持つ値の`share`、`dup`、`decref`、`acquire_immortal`) なら、その読みはT2のatomicで、数える前置きは`UNCOUNTED`にならないので、結果は持ち主の書き込みと競合しても変わらない。断りは保証である
 - ダミーは数えない (上の「ダミーの値」)。前置きの1つ目の欄を `u32::MAX` (`UNCOUNTED`) にして作り、この値の物体は数を変えも確かめもしない
@@ -847,7 +845,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## 実行文脈 `Ctx`
 
-実行文脈`Ctx<M>`は、ヒープと、[LIR](lir.md)の「実行の文脈」の`evv`とyieldの状態を持ち、同じ文書の「基本操作」の表のうち`dummy`、`empty_mut_array`、`child_abort`、`ev_last_state`を除く21個をメソッドにする (`dummy`は上の「ダミーの値」の`Heap::dummy`で、`ev_last_state`は`ev_take_state`を走らせる。`empty_mut_array`と`child_abort`は同じ文書の「基本操作」が述べる)。このほかに、タスクの切り替えのための`switch_task`と`evv_word`を持つ (下の「タスクの切り替え」)。VMは`&mut Ctx`だけを持ち回す。ヒープと実行の状態を別の構造体にしないのは、持ち回すものが2つになり、基本操作の契約が2つの値をまたぐためである。
+実行文脈`Ctx<M>`は、ヒープと、[LIR](lir.md)の「実行の文脈」の`evv`とyieldの状態を持ち、同じ文書の「基本操作」の表のうち`dummy`、`empty_mut_array`、`ev_last_state`を除く21個をメソッドにする (`dummy`は上の「ダミーの値」の`Heap::dummy`で、`ev_last_state`は`ev_take_state`を走らせる。`empty_mut_array`は同じ文書の「基本操作」が述べる)。このほかに、タスクの切り替えのための`switch_task`と`evv_word`を持つ (下の「タスクの切り替え」)。VMは`&mut Ctx`だけを持ち回す。ヒープと実行の状態を別の構造体にしないのは、持ち回すものが2つになり、基本操作の契約が2つの値をまたぐためである。
 
 ### 欄
 
@@ -954,7 +952,7 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 - `evv` と worker を1つの操作で替えるのは、`Ctx` の前提が `evv` の物体の持ち主を今の worker と比べるためである。次のタスクの `evv` は次のタスクの ID の下で正しく、前のタスクの `evv` は前のタスクの ID の下で正しい。2つを別の操作で替えると、その間はどちらかの `evv` の持ち主が今の worker と合わない。そのため、VM は `heap_mut()` で `set_worker` を呼ばない
 - 今のタスクの深さの上限は、`max_depth` から次のタスクの深さの起点 `depth_offset` を引いた値である。起点が `max_depth` を超えれば 0 にする。起点は、そのタスクのスタックの底より下に数える深さで、`par` の右の子では fork のときの親の深さである ([VM](vm.md) の「スロットとスタック」)。`Ctx::new` は上限を `max_depth` にし、起点 0 のタスクを表す。上限を書く操作は `switch_task` と `set_depth_limit(limit)` の2つである。`set_depth_limit` は上限の欄だけを `limit` にし、ほかの欄を変えない。VM はこれで、タスクの深さの超過を知らせる保留と、巻き戻しの間の猶予を表す。0 は保留で、次の安全点の `poll` が必ず `DepthLimit` で失敗する。VM の安全点で渡す深さは、タスクのスタックの底の根のフレームの分 (3 語) をいつも含んで 1 以上なので、0 を超える。`real + LIMIT_HEADROOM` (`real` は上の `max_depth` から起点を引いた値) は猶予で、巻き戻しの間の節のエントリが深くなっても、すぐには止めない。通常の値は `max_depth` から `depth_offset` を引いた値である。`depth_limit()` は今の上限を読む。ほかのタスクの ID に一時だけ切り替える核の `with_worker` が、戻した後に `set_depth_limit` で元の値に戻すために使う ([VM](vm.md) の「タスクの上限」)
 - 起点を上限から引いて `Ctx` に持つのは、安全点の速い道で起点を足さないためである。VM が安全点ごとにタスクの起点を足すと、基準のプログラムの命令の数が最大で約 1.2 % 増える。切り替えは安全点よりずっと少ないので、引く費用は切り替えの側で払う
-- `evv_word()` は今の `evv` の語を返すだけの操作で、RC に触れず、失敗しない。参照は `Ctx` に残る。`par` の fork が、子の `evv` を作る間に親の `evv` を読むための操作である。VM は返した語からたどれる節点と evidence を読むだけで、手放したり書き換えたりしないので、`heap_mut()` の前提 (上の「欄」) は崩れない。`switch_task` と同じく、[LIR](lir.md) の「基本操作」の表にない、VM のための `Ctx` の操作である
+- `evv_word()`は今の`evv`の語を返すだけの操作で、RCに触れず、失敗しない。参照は`Ctx`に残る。VMは返した語からたどれる節点とevidenceを読むだけで、手放したり書き換えたりしないので、`heap_mut()`の前提 (上の「欄」) は崩れない。`switch_task`と同じく、[LIR](lir.md) の「基本操作」の表にない、VMのための`Ctx`の操作である
 - `evv_get` と `evv_set` で切り替えないのは、切り替えごとに `dup` と `decref` が1回ずつ増え、仕事の回数 (VM の `RunStats`) がスケジュールに依存するためである
 - `switch_task` は失敗せず、どちらのモードでも何も確かめない。`evv_set` も l の形を確かめない。速いモードの前提は、切り替えた後の文脈 (`evv` が l で、worker が `worker`) で `held_ok()` が成り立つことである。検査モードでも、この前提が成り立てば、切り替えた後の文脈は `held_ok()` を満たす。切り替える前の文脈で `held_ok()` が成り立っていれば、返す語は前のタスクの ID の下で `evv_wf` を満たし、`evv` を空にした前の文脈で呼ぶ側がその参照を1つ持つ。VM はそれを前のタスクに退避し、そのタスクに戻るときに渡す
 
@@ -1018,9 +1016,6 @@ verifierが確かめるReprが、どの基本操作でも`ev_shape`と`evv_wf`�
 | `evv_enter(l, e)` | `evv_wf(l)`、lの長さが`max_evv`より小さい、`ev_shape(e)` | `evv_push`と同じだが、eは借りる。節点はeの新しい参照を持ち、呼ぶ側は自分の参照を持ったままである。eは`ev_shape`を満たしたままで、tag、エントリの表、状態、外側とrcの符号は変わらない。検査モードは、何も変える前にeの形とlの長さとeの`dup`を確かめる |
 | `evv_mask(items, w)` | `evv_wf(w)`、どの項目についても合う組が n + m 個以上ある (`mask_spec(items, evv_seq(w))` の長さに、各エフェクトの先の項目の m を足すと、`evv_seq(w)` の長さになる) | 結果の `evv_seq` は `mask_spec(items, evv_seq(w))` である。除いた最後の節点までに残す節点を写し、その後ろは元のリストを共有する |
 | `ev_new(effect, n_ops, state, outer)` | `evv_wf(outer)`、effect が 65535 より小さい | 欄が `n_ops` 個でどれも `()` のエントリの表と、それを指す tag が effect + 1 の evidence を作る |
-| `fork_ev(effect, table, depth)` | effectが65535より小さい、`table`がforkの表 (`lin`ビットのない不死のtag 0の`Data`で、エントリはどれも即値か、`lin`ビットを持たない不死の物体)、evidenceをほかのworkerに渡すなら`table`は凍結した領域にある | tagがeffect + 1のfork evidence `[table, 即値 depth, ()]`を作る。`table`は借り、evidenceの参照の分を検査モードだけが`dup`する (上の「evidence の3つの物体」)。検査モードは確保の前に、65535のeffectと、`lin`ビットのない不死のtag 0の`Data`でない`table`に`BadEvidence`を返す。`table`がほかのヒープのページの数える不死の物体なら、その`dup`が`CountedImmortal`を返す |
-| `fork_of(ev)` | `ev_shape(ev)`、状態が即値 | (tagから1を引いた値, 状態の値を`u32`にしたもの) を返す。検査モードは、evidenceでない物体と、`u32`に入る自然数の即値でない状態に`BadEvidence`を返す |
-| `evv_step(w)` | `evv_wf(w)` | wが`()`なら`None`を、そうでなければ (先頭の節点のtagから1を引いた値, 次の節点) を返す。次の節点の`evv_seq`は、`evv_seq(w)`から先頭の組を除いた列である。wは借り、RCに触れない。検査モードは、形の違う節点に`BadEvidence`を返す |
 | `ev_set_clause(ev, op, c)` | `ev_shape(ev)`、op がエントリの数より小さい、欄が `()`、エントリの表の rc が正、c が `lin` ビットを持たない | エントリの欄 op を c にする |
 | `ev_renew(ev, state)` | `ev_shape(ev)` | ev と同じエントリの表と tag を持ち、状態を state に、外側を今の `evv` にした新しい evidence を作る |
 | `ev_retire(ev)` | `ev_shape(ev)` | どちらのモードも、初めにevの状態と外側の`evv`が`()`かを確かめ、そうでなければ何も変えずに`BadEvidence`を返す。evが一意 (rcが1) なら、RCに触れずにそのまま返す。そうでなければ、evのtagとエントリの表を持ち、状態と外側を`()`にした新しい局所のevidenceを作り、evを手放す。新しいevidenceは表の参照を1つ多く持つ。どちらの道でも、結果は`ev_shape`を満たす局所のevidenceである。確かめる前には何も手放さないので、この操作で`Lin`の値の後始末は起きない。検査モードは、evidenceでない物体にも`BadEvidence`を返す。写す道の検査モードでは、evの`decref`が誤り (`UnknownPage`、`UseAfterFree`、`WrongOwner`、`CountedImmortal`、`ImmortalOverRelease`、`LinShared`、手放す連鎖の誤り) を返すと、表の`dup`と新しいevidenceの確保の後で`Err`を返す。その後は`Ctx`を落とすことしかできない |
@@ -1039,8 +1034,6 @@ verifierが確かめるReprが、どの基本操作でも`ev_shape`と`evv_wf`�
 | `yield_finish()` | yield 中で、κ の欄が `()` | 宛先の参照を手放し、節の本体を返し、yield の状態をなしにする |
 | `root_get(i)` | 根 i が空でない、根の語が生きている | 根 i の語を `dup` して返す |
 | `root_set(i, v)` | 根 i が空 | v を根 i に置く。参照は根が持つ |
-| `Heap::alloc_fork_table(entries)` (`unsafe fn`) | どのエントリも即値か、このヒープの生きている物体で、`lin`ビットを持たない。エントリは255個より少ない | どのエントリも即値か不死の物体なら、走査する語にエントリを順に並べたtag 0の不死の`Data`を作る。そうでなければ、どちらのモードでも確保の前に`NotImmortal`を返す |
-| `Heap::alloc_fork_tail(panic, table)` (`unsafe fn`) | `table`はこのヒープの生きている物体を指す。その物体が不死なら、`lin`ビットを持たないtag 0の`Data`で、エントリはどれも即値か、`lin`ビットを持たない不死の物体である | どちらのモードでも、確保の前に、`panic`が65535なら`BadEvidence`を、`table`が不死でなければ`NotImmortal`を返す。そうでなければ、tagが`panic + 1`の不死のfork evidence `[table, 即値 0, ()]`と、それを指す同じtagの不死の節点`[ev, ()]`を作り、節点を返す |
 
 - `ev_set_clause`、`ev_take_state`、`ev_take_evv`、`ev_set_state` は、書く物体の rc が正であることを前提にする。これらの操作は書き終えた物体を書くので、核の `set_field` の前提 (ほかのスレッドが読めない) は、局所であることと同じになる。`par` の fork の `share` は、値から届く退いた evidence にしか届かないので、これらの操作が書く物体は共有にならない (上の「evidence の3つの物体」)。共有の物体を書けば、検査モードは `set_field` の `NotWritable` を返し、速いモードではこの前提を満たさない呼び出しになる
 - `ev_set_state` が ev の参照を s と別に求めるのは、元の状態を手放す連鎖が ev 自身に届いても、ev を空けないためである。EP が出すコードでは、状態は退いた evidence にしか届かないので (上の「evidence の3つの物体」)、連鎖は走っている ev に届かない。契約は、この不変条件がなくても ev を空けない形にしてある
@@ -1048,7 +1041,7 @@ verifierが確かめるReprが、どの基本操作でも`ev_shape`と`evv_wf`�
 - evidence (3語) と節点 (2語) は、`field`と`set_field`で読み書きする。速いモードで1回の読み込みで済むためである。エントリの表は、欄が255個以上なら先頭に数の語があるので (上の「ヘッダ」)、`scanned`で読み、書くときは`scan_first(scan) + op`の位置に書く (上の「語の位置」)
 - `perform` の道は `ev_lookup` と `ev_clause` である。速いモードの `ev_lookup` の1歩は、節点の `meta` を、作っておいた値 (tag が effect + 1、走査する語が2つ、`Data`、`lin` ビットなし) と1回比べ、次の節点を1回読むだけである
 - `evv_mask` の `items` は `&[MaskItem]` である。`MaskItem` はエフェクトの番号 (`u16`) と n と m (どちらも `u32`) を持つ `Copy` の構造体である。項目の昇順と重なりのなさと m が 1 以上であることは verifier が確かめ、`evv_mask` の前提には入れない。VM はセッションでエフェクトの番号を引き直すので ([VM](vm.md) の「追記」)、`evv_mask` に届く並びは verifier を通った並びそのものでないためである。写す節点は先頭から順に作り、1つ前の写しの次の欄を `set_field` で書く。除いた数を配列にも `Vec` にも持たず、tag に合う項目のある節点ごとに、それより前の節点を先頭からたどり直して数える。たどり直しは、合う節点を n 個見つけるまでと n + m 個見つけるまでの高々2回で、n + m は桁があふれないよう `u64` で比べる。節点ごとに `items` も見直す。そのため、たどった先頭の i 個の節点のうち、tag に合う項目のある節点が p 個で、項目の数が q なら、費用は O(i·q + p·i) である。`evv_mask` を通るのは `mask` の包みと `mask$` だけで ([Core IR](core-ir.md) の「`mask` の包み」)、`perform` の道にはない
-- 上の「evidence の3つの物体」の`Panic`の末尾を除き、evidenceと節点は不死の物体にしない。`freeze`はヒープを消費し、evidenceは定数にしないためである
+- evidenceと節点は不死の物体にしない。`freeze`はヒープを消費し、evidenceは定数にしないためである
 
 ### 速いモードと検査モード
 

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use eml_extern::ExternRef;
-use eml_lir::{Call, LirFn, Prim, Program, Rhs, Stmt, Term};
+use eml_lir::{Call, LirFn, Program, Rhs, Stmt, Term};
 
 /// 宣言の順が、報告の順とヒストグラムの鍵の順である。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -12,7 +12,6 @@ pub enum Form {
     Par,
     AsyncRow,
     BlockingC,
-    ChildAbort,
 }
 
 impl Form {
@@ -21,7 +20,6 @@ impl Form {
             Form::Par => "par",
             Form::AsyncRow => "async row",
             Form::BlockingC => "blocking c",
-            Form::ChildAbort => "child abort",
         }
     }
 }
@@ -57,7 +55,6 @@ fn each_form(function: &LirFn, note: &mut impl FnMut(Form, Option<&'static str>)
                 Stmt::Let { var: _, rhs } => match rhs {
                     Rhs::Call(call) => call_form(call, note),
                     Rhs::Extern { ext, .. } => extern_form(*ext, note),
-                    Rhs::Prim(Prim::ChildAbort, _) => note(Form::ChildAbort, None),
                     Rhs::Prim(..)
                     | Rhs::Evidence { .. }
                     | Rhs::MakeClosure(..)

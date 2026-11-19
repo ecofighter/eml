@@ -148,12 +148,11 @@ const PUNCTS: &[char] = &['(', ')', '{', '}', '[', ']', ','];
 
 /// テキストの形で名前を書くRepr。値のReprと文脈のReprである。構造体は形の中身を書き、tokenはreuseのパスだけが作るので
 /// 別に扱う。
-pub(crate) const REPRS: [Repr; 11] = [
+pub(crate) const REPRS: [Repr; 10] = [
     Repr::Obj,
     Repr::TObj,
     Repr::Ev,
     Repr::Cev,
-    Repr::Fev,
     Repr::Rev,
     Repr::Evv,
     Repr::Int,

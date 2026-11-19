@@ -316,7 +316,6 @@ fn rejected_what(rejected: &eml_native::Unsupported) -> String {
         Form::Par => "`par`".to_string(),
         Form::AsyncRow => format!("the task row `{row}`"),
         Form::BlockingC => "blocking C functions".to_string(),
-        Form::ChildAbort => "the abort of a forked child (`par` or `compute`)".to_string(),
     }
 }
 

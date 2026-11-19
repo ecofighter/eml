@@ -335,14 +335,9 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
 pub(super) fn placeholder(b: &mut FunctionBuilder, repr: Repr) -> Value {
     match repr {
         Repr::Float => b.ins().f64const(0.0),
-        Repr::Obj
-        | Repr::TObj
-        | Repr::Unit
-        | Repr::Ev
-        | Repr::Cev
-        | Repr::Fev
-        | Repr::Rev
-        | Repr::Evv => b.ins().iconst(types::I64, mem::UNIT),
+        Repr::Obj | Repr::TObj | Repr::Unit | Repr::Ev | Repr::Cev | Repr::Rev | Repr::Evv => {
+            b.ins().iconst(types::I64, mem::UNIT)
+        }
         Repr::Int | Repr::Enum => b.ins().iconst(types::I64, 0),
         Repr::Token => b.ins().iconst(types::I64, mem::EMPTY_TOKEN),
         Repr::Struct(_) => unreachable!("flattening leaves no struct value"),

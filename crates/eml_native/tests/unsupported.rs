@@ -66,19 +66,8 @@ const PAR_OF_HANDLERS: &str = "import Std.Par\n\
      main () =\n  let (a, b) = Par.par (fn () -> safe 1) (fn () -> safe 0)\n  println (a ++ b)\n";
 
 #[test]
-fn child_abort_is_rejected() {
-    let found = rejected(PAR_OF_HANDLERS);
-    let child_abort = found
-        .iter()
-        .find(|u| u.form == Form::ChildAbort)
-        .unwrap_or_else(|| panic!("ChildAbort not in {found:?}"));
-    assert_eq!(child_abort.function, "fork$Prelude.Panic.panicked");
-    assert_eq!(child_abort.row, None);
-}
-
-#[test]
 fn forms_are_sorted_and_distinct() {
-    assert_eq!(forms(PAR_OF_HANDLERS), [Form::Par, Form::ChildAbort]);
+    assert_eq!(forms(PAR_OF_HANDLERS), [Form::Par]);
 }
 
 /// ネイティブのコードは預かる引数を扱わない。それで正しいのは、預かる引数を持つ行がどれもタスクの行で、断られるから

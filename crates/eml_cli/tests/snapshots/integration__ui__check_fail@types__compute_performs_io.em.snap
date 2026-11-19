@@ -3,20 +3,12 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/types/compute_performs_io.em
 ---
-[E2020] Error: the row passed to `compute` may perform `IO`, but `compute` allows only `never` operations
-     ╭─[ check-fail/types/compute_performs_io.em:6:3 ]
-     │
-   6 │   Async.compute (fn () -> println "job")
-     │   ──────┬──────           ──────┬──────  
-     │         ╰──────────────────────────────── `compute` is used here
-     │                                 │        
-     │                                 ╰──────── `IO` is performed here
-     │
-     ├─[ <std>/Async.em:164:25 ]
-     │
- 164 │ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
-     │                         ──┬──  
-     │                           ╰──── `compute` bounds this row variable by `never`
-     │ 
-     │ Note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
-─────╯
+[E2002] Error: `println` performs `IO`, which this lambda does not allow
+   ╭─[ check-fail/types/compute_performs_io.em:6:27 ]
+   │
+ 6 │   Async.compute (fn () -> println "job")
+   │   ──────┬──────           ──────┬──────  
+   │         ╰──────────────────────────────── argument 1 of `compute` does not allow it
+   │                                 │        
+   │                                 ╰──────── this call performs `IO`
+───╯

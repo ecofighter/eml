@@ -1872,28 +1872,29 @@ fn arrows_with_different_masks_are_applied_apart() {
     ");
 }
 
-/// 引数がそろう `par` は extern の命令でなく `par` の呼び出しになり、最後の矢印の `mask` を持つ。結果は組の型の変数に
-/// そのまま束ねる (docs/spec/core-ir.md の「`par` の呼び出し」)。
+/// 引数がそろう`fork_join`はexternの命令でなく`par`の呼び出しになる。結果は組の型の変数にそのまま束ねる
+/// (docs/spec/core-ir.mdの「`par`の呼び出し」)。
 #[test]
-fn a_saturated_par_is_a_par_call_with_the_mask_of_its_last_arrow() {
-    let text = "import Std.Par\nimport Fail (Fail(..))\n\nfoo : (Unit -> <never e> Int) -> <Fail String | e> (Int, Int)\nfoo h = Par.par h h\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = Fail.to_result (fn () -> Fail.to_result (fn () -> foo (fn () -> Fail.fail 7)))\n  println (show r)";
-    insta::assert_snapshot!(function(&core_text_with_positions(text), "foo"), @r#"
-    fn foo(h.0: tobj) -> (,){int, int} {
-      let t.1: (,){int, int} = mask [Std.Fail.Fail] par (,) #0(h.0, h.0) @"test.em":5:9
-      return t.1
-    }
-    "#);
-}
-
-/// 部分適用の `par` は `$externN` の包む関数になり、その本体も同じ `par` の呼び出しである。本体は最後の矢印の呼び出し
-/// でないので `mask` を持たない。
-#[test]
-fn a_partially_applied_par_wraps_the_same_par_call() {
-    let text = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let p = Par.par (fn () -> 0.25)\n  let (y, m) = p (fn () -> 7)\n  println (show (y, m))";
-    insta::assert_snapshot!(function(&core_text_with_positions(text), "main$extern0"), @r#"
-    internal uniform from 0 fn main$extern0(p.0: tobj, p.1: tobj) -> (,){float, int} {
-      let t.2: (,){float, int} = par (,) #0(p.0, p.1) @"test.em":5:11
-      return t.2
+fn a_saturated_fork_join_is_a_par_call() {
+    let text = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (y, m) = Par.par (fn () -> 0.25) (fn () -> 7)\n  println (show (y, m))";
+    insta::assert_snapshot!(function(&core_text_with_positions(text), "Std.Par.par@[Float, Int]"), @r#"
+    fn "Std.Par.par@[Float, Int]"(f.0: tobj poly, g.1: tobj poly) -> (,){float, int} {
+      let c.2: tobj poly = closure "Std.Par.par@[Float, Int]$lambda0"(f.0)
+      let c.3: tobj poly = closure "Std.Par.par@[Float, Int]$lambda1"(g.1)
+      let t.4: (,){obj, obj} = par (,) #0(c.2, c.3) @"<std>/Par.em":12:9
+      unpack t.4 (,) #0(l.5: obj, r.6: obj)
+      switch l.5 Prelude.Result { #0(m.7: obj) -> b1, #1(a.8: float) -> b2 }
+    b1:
+      let t.12: (,){float, int} = extern Prelude.panic(m.7) @"<std>/Par.em":14:21
+      return t.12
+    b2:
+      switch r.6 Prelude.Result { #0(m.9: obj) -> b3, #1(b.10: int) -> b4 }
+    b3:
+      let t.13: (,){float, int} = extern Prelude.panic(m.9) @"<std>/Par.em":15:21
+      return t.13
+    b4:
+      let d.11: (,){float, int} = con (,) #0(a.8, b.10)
+      return d.11
     }
     "#);
 }

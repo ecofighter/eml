@@ -96,7 +96,7 @@ scope f =
     | Err e ->
       fail_scope s e
       wait_closed s
-      reraise e
+      raise_failure e
 
 pub start : (Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a
 start f = start_raw (bottom f)
@@ -157,15 +157,18 @@ shield f =
       x
     | Err e ->
       shield_leave ()
-      reraise e
+      raise_failure e
 
 -- `f ()` を子が1つの `par` と同じ仕事として動かし、呼んだタスクだけが待つ。仕事の後でだけ働く取り消しの地点で、
--- 取り消されていれば結果を落として投げる (docs/spec/stdlib.md の「`compute`」)
-pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
+-- 取り消されていれば結果を落として投げ、仕事の`Panic`はここで起こし直す (docs/spec/stdlib.mdの「`compute`」)
+pub compute : (Unit -> <Panic> a) -> <IO, Panic, Async> a
 compute f =
-  let (c, j) = job_cell (fork_job f)
+  let (c, j) = job_cell (fork_job (fn () -> try_panic f))
   match await_cell c with
-    | Woke -> take_job j
+    | Woke ->
+      match take_job j with
+        | Ok a -> a
+        | Err m -> panic m
     | Cancelled ->
       drop_job j
       raise_cancelled ()
@@ -210,7 +213,7 @@ timeout ms f =
   match r with
     | Ok x -> Some x
     -- 外から取り消された呼び手は、期限が過ぎていても `None` で取り消しを飲み込まない
-    | Err e -> if late && cancelled e && not (cancel_point ()) then None else reraise e
+    | Err e -> if late && cancelled e && not (cancel_point ()) then None else raise_failure e
 
 -- 過ぎた期限は、タスクを始めずにすぐ旗を立てる
 deadline : Scope -> Int -> <IO, Panic, Async> Option (Task Unit)
@@ -244,7 +247,7 @@ race f g =
       Left x
     | Err e -> match try_all (fn () -> take_result tb) with
       | Ok y -> Right y
-      | Err _ -> reraise e
+      | Err _ -> raise_failure e
 
 -- 値を返したときにまだ取り消されていなければ、勝って旗を立てる。負けた側の値は巻き戻しが落とす
 arm : Scope -> (Unit -> <IO, Panic, Async> a) -> Unit -> <IO, Panic, Async> a
@@ -281,8 +284,8 @@ raise_cancelled : Unit -> <IO> a
 raise_cancelled () = fail_io Prelude.Cancelled "task was cancelled"
 
 -- `try_all` で分けた失敗を、種類と文言のまま起こし直す
-reraise : Failure -> <IO, Panic> a
-reraise e = match e with
+raise_failure : Failure -> <IO, Panic> a
+raise_failure e = match e with
   | IOFailed (IOError { kind = k, message = m }) -> fail_io k m
   | Panicked m -> panic m
 
@@ -395,7 +398,7 @@ extern park_io          : OpId -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit
 extern park_io_until    : OpId -> Int -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit
 extern park_signal      : Int -> (once Wake -> <IO> Unit) -> <IO> Unit
 extern op_ready         : OpId -> Int -> <IO> (Int, OpId)
-extern fork_job         : (Unit -> <never e> a) -> <IO> Job a
+extern fork_job         : (Unit -> a) -> <IO> Job a
 extern job_cell         : Job a -> (Cell, Job a)
 extern take_job         : Job a -> <IO> a
 extern drop_job         : Job a -> <IO> Unit

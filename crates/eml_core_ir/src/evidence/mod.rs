@@ -1,9 +1,8 @@
 //! EP (evidence passing) のパス (docs/spec/core-ir.md の「evidence passing」)。
 //! 型は読まず、関数の `yields` と `clause` の印、`apply` の印、操作の表、Core IR の形と生存解析だけを読む。補助の
 //! 関数は `helpers.rs`、handle、`perform`、`resume`、`mask` の変換は `handlers.rs`、yield の地点での分け方は
-//! `split.rs` にある。最後に、子を fork しうるプログラムに `forks.rs` が fork の関数を足す。
+//! `split.rs`にある。
 
-mod forks;
 mod handlers;
 mod helpers;
 mod split;
@@ -35,7 +34,6 @@ pub fn evidence(program: &mut Program) {
             split(program, function, &annotations, &mut helpers);
         }
     }
-    forks::forks(program);
 }
 
 /// EP が作る補助の関数。使うときに1つずつ作り、プログラムの末尾に足す
@@ -203,7 +201,7 @@ fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
         Repr::Enum => Atom::Tag(0),
         Repr::Unit => Atom::Unit,
         Repr::Token => unreachable!("only the LIR reuse pass makes tokens"),
-        Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv => {
+        Repr::Ev | Repr::Cev | Repr::Rev | Repr::Evv => {
             unreachable!("no function returns a context Repr")
         }
     }

@@ -30,7 +30,7 @@ eml run --link openblas=/opt/lib/libopenblas.so solve.em
 
 標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Char`、`Byte`、`Bool`、`Unit`)、文字列、バイト列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。結果が `Char` の extern の行はスカラー値を、結果が `Byte` の extern の行は 0..=255 を返す ([LIR](lir.md) の「値の表現」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
 
-例外は `Std.Par.par` である。`par` は閉包を2つ受け取って呼ぶが、extern は eml のコードを呼び返さない。そのため、`par` の行は std の宣言を型検査に結ぶためだけにあり、引数をそろえた呼び出しは extern の命令でなく `par` の命令になる ([Core IR](core-ir.md) の「`par` の呼び出し」)。
+例外は`Std.Par.fork_join`である (非公開で、`par`はその上のstdのコードである)。`fork_join`は閉包を2つ受け取って呼ぶが、externはemlのコードを呼び返さない。そのため、`fork_join`の行はstdの宣言を型検査に結ぶためだけにあり、引数をそろえた呼び出しはexternの命令でなく`par`の命令になる ([Core IR](core-ir.md) の「`par`の呼び出し」)。
 
 extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
@@ -971,17 +971,19 @@ main () =
 
 | 名前 | 型 | 実装 |
 |---|---|---|
-| `par` | `(Unit -> <never e> a) -> (Unit -> <never e> b) -> <e> (a, b)` | extern (呼び出しは `par` の命令) |
+| `par` | `(Unit -> <Panic> a) -> (Unit -> <Panic> b) -> <Panic> (a, b)` | eml |
 | `both` | `(Unit -> <e> a) -> (Unit -> <e> b) -> <e> (a, b)` | eml |
 
 - `par f g` は、`f ()` と `g ()` を2つの子として動かし、両方が終わるのを待って結果の組を返す。VM は、空いている worker があれば右の子をその worker で動かし、なければ2つの子を同じ worker の上で切り替えて動かす ([VM](vm.md) の「`par` の fork と join」)。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」にある
-- 子の row の上限は `never` である ([型と Kind](types.md) の「row 変数の多重度の上限」)。子が起こせるのは、`Panic` と、どの操作も `never` のエフェクトだけである。`IO` (`println` や `exit`)、`var` のエフェクト、`once` か `multi` の操作を持つエフェクトを子が起こしうる呼び出しは E2020 になる。子が `never` の操作だけを起こしても、そのエフェクトが `once` の操作を持てば E2020 である。上限は `par` の型にあるので、`par` を値として渡した先の呼び出しも同じく確かめる
-- 子が `never` の操作で中断すると、両方の子が終わった後で、親がその操作を起こし直す。両方の子が中断すれば左の子の操作を起こし直し、もう一方の結果は捨てる。子の中の handler と `try_panic` は、子の中の操作を子の中で捕まえる
-- 子の実行時エラーは評価を止め、ほかの子の結果では救わない。両方の子が誤りなら左の誤りを報告する ([VM](vm.md) の「子の誤り」)。捕まえられなかった子の `Panic` は親で起こし直した `panic` の実行時エラーになり、文言はソースの位置を持たない ([実装の現在地](../implementation/status.md) の「`par`」)
-- 子の閉包は `Lin` の値を捕まえて消費でき、`Lin` の値を返してもよい。extern のスキームは、関数型の引数の矢印の Kind と、その最後の結果だけに現れる型変数を固定しないためである ([宣言](declarations.md) の「`extern`」)。返った値は組に1回入るか、もう一方の子が中断したときに落とされる。落とすのは、`Lin` の値を持つフレームの巻き戻しと同じである ([線形性](linearity.md) の「暗黙の後始末」)。そのため、`both` と `par` は同じ型を受け付ける (`par` は row の上限だけが狭い)
+- 子のrowは`<Panic>`である。子が起こせるのは`Panic`だけで、`IO`、`Async`、`var`のエフェクト、ユーザーのエフェクトを子が起こしうる呼び出しは、呼び出しの所で型エラー (E2001かE2002) になる。子の中のhandlerは、子の中で起こした操作を捕まえる。エフェクトは`par`をまたげず、どの操作も`never`のエフェクトも同じである
+- `par`は、非公開の`fork_join : (Unit -> a) -> (Unit -> b) -> (a, b)`の上に書いたstdのコードで、`fork_join`の子は全域である。`par`は子をそれぞれ`try_panic`の下で動かす。子が`Panic`を起こしても両方の子は最後まで走り、その後で`par`が左の子の`Panic`を起こし直す。左の子が値を返していれば右の子のものを起こし直し、もう一方の結果は捨てる。文言は保たれ、位置はstdにある`par`自身の`panic`のものになる
+- `fork_join`の子が全域である理由は、`try_panic`が`panic`と、`Panic`を起こすすべてのexternの失敗を捕まえることにある。子で起こりうるそれ以外は、runを終わらせる実行時エラーである。ヒープの誤りと内部の誤り、呼び出しの深さの上限、メモリの上限、停止がそれにあたる。`exit`と`fail_io`は`IO`を要し、子のrowに`IO`はない
+- 子の実行時エラーはrunをすぐに終わらせ、もう一方の子が走っている間も同じである。呼んだ側の`try_panic`や`try_all`はそれを見ない。両方の子がこのように失敗したときは、最初に書かれた誤りを報告する。どちらの子の誤りが先かは、タイミングで変わりうる ([VM](vm.md) の「子の誤り」)
+- すべての子は、runを終わらせる上限の状態で動く。`Async`のタスクの中でも、呼び出しの深さの上限を超えた子は`ResourceLimit`を起こさず、runを終わらせる ([VM](vm.md) の「深さ」)
+- 子の閉包は`Lin`の値を捕まえて消費でき、`Lin`の値を返してもよい。返った値は組に1回入るか、もう一方の子が`Panic`を起こしたときに落とされる。`both`はどのrowも受け付け、`par`は`<Panic>`の子だけを受け付ける
 - `par` は Prelude から出さない。`import Std.Par` と書いて `Par.par` で呼ぶか、`import Par (par, both)` で修飾せずに使う
 - `both f g` は、呼んだ側の文脈で `f ()`、`g ()` の順に呼び、結果の組を返す。row に上限がないので、`IO` を起こす計算も渡せる。`par` と同じ組を逐次に作る関数である
-- 引数をそろえた `par` の呼び出しは、extern の命令でなく `par` の命令になる。部分適用 (`Par.par f`) と値として使う `Par.par` は、同じ命令を本体に持つ包む関数 `$externN` になる ([Core IR](core-ir.md) の「`par` の呼び出し」)
+- 引数をそろえた`fork_join`の呼び出しは`par`の命令になる ([Core IR](core-ir.md) の「`par`の呼び出し」)。`par`自身は普通の関数なので、`Par.par f`も値として使う`Par.par`も普通の部分適用である
 
 ## `Std.Async`
 
@@ -1018,7 +1020,7 @@ main () = println (show (body ()))
 | `cancel` | `Task a -> <IO> Unit` | eml |
 | `cancel_scope` | `Scope -> <IO> Unit` | eml |
 | `shield` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` | eml |
-| `compute` | `(Unit -> <never e> a) -> <IO, Async \| e> a` | eml |
+| `compute` | `(Unit -> <Panic> a) -> <IO, Panic, Async> a` | eml |
 | `start_on_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
 | `start_off_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
 | `spawn_off_main` | `(Unit -> <IO, Panic, Async> Unit) -> <IO, Async> Unit` | eml |
@@ -1117,7 +1119,7 @@ pub data Failure =
 | `claim_scope` | `Scope -> <IO> Bool` | なし |
 | `cancel_members` | `Scope -> <IO> Unit` | なし |
 | `op_ready` | `OpId -> Int -> <IO> (Int, OpId)` | なし (token を借りる) |
-| `fork_job` | `(Unit -> <never e> a) -> <IO> Job a` | なし |
+| `fork_job` | `(Unit -> a) -> <IO> Job a` | なし |
 | `job_cell` | `Job a -> (Cell, Job a)` | なし (token を借りる) |
 | `take_job` | `Job a -> <IO> a` | なし |
 | `drop_job` | `Job a -> <IO> Unit` | なし |
@@ -1129,7 +1131,7 @@ pub data Failure =
 - `op_ready op ms` は token を借りて、待たずに続けてよいかを 0 (続ける)、1 (待つ)、2 (先に譲る) で返し、宣言の型では結果と token の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。どの呼び出しも、操作が終わっていたかによらず操作の予算を使い、書きの操作は長さに応じて多く使う (下の「操作の予算」)。記録が終わっていて取り消しの地点が投げなければ、予算が残れば待ちを1つ数えて 0 を返す。切れれば OS を1回見て集め、走れるタスクがあれば数えずに 2 を返し、なければ予算を戻し、待ちを1つ数えて 0 を返す。2 の待ちは、続く `reschedule ()` が数える。ほかは 1 で、何も数えない。待つ側の `await_io` が数える ([VM](vm.md) の「操作の記録」)
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
 - `job_cell` は token を借りてセルを返し、宣言の型ではセルと token の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。`fork_job` は引数の閉包を預からない
-- `fork_job f` は `f` を仕事として、空いている worker の受け箱か呼んだ worker の実行待ちに置き、仕事の token を返す。閉包は仕事として動き、`fork_job` が消費する。`take_job j` は token を消費して、終わった仕事の結果を返すか、仕事の中断を起こし直す。`drop_job j` は token を消費して、終わった仕事の終わりを落とす。どちらも、仕事を出したタスクが仕事の終わった後に呼ぶ。std の `compute` は `job_cell` で借りたセルを `await_cell` で待ってから呼ぶ ([VM](vm.md) の「`compute` の仕事」)
+- `fork_job f`は`f`を仕事として、空いているworkerの受け箱か呼んだworkerの実行待ちに置き、仕事のtokenを返す。閉包は仕事として動き、`fork_job`が消費する。`take_job j`はtokenを消費して、終わった仕事の結果を返す。`drop_job j`はtokenを消費して、終わった仕事の終わりを落とす。どちらも、仕事を出したタスクが仕事の終わった後に呼ぶ。stdの`compute`は`job_cell`で借りたセルを`await_cell`で待ってから呼ぶ ([VM](vm.md) の「`compute`の仕事」)
 - `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のためのインターフェースで、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
 - `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.Net` のためのインターフェースで、同じ理由で `pub` である。処理系も、`blocking` の C の関数の呼び出しの受け付けと取り出しの間で `io_wait` を呼ぶ ([VM](vm.md) の「`blocking` の呼び出し」)。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.Net`」)。どちらも先に `op_ready` を呼ぶ。0 なら perform せずに `(Woke, op)` を返し、2 なら `reschedule ()` で列の後ろへ回ってから、その `Wake` を見ずに `(Woke, op)` を返す。1 のときだけ `await_io` か `await_io_until` を perform して待つ。回る間に届いた取り消しは、次の取り消しの地点で投げる
 - `gui_wait` (`Cell -> <IO, Async> Wake`) は`Std.Gui`のためのインターフェースで、同じ理由で`pub`である。ゲートのセルで待つ取り消しの地点である。ゲートは旗と高々1つの待ち手を持つ登録表のセルで、前の待ちの後に知らせが届いていれば旗を下ろしてすぐ`Woke`で戻る。取り消しは旗より先に見る ([VM](vm.md) の「セルと登録表」、下の「`Std.Gui`」)。ゲートを作る公開の関数はないので、利用者は呼べない
@@ -1156,7 +1158,7 @@ body () =
 ### タスクの上限
 
 - タスクの中で呼び出しの深さが上限を超えると、runは止まらず、そのタスクに種類`ResourceLimit`、文言`the call depth limit is exceeded`のIOの失敗が起きる。深さはタスクごとに数え、どのタスクも`max_depth`をまるごと使う。`par`の子は、呼んだタスクの深さの続きから数える
-- ただし、`par` の子 (左も右も) の中の超過は、タスクの中でも run を止める実行時エラーで、捕まえられない。子の row は `IO` を含められず、失敗を起こす先がないためである (上の「`Std.Par`」)
+- ただし、`par`の子 (左も右も) の中の超過は、タスクの中でもrunを止める実行時エラーで、捕まえられない。子はrunを終わらせる上限の状態で動き、失敗を起こす先がないためである (上の「`Std.Par`」)
 - 投げるのは普通のIOの失敗なので、タスクのフレームを巻き戻して`Lin`の値を落とし、`try_io`と`try_all`が捕まえる。捕まえれば、同じタスクはそのまま続けられ、もう一度超えればまた投げる。捕まえなければタスクの失敗になり、スコープの失敗として`scope`が起こし直す。根のスコープの失敗は`root`が起こし直す。`main`でも捕まえなければ、ほかのIOの失敗と同じく、位置を持たず`main`の名前を付けた実行時エラーになり、終了コードは1である
 - 失敗は関数に入るところでだけ起きる。戻りの途中で深さが上限を超えたままなら、次の呼び出しで起きる。継続の再開と handler の出入りのために処理系が足した補助の関数に入るところでは起きず、その後の次の関数で起きる
 - 確保量が柔らかい上限`soft_bytes`の閾値を越えると、処理系は確保の数がいちばん大きいタスクを選んで上限の印を付け、そのタスクに種類`ResourceLimit`、文言`the memory soft limit is exceeded`のIOの失敗を起こさせる。runは止まらない。起きる所と捕まえ方は深さの上限と同じで、捕まえれば同じタスクは続けられ、`main`でも捕まえなければ、位置を持たず`main`の名前を付けた実行時エラーになる。印を付けるのは確保の数で選んだ1つのタスクで、そのタスクが確保を手放して小さくしたかは見ない。タスクの外の`main`、`par`の右の子、`compute`の仕事の確保はどのタスクの数にも入らない。それでも閾値を越えれば、そのときの数のいちばん大きいタスクに印が付く。印を付けるタスクが1つもなければ (`Async`のタスクのないrunなど)、硬い上限`max_bytes`だけがrunを止める ([VM](vm.md)の「上限と割り込み」)
@@ -1256,8 +1258,8 @@ body () =
 
 - `compute f` は `f ()` を、子が1つの `par` と同じ仕事として動かし、仕事が終わるまで呼んだタスクだけを待たせる。待つタスクは継続だけになり、その間 worker はほかのタスクと仕事を動かす。仕事の結果は呼んだタスクに返る
 - 仕事は `par` の右の子と同じく、空いている worker があればその受け箱に置いてその worker で動かし、なければ呼んだ worker の実行待ちの列の後ろに積む ([VM](vm.md) の「`compute` の仕事」)。worker が1つの run (REPL、`--workers 1`) では、仕事はその worker のほかのタスクと交互に動く
-- `f` の row の上限は `never` である。`par` の子と同じく、`IO`、`Async`、`var` のエフェクト、`once` か `multi` の操作を持つエフェクトを `f` が起こしうる呼び出しは E2020 になる (上の「`Std.Par`」)。`f` は `Lin` の値を捕まえて消費でき、`Lin` の値を返してもよい
-- 仕事が `never` の操作で中断すると、仕事が終わった後で、呼んだタスクがその操作を起こし直す。起こし直す先は、仕事の中の操作が届いた handler で、`compute` の周りの `mask` も守る。仕事の中の handler と `try_panic` は、仕事の中の操作を仕事の中で捕まえる。仕事の中で捕まえない `Panic` も、呼んだタスクで起こし直す。呼んだタスクの `try_panic` か `try_all` が捕まえ、捕まえなければタスクの失敗 `Panicked` になる
+- `f`のrowは、`par`の子と同じく`<Panic>`である。`f`が`Panic`を起こせなくても、`compute`自身のrowは`Panic`を持つ。`f`は`Lin`の値を捕まえて消費でき、`Lin`の値を返してもよい
+- 仕事が捕まえない`Panic`は、仕事が終わった後で、`compute`が呼んだタスクで起こし直す。呼んだタスクの`try_panic`か`try_all`が捕まえ、捕まえなければタスクの失敗`Panicked`になる。仕事の中のhandlerは、仕事の中の操作を捕まえる。ユーザーのエフェクトは`compute`をまたげない
 - 仕事の中の、`Panic` でない実行時エラー (呼び出しの深さの上限など) は、その場で run を止める。呼んだタスクの `try_all` も捕まえない。仕事はタスクの外なので、深さの上限は上の「タスクの上限」の `ResourceLimit` にならない
 - `compute` は取り消しの地点だが、取り消しは仕事が終わってからでないと届かない。仕事の前や途中に立った取り消しは、仕事を止めない。仕事が終わった後、呼んだタスクが再開するときに取り消しの地点の規則 (上の「取り消し」) を満たしていれば、`compute` は仕事の結果を落として `Cancelled` を投げる。仕事が終わってから再開するまでに立った取り消しも、この規則で届く。`shield` の中では外の取り消しが届かないので、結果を返す
 - そのため、`timeout` で囲んだ `compute` は、期限が過ぎても仕事が終わるまで戻らず、仕事の後で `None` を返す。`race` で負けた腕の仕事も最後まで動く

@@ -303,20 +303,6 @@ pub(crate) enum TaskState {
     WaitingCell(CellRef),
 }
 
-/// 子の終わり方 (docs/spec/vm.md の「`par` の fork と join」)。語はどれも、節点が持つ数えた参照である。
-pub(crate) enum Outcome {
-    Value(eml_rt::Word),
-    /// `never` の操作で中断した。`effect` は実行時のエフェクトの番号、`depth` は子の中でのそのエフェクトの evidence
-    /// の順位で、`clause` (操作の引数を捕まえた `reperform$E.op` の閉包) に `()` を適用して親で起こし直す。
-    Abort {
-        effect: u16,
-        depth: u32,
-        clause: eml_rt::Word,
-    },
-    /// 右の子の実行時エラー。左の子の誤りは記録せず、すぐに評価を止める。
-    Error(crate::RuntimeError),
-}
-
 /// 1つの `par` の fork から join までの記録。ヒープの物体にせず、`Drop` もヒープに触れない。
 pub(crate) struct JoinNode {
     pub(crate) parent: TaskId,
@@ -324,14 +310,14 @@ pub(crate) struct JoinNode {
     pub(crate) right_worker: u32,
     /// fork のときの親の `evv`。左の子が終わったら `Ctx` に戻す。
     pub(crate) parent_evv: eml_rt::Word,
-    pub(crate) left: Option<Outcome>,
-    pub(crate) right_outcome: Option<Outcome>,
+    /// forkのときの親の上限の状態。joinが戻し、子の間に届いた旗はここに付く (docs/spec/vm.mdの「深さ」)。
+    pub(crate) parent_limit: crate::vm::Limit,
+    pub(crate) left: Option<eml_rt::Word>,
+    /// 終わった子の値。節点が数えた参照を1つ持つ。
+    pub(crate) right_value: Option<eml_rt::Word>,
     /// `par` の命令の次の位置と、組を書くスロット。
     pub(crate) ret: crate::op::Pc,
     pub(crate) dst: crate::op::Slot,
-    /// 親が誤りで止まった後も、置いた右の子の終わりの知らせを待つ。知らせが届いたら結果に触れずに節点を捨てる
-    /// (docs/spec/vm.md の「子の誤り」)。
-    pub(crate) orphan: bool,
 }
 
 /// 1回の実行のタスクを方針 `P` で切り替える。`Machine` が実行ごとに作り、実行が終わると捨てる。`Scheduler`、`Task`、
@@ -354,7 +340,7 @@ pub struct Scheduler<P: Policy> {
     pub(crate) main_worker: u32,
     /// 深さの上限。右の子のスタックの上限を、fork のときの親の深さから作る。
     pub(crate) max_depth: usize,
-    /// join が見つけた右の子の誤り。`step` は `RunFault` しか返せないので、ここに置いて実行の繰り返しに渡す。
+    /// 右の子の誤りで、`at_par`が`par`の位置を付けたもの。`step`は`RunFault`しか返せないので、ここに置いて実行の繰り返しに渡す。
     pub(crate) failed: Option<crate::RuntimeError>,
     /// 根の表のうち、この番号より前の根はどれも印が付いている。`Machine` が実行をまたいで持つ値を受け取って返す。
     pub(crate) shared_roots: usize,
@@ -790,7 +776,7 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// ほかの worker から届いた知らせを取り出す。置かれた右の子と仕事はこの worker の番号を振って列の後ろに入れ、置いた子の
-    /// 終わりは join の節点に記録して親を起こす。親を失った節点なら、結果に触れずに節点を捨てる。どちらでも
+    /// 終わりはjoinの節点に記録して親を起こす。どちらでも
     /// `in_flight` から引くのは受け取った後なので、受け取っていない終わりの知らせがある間は 0 にならない。`Async` の
     /// タスクの知らせは `rest` に残し、集める地点が登録表の区間で処理する (docs/spec/vm.md の「タスクとスケジュール」)。
     #[cold]
@@ -802,16 +788,9 @@ impl<P: Policy> Scheduler<P> {
                     let id = self.add_task(task);
                     self.run.push_ready(self.index, Ready::Task(id));
                 }
-                Notice::Joined { join, outcome } => {
-                    let node = self.join(join);
-                    if node.orphan {
-                        // 語は捨てる。誤りで終わる run のヒープは回復で丸ごと捨てる
-                        drop(self.take_join(join));
-                        drop(outcome);
-                    } else {
-                        node.right_outcome = Some(outcome);
-                        self.wake_parent(join);
-                    }
+                Notice::Joined { join, value } => {
+                    self.join(join).right_value = Some(value);
+                    self.wake_parent(join);
                     self.run.in_flight.fetch_sub(1, Ordering::Release);
                 }
                 notice @ (Notice::Place { .. }

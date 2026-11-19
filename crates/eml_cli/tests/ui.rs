@@ -1344,11 +1344,11 @@ fn a_seeded_mismatch_names_the_seed() {
     );
 }
 
-/// 左の子が短い `par` は seed で横取りされず、ハーネスがそのファイルを落とす。
+/// 横取りされない`par/`のファイルは、ハーネスが落とす。
 #[test]
 #[should_panic(expected = "never preempted under seed ")]
 fn a_par_file_that_is_never_preempted_fails() {
-    let source = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = Par.par (fn () -> 1) (fn () -> 2)\n  println (show (a + b))\n";
+    let source = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (1 + 2))\n";
     let session = Session::load("run/par/short.em", source, &eml_cli::MemorySource(&[]));
     let program = session.compile().program.expect("the program compiles");
     let root = ui_root().join("run/par");

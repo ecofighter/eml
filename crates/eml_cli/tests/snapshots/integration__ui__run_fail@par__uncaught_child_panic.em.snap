@@ -7,4 +7,5 @@ input_file: tests/ui/run-fail/par/uncaught_child_panic.em
 before
 --- stderr ---
 --- runtime error ---
-panicked: division by zero in `reperform$Prelude.Panic.panicked`
+panicked: division by zero
+  at <std>/Par.em:14:21

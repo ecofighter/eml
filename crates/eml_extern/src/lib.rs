@@ -165,8 +165,6 @@ pub enum Repr {
     Ev,
     /// 節のエントリが呼ばれるときに受けるevidence。
     Cev,
-    /// forkのエントリが呼ばれるときに受けるevidence。
-    Fev,
     /// 退いたevidence。状態と外側のリストが`()`のevidenceで、表とtagを持つ。
     Rev,
     /// リスト`evv`。`()`か、節点のリストである。
@@ -188,9 +186,7 @@ pub struct StructId(pub u32);
 impl Repr {
     pub fn is_rc(self) -> bool {
         match self {
-            Repr::Obj | Repr::TObj | Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv => {
-                true
-            }
+            Repr::Obj | Repr::TObj | Repr::Ev | Repr::Cev | Repr::Rev | Repr::Evv => true,
             Repr::Int | Repr::Float | Repr::Enum | Repr::Unit | Repr::Token | Repr::Struct(_) => {
                 false
             }
@@ -203,12 +199,9 @@ impl Repr {
         matches!(self, Repr::Obj | Repr::TObj)
     }
 
-    /// 文脈のRepr (`ev`、`cev`、`fev`、`rev`、`evv`)。ランタイムが持つ物体の役である (docs/spec/lir.mdの「値の表現」)。
+    /// 文脈のRepr (`ev`、`cev`、`rev`、`evv`)。ランタイムが持つ物体の役である (docs/spec/lir.mdの「値の表現」)。
     pub fn is_context(self) -> bool {
-        matches!(
-            self,
-            Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv
-        )
+        matches!(self, Repr::Ev | Repr::Cev | Repr::Rev | Repr::Evv)
     }
 
     /// 箱を要する Repr。一様な位置との間で `box` と `unbox` を要する。`unit` は命令なしで `tobj` と行き来するので
@@ -248,7 +241,6 @@ impl Repr {
             Repr::Unit => "unit",
             Repr::Ev => "ev",
             Repr::Cev => "cev",
-            Repr::Fev => "fev",
             Repr::Rev => "rev",
             Repr::Evv => "evv",
             Repr::Token => "token",
@@ -1269,7 +1261,7 @@ table! {
         // std の宣言を型検査に結ぶためだけの行である。translate は呼び出しを `par` の命令にするので、
         // `Rhs::Extern` にならない (docs/spec/core-ir.md の「`par` の呼び出し」)
         Par => kinded(
-            "Std.Par.par",
+            "Std.Par.fork_join",
             &[TObj, TObj],
             &[Poly, Poly],
             Obj,
