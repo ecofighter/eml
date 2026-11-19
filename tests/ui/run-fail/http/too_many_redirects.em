@@ -20,9 +20,9 @@ serve l =
   Net.close (Net.write "HTTP/1.1 302 Found\r\nLocation: /again\r\n\r\n" (skip_request s))
   l
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  let r = Async.run (fn () ->
+  let r = Async.scope (fn _ ->
     let l = Net.listen "127.0.0.1" 0
     let (port, l) = Net.local_port l
     let server = Async.start (fn () -> Net.close_listener (serve (serve (serve l))))

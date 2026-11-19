@@ -4,9 +4,9 @@ import Async
 import Net
 import Tls
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  let r = Async.run (fn () ->
+  let r = Async.scope (fn _ ->
     let l = Net.listen "127.0.0.1" 0
     let (port, l) = Net.local_port l
     let r = try_io (fn () -> Tls.close (Tls.connect "tls.localhost" port))

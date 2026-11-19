@@ -25,7 +25,7 @@ body () =
   Async.await t
   println "left in the channels"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "done"

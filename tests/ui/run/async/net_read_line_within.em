@@ -26,8 +26,8 @@ show_read r = match r with
   | Some None -> println "eof"
   | None -> println "None"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let (a, b) = connected ()
   let a = Net.write "hel" a
   let (r, b) = Net.read_line_within 50 b
@@ -42,4 +42,4 @@ main () = Async.run (fn () ->
   let b = Async.await t
   let (r, b) = Net.read_line_within 100 b
   show_read r
-  Net.close b)
+  Net.close b

@@ -20,5 +20,5 @@ body () =
   println (show y)
   println (show z)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

@@ -1,4 +1,4 @@
--- `await` の周りで失敗を捕まえても、スコープの失敗は残り `run` が起こし直す。IO の失敗の種類は `await` を通っても
+-- `await`の周りで失敗を捕まえても、スコープの失敗は残り、スコープが起こし直す。IOの失敗の種類は`await`を通っても
 -- 残る。失敗した子が本体も取り消すので、`shield` の中で待ち、待ち始めが子の失敗の前か後かによらず子の失敗を受け取る
 -- (docs/spec/stdlib.md の「取り消し」)。
 import Async (Async)
@@ -16,8 +16,8 @@ body () =
     | Ok n -> println "ok \{show n}"
     | Err e -> println "caught \{show e.kind}: \{e}"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "unreachable"

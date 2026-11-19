@@ -26,5 +26,5 @@ body () =
     | Ok n -> println "unreachable \{show n}"
     | Err _ -> println "unreachable failure"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

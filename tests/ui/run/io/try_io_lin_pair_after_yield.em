@@ -20,7 +20,7 @@ attempt keep =
       println "kept \{show n}"
     | Err e -> println "\{show e.kind}: \{e}"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   attempt True
-  attempt False)
+  attempt False

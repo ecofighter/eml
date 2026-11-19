@@ -43,5 +43,5 @@ body () =
   Async.await opener
   println (show (count_ok rs 0))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

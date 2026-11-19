@@ -46,5 +46,5 @@ body () =
     Async.drain_within 0 s
     println "a past deadline cancels at once")
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

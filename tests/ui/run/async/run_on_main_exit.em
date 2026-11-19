@@ -18,8 +18,8 @@ body () =
   let _ = Async.await w
   println "unreachable body"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "unreachable"

@@ -25,7 +25,7 @@ body () =
   Async.cancel done
   Async.cancel t
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "after run"

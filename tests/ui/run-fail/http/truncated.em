@@ -15,9 +15,9 @@ skip_request s =
     | Some _ -> skip_request s
     | None -> s
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  let r = Async.run (fn () ->
+  let r = Async.scope (fn _ ->
     let options = { Http.defaults | ca = Fs.read_text "ca.pem" }
     let l = Net.listen "127.0.0.1" 0
     let (port, l) = Net.local_port l

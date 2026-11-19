@@ -116,6 +116,7 @@ Conformance criteria (every unit's review checks those that apply):
 | AR-2 | `Run a main with Async as the root task` | AR-1 | D-AR-1, D-AR-2, D-AR-3, S-AR-1..3; S-21, AR-G1, AR-G2 | Opus |
 | AR-3 | `Run Async inputs of the REPL as root tasks` | AR-2 | D-AR-5, S-AR-1, S-AR-4 | Opus |
 | AR-4 | `Rewrite the .em programs and transcripts without Async.run` | AR-3 | D-AR-7 | Sonnet |
+| AR-4b | `Do not suggest a second Async in the row of main` | AR-4 | E2002's help (user, 2026-11-19) | Opus |
 | AR-5 | `Rewrite the Rust-embedded programs without Async.run` | AR-4 | D-AR-7, S-AR-5 | Sonnet |
 | AR-6 | `Remove Async.run and nested roots` | AR-5 | D-AR-4, D-AR-6; G-2 (code) | Opus |
 | CP-A | push, CI of AR-6, checkpoint extras, the gate of 10.1 | AR-6 | S-5 | orchestrator |
@@ -169,6 +170,14 @@ Every unit's completion includes **G** (7.3.1) and the **SC** lines in force (7.
   3. By hand: those three comments; every comment of a rewritten file that still describes `run` (`grep -rn '`run`' <the changed files>`; e.g. `tests/ui/run-fail/async/cancelled_run.em:1`), reworded for "the root" or "the scope" as the code now reads.
   4. Snapshots: scopes K2-b, K2-c, K2-d, K2-g of 7.4.
 - Completion: G; `grep -rn 'Async\.run\b' tests bench crates/eml_cli/tests/repl` → empty; `cargo nextest run -p eml_cli --test integration -E 'test(ui::) | test(repl::)'` passes; by hand `timeout 20 cargo run -q -p eml_cli -- run --gui stub tests/ui/run/gui/counter.em` and one `bench/net/` program through `bench/net.sh --only base` (or its `eml run` line) run as before.
+
+### AR-4b: `Do not suggest a second Async in the row of main`
+
+- Purpose (added with the user, 2026-11-19): E2002's fix-it help "add `X` to the row of the signature of `main`" must not be given when the label is `Std.Async.Async` and `main`'s row already has it, since a repeated `Async` in `main`'s row is E2004 (D-AR-1, AR-2's review fix). The error and its labels stay; only the help goes.
+- Tests first: a check-fail file `tests/ui/check-fail/types/main_with_async_performs_a_second_async.em` (or a unit test in `crates/eml_types/tests/check.rs`) pinning that E2002 has no such help for the shape of `compute_performs_async`; the help for a `main` without `Async` that performs `Async` stays (an existing pin, or a new one).
+- Work: in the E2002 reporter (`crates/eml_types/src/check/report.rs`, the `fixable` / help path), suppress the help for the label `Async` when the signature is `main`'s and its row already has `Async`. Name the rule in a comment citing docs/spec/types.md (the entry rule).
+- Kind 2: `types__compute_performs_async` loses its help line.
+- Completion: G; SC-1, SC-3, SC-4; `cargo nextest run -p eml_types -p eml_cli --test integration -E 'test(ui::check_fail)'` passes.
 
 ### AR-5: `Rewrite the Rust-embedded programs without Async.run`
 
@@ -265,10 +274,10 @@ Kind 1 (pass / fail), one by one:
 Kind 2 (expected values), as scopes:
 - K2-a (AR-2; the name of the root's failure, S-AR-2): the 16 `run-fail` snapshots that print `at <std>/Async.em:75:9` (`async__{await_rethrows_panic, blocking_fixture_null_handle, blocking_fixture_range_panic, cancelled_run, caught_await_still_fails_run, compute_out_of_range, exec_needs_the_real_driver, exec_pipe_stderr_on_run, exec_write_after_exit, limit_depth_uncaught, limit_memory_uncaught, run_on_main_panics, spawned_failure_fails_run, stream_missing_file}`, `gui__wait_without_window`, `tls__cancelled_setup`) and `repl__transcripts@async__stale_scope.repl.snap`: the two lines `<failure>` / `  at <std>/Async.em:75:9` become one, `<failure> in \`main\`` (`in \`input$4\`` in the transcript); `crates/eml_vm/tests/tasks.rs:129-135` (`await_raises_the_panic_of_the_task_again`) asserts `panicked: boom in \`main\``.
 - K2-b (AR-4; the position of a failure raised in `main` after its run, now inside the root task): the 10 `run-fail` snapshots `http__{downgrade, too_many_redirects, truncated}`, `tls__{bad_ca, line_too_long, no_roots, server_closes_before_handshake, truncated, unknown_ca, write_after_shutdown}`: `<failure>` / `  at run-fail/<file>:l:c` becomes `<failure> in \`main\``. This is D-AR-3's rule for user code: an uncaught failure anywhere in an `Async` `main` crosses the task's bottom as a value and has no position.
-- K2-c (AR-4; positions on rewritten lines): the check-fail snapshots `linearity__task_awaited_twice`, `names__async_op_handled`, `types__{async_in_par_child, compute_in_par_child, compute_performs_async, compute_performs_io, task_captures_var}` (line and column of the user's file only; codes and wording unchanged).
+- K2-c (AR-4; positions on rewritten lines): the check-fail snapshots `linearity__task_awaited_twice`, `names__async_op_handled`, `types__{async_in_par_child, compute_in_par_child, compute_performs_async, compute_performs_io, task_captures_var}` (line and column of the user's file only; codes and wording unchanged), except `types__compute_performs_async` (amended with the user, 2026-11-19): with `compute` called directly in an `Async` `main`, its E2002 names "the signature of `main`" instead of `run`'s lambda, at 7:3, and its E2020 moves to 7:3. AR-4 accepts that snapshot as it comes out (including a help line "add `Async` to the row of the signature of `main`"); AR-4b then removes that help line (its own kind 2).
 - K2-d (AR-4): the nine transcript snapshots echo the rewritten inputs (no output line changes [V: proto]); `integration__ui__run@async__handle_outlives_run.em.snap` moves to `..handle_outlives_scope.em.snap` with its file (a move without a pass/fail change; the comment says a handle outlives the scope that started its task).
 - K2-e (AR-5; counts asserted by value, each +1 for the `Async.scope` that replaced a run in a position the script cannot unwrap): `crates/eml_vm/tests/io.rs:61` `(4, 5, 0)` → `(4, 6, 0)` and `:76` `(5, 5)` → `(5, 6)` (`parks`, through the helper `connected_stats`); `crates/eml_vm/tests/tasks.rs` the second element of every tuple in `timeout_runs_the_body_in_the_calling_task` (`(2, 3, 1, 1)` → `(2, 4, 1, 1)`, ...), `race_decides_the_winner_in_one_claim` (`(3, 5, 2, 1, 0)` → `(3, 6, 2, 1, 0)`, ...) and `drain_within_waits_until_the_scope_has_no_task` (`(4, 7, 2, 1)` → `(4, 8, 2, 1)`); `crates/eml_vm/tests/pinned.rs:116` `pinned_tasks` 4 → 3 (S-AR-5) with its doc comment; `crates/eml_vm/tests/miri/blocking.lir` (regenerated; also in AR-6); inline Core IR / LIR snapshots of the two hand-rewritten templates in `crates/eml_core_ir/tests/{async,perceus}.rs`, if they print the entry (`c_functions.rs` and `lowering.rs` pass as the script rewrites them [V: proto]).
-- K2-g (AR-2, AR-4; the native tallies follow the files added and deleted, each still refused for a task row): `integration__ui__run_native.snap` `rejected 151 → 152`, `async row 129 → 130` in AR-2 (`main_is_the_root.em`) and `152 → 148`, `130 → 126` in AR-4 (the four deleted files); `integration__ui__run_fail_native.snap` `rejected 34 → 35`, `async row 33 → 34` in AR-2 (`main_failure_names_main.em`).
+- K2-g (AR-2, AR-4; the native tallies follow the files added and deleted, each still refused for a task row): `integration__ui__run_native.snap` `rejected 151 → 152`, `async row 129 → 130` in AR-2 (`main_is_the_root.em`) and in AR-4 (the four deleted files; `limit_depth_nested_run.em` was `-- native: skip`, corrected with the user 2026-11-19) `skipped 6 → 5`, `rejected 152 → 149`, `async row 130 → 127`; `integration__ui__run_fail_native.snap` `rejected 34 → 35`, `async row 33 → 34` in AR-2 (`main_failure_names_main.em`).
 - K2-f (AR-6): `<std>/Async.em:171:25` in `types__compute_performs_{async,io}` moves up by the lines deleted above `compute`; `blocking.lir`, and any IR text or snapshot that prints `Std.Async.run_raw`, `Std.Async.run_result` or `Std.Async.root@..`'s body, by the two row names.
 
 Kind 3: every other rewritten file (expectations byte-identical: all 136 `run` files, the 25 `run-fail` files not in K2-a/K2-b, `chan_invariant`, the 10 `bench/` programs, the Rust tests not named above [V: proto]); the 50 `open_root()` call sites; comments.
@@ -497,7 +506,7 @@ A run inside a task that sits inside `main` (`crates/eml_vm/tests/pinned.rs:101`
 ## 8. Execution order
 
 ```
-AR-1 → AR-2 → AR-3 → AR-4 → AR-5 → AR-6 → [CP-A: CI + extras + gate] → AR-7 → AR-8 → [CP-Z] → merge
+AR-1 → AR-2 → AR-3 → AR-4 → AR-4b → AR-5 → AR-6 → [CP-A: CI + extras + gate] → AR-7 → AR-8 → [CP-Z] → merge
 ```
 
 Order rationale: the root exists end to end for `eml run` first (AR-2), then for the REPL (AR-3), so the rewrites have something to be rewritten to; the rewrites while `Async.run` still works, so every commit is green and each rewritten file is checked against its old expectation; the deletion after the last user; the gate on the last code commit, the only one that edits the scheduler's files; the docs last, since AR-6 settles the names.

@@ -19,8 +19,8 @@ print_request s =
       print_request s
     | None -> s
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
   let server = Async.start (fn () ->
@@ -32,4 +32,4 @@ main () = Async.run (fn () ->
   println "status: \{show r.status}"
   List.each (fn h -> println "header: \{h.0}: \{h.1}") r.headers
   println "body: \{String.decode r.body}"
-  Async.await server)
+  Async.await server

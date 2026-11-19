@@ -4,11 +4,11 @@ expression: rendered
 input_file: tests/ui/check-fail/names/async_op_handled.em
 ---
 [E1058] Error: operation `await_cell` of the abstract effect `Async` is not visible outside `Std.Async`
-    ╭─[ check-fail/names/async_op_handled.em:10:13 ]
+    ╭─[ check-fail/names/async_op_handled.em:9:11 ]
     │
- 10 │       | ctl Async.await_cell c k -> k Async.Woke
-    │             ────────┬───────  
-    │                     ╰───────── hidden by `abstract`
+  9 │     | ctl Async.await_cell c k -> k Async.Woke
+    │           ────────┬───────  
+    │                   ╰───────── hidden by `abstract`
     │
     ├─[ <std>/Async.em:13:3 ]
     │
@@ -17,11 +17,11 @@ input_file: tests/ui/check-fail/names/async_op_handled.em
     │        ╰────── declared here
 ────╯
 [E1058] Error: operation `reschedule` of the abstract effect `Async` is not visible outside `Std.Async`
-    ╭─[ check-fail/names/async_op_handled.em:11:13 ]
+    ╭─[ check-fail/names/async_op_handled.em:10:11 ]
     │
- 11 │       | ctl Async.reschedule () k -> k Async.Woke
-    │             ────────┬───────  
-    │                     ╰───────── hidden by `abstract`
+ 10 │     | ctl Async.reschedule () k -> k Async.Woke
+    │           ────────┬───────  
+    │                   ╰───────── hidden by `abstract`
     │
     ├─[ <std>/Async.em:15:3 ]
     │
@@ -30,11 +30,11 @@ input_file: tests/ui/check-fail/names/async_op_handled.em
     │        ╰────── declared here
 ────╯
 [E1058] Error: operation `await_time` of the abstract effect `Async` is not visible outside `Std.Async`
-    ╭─[ check-fail/names/async_op_handled.em:12:13 ]
+    ╭─[ check-fail/names/async_op_handled.em:11:11 ]
     │
- 12 │       | ctl Async.await_time ms k -> k Async.Woke
-    │             ────────┬───────  
-    │                     ╰───────── hidden by `abstract`
+ 11 │     | ctl Async.await_time ms k -> k Async.Woke
+    │           ────────┬───────  
+    │                   ╰───────── hidden by `abstract`
     │
     ├─[ <std>/Async.em:17:3 ]
     │
@@ -43,11 +43,11 @@ input_file: tests/ui/check-fail/names/async_op_handled.em
     │        ╰────── declared here
 ────╯
 [E1058] Error: operation `await_drain` of the abstract effect `Async` is not visible outside `Std.Async`
-    ╭─[ check-fail/names/async_op_handled.em:13:13 ]
+    ╭─[ check-fail/names/async_op_handled.em:12:11 ]
     │
- 13 │       | ctl Async.await_drain s k -> k Async.Woke
-    │             ────────┬────────  
-    │                     ╰────────── hidden by `abstract`
+ 12 │     | ctl Async.await_drain s k -> k Async.Woke
+    │           ────────┬────────  
+    │                   ╰────────── hidden by `abstract`
     │
     ├─[ <std>/Async.em:19:3 ]
     │

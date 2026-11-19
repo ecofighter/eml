@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/types/compute_in_par_child.em
 ---
 [E2020] Error: the row passed to `par` may perform `IO`, but `par` allows only `never` operations
-   ╭─[ check-fail/types/compute_in_par_child.em:8:18 ]
+   ╭─[ check-fail/types/compute_in_par_child.em:7:16 ]
    │
- 8 │     let (a, b) = Par.par (fn () -> Async.compute (fn () -> 1)) (fn () -> 2)
-   │                  ───┬───           ─────────────┬────────────  
-   │                     ╰────────────────────────────────────────── `par` is used here
-   │                                                 │              
-   │                                                 ╰────────────── `IO` is performed here
+ 7 │   let (a, b) = Par.par (fn () -> Async.compute (fn () -> 1)) (fn () -> 2)
+   │                ───┬───           ─────────────┬────────────  
+   │                   ╰────────────────────────────────────────── `par` is used here
+   │                                               │              
+   │                                               ╰────────────── `IO` is performed here
    │
    ├─[ <std>/Par.em:6:28 ]
    │

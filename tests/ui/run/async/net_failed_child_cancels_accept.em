@@ -1,4 +1,4 @@
--- 失敗した子は、同じスコープで `accept` を待つタスクを取り消す。取り消した受けの包みはリスナーを落とし、`run` は
+-- 失敗した子は、同じスコープで`accept`を待つタスクを取り消す。取り消した受けの包みはリスナーを落とし、スコープは
 -- 最初の失敗を起こし直す (docs/spec/stdlib.md の「取り消し」と「`Std.Net`」)。
 import Async (Async)
 import Async
@@ -27,8 +27,8 @@ body () =
   let _ = spin 40
   ()
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  match try_io (fn () -> Async.run body) with
+  match try_io (fn () -> Async.scope (fn _ -> body ())) with
     | Ok () -> println "unreachable"
     | Err e -> println "run: \{show e.kind}: \{e}"

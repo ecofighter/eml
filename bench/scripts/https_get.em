@@ -7,12 +7,12 @@ import Fs
 import Http
 import String
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   match Env.args () with
     | [ca_path, url] ->
       let options = { Http.defaults | ca = Fs.read_text ca_path }
-      let r = Async.run (fn () -> Http.request "GET" url (Bytes.empty ()) options)
+      let r = Async.scope (fn _ -> Http.request "GET" url (Bytes.empty ()) options)
       let n = Bytes.length r.body
       println (show r.status)
       println (show n)

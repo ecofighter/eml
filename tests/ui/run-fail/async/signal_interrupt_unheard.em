@@ -6,10 +6,10 @@ import Async
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   println "before"
-  Async.run (fn () ->
+  Async.scope (fn _ ->
     let t = Async.start (fn () -> Async.sleep_ms 100)
     let _ = spin 40
     Async.sleep_ms 100

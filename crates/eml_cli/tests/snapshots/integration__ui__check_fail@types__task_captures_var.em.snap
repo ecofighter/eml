@@ -1,24 +1,23 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-assertion_line: 380
 expression: rendered
 input_file: tests/ui/check-fail/types/task_captures_var.em
 ---
 [E2002] Error: `n` performs `var n`, which this lambda does not allow
-   ╭─[ check-fail/types/task_captures_var.em:9:35 ]
+   ╭─[ check-fail/types/task_captures_var.em:8:33 ]
    │
- 9 │     let t = Async.start (fn () -> n <- n + 1)
-   │             ─────┬─────           ─────┬────  
-   │                  ╰──────────────────────────── argument 1 of `start` does not allow it
-   │                                        │      
-   │                                        ╰────── this call performs `var n`
+ 8 │   let t = Async.start (fn () -> n <- n + 1)
+   │           ─────┬─────           ─────┬────  
+   │                ╰──────────────────────────── argument 1 of `start` does not allow it
+   │                                      │      
+   │                                      ╰────── this call performs `var n`
 ───╯
 [E2002] Error: `n` performs `var n`, which this lambda does not allow
-   ╭─[ check-fail/types/task_captures_var.em:9:40 ]
+   ╭─[ check-fail/types/task_captures_var.em:8:38 ]
    │
- 9 │     let t = Async.start (fn () -> n <- n + 1)
-   │             ─────┬─────                ┬  
-   │                  ╰──────────────────────── argument 1 of `start` does not allow it
-   │                                        │  
-   │                                        ╰── this call performs `var n`
+ 8 │   let t = Async.start (fn () -> n <- n + 1)
+   │           ─────┬─────                ┬  
+   │                ╰──────────────────────── argument 1 of `start` does not allow it
+   │                                      │  
+   │                                      ╰── this call performs `var n`
 ───╯

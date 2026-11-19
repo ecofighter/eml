@@ -72,5 +72,5 @@ body () =
       println "bit first: \{show r}")
     Async.yield_now ())
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

@@ -10,14 +10,14 @@ import Exec
 import Stdin
 import Stream
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   match Env.args () with
     | ["hold"] ->
       let _ = Stdin.read_text ()
       ()
     | _ ->
-      Async.run parent
+      Async.scope (fn _ -> parent ())
       println "the run ended"
 
 -- 子の標準入力を開いたまま、子を待つ。待ちの前に `ready` に知らせる

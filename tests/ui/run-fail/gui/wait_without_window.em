@@ -14,7 +14,6 @@ app () =
   match Gui.wait () with
     | Quit -> println "unreachable"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  use Async.run
   Gui.run app

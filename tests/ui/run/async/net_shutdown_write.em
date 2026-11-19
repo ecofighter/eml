@@ -22,8 +22,8 @@ connected () =
   let c = Net.connect "127.0.0.1" port
   (c, Async.await t)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let (a, b) = connected ()
   let a = Net.shutdown_write (Net.write "ping" a)
   let (buf, b) = Net.read_chunk (Bytes.empty ()) b
@@ -37,4 +37,4 @@ main () = Async.run (fn () ->
     | Ok a ->
       Net.close a
       println "wrote"
-    | Err e -> println "\{show e.kind}: \{e}")
+    | Err e -> println "\{show e.kind}: \{e}"

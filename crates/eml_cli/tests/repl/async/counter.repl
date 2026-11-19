@@ -11,4 +11,4 @@
 > bump n
 > Atomic.load n
 > import Async
-> Async.run (fn () -> Async.await (Async.start (fn () -> Atomic.add 2 n)))
+> Async.await (Async.start (fn () -> Atomic.add 2 n))

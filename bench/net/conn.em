@@ -32,8 +32,8 @@ clients sc par each port =
     Async.spawn_in sc (fn () -> connect_loop each port)
     clients sc (par - 1) each port
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let n = int_arg 0 10000
   let par = int_arg 1 1
   let port = int_arg 2 0
@@ -47,7 +47,7 @@ main () = Async.run (fn () ->
     println "conn done \{show (each * par)}"
   else
     if par == 1 then connect_loop each port else Async.scope (fn sc -> clients sc par each port)
-    println "conn done \{show (each * par)}")
+    println "conn done \{show (each * par)}"
 
 -- 引数の読み取り。各プログラムが1ファイルで動くように、同じ定義を写して持つ
 int_arg : Int -> Int -> <IO, Panic> Int

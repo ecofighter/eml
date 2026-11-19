@@ -1,4 +1,4 @@
--- `Counter` は `Async.run` の外でも使える。`add` は足した後の値を返し、64 ビットで巻き戻る
+-- `Counter`は`Async`のタスクの外でも使える。`add`は足した後の値を返し、64ビットで巻き戻る
 -- (docs/spec/stdlib.md の「`Std.Atomic`」)。
 import Atomic
 

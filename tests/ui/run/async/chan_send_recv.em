@@ -28,5 +28,5 @@ body () =
   println (show (collect c Nil))
   println (show (Chan.recv c))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

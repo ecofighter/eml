@@ -44,5 +44,5 @@ awaits ts sum =
     | Nil -> sum
     | t :: rest -> awaits rest (sum + Async.await t)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> println (show (awaits (pairs 4 20000 Nil) 0)))
+main : Unit -> <IO, Panic, Async> Unit
+main () = println (show (awaits (pairs 4 20000 Nil) 0))

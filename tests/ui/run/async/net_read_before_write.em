@@ -23,8 +23,8 @@ connected () =
   let c = Net.connect "127.0.0.1" port
   (c, Async.await t)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let (a, b) = connected ()
   let t = Async.start (fn () ->
     println "reading"
@@ -35,4 +35,4 @@ main () = Async.run (fn () ->
   Async.sleep_ms 10
   println "writing"
   Net.close (Net.write "late" a)
-  Async.await t)
+  Async.await t

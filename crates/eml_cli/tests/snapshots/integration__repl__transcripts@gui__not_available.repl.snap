@@ -6,7 +6,7 @@ input_file: crates/eml_cli/tests/repl/gui/not_available.repl
 > import Async
 > import Gui
 > data Msg = | Quit
-> Async.run (fn () -> try_io (fn () -> Async.run (fn () -> Gui.run (fn () -> Gui.wait ()))))
+> try_io (fn () -> Async.scope (fn _ -> Gui.run (fn () -> Gui.wait ())))
 Err IOError { kind = NotAvailable
             , message = "cannot open the GUI: not available" }
 > println "next"

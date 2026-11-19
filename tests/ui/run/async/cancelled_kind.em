@@ -17,7 +17,7 @@ body () =
     | Ok n -> println "unreachable \{show n}"
     | Err e -> println "await: \{show e.kind}: \{e}"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "after run"

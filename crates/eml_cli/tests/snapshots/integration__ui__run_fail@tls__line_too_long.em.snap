@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/tls/line_too_long.em
 Other
 --- stderr ---
 --- runtime error ---
-cannot read the stream: a line is longer than 1048576 bytes
-  at run-fail/tls/line_too_long.em:33:7
+cannot read the stream: a line is longer than 1048576 bytes in `main`

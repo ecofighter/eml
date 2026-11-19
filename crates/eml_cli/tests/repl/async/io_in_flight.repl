@@ -25,7 +25,7 @@
 .   let _ = Async.await t
 .   Net.close b
 .
-> Async.run stuck
+> stuck ()
 > println "next"
 > echo : String -> <IO, Panic, Async.Async> String
 . echo s =
@@ -36,4 +36,4 @@
 .   Net.close b
 .   String.decode buf
 .
-> println (Async.run (fn () -> echo "hello"))
+> println (Async.scope (fn _ -> echo "hello"))

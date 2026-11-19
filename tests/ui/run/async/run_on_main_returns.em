@@ -14,8 +14,8 @@ body () =
   println "main worker: \{show n}"
   println "plain task: \{show m}"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
-  let k = Async.run (fn () -> Async.run_on_main (fn () -> 7))
+  Async.scope (fn _ -> body ())
+  let k = Async.scope (fn _ -> Async.run_on_main (fn () -> 7))
   println "after run: \{show k}"

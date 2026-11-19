@@ -25,8 +25,8 @@ serve l response =
     Net.close s)
   l
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
   let long = String.decode (Bytes.make 65537 97u8)
@@ -63,4 +63,4 @@ main () = Async.run (fn () ->
     match try_io (fn () -> Http.get url) with
       | Ok r -> println "ok: \{show r.status}"
       | Err e -> println "\{show e.kind}: \{e.message}") responses
-  Async.await server)
+  Async.await server

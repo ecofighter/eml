@@ -51,5 +51,5 @@ body () =
       let _ = spin 40
       Async.race (fn () -> after 50 1) (fn () -> after 100 2)))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

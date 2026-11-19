@@ -11,9 +11,9 @@ drain s =
   let (b, s) = Net.read_chunk (Bytes.empty ()) s
   if Bytes.length b == 0 then s else drain s
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  let r = Async.run (fn () ->
+  let r = Async.scope (fn _ ->
     let ca = Fs.read_text "ca.pem"
     let l = Net.listen "127.0.0.1" 0
     let (port, l) = Net.local_port l

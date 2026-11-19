@@ -42,8 +42,8 @@ read_body n b s =
     let (b, s) = Net.read_chunk b s
     read_body n b s
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
   let server = Async.start (fn () ->
@@ -62,4 +62,4 @@ main () = Async.run (fn () ->
   println "client: \{show r.status} \{show (Bytes.length r.body)}"
   let r = Http.request "GET" "http://localhost:\{show port}/g" (Bytes.empty ()) { Http.defaults | max_redirects = 0 }
   println "client: \{show r.status} \{String.decode r.body}"
-  Async.await server)
+  Async.await server

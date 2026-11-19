@@ -30,5 +30,5 @@ body () =
   println (show (List.sort [x, y]))
   Chan.close c
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

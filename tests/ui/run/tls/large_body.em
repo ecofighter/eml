@@ -13,8 +13,8 @@ total n c =
   let k = Bytes.length b
   if k == 0 then (n, c) else total (n + k) c
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let ca = Fs.read_text "ca.pem"
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
@@ -27,4 +27,4 @@ main () = Async.run (fn () ->
   let (n, c) = total 0 c
   println (show n)
   Tls.close c
-  Async.await server)
+  Async.await server

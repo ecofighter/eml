@@ -1,4 +1,4 @@
--- `start` と `await`。待つ順はタスクが終わる順によらず、`run` は本体の値を返す (docs/spec/stdlib.md の「`Std.Async`」)。
+-- `start`と`await`。待つ順はタスクが終わる順によらず、スコープは本体の値を返す (docs/spec/stdlib.mdの「`Std.Async`」)。
 import Async (Async)
 
 spin : Int -> <Panic> Int
@@ -13,5 +13,5 @@ body () =
   let x = Async.await a
   y * 10 + x + s
 
-main : Unit -> <IO, Panic> Unit
-main () = println (show (Async.run body))
+main : Unit -> <IO, Panic, Async> Unit
+main () = println (show (Async.scope (fn _ -> body ())))

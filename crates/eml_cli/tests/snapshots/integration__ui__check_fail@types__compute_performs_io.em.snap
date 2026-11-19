@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/types/compute_performs_io.em
 ---
 [E2020] Error: the row passed to `compute` may perform `IO`, but `compute` allows only `never` operations
-     ╭─[ check-fail/types/compute_performs_io.em:6:23 ]
+     ╭─[ check-fail/types/compute_performs_io.em:6:3 ]
      │
-   6 │   Async.run (fn () -> Async.compute (fn () -> println "job"))
-     │                       ──────┬──────           ──────┬──────  
-     │                             ╰──────────────────────────────── `compute` is used here
-     │                                                     │        
-     │                                                     ╰──────── `IO` is performed here
+   6 │   Async.compute (fn () -> println "job")
+     │   ──────┬──────           ──────┬──────  
+     │         ╰──────────────────────────────── `compute` is used here
+     │                                 │        
+     │                                 ╰──────── `IO` is performed here
      │
      ├─[ <std>/Async.em:171:25 ]
      │

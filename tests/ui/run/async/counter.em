@@ -29,5 +29,5 @@ body () =
   Atomic.store 5 c
   println (show (Atomic.add 2 c))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

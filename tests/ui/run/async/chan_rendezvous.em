@@ -16,5 +16,5 @@ body () =
   println (show (Chan.send 2 c))
   println (show (Async.await r))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

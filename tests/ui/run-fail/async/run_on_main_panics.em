@@ -1,5 +1,5 @@
 -- メインのworkerのタスクのPanicは、ほかのタスクの失敗と同じく`await`で起こし直され、
--- `run`が文言を保って起こし直す (docs/spec/stdlib.mdの「`Std.Async`」の「メインのworker」)。
+-- スコープが文言を保って起こし直す (docs/spec/stdlib.mdの「`Std.Async`」の「メインのworker」)。
 import Async (Async)
 
 spin : Int -> <Panic> Int
@@ -12,8 +12,8 @@ body () =
     (panic "boom on main" : Int))
   println "unreachable \{show n}"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "unreachable"

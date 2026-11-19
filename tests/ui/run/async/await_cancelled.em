@@ -17,7 +17,7 @@ body () =
     | Err e -> println "await: \{show e.kind}: \{e}"
   println "requested \{show (Async.cancel_requested ())}"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "after run"

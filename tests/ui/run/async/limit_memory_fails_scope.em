@@ -1,5 +1,5 @@
 -- max-bytes: 268435456 soft 4194304
--- spawn したタスクがメモリの柔らかい上限の印を捕まえなければスコープの失敗になり、`run` が `ResourceLimit` の
+-- spawnしたタスクがメモリの柔らかい上限の印を捕まえなければスコープの失敗になり、スコープが`ResourceLimit`の
 -- IO の失敗として起こし直す
 -- (docs/spec/stdlib.md の「`Std.Async`」)
 import Async (Async)
@@ -27,8 +27,8 @@ body () =
     ())
   Async.spawn (fn () -> grow 0 [])
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  match try_io (fn () -> Async.run body) with
+  match try_io (fn () -> Async.scope (fn _ -> body ())) with
     | Ok _ -> println "unreachable"
     | Err e -> println "run: \{show e.kind}: \{e}"

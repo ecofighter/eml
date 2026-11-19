@@ -23,5 +23,5 @@ body () =
   let _ = spin 40
   println (show (Async.await t))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

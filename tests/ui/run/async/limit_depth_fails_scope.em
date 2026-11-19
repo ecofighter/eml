@@ -1,6 +1,6 @@
 -- native: skip (the depth limit is the thread's stack, not a word count)
 -- max-depth: 4096
--- spawn したタスクの深さの超過はスコープの失敗になり、`run` が `ResourceLimit` の IO の失敗として起こし直す
+-- spawnしたタスクの深さの超過はスコープの失敗になり、スコープが`ResourceLimit`のIOの失敗として起こし直す
 -- (docs/spec/stdlib.md の「`Std.Async`」)。
 import Async (Async)
 import String
@@ -23,8 +23,8 @@ body () =
   let _ = spin 40
   1
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  match try_io (fn () -> Async.run body) with
+  match try_io (fn () -> Async.scope (fn _ -> body ())) with
     | Ok n -> println "unreachable \{show n}"
     | Err e -> println "run failed: \{show e.kind}: \{e}"

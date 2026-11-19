@@ -7,11 +7,11 @@ import Env
 import Exec
 import Stream
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   match Env.args () with
     | ["quit"] -> ()
-    | _ -> Async.run parent
+    | _ -> Async.scope (fn _ -> parent ())
 
 parent : Unit -> <IO, Panic, Async> Unit
 parent () =

@@ -1,4 +1,4 @@
--- `run` の本体の `Cancelled` は、ほかの IO の失敗と同じく `run` から出る。捕まえなければ実行時エラーになる
+-- スコープの本体の`Cancelled`は、ほかのIOの失敗と同じくスコープから出る。捕まえなければ実行時エラーになる
 -- (docs/spec/stdlib.md の「取り消し」)。
 import Async (Async)
 
@@ -21,8 +21,8 @@ body () =
     let _ = spin 40
     Async.await u)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  let n = Async.run body
+  let n = Async.scope (fn _ -> body ())
   println "unreachable \{show n}"

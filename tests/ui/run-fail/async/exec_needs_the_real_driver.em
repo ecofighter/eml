@@ -10,8 +10,8 @@ spin n = if n == 0 then 0 else spin (n - 1)
 runner : Unit -> <IO, Async> Unit
 runner () = drop (Exec.spawn `eml --version`)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let t = Async.start runner
   let _ = spin 40
-  Async.await t)
+  Async.await t

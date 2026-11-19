@@ -21,5 +21,5 @@ body () =
   Async.await (Async.start (report "started"))
   Async.await (Async.start_on_main (report "main-worker"))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

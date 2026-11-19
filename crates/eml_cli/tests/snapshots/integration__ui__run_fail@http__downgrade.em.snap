@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/http/downgrade.em
 Other
 --- stderr ---
 --- runtime error ---
-cannot follow the redirect to http://localhost:49152/plain: it goes from https to http
-  at run-fail/http/downgrade.em:35:7
+cannot follow the redirect to http://localhost:49152/plain: it goes from https to http in `main`

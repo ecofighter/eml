@@ -12,5 +12,5 @@ body () =
   println "before"
   println (show (add 3000000000 1))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

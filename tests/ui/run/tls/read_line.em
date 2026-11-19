@@ -17,8 +17,8 @@ lines c =
       println "None"
       c
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let ca = Fs.read_text "ca.pem"
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
@@ -28,4 +28,4 @@ main () = Async.run (fn () ->
     Net.close (Net.write "one\r\ntwo\nthree" s))
   let c = Tls.connect_with_ca ca "tls.localhost" port
   Tls.close (lines c)
-  Async.await server)
+  Async.await server

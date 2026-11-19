@@ -7,11 +7,11 @@ import Signal
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () ->
     Async.race (fn () -> Async.sleep_ms 1000) (fn () -> Signal.wait Signal.Terminate))
   let _ = spin 40
   match Async.await t with
     | Left () -> println "slept"
-    | Right () -> println "terminated")
+    | Right () -> println "terminated"

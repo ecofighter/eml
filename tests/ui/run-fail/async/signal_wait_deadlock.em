@@ -6,10 +6,10 @@ import Signal
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   println "before"
-  Async.run (fn () ->
+  Async.scope (fn _ ->
     let t = Async.start (fn () -> Signal.wait Signal.Terminate)
     let _ = spin 40
     Async.await t)

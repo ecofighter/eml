@@ -2,14 +2,13 @@
 -- 終わっていないタスクの結果を取りに行く道を名前解決で断つ (docs/spec/effects.md の「抽象エフェクト」)。
 import Async
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () -> 1)
-    let x = handle Async.await t with
-      | ctl Async.await_cell c k -> k Async.Woke
-      | ctl Async.reschedule () k -> k Async.Woke
-      | ctl Async.await_time ms k -> k Async.Woke
-      | ctl Async.await_drain s k -> k Async.Woke
-      | return x -> x
-    println (show x))
+  let t = Async.start (fn () -> 1)
+  let x = handle Async.await t with
+    | ctl Async.await_cell c k -> k Async.Woke
+    | ctl Async.reschedule () k -> k Async.Woke
+    | ctl Async.await_time ms k -> k Async.Woke
+    | ctl Async.await_drain s k -> k Async.Woke
+    | return x -> x
+  println (show x)

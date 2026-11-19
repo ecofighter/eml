@@ -14,11 +14,11 @@ attempt ca port ms =
       Tls.close s
     | None -> println "\{show ms}: timed out"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let ca = Fs.read_text "ca.pem"
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
   attempt ca port 0
   attempt ca port 1
-  Net.close_listener l)
+  Net.close_listener l

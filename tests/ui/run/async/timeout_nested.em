@@ -26,5 +26,5 @@ body () =
     2)
   println "timeout: \{show r}"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

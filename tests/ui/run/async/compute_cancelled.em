@@ -23,5 +23,5 @@ body () =
   println "requested \{show (Async.cancel_requested ())}"
   println (show (Async.await t))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

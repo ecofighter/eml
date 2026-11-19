@@ -48,8 +48,8 @@ clients c port =
   let xs = connect_all c port Nil
   Async.scope (fn sc -> ask_all sc xs)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let c = int_arg 0 1000
   let port = int_arg 1 0
   if port == 0 then
@@ -61,7 +61,7 @@ main () = Async.run (fn () ->
     println "many done \{show c}"
   else
     clients c port
-    println "many done \{show c}")
+    println "many done \{show c}"
 
 -- 引数の読み取り。各プログラムが1ファイルで動くように、同じ定義を写して持つ
 int_arg : Int -> Int -> <IO, Panic> Int

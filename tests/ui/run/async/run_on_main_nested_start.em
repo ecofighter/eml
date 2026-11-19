@@ -22,7 +22,7 @@ body () =
   let n = Async.await t
   println "sum: \{show n}"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "done"

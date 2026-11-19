@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/tls/bad_ca.em
 Other
 --- stderr ---
 --- runtime error ---
-cannot set up TLS for tls.localhost: the CA certificates are not valid PEM
-  at run-fail/tls/bad_ca.em:19:7
+cannot set up TLS for tls.localhost: the CA certificates are not valid PEM in `main`

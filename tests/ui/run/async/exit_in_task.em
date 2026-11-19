@@ -17,10 +17,10 @@ body () =
   Async.await x
   FileIn.close f
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   let g = FileIn.open "exit_in_task.em"
   println "before"
-  Async.run body
+  Async.scope (fn _ -> body ())
   FileIn.close g
   println "unreachable"
