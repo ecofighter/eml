@@ -140,7 +140,7 @@ struct Fix {
 | E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 一様な位置の型変数が制約を持つ ([Core IR](core-ir.md) の「一様な位置と制約付きの多相再帰」) |
 | E2013 | `FIELD_NEEDS_KNOWN_TYPE` | 射影か更新の時点で、値の型が決まっていない ([型と Kind](types.md) の「フィールドの解決」) |
 | E2014 | `NO_SUCH_FIELD` | 射影か更新のフィールドが、その型にない。コンストラクタが2つ以上の型への射影と更新、タプルの更新を含む |
-| E2015 | `INPUT_EFFECT` | REPL の `let` の束縛か式の入力の row が `<IO, Panic>` に収まらない ([型と Kind](types.md) の「REPL の入力」)。`:type` の問い合わせには当てない |
+| E2015 | `INPUT_EFFECT` | REPLの`let`の束縛か式の入力のrowが`<IO, Panic>` (プログラムが`Std.Async`を読み込んでいれば`<IO, Panic, Async>`) に収まらない ([型と Kind](types.md)の「REPL の入力」)。`:type`の問い合わせには当てない |
 | E2016 | `INPUT_LINEAR` | REPL の `let` の束縛か式の入力の型が `Unr` でない。`:type` の問い合わせには当てない |
 | E2017 | `BINDING_AMBIGUOUS` | REPL の `let` の束縛の型に、決まらない型変数が残った |
 | E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |

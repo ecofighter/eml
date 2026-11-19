@@ -153,17 +153,22 @@ pub(crate) fn check_module(
     let mut query = None;
     for component in &scc::components(program) {
         let mut pending: Vec<(FunctionId, PendingBody<'_>)> = Vec::new();
+        let mut input_rows = FxHashMap::default();
         for &id in component {
             let result = match program[id].kind {
-                FunctionKind::Input(kind) => Some(input::check_input(
-                    program,
-                    files,
-                    &context,
-                    &signatures,
-                    id,
-                    kind,
-                    &mut types,
-                )),
+                FunctionKind::Input(kind) => {
+                    let (body, found, labels) = input::check_input(
+                        program,
+                        files,
+                        &context,
+                        &signatures,
+                        id,
+                        kind,
+                        &mut types,
+                    );
+                    input_rows.insert(id, labels);
+                    Some((body, found))
+                }
                 _ => check_body(program, files, &context, &signatures, id, &mut types),
             };
             if let Some((body, found)) = result {
@@ -209,6 +214,7 @@ pub(crate) fn check_module(
                     program,
                     id,
                     kind,
+                    &input_rows[&id],
                     &body_types,
                     &mut types,
                     &mut signatures,

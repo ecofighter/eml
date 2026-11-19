@@ -1,10 +1,10 @@
-//! REPL の入力の関数の検査 (docs/spec/types.md の「REPL の入力」)。入力は
-//! `Unit -> <IO, Panic> T` の関数 (`:type` の問い合わせは `Unit -> <ρ> T`) で、`T` をシグネチャなしで、局所の `let` と同じく
-//! 単相に推論する。入力の関数はほかの関数から参照されないので、1つだけの SCC として、ほかの関数と同じ道で Kind を解いて
-//! 書き出す。
+//! REPL の入力の関数の検査 (docs/spec/types.md の「REPL の入力」)。入力は`Unit -> <IO, Panic> T`の関数
+//! (そのrowで通らず`Unit -> <IO, Panic, Async> T`で通るなら、そちら。`:type`の問い合わせは`Unit -> <ρ> T`)で、`T`を
+//! シグネチャなしで、局所の`let`と同じく単相に推論する。入力の関数はほかの関数から参照されないので、1つだけのSCCとして、
+//! ほかの関数と同じ道でKindを解いて書き出す。
 
 use eml_diagnostics::{Diagnostic, Label, SourceFiles};
-use eml_hir::{FunctionId, Generics, InputKind, Program, ValueItem};
+use eml_hir::{EffectId, FunctionId, Generics, InputKind, Program, ValueItem};
 use rustc_hash::FxHashMap;
 
 use crate::context::Context;
@@ -20,7 +20,8 @@ use super::constraints::Defaulting;
 use super::report::AmbientSource;
 use super::{PendingBody, Signatures, query};
 
-/// 入力の関数の本体を検査する。`check_body` と同じく、Kind の制約を持った本体を返す。
+/// 入力の関数の本体を検査する。`check_body`と同じくKindの制約を持った本体を返し、検査に使ったrowのラベルも返す。
+/// `finish_input`は、そのラベルを入力の関数の型に書く。
 pub(super) fn check_input<'c>(
     program: &Program,
     files: &SourceFiles,
@@ -29,6 +30,39 @@ pub(super) fn check_input<'c>(
     id: FunctionId,
     kind: InputKind,
     types: &mut TypeStore,
+) -> (PendingBody<'c>, Vec<Diagnostic>, Vec<EffectId>) {
+    let labels = vec![program.io(), program.panic()];
+    let (body, diagnostics) = check_input_under(
+        program, files, context, signatures, id, kind, types, &labels,
+    );
+    // `Async`は、`<IO, Panic>`で通らない入力にだけ許す。そこで通る入力は根のタスクを持たず、どのタスクの外でも動く
+    // (docs/spec/types.md の「REPL の入力」)
+    if let Some(effect) = program.async_effect()
+        && diagnostics.iter().any(|d| d.code == codes::INPUT_EFFECT)
+    {
+        let labels = vec![program.io(), program.panic(), effect];
+        let (body, diagnostics) = check_input_under(
+            program, files, context, signatures, id, kind, types, &labels,
+        );
+        return (body, diagnostics, labels);
+    }
+    (body, diagnostics, labels)
+}
+
+/// 式と`let`の入力は、`labels`の閉じたrowの下で検査する。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "check_input's arguments and the row"
+)]
+fn check_input_under<'c>(
+    program: &Program,
+    files: &SourceFiles,
+    context: &'c Context,
+    signatures: &Signatures,
+    id: FunctionId,
+    kind: InputKind,
+    types: &mut TypeStore,
+    labels: &[EffectId],
 ) -> (PendingBody<'c>, Vec<Diagnostic>) {
     let mut table = Table::new(context);
     let result = table.fresh_var();
@@ -39,9 +73,9 @@ pub(super) fn check_input<'c>(
             tail: Tail::Var(table.fresh_row_var()),
         },
         InputKind::Expr | InputKind::Let(_) => Row::closed(
-            [program.io(), program.panic()]
-                .into_iter()
-                .map(|effect| RowLabel {
+            labels
+                .iter()
+                .map(|&effect| RowLabel {
                     effect,
                     args: Vec::new(),
                 })
@@ -156,6 +190,7 @@ pub(super) fn finish_input(
     program: &Program,
     id: FunctionId,
     kind: InputKind,
+    labels: &[EffectId],
     body_types: &BodyTypes,
     types: &mut TypeStore,
     signatures: &mut Signatures,
@@ -171,9 +206,9 @@ pub(super) fn finish_input(
     let function_ty = types.intern(TypeKind::Fn {
         param: types.unit(),
         lin: Lin::Unr,
-        effects: [program.io(), program.panic()]
-            .into_iter()
-            .map(|id| EffectLabel {
+        effects: labels
+            .iter()
+            .map(|&id| EffectLabel {
                 id,
                 args: Vec::new(),
             })
@@ -462,6 +497,63 @@ mod tests {
         assert_eq!(
             diagnostics,
             ["E2015 `ask` performs `Ask`, but an input may perform only `IO` and `Panic`"]
+        );
+    }
+
+    /// 最後の入力の関数の型。
+    fn input_function_type(program: &Program, typed: &TypedProgram) -> String {
+        let input = program
+            .input()
+            .expect("the last input is an input function");
+        let ty = typed.decls[&ValueItem::Function(input)].ty;
+        typed.types.display(ty, &program.names).to_string()
+    }
+
+    #[test]
+    fn an_input_may_perform_async() {
+        let (program, typed, diagnostics) = session(&[
+            "import Async",
+            "Async.await (Async.start (fn () -> (1, \"one\")))",
+        ]);
+        assert_eq!(diagnostics, Vec::<String>::new());
+        assert_eq!(
+            input_function_type(&program, &typed),
+            "Unit -> <IO, Panic, Async> (Int, String)"
+        );
+        let (program, typed, diagnostics) = session(&[
+            "import Async",
+            "let x = Async.await (Async.start (fn () -> 1))",
+        ]);
+        assert_eq!(diagnostics, Vec::<String>::new());
+        assert_eq!(binding_type(&program, &typed, "x"), "Int");
+        assert_eq!(
+            input_function_type(&program, &typed),
+            "Unit -> <IO, Panic, Async> Int"
+        );
+        let (_, _, diagnostics) = session(&[
+            "import Async",
+            "effect Ask where\n  ask : Unit -> Int",
+            "ask ()",
+        ]);
+        assert_eq!(
+            diagnostics,
+            ["E2015 `ask` performs `Ask`, but an input may perform only `IO`, `Panic` and `Async`"]
+        );
+    }
+
+    #[test]
+    fn an_input_without_async_keeps_its_row() {
+        let (program, typed, diagnostics) = session(&["import Async", "1 + 1"]);
+        assert_eq!(diagnostics, Vec::<String>::new());
+        assert_eq!(
+            input_function_type(&program, &typed),
+            "Unit -> <IO, Panic> Int"
+        );
+        let (program, typed, diagnostics) = session(&["println \"hi\""]);
+        assert_eq!(diagnostics, Vec::<String>::new());
+        assert_eq!(
+            input_function_type(&program, &typed),
+            "Unit -> <IO, Panic> Unit"
         );
     }
 

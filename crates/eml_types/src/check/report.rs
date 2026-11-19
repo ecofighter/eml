@@ -392,14 +392,22 @@ impl BodyCheck<'_, '_> {
                     None => diagnostic,
                 }
             }
-            AmbientSource::Input => Diagnostic::error(
-                codes::INPUT_EFFECT,
-                format!("{name} performs {quoted}, but an input may perform only `IO` and `Panic`"),
-                Label::new(file, range, format!("this call performs {quoted}")),
-            )
-            .with_help(format!(
-                "handle {quoted} inside the input, as in `handle … with …`"
-            )),
+            AmbientSource::Input => {
+                // `Std.Async`を読み込んでいれば、入力は`Async`も行える (docs/spec/types.md の「REPL の入力」)
+                let allowed = if self.program.async_effect().is_some() {
+                    "`IO`, `Panic` and `Async`"
+                } else {
+                    "`IO` and `Panic`"
+                };
+                Diagnostic::error(
+                    codes::INPUT_EFFECT,
+                    format!("{name} performs {quoted}, but an input may perform only {allowed}"),
+                    Label::new(file, range, format!("this call performs {quoted}")),
+                )
+                .with_help(format!(
+                    "handle {quoted} inside the input, as in `handle … with …`"
+                ))
+            }
             AmbientSource::Lambda(origin) => {
                 let diagnostic = Diagnostic::error(
                     codes::EFFECT_NOT_IN_ROW,

@@ -1,0 +1,34 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/async/root_input.repl
+---
+> import Async
+> 1 + 1
+2
+> let x = Async.await (Async.start (fn () -> [1, 2, 3]))
+> x
+[1, 2, 3]
+> Async.await (Async.start (fn () -> (1, "one")))
+(1, "one")
+> let p = Async.await (Async.start (fn () -> (2, "two")))
+> p
+(2, "two")
+> Async.spawn (fn () -> println "child")
+child
+> Async.await (Async.start (fn () -> panic "boom"))
+runtime error: panicked: boom in `input$9`
+> 10 / 0
+runtime error: division by zero
+  at <input 10>:1:4
+> effect Ask where
+.   ask : Unit -> Int
+.
+> ask ()
+E2015 <input 12> 1:1 `ask` performs `Ask`, but an input may perform only `IO`, `Panic` and `Async`
+  <input 12> 1:1 this call performs `Ask`
+  help: handle `Ask` inside the input, as in `handle … with …`
+> println "next"
+next
+--- close ---
+no leaks
