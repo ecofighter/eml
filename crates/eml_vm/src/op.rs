@@ -66,7 +66,7 @@ pub enum Op {
     /// `par` の子の本体の戻り先。境目のフレームの slot 0 が子の結果、slot 1 が join の番号である。
     ChildDone,
     /// `par` の fork。`operands[at..]` は [左の子のスロット, 右の子のスロット, 組の構築子のタグ]。両方の子が終わった
-    /// 後の join で、組を `dst` に書くか、中断を起こし直す。
+    /// 後のjoinで、組を`dst`に書く。子は全域なので、joinは子の誤りを見ない。
     Par {
         dst: Slot,
         at: u32,

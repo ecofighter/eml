@@ -1466,8 +1466,8 @@ fn an_unmasked_par_is_not_a_yield_point() {
     assert_eq!(evidence_text(text), text);
 }
 
-/// その場で動く節の本体の `par` は、ほかの呼び出しと同じく under の形にする。子が起こし直す操作は handle の外の
-/// handler に届く (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
+/// その場で動く節の本体の`par`は、ほかの呼び出しと同じくunderの形にする。子は全域なので、子の中の操作は
+/// handleの外のhandlerに届かない (docs/spec/core-ir.mdの「`perform`と節の3つの形」)。
 #[test]
 fn a_par_in_an_immediate_clause_runs_it_under_the_handler() {
     let text = "\

@@ -340,7 +340,7 @@ pub struct Scheduler<P: Policy> {
     pub(crate) main_worker: u32,
     /// 深さの上限。右の子のスタックの上限を、fork のときの親の深さから作る。
     pub(crate) max_depth: usize,
-    /// join が見つけた右の子の誤り。`step` は `RunFault` しか返せないので、ここに置いて実行の繰り返しに渡す。
+    /// 右の子の誤りで、`at_par`が`par`の位置を付けたもの。`step`は`RunFault`しか返せないので、ここに置いて実行の繰り返しに渡す。
     pub(crate) failed: Option<crate::RuntimeError>,
     /// 根の表のうち、この番号より前の根はどれも印が付いている。`Machine` が実行をまたいで持つ値を受け取って返す。
     pub(crate) shared_roots: usize,

@@ -684,16 +684,28 @@ main () =
 }
 
 /// worker `worker`の止める語に`END`が立つまで、つまりどれかのworkerが失敗してrunが止まりつつあるときまで、行
-/// `gate`を持つhost。10秒は止まりの見張りである。
+/// `gate`を持つhost。行`wait`は`gate`が来るまで持つので、早い子は遅い子がgateに入るまで失敗しない。10秒は止まりの
+/// 見張りである。
 struct EndGate {
     inner: eml_vm::CaptureHost,
     control: Arc<Control>,
     worker: usize,
+    entered: std::sync::atomic::AtomicBool,
 }
 
 impl eml_rt::Host for EndGate {
     fn write_line(&self, stream: eml_rt::Stream, line: &str) -> std::io::Result<()> {
+        if line == "wait" {
+            let start = Instant::now();
+            while !self.entered.load(std::sync::atomic::Ordering::Acquire)
+                && start.elapsed() < Duration::from_secs(10)
+            {
+                std::thread::sleep(Duration::from_micros(200));
+            }
+        }
         if line == "gate" {
+            self.entered
+                .store(true, std::sync::atomic::Ordering::Release);
             let word = self.control.word(self.worker);
             let start = Instant::now();
             while word.load(std::sync::atomic::Ordering::Relaxed) & Control::END == 0
@@ -715,18 +727,31 @@ impl eml_rt::Host for EndGate {
     }
 }
 
-/// 一方の子は深さですぐに失敗し、もう一方はrunが止まりつつあるときまでgateで待ち、その後で割り算で失敗する。間に
-/// 安全点はない。最初に書かれた誤りが報告され、どのworkerが書いたかによらない。左の子が早い方ならworker 0の誤り、右の
-/// 子が早い方ならworker 1の誤りである。
+/// 一方の子は、もう一方がgateに入ってから深さで失敗し、もう一方はrunが止まりつつあるときまでgateで待ち、その後で
+/// 割り算で失敗する。間に安全点はない。最初に書かれた誤りが報告され、どのworkerが書いたかによらない。左の子が早い
+/// 方ならworker 0の誤り、右の子が早い方ならworker 1の誤りである。
+///
+/// 行("deep", "late", 1)は、`entry_body`で`sched.run.record(result)`をworkerのjoinの後ろへ動かす変更を捕まえる。
+/// worker 0が先に書かず、止められたworker 1の`late`の誤りが先に書かれるからである。行("late", "deep", 0)は、
+/// `record`を消す変更を捕まえる。worker 0の`late`の誤りが残り、worker 1の先に書かれた誤りを上書きするからである。
+/// 早い子はgateに入るまで待つので、どちらの行もタイミングに頼らない。
 #[test]
 fn the_first_error_written_wins_on_either_worker() {
     for (left, right, gated) in [("deep", "late", 1), ("late", "deep", 0)] {
+        let entry = |name: &str| if name == "deep" { "early" } else { "late" };
+        let (entry_left, entry_right) = (entry(left), entry(right));
         let text = format!(
             "{HEAD}\
 fn main() -> unit {{
-  let t.0: obj = par (,) #0(&{left}, &{right})
+  let t.0: obj = par (,) #0(&{entry_left}, &{entry_right})
   decref t.0
   return ()
+}}
+fn early(p.0: unit) -> tobj {{
+  let s.1: obj = const \"wait\"
+  let u.2: unit = extern Prelude.println(s.1)
+  let t.3: tobj = call deep(())
+  return t.3
 }}
 fn deep(p.0: unit) -> tobj {{
   let t.1: tobj = call deep(())
@@ -750,6 +775,7 @@ fn late(p.0: unit) -> tobj {{
             inner: eml_vm::CaptureHost::new(Default::default()),
             control: Arc::clone(&control),
             worker: gated,
+            entered: Default::default(),
         });
         let config = RunConfig::default()
             .with_debug_heap(true)

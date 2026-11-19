@@ -357,7 +357,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 
 #### `par` の呼び出し
 
-- `Std.Par.fork_join`の引数のそろった呼び出しは、`extern`命令でなく`par`の呼び出し (`Rhs::Call { call: Call::Par { left, right, pair, at }, mask }`、`mask`は空) にする。externはemlのコードを呼び返さないが、`par`は2つの子の閉包を呼ぶためである。呼び出しの一種にするので、`mask`と巻き戻しの表をほかの呼び出しと同じ仕組みで扱える。`eml_extern`の`Extern::Par`の行はstdの宣言を型検査に結ぶためだけにあり、`Rhs::Extern`にならない。verifierは`extern Std.Par.fork_join`をどの段でも拒む ([LIR](lir.md) の「verifier」)
+- `Std.Par.fork_join`の引数のそろった呼び出しは、`extern`命令でなく`par`の呼び出し (`Rhs::Call { call: Call::Par { left, right, pair, at }, mask }`、`mask`は空) にする。externはemlのコードを呼び返さないが、`par`は2つの子の閉包を呼ぶためである。呼び出しの一種にするので、2つの子の閉包を呼ぶ呼び出しとして、ほかの呼び出しと同じ`Rhs::Call`の形で扱える。`eml_extern`の`Extern::Par`の行はstdの宣言を型検査に結ぶためだけにあり、`Rhs::Extern`にならない。verifierは`extern Std.Par.fork_join`をどの段でも拒む ([LIR](lir.md) の「verifier」)
 - `left` と `right` は2つの引数、`pair` は `tuple_layout(2)` の `TUPLE` の構築子、`at` は `par` の名前の位置である。結果は組の型の変数 (`obj` か構造体) にそのまま束ねる。構造体なら、box の挿入が `obj` からの `unbox` を足す ([LIR](lir.md) の「box の挿入」)。タプルの配置の欄はどれも `tobj` なので (上の「translate の配置」)、構造体の箱は VM が作る組と同じ形である
 - `fork_join`は`std/Par.em`の非公開のexternで、`std/Par.em`が2つの引数をそろえて呼ぶ。型検査はexternの呼び出しに`mask`を記録しない
 - 最適化は`par`をほかの文と同じく扱う。yieldの地点でなく、handlerに触れず (下の「handlerへの特殊化」)、到達の解析は2つの子をたどる

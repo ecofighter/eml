@@ -99,8 +99,8 @@ pub struct Task {
     /// `finish_*` が預けたタスクの終わり方。エントリの `Task` の `Finish` が核の `finish` に渡す。タスクの ID の物体が
     /// すべて片付く前に待ち手を起こさないためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) outcome: Option<cells::Outcome>,
-    /// ほかの worker に置いた右の子の、親の側の記録。join の節点は親の worker にあるので、子の終わりと誤りは
-    /// `home` へ知らせで送る (docs/spec/vm.md の「`par` の fork と join」)。
+    /// ほかのworkerに置いた右の子の、親の側の記録。joinの節点は親のworkerにあるので、子の値は
+    /// `home`へ知らせで送る。誤りは知らせでなくrunの致命的な誤りの欄に書く (docs/spec/vm.mdの「`par`のforkとjoin」)。
     pub(crate) placed: Option<Placed>,
     /// `compute` の仕事の `Task` の、仕事のセルと `fork_job` の位置。仕事は join の節点を持たず、終わりを仕事のセルに
     /// 置く (docs/spec/vm.md の「`compute` の仕事」)。
@@ -1994,7 +1994,7 @@ fn child_done<R: Exec>(
     let parent_evv = std::mem::replace(&mut join.parent_evv, Word::UNIT);
     task.limit = join.parent_limit;
     let right_done = join.right_value.is_some();
-    // 境目のフレームを外す。組か起こし直しの結果は join が `par` の結果のスロットに書く
+    // 境目のフレームを外す。組はjoinが`par`の結果のスロットに書く
     task.pop_frame();
     let rest = unsafe { switch_to(ctx, parent_evv, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
