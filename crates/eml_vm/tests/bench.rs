@@ -1674,8 +1674,8 @@ fn unwind_points() {
     nbody: 93
     orders: 13
     orders_by_hand: 13
-    par_tree: 46
-    pfib: 32
+    par_tree: 43
+    pfib: 29
     push_fold: 4
     push_fold_by_hand: 4
     rbtree: 15

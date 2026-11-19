@@ -93,19 +93,8 @@ layout (,) { (,)(tobj, tobj) }
 effect Prelude.Panic { never panicked(obj) -> never }
 ";
 
-/// `par` の右の子の中断に要る関数と、左の子の `one`。エントリより後ろに置く。
-const FORKS: &str = "\
-clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: fev, a.1: obj) -> obj poly {
-  let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
-  let u.3: unit = prim child_abort(ev.0, c.2)
-  decref ev.0
-  let d.4: obj poly = prim dummy()
-  return d.4
-}
-uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj poly {
-  let r.2: tobj poly = extern Prelude.panic(a.0)
-  return r.2
-}
+/// 左の子の`one`。エントリより後ろに置く。
+const ONE: &str = "\
 fn one(p.0: unit) -> tobj {
   let n.1: tobj = box 1
   return n.1
@@ -259,7 +248,7 @@ fn text(p.0: unit) -> tobj {{
   let s.1: obj = extern \"Prelude.Show Int.show\"(12345)
   return s.1
 }}
-{FORKS}"
+{ONE}"
     );
     let program = trusted(&text);
     let (host, _) = eml_vm::capture_host(Default::default());
@@ -360,7 +349,7 @@ fn twice(p.0: unit) -> tobj {{
   let m.2: tobj = box 3
   return m.2
 }}
-{FORKS}"
+{ONE}"
     );
     let config = RunConfig::default()
         .with_debug_heap(true)

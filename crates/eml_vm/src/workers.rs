@@ -1569,17 +1569,6 @@ fn one(p.0: unit) -> tobj {
   let n.1: tobj = box 1
   return n.1
 }
-clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: fev, a.1: obj) -> obj poly {
-  let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
-  let u.3: unit = prim child_abort(ev.0, c.2)
-  decref ev.0
-  let d.4: obj poly = prim dummy()
-  return d.4
-}
-uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj poly {
-  let r.2: tobj poly = extern Prelude.panic(a.0)
-  return r.2
-}
 ";
         let program = crate::trusted(text);
         let control = Arc::new(Control::new(Limits {

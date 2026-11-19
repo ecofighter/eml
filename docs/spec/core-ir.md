@@ -901,7 +901,7 @@ EPは次の不変条件を守る。yieldの地点で生きている文脈の変�
 - 再開するエントリと`never`のエントリ (`e`): `yield_to`か`yield_abort`が消費する
 - 補助の関数`prompt$`、`resume$`、`rewind$`、`mask$`: 本体は決まっていて、`mask$`は再開の後にリストを読み直し、`apply`をまたいでクロージャに持たない
 
-クロージャが捕獲するのは、yieldの地点で生きている変数 (継続)、補助の関数の決まった捕獲 (`κ`、`c`、`ret`、`h: rev`、状態)、ソースの値だけである。そのため、どのクロージャも`ev`、`cev`、`fev`、`evv`を捕獲せず、クロージャは退いたevidenceだけを捕獲するというverifierの規則は、EPが作るどのプログラムも拒まない ([LIR](lir.md)の「verifier」)。
+クロージャが捕獲するのは、yieldの地点で生きている変数 (継続)、補助の関数の決まった捕獲 (`κ`、`c`、`ret`、`h: rev`、状態)、ソースの値だけである。そのため、どのクロージャも`ev`、`cev`、`evv`を捕獲せず、クロージャは退いたevidenceだけを捕獲するというverifierの規則は、EPが作るどのプログラムも拒まない ([LIR](lir.md)の「verifier」)。
 
 `prompt$`の`ev_retire`の時点では、ふつう持ち主の参照だけがある。リストは`prompt$`の初めの`evv_set(w)`で替わり、yieldと`prompt$`の間のフレームは戻り、`yield_finish`は宛先を手放し、リストや実行中のevidenceを持つクロージャはない。そのため退かせる操作はevidenceそのものを返す。別の参照が残るときは、`ev_retire`がevidenceを写し、結果は同じになる。
 

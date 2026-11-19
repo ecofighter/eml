@@ -42,9 +42,6 @@ macro_rules! __kind {
     (cev) => {
         $crate::Kind::I64
     };
-    (fev) => {
-        $crate::Kind::I64
-    };
     (rev) => {
         $crate::Kind::I64
     };
@@ -110,9 +107,6 @@ macro_rules! __ty {
         $crate::__rt::Word
     };
     (cev) => {
-        $crate::__rt::Word
-    };
-    (fev) => {
         $crate::__rt::Word
     };
     (rev) => {

@@ -62,7 +62,7 @@
 //!   引数の`worker`は呼び出しをするタスクの論理的なIDで、文書が別に書かない限り`ctx`のヒープの今のworkerである。
 //!   呼ぶタスクを名指すセルの引数は、そのタスクのセルである。速いモードでは、`ctx`のyieldの状態の語は即値か不死の
 //!   物体である (yieldの外では`()`で、`exit`が`Finish`まで巻き戻す間は、宛先がヒープの不死のダミーである)。
-//! - C2: 引数の`Word`と、引数の中の語 (`Outcome`、根のslice、`Hold`、`JobEnd`) は、どれも関数の文書が名指す
+//! - C2: 引数の`Word`と、引数の中の語 (`Outcome`、根のslice、`Hold`) は、どれも関数の文書が名指す
 //!   Reprを持つ。ポインタなら、`ctx`のヒープか、それに付けた領域か共有した領域の、文書が名指す種類の生きている物体を
 //!   指し、呼ぶ側はその参照を1つ持つ。文書が借りると書かない限り、呼び出しがその参照を取る。
 //! - C3: 渡す`Shared`、`Registry`、`Depot`、`Discards`、`IoWork`、`Hold`は、C1からC4を守る呼ぶ側だけが動かしてきた。
@@ -378,31 +378,11 @@ struct JobCell {
     worker: u32,
     /// 仕事を出したタスク。待てるのも取り出せるのもこのタスクだけである。
     submitter: CellRef,
-    end: Option<JobEnd>,
+    /// 仕事の結果。仕事のIDの物体で、セルが参照を1つ持つ。仕事の実行時エラーはその場でrunを止めるので、終わりはいつも
+    /// 値である (docs/spec/vm.mdの「`compute`の仕事」)。
+    end: Option<Word>,
     /// 終わりを待つタスク。いれば `submitter` で、その `wait` は `Some(Job(このセル))` である。
     waiter: Option<CellRef>,
-}
-
-/// 仕事の終わり方。仕事の実行時エラーはその場で run を止めるので、誤りの変種はない
-/// (docs/spec/vm.md の「`compute` の仕事」)。
-pub enum JobEnd {
-    /// 仕事の結果。仕事の ID の物体で、セルが参照を1つ持つ。
-    Value(Word),
-    /// never だけのエフェクトの中断。`clause` は `reperform$` の閉包で、セルが参照を1つ持つ。
-    Abort {
-        effect: u16,
-        depth: u32,
-        clause: Word,
-    },
-}
-
-impl JobEnd {
-    /// 終わりが持つ語。
-    pub fn word(&self) -> Word {
-        match *self {
-            JobEnd::Value(w) | JobEnd::Abort { clause: w, .. } => w,
-        }
-    }
 }
 
 /// driver に出した操作の記録 (docs/spec/vm.md の「操作の記録」)。driver は語を見ないので、操作に貸した記憶の物体と
@@ -3081,7 +3061,7 @@ impl Registry {
     pub fn finish_job(
         &mut self,
         cell: CellRef,
-        end: JobEnd,
+        end: Word,
         out: &mut Vec<Woken>,
     ) -> Result<(), CellFault> {
         let job = self.job_mut(cell)?;
@@ -3105,7 +3085,7 @@ impl Registry {
 
     /// タスク `me` が token `raw` の終わった仕事を取り出し、セルを放す。仕事の ID と終わりを返す。終わりの語は仕事の ID
     /// の物体なので、呼ぶ側が lock を放してから `transfer_back` し、ID を退かせる。
-    pub fn take_job(&mut self, raw: i64, me: CellRef) -> Result<(u32, JobEnd), CellFault> {
+    pub fn take_job(&mut self, raw: i64, me: CellRef) -> Result<(u32, Word), CellFault> {
         let cell = CellRef::decode(raw);
         let job = self.job_mut(cell)?;
         if job.submitter != me {
@@ -3127,7 +3107,7 @@ impl Registry {
         let job = self.job_mut(cell)?;
         let (worker, end) = (job.worker, job.end.take());
         if let Some(end) = end {
-            discards.word(end.word(), worker);
+            discards.word(end, worker);
         }
         discards.retire(worker);
         self.release(cell.index);
@@ -5799,7 +5779,7 @@ pub fn finish_job(
     shared: &Shared,
     here: &Here,
     cell: CellRef,
-    end: JobEnd,
+    end: Word,
     out: &mut Vec<Runnable>,
 ) -> Result<(), CellFault> {
     let mut cells = shared.lock();
@@ -6268,14 +6248,7 @@ fn a_cancel_leaves_a_task_parked_on_a_job() {
     assert!(woken.is_empty());
     assert_eq!(registry.lock().stats.cancels, 0);
     let mut out = Vec::new();
-    finish_job(
-        &registry,
-        &solo(&registry),
-        job,
-        JobEnd::Value(Word::UNIT),
-        &mut out,
-    )
-    .unwrap();
+    finish_job(&registry, &solo(&registry), job, Word::UNIT, &mut out).unwrap();
     assert_eq!(resumed_cells(&out), [(me, WOKE)]);
     assert_eq!(
         registry.lock().resumed(me, WOKE, false).unwrap().0,
@@ -6284,7 +6257,7 @@ fn a_cancel_leaves_a_task_parked_on_a_job() {
     assert_eq!(registry.lock().stats.cancels, 1);
     let (worker, end) = registry.lock().take_job(job.encode(), me).unwrap();
     assert_eq!(worker, 1);
-    assert!(matches!(end, JobEnd::Value(_)));
+    assert_eq!(end, Word::UNIT);
 }
 
 /// 終わった仕事への park は待ち手を登録せず、すぐ再開の項を返す。待ちは数える。
@@ -6295,14 +6268,7 @@ fn a_task_parked_on_a_finished_job_resumes_at_once() {
     let me = running_task(&registry, scope);
     let job = registry.lock().new_job(1, me);
     let mut out = Vec::new();
-    finish_job(
-        &registry,
-        &solo(&registry),
-        job,
-        JobEnd::Value(Word::UNIT),
-        &mut out,
-    )
-    .unwrap();
+    finish_job(&registry, &solo(&registry), job, Word::UNIT, &mut out).unwrap();
     assert!(out.is_empty());
     let run = registry.lock().park(job.encode(), me, Word::UNIT).unwrap();
     assert!(matches!(

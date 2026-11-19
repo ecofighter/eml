@@ -24,7 +24,7 @@ pub fn split(split: Option<u32>, params: usize) -> Result<(), String> {
     }
 }
 
-/// `clause`の印の関数は、捕獲の後にevidenceと操作の引数を受け、操作の結果を返す。evidenceは`cev`か`fev`である。
+/// `clause`の印の関数は、捕獲の後にevidenceと操作の引数を受け、操作の結果を返す。evidenceは`cev`である。
 /// 境界の段では、捕獲が`tobj`、残りの引数と`ret`が操作の表のRepr (`never`の操作の`ret`は`obj`) と互換であることも
 /// 確かめる (docs/spec/lir.md の「box の挿入」と「verifier」)。印も同じ段で、evidence が `unr`、残りの引数と戻り値が
 /// 操作の表の印と互換であることを確かめる。捕獲の印は、`closure` を作る所で比べる
@@ -62,10 +62,9 @@ pub fn clause_function<'v>(
         ));
     };
     let params: Vec<(VarId, &VarInfo)> = params.collect();
-    // evidenceの引数はEPから後は役を持つので、どの段でも確かめる。`cev`か、forkのエントリなら`fev`で、その名前は規則Fが
-    // 確かめる (docs/spec/lir.mdの「エントリの関数の印」)
+    // evidenceの引数はEPから後は役を持つので、どの段でも確かめる。`cev`である (docs/spec/lir.mdの「エントリの関数の印」)
     let evidence = params[captures].1.repr;
-    if !matches!(evidence, Repr::Cev | Repr::Fev) {
+    if evidence != Repr::Cev {
         return Err(format!(
             "`{name}` is a clause of `{clause}`, but its parameter {captures} is {}",
             evidence.name()
@@ -449,8 +448,6 @@ pub struct FnSummary<'a> {
     pub clause: Option<(u32, u32)>,
     /// 引数の数。
     pub params: usize,
-    /// 引数に`fev`がある。
-    pub takes_fork: bool,
     /// 着地が入ったときの形。LIRのverifierが本体から1回だけ求め、着地の検査が引く。Core IRのverifierは着地を
     /// 確かめないので`None`にする。
     pub landed: Option<Landed>,
@@ -723,14 +720,6 @@ impl<'a> Context<'a> {
                         function.name
                     ));
                 }
-            }
-            // ハンドラの表を通る節の呼び出しは、走っているevidenceをエントリに渡すので、`fev`を取るforkのエントリは
-            // 表に入らない
-            if function.takes_fork {
-                return Err(format!(
-                    "{entry} is `{}`, which takes a fork evidence",
-                    function.name
-                ));
             }
             if let Some(required) = self.clause_captures(function)
                 && captures.len() != required

@@ -461,31 +461,10 @@ fn show(t.0: tobj) -> unit {
   let u.3: unit = extern Prelude.println(s.2)
   return u.3
 }
-clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: fev, a.1: obj) -> obj poly {
-  let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
-  let u.3: unit = prim child_abort(ev.0, c.2)
-  decref ev.0
-  let d.4: obj poly = prim dummy()
-  return d.4
-}
-uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj poly {
-  let r.2: tobj poly = extern Prelude.panic(a.0)
-  return r.2
-}
-clause Fail.fail fn fork$Fail.fail(ev.0: fev, a.1: int) -> obj poly {
-  let c.2: tobj = closure reperform$Fail.fail(a.1)
-  let u.3: unit = prim child_abort(ev.0, c.2)
-  decref ev.0
-  let d.4: obj poly = prim dummy()
-  return d.4
-}
 internal clause Fail.fail fn fail$entry(ev.0: cev, a.1: int) -> obj poly {
   decref ev.0
   let d.2: obj poly = prim dummy()
   return d.2
-}
-uniform from 1 fn reperform$Fail.fail(a.0: int, u.1: unit) -> tobj poly {
-  tail clause Fail.fail(a.0)
 }
 fn spin(n.0: int) -> unit {
   switch n.0 { 0 -> b1, _ -> b2 }

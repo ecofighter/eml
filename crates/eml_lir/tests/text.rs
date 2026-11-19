@@ -805,7 +805,7 @@ fn a_binder_needs_a_repr() {
     let error = parse_error("fn f(x.0: boxed) -> int {\n  return x.0\n}\n");
     assert_eq!(
         error.message,
-        "expected a repr (obj, tobj, ev, cev, fev, rev, evv, int, float, enum or unit), found `boxed`"
+        "expected a repr (obj, tobj, ev, cev, rev, evv, int, float, enum or unit), found `boxed`"
     );
 
     let error = parse_error("fn f(x.0: int) {\n  return x.0\n}\n");
@@ -850,7 +850,7 @@ fn an_operation_needs_its_reprs() {
     let error = parse_error("effect E { ask(x) -> tobj }\n");
     assert_eq!(
         error.message,
-        "expected a repr (obj, tobj, ev, cev, fev, rev, evv, int, float, enum or unit), found `x`"
+        "expected a repr (obj, tobj, ev, cev, rev, evv, int, float, enum or unit), found `x`"
     );
 }
 
@@ -1296,7 +1296,7 @@ fn malformed_layouts_are_errors_with_their_lines() {
     assert_eq!(error.line, 1);
     assert_eq!(
         error.message,
-        "expected a repr (obj, tobj, ev, cev, fev, rev, evv, int, float, enum or unit), found `tob`"
+        "expected a repr (obj, tobj, ev, cev, rev, evv, int, float, enum or unit), found `tob`"
     );
 
     // 参照の `#0` は表の番号と読むので、この名前の配置は名前で引けない
@@ -1945,8 +1945,8 @@ fn f(w.0: tobj, x.1: float) -> (obj lin, float) {
 }
 
 #[test]
-fn par_and_child_abort_round_trip() {
-    let text = "layout (,) { (,)(tobj, tobj) }\nfn f(a.0: tobj, b.1: tobj) -> obj {\n  let t.2: obj = par (,) #0(a.0, b.1) @\"main.em\":3:5\n  return t.2\n}\nfn g(e.0: obj, c.1: tobj) -> obj {\n  let u.2: unit = prim child_abort(e.0, c.1)\n  let d.3: obj = prim dummy()\n  return d.3\n}\n";
+fn par_round_trips() {
+    let text = "layout (,) { (,)(tobj, tobj) }\nfn f(a.0: tobj, b.1: tobj) -> obj {\n  let t.2: obj = par (,) #0(a.0, b.1) @\"main.em\":3:5\n  return t.2\n}\n";
     let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(pretty_with_positions(&program), text);
     round_trip(&text.replace(" @\"main.em\":3:5", ""));
@@ -1967,13 +1967,6 @@ fn par_and_child_abort_round_trip() {
                     column: 5,
                 }),
             }),
-        }
-    );
-    assert_eq!(
-        program.functions[1].blocks[0].stmts[0],
-        Stmt::Let {
-            var: VarId(2),
-            rhs: Rhs::Prim(Prim::ChildAbort, vec![v(0), v(1)]),
         }
     );
 }

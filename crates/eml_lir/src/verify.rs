@@ -502,10 +502,6 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
         name: &function.name,
         clause: function.clause,
         params: function.params().len(),
-        takes_fork: function
-            .params()
-            .iter()
-            .any(|&param| function.repr(param) == Repr::Fev),
         landed: Some(landed(function, &program.c_functions)),
     });
     check::with_tables(
@@ -1960,7 +1956,7 @@ impl<'a> Checker<'a> {
                     var: _,
                     rhs: Rhs::Extern { .. },
                 } => Some(None),
-                // 窓は呼ぶ相手の側と同じ`crosses`で閉じる。`prim child_abort`も巻き戻しの地点である
+                // 窓は呼ぶ相手の側と同じ`crosses`で閉じる。`prim yield_abort`も巻き戻しの地点である
                 _ if crosses(stmt, &self.program.c_functions) => Some(None),
                 _ => None,
             })

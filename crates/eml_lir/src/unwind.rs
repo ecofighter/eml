@@ -35,8 +35,8 @@ pub struct Unwinds {
 }
 
 /// 関数ごとの巻き戻しの表。`FnIdx`の番号で引く。地点は、すべての関数の末尾でない呼び出し、末尾でない`apply`と
-/// `clause`と`par`、`Pure`でないextern (誤りが`try_io`か`try_panic`まで巻き戻す)、`prim yield_abort`と
-/// `prim child_abort`である。呼ばれる側が中断するかは問わない。関数を1つずつ確かめ、プログラム全体の規則は
+/// `clause`、`Pure`でないextern (誤りが`try_io`か`try_panic`まで巻き戻す)、`prim yield_abort`である。呼ばれる側が
+/// 中断するかは問わない。関数を1つずつ確かめ、プログラム全体の規則は
 /// 確かめない。所有の段で拒まれた関数は表の代わりにその誤りを返し、ほかの関数は表を返す。verifierを通さないIRの
 /// 地点を見るテストと、VMの確かめない読み込み (feature `testing`) のためである。`wanted`でない関数は求めずに`None`に
 /// する。プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り直さないためである。
@@ -76,9 +76,10 @@ pub(crate) fn point<'a>(stmt: &'a Stmt, c: &[CFunction]) -> Option<(&'a [VarId],
     match stmt {
         Stmt::Let { var, rhs } => {
             let (point, landing) = match rhs {
+                Rhs::Call(crate::Call::Par { .. }) => (false, None),
                 Rhs::Call(call) => (true, call.prompt()),
                 Rhs::Extern { ext, .. } => (ext.row(c).faults, None),
-                Rhs::Prim(Prim::YieldAbort | Prim::ChildAbort, _) => (true, None),
+                Rhs::Prim(Prim::YieldAbort, _) => (true, None),
                 _ => (false, None),
             };
             point.then_some((std::slice::from_ref(var), landing))

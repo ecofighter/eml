@@ -201,7 +201,7 @@ fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
         Repr::Enum => Atom::Tag(0),
         Repr::Unit => Atom::Unit,
         Repr::Token => unreachable!("only the LIR reuse pass makes tokens"),
-        Repr::Ev | Repr::Cev | Repr::Fev | Repr::Rev | Repr::Evv => {
+        Repr::Ev | Repr::Cev | Repr::Rev | Repr::Evv => {
             unreachable!("no function returns a context Repr")
         }
     }

@@ -502,12 +502,6 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
-    /// `par` の子を中断する。fork evidence `ev` からエフェクトと深さを読み、起こし直す閉包 `c` を持って子の境目まで
-    /// 巻き戻す。戻らないので、結果のスロットを持たない。
-    ChildAbort {
-        ev: Slot,
-        c: Slot,
-    },
 }
 
 /// 行き先がないことを表すオペランド (switch の `default`、確かめない走査する語の数)。

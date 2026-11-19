@@ -2605,9 +2605,6 @@ internal clause Counter.put fn g(e.0: cev, n.1: int) -> unit {
 fn h(e.0: cev, u.1: unit) -> tobj {
   return ()
 }
-clause State.get fn fork$State.get(e.0: fev, u.1: unit) -> tobj {
-  return ()
-}
 ";
 
 /// evidenceは操作ごとに1つのエントリを操作の順に持ち、エントリiは`clause E.i`の印を持ち、forkのevidenceを取らない関数で、
@@ -2640,10 +2637,6 @@ fn an_evidence_names_one_clause_function_per_operation() {
         (
             entries("closure put(a.2), &get"),
             "entry 0 of an evidence of `State` is `put`, a clause of `State.put`",
-        ),
-        (
-            entries("&fork$State.get, closure put(a.2)"),
-            "entry 0 of an evidence of `State` is `fork$State.get`, which takes a fork evidence",
         ),
         (
             entries("&get, &put"),
@@ -3425,29 +3418,6 @@ fn a_call_between_a_prompted_apply_and_prompt_is_refused() {
 #[test]
 fn an_extern_row_between_a_prompted_apply_and_prompt_is_refused() {
     let text = between_landing_and_prompt("let z.9: int = extern \"Prelude.Num Int.+\"(1, 2)");
-    assert_eq!(
-        check(&text),
-        Err(
-            "the apply with the prompt marker `ev.3` is not followed by `prompt$` in `try_panic`"
-                .to_string()
-        )
-    );
-}
-
-#[test]
-fn a_child_abort_between_a_prompted_apply_and_prompt_is_refused() {
-    // `prim child_abort`も巻き戻しの地点なので、着地と`prompt$`の間に置けない
-    let text = between_landing_and_prompt(
-        "let q.41: tobj = box 1\n  let u.42: unit = prim child_abort(e.40, q.41)\n  decref e.40",
-    )
-    .replace(
-        "fn try_panic(f.0: tobj, c.1: tobj)",
-        "fn try_panic(f.0: tobj, c.1: tobj, e.40: fev)",
-    )
-    .replace(
-        "  let r.1: tobj = call try_panic(&boom, c.0)\n",
-        "  decref c.0\n  let r.1: tobj = box 0\n",
-    );
     assert_eq!(
         check(&text),
         Err(
@@ -4315,7 +4285,7 @@ fn f(w.0: obj) -> obj {{
     );
 }
 
-// `par` と `child_abort`
+// `par`
 
 /// `a` と `b` を子にする `par` の結果を返す `f`。`call` は `par` の文で、`after` はその後の文である。
 fn par(params: &str, call: &str, after: &str) -> String {
@@ -4405,33 +4375,6 @@ fn a_lin_child_of_a_par_is_consumed_once() {
     );
 }
 
-/// 起こし直す閉包を親に渡し、evidence は借りる。
-const CHILD_ABORT: &str = "fn main() -> unit {\n  return ()\n}\nfn g(e.0: fev, c.1: tobj poly) -> obj poly {\n  let u.2: unit = prim child_abort(e.0, c.1)\n  decref e.0\n  let d.3: obj poly = prim dummy()\n  return d.3\n}\n";
-
-#[test]
-fn child_abort_borrows_the_evidence() {
-    assert_eq!(check(CHILD_ABORT), Ok(()));
-}
-
-#[test]
-fn child_abort_takes_a_fork_evidence_and_a_closure() {
-    let arity = CHILD_ABORT.replace("(e.0, c.1)", "(e.0)");
-    assert_eq!(
-        check(&arity),
-        Err("`prim child_abort` takes 2 arguments but is given 1 in `g`".to_string())
-    );
-    let evidence = CHILD_ABORT
-        .replace("e.0: fev", "e.0: int")
-        .replace("  decref e.0\n", "");
-    assert_eq!(
-        check(&evidence),
-        Err(
-            "argument 0 of `prim child_abort` is `e.0` (int), but the primitive takes fev in `g`"
-                .to_string()
-        )
-    );
-}
-
 #[test]
 fn a_c_call_with_the_wrong_arity_is_rejected() {
     let text = "\
@@ -4498,7 +4441,7 @@ fn borrowed_parameters_are_accepted_from_the_borrow_pass_on() {
 #[test]
 fn a_borrowed_parameter_is_reference_counted() {
     let text = "fn f(x.0: obj, borrowed n.1: int) -> int {\n  return n.1\n}\n";
-    let message = "`n.1` (int) is a borrowed parameter, but only obj, tobj, ev, cev, fev, rev and evv can be in `f`";
+    let message = "`n.1` (int) is a borrowed parameter, but only obj, tobj, ev, cev, rev and evv can be in `f`";
     assert_eq!(check_borrowed(text), Err(message.to_string()));
     assert_eq!(check(text), Err(message.to_string()));
 }
@@ -4980,12 +4923,7 @@ fn f(h.0: {repr}) -> tobj {{
         )
     };
     assert_eq!(check_scopes(&capture("rev")), Ok(()));
-    for (repr, name) in [
-        ("ev lin", "ev"),
-        ("cev", "cev"),
-        ("fev", "fev"),
-        ("evv", "evv"),
-    ] {
+    for (repr, name) in [("ev lin", "ev"), ("cev", "cev"), ("evv", "evv")] {
         assert_eq!(
             check_scopes(&capture(repr)),
             Err(format!(
@@ -4994,44 +4932,4 @@ fn f(h.0: {repr}) -> tobj {{
             "{repr}"
         );
     }
-}
-
-#[test]
-fn a_fork_entry_does_not_go_into_a_handler_table() {
-    let program = |entry: &str| {
-        format!(
-            "effect Land {{ land(tobj) -> tobj }}
-fn entry$main() -> unit {{
-  return ()
-}}
-clause Land.land fn fork$Land.land(ev.0: fev, a.1: tobj) -> tobj {{
-  let u.2: unit = prim child_abort(ev.0, a.1)
-  decref ev.0
-  return ()
-}}
-clause Land.land fn g(ev.0: cev, a.1: tobj) -> tobj {{
-  decref ev.0
-  return a.1
-}}
-fn f(b.0: tobj, w.1: evv) -> tobj poly {{
-  let ev.2: ev lin = evidence Land((), w.1) [&{entry}]
-  let x.4: tobj poly = yields apply b.0(()) prompt ev.2
-  let r.5: tobj poly = call prompt$(ev.2, x.4)
-  return r.5
-}}
-yields fn prompt$(ev.0: ev lin, x.1: tobj poly) -> tobj poly {{
-  let u.2: unit = drop ev.0
-  return x.1
-}}
-"
-        )
-    };
-    assert_eq!(check(&program("g")), Ok(()));
-    assert_eq!(
-        check(&program("fork$Land.land")),
-        Err(
-            "entry 0 of an evidence of `Land` is `fork$Land.land`, which takes a fork evidence in `f`"
-                .to_string()
-        )
-    );
 }

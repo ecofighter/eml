@@ -33,8 +33,6 @@ pub enum Prim {
     RootSet(u32),
     /// 不死の空の `MutArray`。`var` の配列の変数を取り出した後の状態である (docs/spec/lir.md の「基本操作」)。
     EmptyMutArray,
-    /// `par` の子を中断し、親で起こし直す閉包を渡す。戻らない (docs/spec/lir.md の「基本操作」)。
-    ChildAbort,
 }
 
 /// 命令が自分の意味の一部として走らせる`Ctx`の操作で、それ自身は基本操作でない。`clause E.op`は`ev_lookup`、続いて
@@ -151,7 +149,6 @@ kinds! {
     Prim::RootGet(_) => "root_get", Prim::RootGet(0);
     Prim::RootSet(_) => "root_set", Prim::RootSet(0);
     Prim::EmptyMutArray => "empty_mut_array", Prim::EmptyMutArray;
-    Prim::ChildAbort => "child_abort", Prim::ChildAbort;
 }
 
 impl Prim {
@@ -182,14 +179,13 @@ impl Prim {
             | Prim::YieldContSet
             | Prim::YieldFinish
             | Prim::Dummy
-            | Prim::EmptyMutArray
-            | Prim::ChildAbort => Immediates::None,
+            | Prim::EmptyMutArray => Immediates::None,
         }
     }
 
     pub fn row(&self) -> PrimRow {
         use Mark::{Lin, Poly, Unr};
-        use Repr::{Cev, Ev, Evv, Fev, Int, Obj, Rev, TObj, Unit};
+        use Repr::{Cev, Ev, Evv, Int, Obj, Rev, TObj, Unit};
         const NONE: &[bool] = &[];
         const NO_MARKS: &[Mark] = &[];
         let (params, borrowed, ret, param_marks, ret_mark): (
@@ -229,8 +225,6 @@ impl Prim {
             Prim::RootSet(_) => (&[TObj], &[false], Unit, &[Unr], Unr),
             // 結果は `MutArray` の値なので `lin` である
             Prim::EmptyMutArray => (&[], NONE, Obj, NO_MARKS, Lin),
-            // evidence は節のエントリが持ち続けるので借りる。操作の引数を捕まえた起こし直しの閉包は親に渡る
-            Prim::ChildAbort => (&[Fev, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
         };
         PrimRow {
             params,
@@ -286,7 +280,7 @@ mod tests {
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
         use Mark::{Lin, Poly, Unr};
-        let table: [(&str, &[Mark], Mark); 23] = [
+        let table: [(&str, &[Mark], Mark); 22] = [
             ("evv_get", &[], Unr),
             ("evv_set", &[Unr], Unr),
             ("evv_enter", &[Unr, Lin], Unr),
@@ -309,7 +303,6 @@ mod tests {
             ("root_get", &[], Unr),
             ("root_set", &[Unr], Unr),
             ("empty_mut_array", &[], Lin),
-            ("child_abort", &[Unr, Poly], Unr),
         ];
         assert_eq!(table.len(), Prim::KINDS.len());
         for (name, params, ret) in table {

@@ -181,7 +181,7 @@ fn conform_split(function: &mut LirFn, structs: &Structs) {
     conform(function, structs, &expected, ret);
 }
 
-/// `clause`の印の関数を操作のABIに合わせる。捕獲は一様なRepr、evidenceは自分のRepr (`cev`か`fev`)、残りの引数は
+/// `clause`の印の関数を操作のABIに合わせる。捕獲は一様なRepr、evidenceは自分のRepr (`cev`)、残りの引数は
 /// 操作の表のReprで受け、`ret`は操作の`ret`にする。`never`の操作の節のエントリはダミーの物体を返すので`obj`である
 /// (docs/spec/lir.mdの「box の挿入」)。操作の表は構造体の型の位置を`obj`にするので、構造体の引数はエントリで
 /// `unbox` して受け直す。

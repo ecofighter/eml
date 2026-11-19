@@ -12,32 +12,11 @@ use eml_vm::{Finished, RunConfig, RuntimeError};
 
 use crate::common::trusted;
 
-/// 組の構築子、`Panic` と `Fail` のエフェクト、それぞれの fork の関数、`prompt$` とその補助の関数。
+/// 組の構築子、`Panic`と`Fail`のエフェクト、`prompt$`とその補助の関数。
 const PRELUDE: &str = "\
 layout (,) { (,)(tobj, tobj) }
 effect Prelude.Panic { never panicked(obj) -> never }
 effect Fail { never fail(int) -> never }
-clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: fev, a.1: obj) -> obj poly {
-  let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
-  let u.3: unit = prim child_abort(ev.0, c.2)
-  decref ev.0
-  let d.4: obj poly = prim dummy()
-  return d.4
-}
-uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj poly {
-  let r.2: tobj poly = extern Prelude.panic(a.0)
-  return r.2
-}
-clause Fail.fail fn fork$Fail.fail(ev.0: fev, a.1: int) -> obj poly {
-  let c.2: tobj = closure reperform$Fail.fail(a.1)
-  let u.3: unit = prim child_abort(ev.0, c.2)
-  decref ev.0
-  let d.4: obj poly = prim dummy()
-  return d.4
-}
-uniform from 1 fn reperform$Fail.fail(a.0: int, u.1: unit) -> tobj poly {
-  tail clause Fail.fail(a.0)
-}
 yields fn prompt$(ev.0: ev lin, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
   let w.3: evv = prim ev_take_evv(ev.0)
   let u.4: unit = prim evv_set(w.3)
@@ -270,8 +249,11 @@ fn run_with(
 
 /// エントリは最初の関数なので、`PRELUDE` の前に置く。レイアウトとエフェクトの宣言は先頭に要る。
 fn with_prelude(text: &str) -> String {
-    let (decls, functions) =
-        PRELUDE.split_at(PRELUDE.find("clause ").expect("the prelude has functions"));
+    let (decls, functions) = PRELUDE.split_at(
+        PRELUDE
+            .find("yields fn ")
+            .expect("the prelude has functions"),
+    );
     format!("{decls}{text}{functions}")
 }
 

@@ -20,12 +20,12 @@ fn immediates(prim: &Prim) -> usize {
 }
 
 /// 呼ぶ基本操作のエントリは、記号が`eml_rt_`に基本操作の名前を続けたもので、引数は即値と行の引数を並べたものである。
-/// 表を持たず、基本操作の表から導く。インラインの2つと、`empty_mut_array`、`child_abort`にはエントリがない。命令が
+/// 表を持たず、基本操作の表から導く。インラインの2つと、`empty_mut_array`にはエントリがない。命令が
 /// 走らせる`Ctx`の操作のエントリも、記号が`eml_rt_`にstepの名前を続けたもので、stepのオペランドを受け、stepが返す
 /// ときに語を返す。
 #[test]
 fn every_prim_entry_is_named_after_its_prim() {
-    const NO_ENTRY: [&str; 4] = ["yielding", "yield_status", "empty_mut_array", "child_abort"];
+    const NO_ENTRY: [&str; 3] = ["yielding", "yield_status", "empty_mut_array"];
     for prim in Prim::KINDS {
         let symbol = format!("eml_rt_{}", prim.name());
         let entry = eml_nrt::entries().find(|e| e.symbol == symbol);

@@ -22,7 +22,7 @@ pub(super) fn step_entry(step: Step) -> String {
 }
 
 impl<M: Module> FnLower<'_, '_, M> {
-    /// `var = prim(args)`。`prim`は`empty_mut_array`でも`child_abort`でもない。
+    /// `var = prim(args)`。`prim`は`empty_mut_array`でない。
     pub(super) fn prim(
         &mut self,
         block: BlockId,

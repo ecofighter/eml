@@ -11,7 +11,7 @@ use eml_rows::rows::{Args, Value};
 use eml_rows::{gui, tls};
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::layout::data_first;
-use eml_rt::{Ctx, MaskItem, Mode, PipeEnd, RawResource, Stop, Token, Word};
+use eml_rt::{Ctx, Mode, PipeEnd, RawResource, Stop, Token, Word};
 
 use crate::apply;
 use crate::cells::{self, CellRef, JobSource, Raise, Runnable, Take, WaitToken};
@@ -1490,7 +1490,6 @@ fn step<R: Exec>(
             let w = unsafe { ctx.root_get(root) }?;
             task.set(dst, w);
         }
-        Op::ChildAbort { ev, c } => child_abort::<R>(code, ctx, task, sched, counts, ev, c)?,
         Op::RootSet { dst, at } => {
             let o = ops(at);
             unsafe { ctx.root_set(o[0], task.get(o[1] as Slot)) }?;
@@ -1743,12 +1742,7 @@ fn unwind<R: Exec>(
                     "an abort reached the bottom of the task",
                 ));
             }
-            // 子の中の handler は子の中に着地するので、子の境目に着くのは `child_abort` の巻き戻しだけである。宛先は
-            // 不死のダミーで、どの着地の印とも合わない
-            CHILD_DONE if task.exit.is_none() && target == ctx.heap().dummy() => {
-                landed(ctx, task);
-                return Ok(());
-            }
+            // 子の中のhandlerは子の中に着地するので、巻き戻しは子の境目に着かない
             CHILD_DONE => {
                 return Err(RunFault::Internal(
                     "an abort reached the boundary of a par child",
@@ -1943,7 +1937,7 @@ fn unshared_roots<M: Mode, P: Policy>(ctx: &Ctx<M>, sched: &mut Scheduler<P>) ->
     fresh
 }
 
-/// 閉包 `f` に `()` を適用し、戻り先 `ret` で結果を `dst` に受ける。`par` の2つの子の始まりと join の起こし直しは、
+/// 閉包`f`に`()`を適用し、戻り先`ret`で結果を`dst`に受ける。`par`の2つの子の始まりは、
 /// どれもこの形である (docs/spec/vm.md の「`par` の fork と join」)。
 fn apply_to_unit<R: Exec>(
     code: &CodeBase<R::M>,
@@ -1958,7 +1952,7 @@ fn apply_to_unit<R: Exec>(
     apply::apply::<R>(code, ctx, task, f, apply::Target::Frame { ret, dst })
 }
 
-/// 子の本体が値で戻ったか (`ChildDone`)、中断した (`child_abort`)。`task.base` は子の境目のフレームである。
+/// 子の本体が値で戻った (`ChildDone`)。`task.base`は子の境目のフレームである。
 #[inline(never)]
 fn child_done<R: Exec>(
     code: &CodeBase<R::M>,
@@ -2054,18 +2048,8 @@ fn job_done<R: Exec>(
     job: JobRef,
     outcome: Outcome,
 ) -> Result<(), RunFault> {
-    let end = match outcome {
-        Outcome::Value(w) => cells::JobEnd::Value(w),
-        Outcome::Abort {
-            effect,
-            depth,
-            clause,
-        } => cells::JobEnd::Abort {
-            effect,
-            depth,
-            clause,
-        },
-        Outcome::Error(_) => return Err(RunFault::Internal("a job ends with an error")),
+    let Outcome::Value(end) = outcome else {
+        return Err(RunFault::Internal("a job ends with an error"));
     };
     let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
@@ -2402,104 +2386,26 @@ fn join_outcomes<R: Exec>(
         unsafe { heap.transfer_back(w, join.right_worker) }?;
     }
     heap.retire_worker(join.right_worker)?;
-    let (abort, dropped) = match (left, right) {
-        (Outcome::Value(l), Outcome::Value(r)) => {
-            let Op::Par { at, .. } = code.tables.code[join.ret as usize - 1] else {
-                return Err(RunFault::Internal(
-                    "a join returns after something other than a par",
-                ));
-            };
-            let tag = code.tables.operands[at as usize + 2] as u16;
-            const PAIR: usize = data_first(2, false);
-            let pair = heap.alloc_data(tag, 2, 0, false);
-            // 組は今作った局所の物体で、2つの語の参照は組に移る
-            unsafe {
-                heap.set_field(pair, PAIR, l)?;
-                heap.set_field(pair, PAIR + 1, r)?;
-            }
-            task.set(join.dst, pair);
-            return Ok(());
-        }
-        (Outcome::Error(_), _) | (_, Outcome::Error(_)) => {
-            return Err(RunFault::Internal(
-                "a join raises an error after reporting it",
-            ));
-        }
-        // いちばん左の中断を起こし直し、中断しなかった側の値は捨てる
-        (abort @ Outcome::Abort { .. }, other) | (other @ Outcome::Value(_), abort) => {
-            (abort, other)
-        }
-    };
-    if let Some(w) = dropped.word() {
-        unsafe { heap.decref(w) }?;
-    }
-    let Outcome::Abort {
-        effect,
-        depth,
-        clause,
-    } = abort
-    else {
+    let (Outcome::Value(l), Outcome::Value(r)) = (left, right) else {
         return Err(RunFault::Internal(
-            "a join raises again something other than an abort",
+            "a join raises an error after reporting it",
         ));
     };
-    reraise::<R>(code, ctx, task, (effect, depth, clause), join.ret, join.dst)
-}
-
-/// 中断した子の handler の節を、親の `evv` を mask してから起こし直す。
-fn reraise<R: Exec>(
-    code: &CodeBase<R::M>,
-    ctx: &mut Ctx<R::M>,
-    task: &mut Task,
-    abort: (u16, u32, Word),
-    ret: Pc,
-    dst: Slot,
-) -> Result<(), RunFault> {
-    let (effect, depth, clause) = abort;
-    // 子が見た `depth` 番目の evidence に届くように、親の `evv` を mask する。`reperform$` は今の `evv` の最初の
-    // evidence で perform して戻らないので、mask した `evv` は handler の `prompt$` が手放す
-    if depth > 0 {
-        unsafe {
-            let w = ctx.evv_get()?;
-            let item = MaskItem {
-                effect,
-                keep: 0,
-                skip: depth,
-            };
-            let m = ctx.evv_mask(&[item], w)?;
-            ctx.heap_mut().decref(w)?;
-            ctx.evv_set(m)?;
-        }
-    }
-    apply_to_unit::<R>(code, ctx, task, clause, ret, dst)
-}
-
-/// `prim child_abort(ev, c)`。fork evidence `ev` からエフェクトと深さを読み、子の境目まで巻き戻す。`ev` は借りる。
-#[inline(never)]
-fn child_abort<R: Exec>(
-    code: &CodeBase<R::M>,
-    ctx: &mut Ctx<R::M>,
-    task: &mut Task,
-    sched: &mut Scheduler<R::P>,
-    counts: &mut RunCounts,
-    ev: Slot,
-    c: Slot,
-) -> Result<(), RunFault> {
-    if task.boundaries.is_empty() {
-        return Err(RunFault::Internal("a child abort outside a par child"));
-    }
-    let ev = task.get(ev);
-    // SAFETY: `ev`は節のエントリが持つfork evidenceで、状態の欄は深さの即値である。読むだけなので`heap_mut`の前提を守る
-    let (effect, depth) = unsafe { ctx.fork_of(ev) }?;
-    let clause = task.get(c);
-    let dummy = ctx.heap().dummy();
-    unwind::<R>(code, ctx, task, counts, dummy)?;
-    let outcome = Outcome::Abort {
-        effect,
-        depth,
-        clause,
+    let Op::Par { at, .. } = code.tables.code[join.ret as usize - 1] else {
+        return Err(RunFault::Internal(
+            "a join returns after something other than a par",
+        ));
     };
-    child_done::<R>(code, ctx, task, sched, outcome)
+    let tag = code.tables.operands[at as usize + 2] as u16;
+    const PAIR: usize = data_first(2, false);
+    let pair = heap.alloc_data(tag, 2, 0, false);
+    // 組は今作った局所の物体で、2つの語の参照は組に移る
+    unsafe {
+        heap.set_field(pair, PAIR, l)?;
+        heap.set_field(pair, PAIR + 1, r)?;
+    }
+    task.set(join.dst, pair);
+    Ok(())
 }
 
 /// 実行時エラーの後。すぐに実行を止める誤りと、エントリのタスクの誤り (左の子の誤りを含む) と、`compute` の仕事の誤りは
@@ -2613,10 +2519,10 @@ fn cancel<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
 }
 
 impl Outcome {
-    /// 子が残した語。値か、起こし直しの閉包である。
+    /// 子が残した語。
     fn word(&self) -> Option<Word> {
         match *self {
-            Outcome::Value(w) | Outcome::Abort { clause: w, .. } => Some(w),
+            Outcome::Value(w) => Some(w),
             Outcome::Error(_) => None,
         }
     }
@@ -2854,28 +2760,19 @@ fn async_op<R: Exec>(
         }
         ext @ (Extern::AsyncTakeJob | Extern::AsyncDropJob) => {
             let me = current_cell(task)?;
-            let (worker, end) = sched.cells.lock().take_job(task.raw(arg(0)), me)?;
+            let (worker, w) = sched.cells.lock().take_job(task.raw(arg(0)), me)?;
             // 終わりの語は仕事のセルが持っていた、仕事の ID の物体である。登録表の lock を放してから今の ID へ戻し、
             // その後で仕事の ID を退かせる (docs/spec/object-model.md の「`transfer_back`」)
-            let w = end.word();
             let heap = unsafe { ctx.heap_mut() };
             unsafe { heap.transfer_back(w, worker) }?;
             heap.retire_worker(worker)?;
             ctx.reclaim_if_due();
-            match end {
-                // 取り消されたタスクは結果を受け取らない。中断も起こし直さずに落とす
-                _ if ext == Extern::AsyncDropJob => {
-                    unsafe { ctx.heap_mut().decref(w) }?;
-                    task.set(dst, Word::UNIT);
-                }
-                cells::JobEnd::Value(w) => task.set(dst, w),
-                // join の起こし直しと同じく、次の命令を戻り先にして呼んだタスクのフレームで起こし直す
-                // (docs/spec/vm.md の「`compute` の仕事」)
-                cells::JobEnd::Abort {
-                    effect,
-                    depth,
-                    clause,
-                } => return reraise::<R>(code, ctx, task, (effect, depth, clause), task.pc, dst),
+            if ext == Extern::AsyncDropJob {
+                // 取り消されたタスクは結果を受け取らない
+                unsafe { ctx.heap_mut().decref(w) }?;
+                task.set(dst, Word::UNIT);
+            } else {
+                task.set(dst, w);
             }
         }
         ext @ (Extern::AsyncDetach | Extern::AsyncCancelRaw) => {
