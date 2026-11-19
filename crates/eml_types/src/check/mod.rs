@@ -153,17 +153,22 @@ pub(crate) fn check_module(
     let mut query = None;
     for component in &scc::components(program) {
         let mut pending: Vec<(FunctionId, PendingBody<'_>)> = Vec::new();
+        let mut input_rows = FxHashMap::default();
         for &id in component {
             let result = match program[id].kind {
-                FunctionKind::Input(kind) => Some(input::check_input(
-                    program,
-                    files,
-                    &context,
-                    &signatures,
-                    id,
-                    kind,
-                    &mut types,
-                )),
+                FunctionKind::Input(kind) => {
+                    let (body, found, labels) = input::check_input(
+                        program,
+                        files,
+                        &context,
+                        &signatures,
+                        id,
+                        kind,
+                        &mut types,
+                    );
+                    input_rows.insert(id, labels);
+                    Some((body, found))
+                }
                 _ => check_body(program, files, &context, &signatures, id, &mut types),
             };
             if let Some((body, found)) = result {
@@ -209,6 +214,7 @@ pub(crate) fn check_module(
                     program,
                     id,
                     kind,
+                    &input_rows[&id],
                     &body_types,
                     &mut types,
                     &mut signatures,
@@ -1156,8 +1162,16 @@ fn check_main(
         return;
     }
     let found = shape.export(types, None);
-    // row のラベルは `IO` と `Panic` のどちらも省けて、順は問わない (docs/spec/modules.md の「モジュール」)
-    let allowed = [program.io(), program.panic()];
+    // rowのラベルは`IO`、`Panic`と、`Std.Async`を読み込んでいれば`Async`である。どれも省けて、順は問わない
+    // (docs/spec/modules.md の「モジュール」)
+    let allowed: Vec<_> = [
+        Some(program.io()),
+        Some(program.panic()),
+        program.async_effect(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     let main_type = |types: &mut TypeStore, effects: Vec<EffectLabel>| {
         types.intern(TypeKind::Fn {
             param: types.unit(),
@@ -1174,7 +1188,12 @@ fn check_main(
             ..
         } if effects
             .iter()
-            .all(|label| allowed.contains(&label.id) && label.args.is_empty()) =>
+            .all(|label| allowed.contains(&label.id) && label.args.is_empty())
+            // 根のタスクの底は`Async`のhandlerを1つだけかぶせるので、`Async`は高々1回である。重ねた`IO`と`Panic`は
+            // 1つにまとまるので、ここには残らない (docs/spec/modules.md の「モジュール」)
+            && program.async_effect().is_none_or(|effect| {
+                effects.iter().filter(|label| label.id == effect).count() <= 1
+            }) =>
         {
             // 同じ形の型は同じ ID なので、書いたラベルで作った型と ID を比べれば、ほかの部分を比べたことになる
             let effects = effects.clone();
@@ -1196,8 +1215,9 @@ fn check_main(
         diagnostics.push(Diagnostic::error(
             codes::INVALID_MAIN_TYPE,
             format!(
-                "`main` must have type `{}`, with either label optional",
-                types.display(expected, &program.names)
+                "`main` must have type `{}`, with {} label optional",
+                types.display(expected, &program.names),
+                if allowed.len() == 2 { "either" } else { "each" }
             ),
             Label::new(
                 program.file(id.module),

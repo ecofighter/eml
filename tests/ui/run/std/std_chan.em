@@ -1,4 +1,4 @@
--- `try_send`、`try_recv`、`close` は `Async` を持たないので、`Async.run` の外でも使える。channel の品物には channel も
+-- `try_send`、`try_recv`、`close`は`Async`を持たないので、`Async`のタスクの外でも使える。channelの品物にはchannelも
 -- 置ける。負の容量は 0 として扱う。閉じて空になって放した channel の値は、同じ添字を新しい channel が使っても、
 -- 閉じて空の channel として振る舞う (docs/spec/stdlib.md の「`Std.Chan`」)。
 import Chan

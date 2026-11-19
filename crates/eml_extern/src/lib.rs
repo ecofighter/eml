@@ -1311,10 +1311,10 @@ table! {
                 Purity::Effectful,
             ),
         ),
-        AsyncRunRaw => holding(
+        AsyncRootStart => holding(
             &[true],
             kinded(
-                "Std.Async.run_raw",
+                "Std.Async.root_start",
                 &[TObj],
                 &[Poly],
                 Obj,
@@ -1412,10 +1412,10 @@ table! {
                 Purity::Effectful,
             ),
         ),
-        AsyncRunResult => holding(
+        AsyncRootResult => holding(
             &[true],
             kinded(
-                "Std.Async.run_result",
+                "Std.Async.root_result",
                 &[Obj],
                 &[Lin],
                 TObj,
@@ -2285,7 +2285,7 @@ impl Extern {
             Extern::AsyncStartRaw
                 | Extern::AsyncStartMainRaw
                 | Extern::AsyncStartOffMainRaw
-                | Extern::AsyncRunRaw
+                | Extern::AsyncRootStart
                 | Extern::AsyncPark
                 | Extern::AsyncParkTime
                 | Extern::AsyncReady
@@ -2294,7 +2294,7 @@ impl Extern {
                 | Extern::AsyncFinishPanic
                 | Extern::AsyncTaskCell
                 | Extern::AsyncTakeResult
-                | Extern::AsyncRunResult
+                | Extern::AsyncRootResult
                 | Extern::AsyncDetach
                 | Extern::AsyncCancelRaw
                 | Extern::AsyncShieldEnter

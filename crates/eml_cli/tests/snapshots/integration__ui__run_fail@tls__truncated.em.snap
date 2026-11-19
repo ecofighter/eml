@@ -8,5 +8,4 @@ partial
 ConnectionReset
 --- stderr ---
 --- runtime error ---
-cannot read the stream: the peer closed the connection without close_notify
-  at run-fail/tls/truncated.em:34:7
+cannot read the stream: the peer closed the connection without close_notify in `main`

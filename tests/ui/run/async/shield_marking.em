@@ -34,5 +34,5 @@ body () =
     Async.yield_now ()
     Async.cancel_scope s)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

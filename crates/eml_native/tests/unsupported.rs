@@ -33,8 +33,8 @@ fn async_row_is_rejected() {
     assert_rejects(
         "import Async\n\
          \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () = println (show (Async.run (fn () -> 1)))\n",
+         main : Unit -> <IO, Panic, Async.Async> Unit\n\
+         main () = println (show (Async.scope (fn _ -> 1)))\n",
         Form::AsyncRow,
     );
 }
@@ -46,8 +46,8 @@ fn blocking_c_is_rejected() {
          \n\
          extern \"C\" blocking symbol \"eml_fixture_add_i32\" add : Int as int -> Int as int -> <IO, Panic, Async> Int as int\n\
          \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () = Async.run (fn () -> println (show (add 1 2)))\n",
+         main : Unit -> <IO, Panic, Async> Unit\n\
+         main () = println (show (add 1 2))\n",
         Form::BlockingC,
     );
 }

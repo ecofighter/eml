@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/tls/unknown_ca.em
 Other
 --- stderr ---
 --- runtime error ---
-cannot complete the TLS handshake with tls.localhost: the server certificate was rejected
-  at run-fail/tls/unknown_ca.em:20:7
+cannot complete the TLS handshake with tls.localhost: the server certificate was rejected in `main`

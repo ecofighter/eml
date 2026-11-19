@@ -30,8 +30,8 @@ report r =
   List.each (fn h -> println "header: \{h.0}: \{h.1}") r.headers
   println "length: \{show (Bytes.length r.body)}"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
   let server = Async.start (fn () ->
@@ -45,4 +45,4 @@ main () = Async.run (fn () ->
   report (Http.get url)
   report (Http.get url)
   report (Http.get url)
-  Async.await server)
+  Async.await server

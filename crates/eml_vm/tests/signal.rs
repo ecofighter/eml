@@ -19,8 +19,8 @@ fn a_relayed_signal_without_a_waiter_stops_the_run() {
     let program = eml_test_support::lir(
         "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Async.sleep_ms 2000)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Async.sleep_ms 2000
 ",
     );
     let control = Arc::new(Control::new(Limits::default()));
@@ -173,12 +173,12 @@ fn a_pending_signal_reaches_a_waiter_through_the_monitor() {
 import Async
 import Signal
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () ->
     Signal.wait Signal.Terminate
     println \"got\")
-  Async.await t)
+  Async.await t
 ";
     for sched in [Sched::Sequential, Sched::Normal, Sched::Seeded(1)] {
         let run = run_real(src, sched, Vec::new(), terminate_when_watched);
@@ -197,10 +197,10 @@ fn a_waiter_keeps_an_otherwise_idle_run_alive() {
 import Async
 import Signal
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Signal.wait Signal.Terminate
-  println \"got\")
+  println \"got\"
 ";
     fn poke(control: &Control, doorbell: &Doorbell) -> bool {
         if !until(|| control.watched() & Control::TERMINATE != 0) {
@@ -224,8 +224,8 @@ fn an_unheard_scheduled_terminate_stops_the_run() {
     let src = "\
 import Async
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Async.sleep_ms 2000)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Async.sleep_ms 2000
 ";
     let signals = vec![VirtualSignal {
         at_ms: 5,
@@ -248,13 +248,13 @@ import Signal
 spin : Int -> <Panic> Unit
 spin n = spin (n + 1)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.spawn (fn () ->
     Signal.wait Signal.Terminate
     println \"got\")
   Async.yield_now ()
-  spin 0)
+  spin 0
 ";
     fn poke(control: &Control, doorbell: &Doorbell) -> bool {
         if !terminate_when_watched(control, doorbell) {
@@ -283,8 +283,8 @@ fn an_injected_driver_does_not_listen_for_os_signals() {
 import Async
 import Signal
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Signal.wait Signal.Terminate)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Signal.wait Signal.Terminate
 ",
     );
     let control = Arc::new(Control::new(Limits::default()));
@@ -326,10 +326,10 @@ import Async
 import Signal
 import Std.Par
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   let (a, b) = Par.par (fn () -> 1) (fn () -> 2)
-  Async.run (fn () ->
+  Async.scope (fn _ ->
     let t = Async.start (fn () ->
       Signal.wait Signal.Terminate
       println (show (a + b)))
@@ -352,13 +352,12 @@ fn a_pending_signal_reaches_a_waiter_on_worker_1() {
 import Async
 import Signal
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () ->
-      Signal.wait Signal.Terminate
-      println \"got\")
-    Async.await t)
+  let t = Async.start (fn () ->
+    Signal.wait Signal.Terminate
+    println \"got\")
+  Async.await t
 ";
     for sched in [Sched::Sequential, Sched::Normal, Sched::Seeded(1)] {
         let run = run_real_on(2, src, sched, Vec::new(), terminate_when_watched);
@@ -388,10 +387,10 @@ import Std.Par
 spin : Int -> <Panic> Unit
 spin n = spin (n + 1)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   let (a, b) = Par.par (fn () -> 1) (fn () -> 2)
-  Async.run (fn () ->
+  Async.scope (fn _ ->
     Async.spawn (fn () ->
       Signal.wait Signal.Terminate
       println (show (a + b)))

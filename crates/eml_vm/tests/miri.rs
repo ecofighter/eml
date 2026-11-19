@@ -621,15 +621,15 @@ extern \"C\" blocking symbol \"rs_sub_i32\" sub : Int as int32_t -> Int as int32
 extern \"C\" symbol \"rs_publish\" publish : UnboxedArray Int -> Int -> <IO> Int
 extern \"C\" blocking symbol \"rs_publish\" publish_blocking : UnboxedArray Int -> Int -> <IO, Async> Int
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let a = MutUnboxedArray.freeze (MutUnboxedArray.make 200 0)
   let _ = publish a 100160
   let _ = publish_blocking a 100161
-  println (show (sub 7 2)))
+  println (show (sub 7 2))
 ";
 
-/// `BLOCKING_SRC` の LIR。`Async.run` の機構は手で書けず、Miri の下ではパイプラインの構文解析が rowan の中で
+/// `BLOCKING_SRC`のLIR。根のタスクの機構は手で書けず、Miriの下ではパイプラインの構文解析がrowanの中で
 /// 止まるので、パイプラインの出力を写して置く。Prelude、std/Async、translate、最適化、LIR のパス、instance の名前、
 /// 表示のどれかでこのプログラムの出力が変われば書き直す。
 const BLOCKING_LIR: &str = include_str!("miri/blocking.lir");

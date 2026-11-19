@@ -38,8 +38,8 @@ lines b =
     | Some _ -> lines b
     | None -> Net.close b
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let (a, b) = connected ()
   let a = Net.write "x\nyz" a
   let (r, b) = Net.read_line b
@@ -52,4 +52,4 @@ main () = Async.run (fn () ->
   Net.close a
   let t = Async.start (fn () -> lines b)
   let _ = spin 40
-  Async.await t)
+  Async.await t

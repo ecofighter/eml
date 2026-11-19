@@ -25,8 +25,8 @@ serve response l =
   Net.close (Net.write response (print_request s))
   l
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let options = { Http.defaults | ca = Fs.read_text "ca.pem" }
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
@@ -39,4 +39,4 @@ main () = Async.run (fn () ->
   println "client: \{show r.status} \{String.decode r.body}"
   let r = Http.request "GET" "http://localhost:\{show port}/plain" (Bytes.empty ()) options
   println "client: \{show r.status} \{String.decode r.body}"
-  Async.await server)
+  Async.await server

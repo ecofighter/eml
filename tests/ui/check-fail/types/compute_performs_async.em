@@ -2,6 +2,6 @@
 -- E2002 が並ぶ (docs/spec/stdlib.md の「`compute`」)。
 import Async (Async)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () -> Async.compute (fn () -> Async.yield_now ()))
+  Async.compute (fn () -> Async.yield_now ())

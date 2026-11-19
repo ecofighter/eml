@@ -1,4 +1,4 @@
--- `run` は根のスコープのすべてのタスクを、待たない孫も含めて待ってから戻る (docs/spec/stdlib.md の「`Std.Async`」)。
+-- `Async.scope`はその本体が始めたすべてのタスクを、待たない孫も含めて待ってから戻る (docs/spec/stdlib.mdの「`Std.Async`」)。
 import Async (Async)
 
 spin : Int -> <Panic> Int
@@ -15,7 +15,7 @@ body () =
   let _ = spin 40
   ()
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "after run"

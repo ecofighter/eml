@@ -107,9 +107,9 @@ LIRからCraneliftでネイティブのコードを出す設計をまとめる�
 - `par`の子の境目は`unwind::if_aborting`の地点で、その着地の確かめは、宛先がダミーで、このjoinがいちばん内側の境目であることである。`exit`の中断 (`exit_abort`) も同じダミーを宛先にするので、境目は、runの終わりの`finish`と同じく、workerの終了コードで2つを見分ける
 - emlのコードに入り直す行 (閉包を`eml_enter`で走らせるタスクの行) は、3つの規則を守る。入り直しをまたいで持つのは`Copy`の値だけである。入れ子のコードが`abort`のバイトを立てて戻ったら、行はふつうに戻り、生成したコードは行の後に`Faults`の確かめに加えて`Call`の確かめも置く ([ネイティブの実行系](../spec/native.md)の「巻き戻しの地点」)。再開できるyieldが行をまたぐことはない。行のシグネチャが、閉包の再開できるエフェクトをどれも扱わなければならない
 - `compute` の仕事は join するフレームを持たない fork の子で、盗む worker か手伝う worker が動かし、終わりで仕事のセルを終える。出したタスクはほかの `Async` の待ちと同じく `resume_task` で再開する ([VM](../spec/vm.md) の「`compute` の仕事」)
-- ネイティブのタスクは`Async`の操作でだけ切り替わる。`Async`の操作を持たないタスクは、VMと同じく終わるまでworkerを持ち続け、同じworkerのほかのタスクは待つ。CPUを多く使う仕事は`compute`に入れる。`Async.run`は、VMではタスクを待たせるが、ネイティブではマシンのスタックの上でworkerのループを入れ子にする ([非同期の設計](async.md)の「スコープとタスク」)。呼んだ側が完了の後に再開するという約束は同じだが、入れ子の終わる順はVMと違う。入れ子の`Async.run`は、後に入ったものから先に終わる。内側の入れ子の下で外側の`Async.run`のrunが終わったときは、内側が終わるのを待つ。外側を先に終えないと進めないrunは、デッドロックの誤り`BuriedRun`で終わる。VMは同じプログラムを続けるので、これはVMとネイティブの違いである
+- ネイティブのタスクは`Async`の操作でだけ切り替わる。`Async`の操作を持たないタスクは、VMと同じく終わるまでworkerを持ち続け、同じworkerのほかのタスクは待つ。CPUを多く使う仕事は`compute`に入れる。`Async`のrowを持つ`main`の根のスコープの終わりは、VMではエントリの関数がスタックを持ったまま待つ。ネイティブのコードはスタックを切り替えられないので、エントリはフレームを持ったまま根のタスクを待てない。そこで、エンジンが根を始める関数を先に呼び、根のスコープが閉じるまでworkerのループを回し、その後でエントリを呼ぶ予定である。これは既定の設計で、ロードマップの`jit-tasks`の最初で確かめる。エントリが根の結果を受け取る約束はVMと同じである([非同期の設計](async.md)の「スコープとタスク」)
 - 致命的な誤りは複数のworkerでも次の手順で止める。`par`の子の外では、worker kの`eml_fatal`は`Control`の終わりの欄に誤りを書き (最初の書き手が勝つ)、終わりのビットを立ててから、自分のエントリへ切る。`par`の子の中では、子ごとの`JmpBuf` (子の境目) まで切り、誤りをjoinの節点に記録する。手伝うworkerでは子の下に待つ親のフレームがあるので、エントリまで切らない ([マルチコア対応の設計](multicore.md) の「`par`の意味」)。書く側がすべてのworkerの止める語にビットを立て、監視のスレッドは待っているworker (joinで待つworkerを含む) を起こすだけである。ほかのworkerは次の安全点でビットを見て、それぞれのエントリへ切る。後始末はしない。各workerはエントリへ戻った後、自分のスレッドの上でI/Oのdriverを空にする (実行中のプールの仕事も待つ)。`Machine`を持つスレッドはすべてのworkerを待ってから、終わるか回復する ([マルチコア対応の設計](multicore.md) の「止める手順」)
-- メインのworkerは、配置で仕事を受けない追加のworkerである。自分のjoinだけを手伝い、入れ子の`Async.run`のループはほかのworkerと同じ手順で眠り、`eml_run_pending`の下の致命的な誤りは`Park`へ戻り、ほかのworkerと同じく自分のI/Oのdriverを持つ
+- メインのworkerは、配置で仕事を受けない追加のworkerである。自分のjoinだけを手伝い、`eml_run_pending`の下の致命的な誤りは`Park`へ戻り、ほかのworkerと同じく自分のI/Oのdriverを持つ
 - 捨てたネイティブのフレームは、Rust の局所変数 (extern はもう戻っている) もデストラクタも持たない。`Foreign` のファイナライザは VM と同じく、ヒープを落とすときか回復のときに走る
 
 ### メインのworkerの対応
@@ -121,7 +121,6 @@ LIRからCraneliftでネイティブのコードを出す設計をまとめる�
 | タスクのセルと登録表 | `extern "C"`のエントリを通した、`eml_sched`の`cells.rs`の共有の核 | `TaskCell.pinned`、行`start_main_raw` |
 | 継続 | 待つタスクが`k`を持ち、`resume_task k w`で再開する | 変わらない。`k`はworkerから出ない |
 | 実行待ちと受け箱 | workerごとの列と`Notice`の受け箱 | メインのworkerの列は欄N。`Slot::ring`は`Park`のwakerも鳴らす |
-| `Async.run`の入れ子 | ネイティブのコードはworkerのループを入れ子にする | メインのworkerの上の入れ子のループは、ほかのworkerと同じ手順で眠り、その間の状態は`Parked`である |
 | joinの手伝い | 自分より深いforkを手伝う | メインのworkerは自分のjoinだけを手伝う |
 | `eml_enter`、`JmpBuf`、`eml_fatal` | asmのstub、入れ子の`JmpBuf` | `eml_run_pending(ctx) -> Progress`は各エントリに`eml_enter`で入る。中の致命的な誤りは`Park`へ`Stopping`を返し、toolkitのフレームを越えてlongjmpしない |
 | ネイティブのコードが読む`Ctx`の欄 | 止める語へのポインタ、`stack_limit`、`jmp`、`runtime`など | メインのworkerの`Ctx`は`Ctx::for_worker(.., N)`で、止める語はN。`hard`はOSのスタックの`stack_base + 2 MiB` |

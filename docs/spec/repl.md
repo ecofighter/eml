@@ -97,7 +97,7 @@
 
 式の入力の規則のうち、次の3つは `:type` に当てない。
 
-- row が `<IO, Panic>` に収まらなければ E2015 にする規則。`:type ask ()` は `Int` を返す
+- rowが`<IO, Panic>` (プログラムが`Std.Async`を読み込んでいれば`<IO, Panic, Async>`) に収まらなければE2015にする規則。`:type ask ()`は`Int`を返す
 - 型が `Unr` でなければ E2016 にする規則。`:type FileIn.open "x"` は `FileIn` を返す
 - 型に現れる型変数を `Unit` に決める規則 (上のとおり名前を付け、制約は文脈にする)
 

@@ -26,5 +26,5 @@ body () =
     | Err e -> println "scope: \{show e.kind}"
   println "done"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

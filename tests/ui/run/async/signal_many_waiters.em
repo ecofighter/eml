@@ -6,8 +6,8 @@ import Signal
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let a = Async.start (fn () ->
     Signal.wait Signal.Interrupt
     "a woke")
@@ -16,4 +16,4 @@ main () = Async.run (fn () ->
     "b woke")
   let _ = spin 40
   println (Async.await a)
-  println (Async.await b))
+  println (Async.await b)

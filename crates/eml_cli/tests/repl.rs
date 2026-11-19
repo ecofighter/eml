@@ -462,7 +462,7 @@ extern \"C\" blocking symbol \"eml_fixture_gate_wait\" gate_wait : Int -> <IO, A
     // worker は1つなので、`x` が仕事を出して待った後に `y` が動く
     let exited = repl.eval(
         "\
-Async.run (fn () ->
+Async.scope (fn _ ->
   let x = Async.start (fn () -> gate_wait 100100)
   let y = Async.start (fn () -> (exit 3 : Unit))
   println (show (Async.await x))

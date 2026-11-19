@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/types/async_in_par_child.em
 ---
 [E2020] Error: the row passed to `par` may perform `Async`, but `par` allows only `never` operations
-    ╭─[ check-fail/types/async_in_par_child.em:12:18 ]
+    ╭─[ check-fail/types/async_in_par_child.em:11:16 ]
     │
- 12 │     let (a, b) = Par.par child (fn () -> 1)
-    │                  ───┬─── ──┬──  
-    │                     ╰─────────── `par` is used here
-    │                            │    
-    │                            ╰──── `Async` is performed here
+ 11 │   let (a, b) = Par.par child (fn () -> 1)
+    │                ───┬─── ──┬──  
+    │                   ╰─────────── `par` is used here
+    │                          │    
+    │                          ╰──── `Async` is performed here
     │
     ├─[ <std>/Par.em:6:28 ]
     │

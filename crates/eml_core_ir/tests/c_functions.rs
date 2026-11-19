@@ -262,11 +262,11 @@ data Box a = | Box a
 hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   let Box wrap = hide 0 wrap
   let a : MutUnboxedArray Int = MutUnboxedArray.empty ()
-  let (n, a) = Async.run (fn () -> wrap \"x\" a)
+  let (n, a) = Async.scope (fn _ -> wrap \"x\" a)
   drop a
   println (show n)
 ";

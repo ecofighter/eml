@@ -21,5 +21,5 @@ body () =
       println "drained"
       Async.spawn_in s (worker "after" 10)))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

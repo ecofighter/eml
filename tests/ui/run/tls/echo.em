@@ -6,8 +6,8 @@ import Fs
 import Net
 import Tls
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let ca = Fs.read_text "ca.pem"
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
@@ -28,4 +28,4 @@ main () = Async.run (fn () ->
     | Some text -> println "client: Some \{text}"
     | None -> println "client: None"
   Tls.close c
-  Async.await server)
+  Async.await server

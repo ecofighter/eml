@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/async/exec_pipe_stderr_on_run.em
 Other: cannot run `eml-first`: the standard error pipe needs `Exec.spawn` on the last stage
 --- stderr ---
 --- runtime error ---
-cannot run `eml-only`: the standard error pipe needs `Exec.spawn` on the last stage
-  at <std>/Async.em:75:9
+cannot run `eml-only`: the standard error pipe needs `Exec.spawn` on the last stage in `main`

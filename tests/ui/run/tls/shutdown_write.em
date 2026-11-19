@@ -21,8 +21,8 @@ drain_tls b c =
   let (b, c) = Tls.read_chunk b c
   if Bytes.length b == n then (b, c) else drain_tls b c
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let ca = Fs.read_text "ca.pem"
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
@@ -38,4 +38,4 @@ main () = Async.run (fn () ->
   let (b, c) = drain_tls (Bytes.empty ()) c
   println "client: \{String.decode b}"
   Tls.close c
-  Async.await server)
+  Async.await server

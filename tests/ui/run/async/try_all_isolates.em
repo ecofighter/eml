@@ -30,7 +30,7 @@ body () =
   println (describe (Async.await c))
   println (describe (Async.await d))
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "run finished"

@@ -1,4 +1,4 @@
--- `await` は子の Panic を起こし直す。失敗はスコープの失敗のままで、`run` が文言を保って起こし直す
+-- `await`は子のPanicを起こし直す。失敗はスコープの失敗のままで、スコープが文言を保って起こし直す
 -- (docs/spec/stdlib.md の「`Std.Async`」)。
 import Async (Async)
 
@@ -14,8 +14,8 @@ body () =
   let n = Async.await t
   println "unreachable \{show n}"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "unreachable"

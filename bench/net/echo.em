@@ -56,8 +56,8 @@ client n size mode port =
   if mode == "reuse" then Net.close (rounds_reuse n size (Bytes.make size 'x'u8) (Bytes.empty ()) c)
   else Net.close (rounds_fresh n size c)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let n = int_arg 0 10000
   let size = int_arg 1 16
   let mode = str_arg 2 "fresh"
@@ -75,7 +75,7 @@ main () = Async.run (fn () ->
     println "echo done \{show n}"
   else
     client n size mode port
-    println "echo done \{show n}")
+    println "echo done \{show n}"
 
 -- 引数の読み取り。各プログラムが1ファイルで動くように、同じ定義を写して持つ
 int_arg : Int -> Int -> <IO, Panic> Int

@@ -12,7 +12,7 @@
 - エントリのモジュールの名前は、ファイル名によらず `Main` である。エントリのモジュールは、どの名前でも import できない
 - `Prelude`、`Main`、`Std` は予約したモジュール名である。根に `Prelude.em`、`Main.em`、`Std.em` があっても import できない
 - `Prelude` (`Bool`、`List`、`Option`、`Result`、`Either`、`println` など) を暗黙に取り込む (下の「Prelude」)
-- エントリポイントは、エントリのモジュールの `main` とする。型は `Unit -> <…> Unit` で、row のラベルは `IO` と `Panic` だけ (順は問わず、どちらも省ける) で、row 変数の末尾を持たない。`Unit -> Unit`、`Unit -> <IO> Unit`、`Unit -> <Panic> Unit`、`Unit -> <IO, Panic> Unit` のどれでもよい。ほかの型は E2004 にする。終了コードは標準ライブラリの `exit` で扱う ([標準ライブラリ](stdlib.md) の「`exit`」)
+- エントリポイントは、エントリのモジュールの`main`とする。型は`Unit -> <…> Unit`で、rowのラベルは`IO`と`Panic`と、プログラムが`Std.Async`を読み込んでいれば`Async`だけ (順は問わず、どれも省ける。`Async`は高々1回書ける) で、row変数の末尾を持たない。`Unit -> Unit`、`Unit -> <IO> Unit`、`Unit -> <Panic> Unit`、`Unit -> <IO, Panic> Unit`と、`Std.Async`を読み込んでいれば`Unit -> <IO, Panic, Async> Unit`などのどれでもよい。ほかの型はE2004にする。rowに`Async`を持つ`main`は、runの根のタスクとして動く ([標準ライブラリ](stdlib.md)の「`Std.Async`」)。終了コードは標準ライブラリの`exit`で扱う ([標準ライブラリ](stdlib.md)の「`exit`」)
 - 公開するものには `pub` を付ける ([宣言](declarations.md) の「`pub`」と、下の「公開の範囲」)
 
 ```
@@ -179,6 +179,7 @@ REPL (`eml_cli::Repl`) では、セッションを1つのモジュールとみ�
 - `:type` の問い合わせは、受け付けた入力の後に、次の入力の番号を持つセッションのモジュールとして読む。入力の関数は `InputKind::Query` で、検査だけをし、lowering も実行もせず、受け付けない ([型と Kind](types.md) の「REPL の入力」)
 - `Std.Chan.Chan a` の値は束縛に残せるが、前の入力の channel は閉じて空の channel として振る舞う。後の入力の channel とは generation で見分ける ([VM](vm.md) の「セルと登録表」)
 - `Std.Atomic.Counter` は入力をまたいで使える。表を `Machine` が持つためである ([VM](vm.md) の「セルと登録表」)
+- rowに`Async`を持つ入力 (プログラムが`Std.Async`を読み込んだときだけ起きる) は、`Async`を持つ`main`と同じく、自分のrunの根のタスクとして動く。runは根のタスクとその中で始めたすべてのタスクが終わってから終わるので、入力より長く生きるタスクはない。根の捕まえられなかった失敗には`input$N`という名前を付ける ([型と Kind](types.md)の「REPL の入力」、[標準ライブラリ](stdlib.md)の「`Std.Async`」)
 
 ## 公開の範囲
 

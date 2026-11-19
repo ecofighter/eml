@@ -46,8 +46,8 @@ spin done flag =
     Async.yield_now ()
     spin (done + 1) flag
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let n = int_arg 0 2000
   let flag = Atomic.new 0
   let l = Net.listen "127.0.0.1" 0
@@ -62,7 +62,7 @@ main () = Async.run (fn () ->
   Async.await server
   Atomic.store 1 flag
   let _ = Async.await busy
-  println "busy done \{show n}")
+  println "busy done \{show n}"
 
 -- 引数の読み取り。各プログラムが1ファイルで動くように、同じ定義を写して持つ
 int_arg : Int -> Int -> <IO, Panic> Int

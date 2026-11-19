@@ -441,6 +441,7 @@ pub(crate) fn translate(
         entry_instance.signature,
         instances::resolve(first_arrow, &entry_instance.bits),
         after,
+        instances.root.map(|root| indices[root.0]),
     );
     Program {
         functions: builder

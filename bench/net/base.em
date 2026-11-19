@@ -1,4 +1,4 @@
--- 物差しの床。Net と Async を読み込んで、何もしない run を1回する (コンパイルと起動の分)
+-- 物差しの床。NetとAsyncを読み込んで、何もしない`main`を1回走らせる (コンパイルと起動の分)
 import Async (Async)
 import Async
 import Bytes
@@ -6,11 +6,11 @@ import Net
 import Env
 import String
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen "127.0.0.1" 0
   Net.close_listener l
-  println "base done \{show (int_arg 0 0)}")
+  println "base done \{show (int_arg 0 0)}"
 
 -- 引数の読み取り。各プログラムが1ファイルで動くように、同じ定義を写して持つ
 int_arg : Int -> Int -> <IO, Panic> Int

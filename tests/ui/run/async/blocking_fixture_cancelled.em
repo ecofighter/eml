@@ -28,7 +28,7 @@ body () =
   println "b: opening"
   gate_open 1031
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println (show (frees 1030))

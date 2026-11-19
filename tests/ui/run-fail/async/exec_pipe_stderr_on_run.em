@@ -6,9 +6,9 @@ import Async
 import Exec
 import Proc ((.|))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   match try_io (fn () -> drop (Exec.spawn (Exec.pipe_stderr `eml-first` .| `eml-second`))) with
     | Ok () -> println "unreachable"
     | Err e -> println "\{show e.kind}: \{e}"
-  println "exit \{show (Exec.run (Exec.pipe_stderr `eml-only`))}")
+  println "exit \{show (Exec.run (Exec.pipe_stderr `eml-only`))}"

@@ -6,10 +6,10 @@ import Proc
 import Fs
 import Async
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   match Env.args () with
-    | ["child", "sleep"] -> Async.run (fn () -> Async.sleep_ms 30000)
+    | ["child", "sleep"] -> Async.scope (fn _ -> Async.sleep_ms 30000)
     | ["child", word] -> println word
     | _ -> parent ()
 

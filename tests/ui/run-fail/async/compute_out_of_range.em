@@ -1,4 +1,4 @@
--- 仕事の中の範囲外の読みは `Panic` なので、呼んだタスクで起こし直され、捕まえなければ `run` から実行時エラーとして
+-- 仕事の中の範囲外の読みは`Panic`なので、呼んだタスクで起こし直され、捕まえなければスコープから実行時エラーとして
 -- 出る (docs/spec/stdlib.md の「`compute`」)。
 import Async (Async)
 import MutArray
@@ -16,8 +16,8 @@ body () =
   let _ = spin 40
   println "unreachable \{show n}"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "unreachable"

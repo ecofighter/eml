@@ -7,8 +7,8 @@ import Net
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
   let (r, l) = Net.accept_within 50 l
@@ -27,4 +27,4 @@ main () = Async.run (fn () ->
       println "Some \{peer}"
     | None -> println "None"
   Net.close (Async.await t)
-  Net.close_listener l)
+  Net.close_listener l

@@ -28,7 +28,7 @@ input_file: crates/eml_cli/tests/repl/async/io_in_flight.repl
 .   let _ = Async.await t
 .   Net.close b
 .
-> Async.run stuck
+> stuck ()
 runtime error: deadlock: every task is waiting and no timer is pending
 > println "next"
 next
@@ -41,7 +41,7 @@ next
 .   Net.close b
 .   String.decode buf
 .
-> println (Async.run (fn () -> echo "hello"))
+> println (Async.scope (fn _ -> echo "hello"))
 hello
 --- close ---
 no leaks

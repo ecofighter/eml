@@ -26,5 +26,5 @@ body () =
           Async.cancel_scope q)
         Async.spawn_in q (drainer s))))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

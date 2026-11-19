@@ -23,8 +23,8 @@ body () =
   let _ = spin 40
   1
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  let n = Async.run body
+  let n = Async.scope (fn _ -> body ())
   println "unreachable \{show n}"

@@ -22,10 +22,10 @@ connected () =
   let c = Net.connect "127.0.0.1" port
   (c, Async.await t)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  Async.run (fn () ->
+  Async.scope (fn _ ->
     let (a, b) = connected ()
     let t = Async.start (fn () ->
       let (buf, a) = Net.read_chunk (Bytes.empty ()) a

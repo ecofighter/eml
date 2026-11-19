@@ -64,8 +64,8 @@ send wmode n size s =
   if wmode == "shared" then Net.close (send_shared n (Bytes.make size 'x'u8) s)
   else Net.close (send_fresh n size s)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let mib = int_arg 0 100
   let size = int_arg 1 64 * 1024
   let wmode = str_arg 2 "fresh"
@@ -87,7 +87,7 @@ main () = Async.run (fn () ->
     println "bulk sent \{show (n * size)}"
   else
     let got = drain rmode (Net.connect "127.0.0.1" (0 - port))
-    println "bulk done \{show got}")
+    println "bulk done \{show got}"
 
 -- 引数の読み取り。各プログラムが1ファイルで動くように、同じ定義を写して持つ
 int_arg : Int -> Int -> <IO, Panic> Int

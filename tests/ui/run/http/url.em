@@ -34,8 +34,8 @@ attempt method body options url =
     | Ok r -> println "client: \{show r.status}"
     | Err e -> println "client: \{show e.kind}: \{e.message}"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
   let server = Async.start (fn () ->
@@ -65,4 +65,4 @@ main () = Async.run (fn () ->
   attempt "GET" (Bytes.empty ()) { Http.defaults | headers = [("X-Split", "a\r\nInjected: b")] } "http://localhost/"
   attempt "GET" (Bytes.empty ()) { Http.defaults | headers = [("content-LENGTH", "3")] } "http://localhost/"
   attempt "GET" (Bytes.empty ()) { Http.defaults | headers = [("Host", "elsewhere")] } "http://localhost/"
-  Async.await server)
+  Async.await server

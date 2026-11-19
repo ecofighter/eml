@@ -74,10 +74,10 @@ fn finished(result: Result<Finished, RuntimeError>) -> Finished {
 fn run_on_main_runs_on_the_caller_thread() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () -> println \"pinned\")
-  println \"main\")
+  println \"main\"
 ";
     let (lines, result) = run(src, 1);
     let finished = finished(result);
@@ -88,22 +88,22 @@ main () = Async.run (fn () ->
     assert_eq!(finished.pinned_tasks, 1);
 }
 
-/// 固定したタスクが始めるタスクも、入れ子の`Async.run`の根とその子も固定する。どれもメインのworkerで動く。
+/// 固定したタスクが始めるタスクも、その中の`Async.scope`が始めるタスクも固定する。どれもメインのworkerで動く。
 #[test]
 fn children_of_a_pinned_task_stay_on_the_main_worker() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     let a = Async.start (fn () -> println \"child\")
     Async.await a
-    let n = Async.run (fn () ->
+    let n = Async.scope (fn _ ->
       let b = Async.start (fn () -> println \"grandchild\")
       Async.await b
       1)
     println \"nested \\{show n}\")
-  println \"main\")
+  println \"main\"
 ";
     let (lines, result) = run(src, 2);
     let finished = finished(result);
@@ -113,7 +113,7 @@ main () = Async.run (fn () ->
         assert_eq!(thread_of(&lines, text), me, "{text}");
     }
     assert_ne!(thread_of(&lines, "main"), me);
-    assert_eq!(finished.pinned_tasks, 4);
+    assert_eq!(finished.pinned_tasks, 3);
 }
 
 /// 固定したタスクの`par`の右の子は、空いたworkerに置く。worker 1は始めから空いている。
@@ -122,12 +122,12 @@ fn par_in_a_pinned_task_is_placed_on_a_worker() {
     let src = "\
 import Std.Par
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let n = Async.run_on_main (fn () ->
     let (a, b) = Par.par (fn () -> 1) (fn () -> 2)
     a + b)
-  println (show n))
+  println (show n)
 ";
     let (lines, result) = run(src, 2);
     let finished = finished(result);
@@ -140,10 +140,10 @@ main () = Async.run (fn () ->
 fn compute_in_a_pinned_task_is_placed_on_a_worker() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let n = Async.run_on_main (fn () -> Async.compute (fn () -> 20 + 1))
-  println (show n))
+  println (show n)
 ";
     let (lines, result) = run(src, 2);
     let finished = finished(result);
@@ -156,11 +156,11 @@ main () = Async.run (fn () ->
 fn exit_in_a_pinned_task_ends_the_run() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let p = Async.start_on_main (fn () -> (exit 5 : Unit))
   Async.await p
-  println \"unreachable\")
+  println \"unreachable\"
 ";
     let (lines, result) = run(src, 1);
     assert_eq!(texts(&lines), Vec::<&str>::new());
@@ -172,14 +172,14 @@ main () = Async.run (fn () ->
 fn exit_in_main_ends_a_run_with_a_sleeping_pinned_task() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let p = Async.start_on_main (fn () ->
     Async.sleep_ms 1000
     println \"late\")
   Async.sleep_ms 1
   (exit 4 : Unit)
-  Async.await p)
+  Async.await p
 ";
     let (lines, result) = run(src, 1);
     assert_eq!(texts(&lines), Vec::<&str>::new());
@@ -194,14 +194,14 @@ fn a_fatal_error_on_worker_1_ends_a_run_with_a_sleeping_pinned_task() {
 import Async
 deep : Int -> <Panic> Int
 deep n = if n == 0 then 0 else 1 + deep (n - 1)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let p = Async.start_on_main (fn () ->
     Async.sleep_ms 1000
     println \"late\")
   Async.sleep_ms 1
   println (show (Async.compute (fn () -> deep 100000)))
-  Async.await p)
+  Async.await p
 ";
     let control = Arc::new(Control::new(Limits {
         workers: 2,
@@ -225,10 +225,10 @@ fn run_on_main_in_a_merged_machine_runs_on_worker_0() {
     let program = eml_test_support::lir(
         "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () -> println \"pinned\")
-  println \"main\")
+  println \"main\"
 ",
     );
     let (host, _) = RecordingHost::new(None);
@@ -249,14 +249,14 @@ main () = Async.run (fn () ->
 fn a_pinned_timer_advances_the_virtual_clock() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let p = Async.start_on_main (fn () ->
     Async.sleep_ms 20
     println \"pinned\")
   Async.sleep_ms 10
   println \"main\"
-  Async.await p)
+  Async.await p
 ";
     let (lines, result) = run(src, 1);
     finished(result);
@@ -269,12 +269,12 @@ main () = Async.run (fn () ->
 fn a_pinned_timer_fires_on_the_real_clock() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     Async.sleep_ms 5
     println \"timer\")
-  println \"done\")
+  println \"done\"
 ";
     let (lines, result) = run_real(src);
     finished(result);
@@ -287,8 +287,8 @@ fn a_pinned_listener_serves_a_worker_0_client() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let (port, l) = Async.run_on_main (fn () -> Net.local_port (Net.listen \"127.0.0.1\" 0))
   let server = Async.start_on_main (fn () ->
     let (s, l) = Net.accept l
@@ -301,7 +301,7 @@ main () = Async.run (fn () ->
   let c = Net.connect \"127.0.0.1\" port
   let c = Net.write_line \"hello\" c
   Net.close c
-  Async.await server)
+  Async.await server
 ";
     let (lines, result) = run_real(src);
     finished(result);
@@ -319,8 +319,8 @@ fn a_socket_moves_from_a_pinned_task_to_worker_0() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let server = Async.start (fn () ->
@@ -334,7 +334,7 @@ main () = Async.run (fn () ->
   let c = Async.run_on_main (fn () -> Net.connect \"127.0.0.1\" port)
   let c = Net.write_line \"moved\" c
   Net.close c
-  Async.await server)
+  Async.await server
 ";
     let (lines, result) = run_real(src);
     finished(result);
@@ -351,8 +351,8 @@ import Bytes
 import Net
 deep : Int -> <Panic> Int
 deep n = if n == 0 then 0 else 1 + deep (n - 1)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let reader = Async.start_on_main (fn () ->
@@ -367,7 +367,7 @@ main () = Async.run (fn () ->
   Async.sleep_ms 5
   println (show (deep 100000))
   Net.close s
-  Async.await reader)
+  Async.await reader
 ";
     let control = Arc::new(Control::new(Limits {
         workers: 1,
@@ -398,8 +398,8 @@ fn a_pinned_task_closing_a_socket_wakes_a_sleeping_worker_0() {
 import Async
 import Bytes
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let reader = Async.start (fn () ->
@@ -412,7 +412,7 @@ main () = Async.run (fn () ->
     let c = Net.connect \"127.0.0.1\" port
     Async.sleep_ms 5
     Net.close c)
-  Async.await reader)
+  Async.await reader
 ";
     let (lines, result) = run_real(src);
     finished(result);
@@ -425,14 +425,14 @@ main () = Async.run (fn () ->
 fn pinned_tasks_are_counted() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let a = Async.start_on_main (fn () ->
     let c = Async.start (fn () -> 1)
     Async.await c)
   let b = Async.start (fn () -> 2)
   let x = Async.await a + Async.await b
-  println (show x))
+  println (show x)
 ";
     for workers in [1, 2] {
         let (lines, result) = run(src, workers);
@@ -448,15 +448,15 @@ main () = Async.run (fn () ->
 fn spawn_off_main_from_a_pinned_task_runs_on_a_worker() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     println \"pinned\"
     let t = Async.start_off_main (fn () -> println \"off\")
     Async.await t
     Async.spawn_off_main (fn () -> println \"spawned\")
     Async.sleep_ms 1)
-  println \"main\")
+  println \"main\"
 ";
     let (lines, result) = run(src, 2);
     let finished = finished(result);
@@ -473,15 +473,15 @@ main () = Async.run (fn () ->
 fn closing_a_pinned_scope_waits_for_an_unpinned_child() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     Async.scope (fn _ ->
       Async.spawn_off_main (fn () ->
         Async.sleep_ms 5
         println \"child\")
       println \"body\"))
-  println \"main\")
+  println \"main\"
 ";
     let (lines, result) = run(src, 2);
     let finished = finished(result);
@@ -495,8 +495,8 @@ main () = Async.run (fn () ->
 fn cancelling_a_pinned_scope_reaches_an_unpinned_child() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     Async.scope (fn s ->
       Async.spawn_off_main (fn () ->
@@ -506,7 +506,7 @@ main () = Async.run (fn () ->
       Async.sleep_ms 5
       Async.cancel_scope s
       println \"body\"))
-  println \"main\")
+  println \"main\"
 ";
     let (lines, result) = run(src, 2);
     let finished = finished(result);
@@ -637,12 +637,12 @@ fn park(mode: Mode, log: &Arc<Log>) -> ParkFactory {
 fn a_main_park_runs_on_the_caller_thread() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     Async.sleep_ms 5
     println \"pinned\")
-  println \"main\")
+  println \"main\"
 ";
     for clock in [Clock::Virtual, Clock::Real] {
         let log = Arc::new(Log::default());
@@ -667,15 +667,15 @@ main () = Async.run (fn () ->
 fn a_park_that_returns_at_once_changes_nothing() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let p = Async.start_on_main (fn () ->
     Async.sleep_ms 10
     let xs = [1, 2, 3]
     println \"pinned \\{show xs}\")
   Async.sleep_ms 5
   println \"main\"
-  Async.await p)
+  Async.await p
 ";
     let (default_lines, default) = run(src, 1);
     let log = Arc::new(Log::default());
@@ -694,23 +694,23 @@ main () = Async.run (fn () ->
 const CHAN_DEADLOCK: &str = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () -> Async.sleep_ms 1)
   let c : Chan.Chan Int = Chan.new 0
-  println (show (Chan.recv c)))
+  println (show (Chan.recv c))
 ";
 
 const ACCEPT_DEADLOCK: &str = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () -> Async.sleep_ms 1)
   let l = Net.listen \"127.0.0.1\" 0
   let (s, l) = Net.accept l
   Net.close_listener l
-  Net.close s)
+  Net.close s
 ";
 
 /// `Park`が最初の待ちで`set_holds(true)`を書き、5回目の待ちで下ろす`clock`のrunで、`src`はデッドロックで終わる。
@@ -796,13 +796,13 @@ fn a_park_that_raises_holds_once_a_window_is_open_defers_the_verdict() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     println \"open\"
     Async.sleep_ms 10
     let c : Chan.Chan Int = Chan.new 0
-    println (show (Chan.recv c))))
+    println (show (Chan.recv c)))
 ";
     let (host, _) = RecordingHost::new(None);
     let lowered = Arc::new(AtomicBool::new(false));
@@ -899,13 +899,13 @@ fn a_park_that_raises_holds_before_run_defers_the_verdict() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     Async.sleep_ms 1
     println \"open\"
     let c : Chan.Chan Int = Chan.new 0
-    println (show (Chan.recv c))))
+    println (show (Chan.recv c)))
 ";
     let (host, _) = RecordingHost::new(None);
     let lowered = Arc::new(AtomicBool::new(false));
@@ -986,12 +986,12 @@ fn a_window_opened_by_the_first_pinned_task_is_held() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     println \"open\"
     let c : Chan.Chan Int = Chan.new 0
-    println (show (Chan.recv c))))
+    println (show (Chan.recv c)))
 ";
     for returns in [false, true] {
         let (host, _) = RecordingHost::new(None);
@@ -1052,15 +1052,15 @@ main () = Async.run (fn () ->
 fn a_park_that_never_runs_pending_still_ends_main() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let p = Async.start_on_main (fn () -> Async.sleep_ms 3)
   let t = Async.start (fn () ->
     Async.sleep_ms 10
     1)
   Async.sleep_ms 5
   Async.await p
-  println \"main \\{show (Async.await t)}\")
+  println \"main \\{show (Async.await t)}\"
 ";
     for clock in [Clock::Virtual, Clock::Real] {
         let log = Arc::new(Log::default());
@@ -1081,12 +1081,12 @@ main () = Async.run (fn () ->
 fn a_park_that_returns_at_its_timeout_collects_a_pinned_timer() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     Async.sleep_ms 5
     println \"pinned\")
-  println \"main\")
+  println \"main\"
 ";
     let log = Arc::new(Log::default());
     let config = RunConfig::default()
@@ -1105,9 +1105,9 @@ main () = Async.run (fn () ->
 fn an_interrupt_reaches_a_main_worker_in_a_custom_park() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  Async.run_on_main (fn () -> Async.sleep_ms 100000))
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
+  Async.run_on_main (fn () -> Async.sleep_ms 100000)
 ";
     let log = Arc::new(Log::default());
     let control = limits(2);
@@ -1136,8 +1136,8 @@ fn a_pinned_socket_read_completes_under_the_default_park() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let reader = Async.start_on_main (fn () ->
@@ -1151,7 +1151,7 @@ main () = Async.run (fn () ->
   Net.close_listener l
   let s = Net.write_line \"hello\" s
   Net.close s
-  Async.await reader)
+  Async.await reader
 ";
     let config = RunConfig::default()
         .with_clock(Clock::Real)
@@ -1179,10 +1179,10 @@ mod worker_panic {
     fn a_park_that_ignores_stopping_fails_in_debug_builds() {
         let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () -> Async.sleep_ms 10)
-  println \"main\")
+  println \"main\"
 ";
         let log = Arc::new(Log::default());
         let config = RunConfig::default()
@@ -1220,10 +1220,10 @@ main () = Async.run (fn () ->
     fn a_park_whose_drop_panics_ends_the_run() {
         let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () -> println \"pinned\")
-  println \"main\")
+  println \"main\"
 ";
         let config = RunConfig::default()
             .with_control(limits(2))
@@ -1341,8 +1341,8 @@ mod io_source {
         let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let reader = Async.start_on_main (fn () ->
@@ -1361,7 +1361,7 @@ main () = Async.run (fn () ->
   Async.await reader
   match line with
     | Some text -> println \"main: \\{text}\"
-    | None -> println \"eof\")
+    | None -> println \"eof\"
 ";
         let sourced = Arc::new(AtomicBool::new(false));
         let runs = Arc::new(AtomicUsize::new(0));
@@ -1387,8 +1387,8 @@ main () = Async.run (fn () ->
 import Async
 import Net
 import Chan
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let ch : Chan.Chan Int = Chan.new 0
@@ -1403,7 +1403,7 @@ main () = Async.run (fn () ->
   Net.close s
   Async.sleep_ms 20
   let _ = Chan.send 1 ch
-  Async.await reader)
+  Async.await reader
 ";
         let sourced = Arc::new(AtomicBool::new(false));
         let runs = Arc::new(AtomicUsize::new(0));
@@ -1439,9 +1439,9 @@ impl Park for FailingPark {
 fn an_error_of_the_park_stops_the_run_as_a_park_failure() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  Async.run_on_main (fn () -> println \"pinned\"))
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
+  Async.run_on_main (fn () -> println \"pinned\")
 ";
     let config = RunConfig::default()
         .with_control(limits(1))

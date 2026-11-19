@@ -2,8 +2,7 @@
 import Std.Par
 import Async (Async)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
-    let (a, b) = Par.par (fn () -> Async.compute (fn () -> 1)) (fn () -> 2)
-    println (show (a + b)))
+  let (a, b) = Par.par (fn () -> Async.compute (fn () -> 1)) (fn () -> 2)
+  println (show (a + b))

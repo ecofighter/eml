@@ -6,11 +6,11 @@ import Gui
 data Msg =
   | Quit
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  match try_io (fn () -> Async.run (fn () -> Gui.run (fn () -> Gui.wait ()))) with
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
+  match try_io (fn () -> Async.scope (fn _ -> Gui.run (fn () -> Gui.wait ()))) with
     | Ok Quit -> println \"opened\"
-    | Err e -> println (show e))
+    | Err e -> println (show e)
 ";
 
 #[test]

@@ -39,8 +39,8 @@ const _: () = {
 
 /// worker の実行待ちの列の項 (docs/spec/vm.md の「タスクとスケジュール」)。
 pub enum Ready {
-    /// このworkerの表にあるVMの`Task`。`par`の右の子、`Seeded`が切り替えたタスク、joinで待つ親、`Async.run`で待つ`Task`
-    /// で、フレームを持つ。
+    /// このworkerの表にあるVMの`Task`。`par`の右の子、`Seeded`が切り替えたタスク、joinで待つ親、根のスコープを待つ
+    /// エントリの`Task`で、フレームを持つ。
     Task(TaskId),
     /// フレームを持たない `Async` の仕事。持ち主が `pick` で取ったときにエントリの `Task` にする。
     Entry(Entry),
@@ -1900,7 +1900,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
                 mail: &shared.mail,
                 post: &post,
             };
-            let scope = shared.lock().open_root(None, None).unwrap();
+            let scope = shared.lock().open_root().unwrap();
             let mut start = |owner: u32, pinned: bool| {
                 // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
                 // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)

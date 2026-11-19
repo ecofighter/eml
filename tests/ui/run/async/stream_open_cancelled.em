@@ -21,7 +21,7 @@ body () =
   Async.yield_now ()
   Async.cancel t
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "after run"

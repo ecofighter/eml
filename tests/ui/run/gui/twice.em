@@ -15,8 +15,7 @@ app name () =
   match Gui.wait () with
     | Quit -> println "closed \{name}"
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  use Async.run
   Gui.run (app "first")
   Gui.run (app "second")

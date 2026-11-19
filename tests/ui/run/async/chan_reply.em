@@ -47,5 +47,5 @@ body () =
   println "awaited: \{show (Async.await w)}"
   Chan.close handles
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

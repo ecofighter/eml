@@ -32,7 +32,7 @@ pub abstract effect Async where
 pub extern data Cell
 -- ランタイムのタスクのハンドルを中身に持つ。Kind はいつも `Lin`
 pub extern data Task a
--- タスクの失敗。`await` と `run` は、IO の失敗を種類と文言のまま、Panic を文言のまま起こし直す
+-- タスクの失敗。`await`と`root`は、IOの失敗を種類と文言のまま、Panicを文言のまま起こし直す
 pub data Failure =
   | IOFailed IOError
   | Panicked String
@@ -70,13 +70,6 @@ bottom f () =
     | Ok x -> finish_ok x
     | Err (IOFailed (IOError { kind = k, message = m })) -> finish_io k m
     | Err (Panicked m) -> finish_panic m
-
-pub run : (Unit -> <IO, Panic, Async> a) -> <IO, Panic> a
-run f = run_result (run_raw (bottom f))
-
--- 置き場所の決まり。`run` の位置 (`<std>/Async.em:行:桁`) は実行時エラーの UI テストと REPL のスナップショットに出る。
--- そのため `run` より上には `Async` の操作の宣言と `start_task` の節だけを置き、関数は `shield` より下に足す。
--- extern は extern の並びの末尾に足す。
 
 -- 名前付きのスコープのセルの番号を持つ即値で、`Cell` と同じ形である。Kind は `Unr` で、子のタスクにも渡せる。閉じて
 -- 離れたスコープの番号と前の run の番号は、閉じたスコープとして扱う (docs/spec/stdlib.md の「スコープ」)
@@ -359,13 +352,18 @@ signal_wait s =
 resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit
 resume_io k w op = k (w, op)
 
--- ランタイムのインターフェース。生の行を`pub`にせず、結果の型の`a`は`start`、`start_in`、`start_on_main`、`start_off_main`、`run`、`await`、`compute`のシグネチャだけが結ぶ。
--- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`start_main_raw`、`start_off_main_raw`、`run_raw`、`ready`、`finish_ok`、
--- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`park_drain`、`park_send`、
--- `park_recv`、`park_io`、`park_signal`、`start_in_raw` の2つ目の引数、`park_io_until` の3つ目の引数、`task_cell` の引数
--- (`task_cell` だけは借りて預かる) である。預かる引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
+-- エントリの関数のrowに`Async`があるrunの根のタスク。translateが作るエントリの関数だけが呼ぶ
+-- (docs/spec/stdlib.md の「`Std.Async`」)
+root : (Unit -> <IO, Panic, Async> a) -> <IO, Panic> a
+root f = root_result (root_start (bottom f))
+
+-- ランタイムのインターフェース。生の行を`pub`にせず、結果の型の`a`は`start`、`start_in`、`start_on_main`、`start_off_main`、`root`、`await`、`compute`のシグネチャだけが結ぶ。
+-- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`start_main_raw`、`start_off_main_raw`、`root_start`、`ready`、`finish_ok`、
+-- `take_result`、`root_result`、`detach`、`cancel_raw`の引数、`park`、`park_time`、`park_drain`、`park_send`、
+-- `park_recv`、`park_io`、`park_signal`、`start_in_raw`の2つ目の引数、`park_io_until`の3つ目の引数、`task_cell`の引数
+-- (`task_cell`だけは借りて預かる) である。預かる引数の型変数は`Unr`に固定せず、その矢印には閉じたrowを書ける (docs/spec/stdlib.mdの「`Std.Async`」)
 extern start_raw        : (Unit -> <IO, Async> Unit) -> <IO> Task a
-extern run_raw          : (Unit -> <IO, Async> Unit) -> <IO> Task a
+extern root_start       : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern start_in_raw     : Scope -> (Unit -> <IO, Async> Unit) -> <IO, Panic> Task a
 extern park             : Cell -> (once Wake -> <IO> Unit) -> <IO> Unit
 extern ready            : (once Wake -> <IO> Unit) -> <IO> Unit
@@ -374,7 +372,7 @@ extern finish_io        : IOErrorKind -> String -> <IO> Unit
 extern finish_panic     : String -> <IO> Unit
 extern task_cell        : Task a -> (Cell, Task a)
 extern take_result      : Task a -> <IO, Panic> a
-extern run_result       : Task a -> <IO, Panic> a
+extern root_result      : Task a -> <IO, Panic> a
 extern detach           : Task a -> <IO> Unit
 extern cancel_raw       : Task a -> <IO> Unit
 extern open_scope       : Unit -> <IO> Scope

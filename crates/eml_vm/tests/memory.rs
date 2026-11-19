@@ -89,8 +89,8 @@ body () =
   Async.await t
   println \"done\"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = body ()
 ",
     );
     for workers in [1, 2] {
@@ -115,8 +115,8 @@ body () =
       | Err e -> println \"caught: \\{show e.kind}: \\{e}\")
   Async.await t
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = body ()
 ",
     );
     for workers in [1, 2] {
@@ -139,51 +139,14 @@ body () =
       | Err e -> println \"caught: \\{show e.kind}: \\{e}\")
   Async.await t
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = body ()
 ",
     );
     for workers in [1, 2] {
         let (out, result) = run(&src, workers, Sched::Sequential, 16 * MIB, 2 * MIB);
         assert_eq!(out, "", "{workers} workers");
         assert_memory_limit(result, workers);
-    }
-}
-
-/// 入れ子の `Async.run` で始めたタスクも自分のセルで数え、旗が立つ。旗が立つのは確保した内のタスクで、待っている
-/// 外のタスクではない。内のタスクが自分の失敗を捕まえ、外のタスクの `try_io` は値を受け取る。
-#[test]
-fn a_task_in_a_nested_run_is_flagged() {
-    let src = program(
-        "\
-body : Unit -> <IO, Panic, Async> Unit
-body () =
-  let t = Async.start (fn () ->
-    match try_io (fn () -> Async.run (fn () ->
-        let u = Async.start (fn () ->
-          match try_io (fn () -> count (grow 0 []) 0) with
-            | Ok n -> n
-            | Err e ->
-              println \"inner caught: \\{show e.kind}: \\{e}\"
-              0)
-        Async.await u)) with
-      | Ok n -> println \"outer ok: \\{show n}\"
-      | Err e -> println \"outer caught: \\{show e.kind}: \\{e}\")
-  Async.await t
-  println \"done\"
-
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
-",
-    );
-    for workers in [1, 2] {
-        let (out, result) = run(&src, workers, Sched::Sequential, 64 * MIB, 2 * MIB);
-        assert_eq!(
-            out,
-            "inner caught: ResourceLimit: the memory soft limit is exceeded\nouter ok: 0\ndone\n",
-            "{workers} workers"
-        );
-        result.unwrap_or_else(|error| panic!("{workers} workers: {error}"));
     }
 }
 
@@ -203,44 +166,14 @@ body () =
     count mine (a + b))
   Async.await t
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  let n = Async.run body
+  let n = Async.scope (fn _ -> body ())
   println \"ok \\{show n}\"
 ",
     );
     let (out, result) = run(&src, 1, Sched::Sequential, 64 * MIB, 2 * MIB);
     assert_eq!(out, "ok 105001\n");
-    result.unwrap_or_else(|error| panic!("{error}"));
-}
-
-/// 候補のないまま柔らかい上限を越えた後に、切り替えずに増え始めたタスクにも旗が立つ。`main` がタスクの前に越えた
-/// ときは候補がなく、決定的な方針は閾値を同じ幅だけ進める。タスクは次の閾値を越えたページで集める地点に来て、そこで
-/// 選ばれる (docs/spec/vm.md の「上限と割り込み」)。
-#[test]
-fn a_task_that_grows_without_switching_after_a_crossing_without_a_candidate_is_flagged() {
-    let src = program(
-        "\
-body : List Int -> <IO, Panic, Async> Unit
-body held =
-  let t = Async.start (fn () ->
-    match try_io (fn () -> count (grow 0 []) 0) with
-      | Ok n -> println \"ok \\{show n}\"
-      | Err e -> println \"caught: \\{show e.kind}: \\{e}\")
-  Async.await t
-  println \"held \\{show (count held 0)}\"
-
-main : Unit -> <IO, Panic> Unit
-main () =
-  let held = build 100000 []
-  Async.run (fn () -> body held)
-",
-    );
-    let (out, result) = run(&src, 1, Sched::Sequential, 16 * MIB, 2 * MIB);
-    assert_eq!(
-        out,
-        "caught: ResourceLimit: the memory soft limit is exceeded\nheld 100000\n"
-    );
     result.unwrap_or_else(|error| panic!("{error}"));
 }
 
@@ -279,8 +212,8 @@ body () =
   Async.await b
   println \"done\"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = body ()
 ",
     );
     let (out, result) = run(&src, 1, Sched::Sequential, 64 * MIB, 2 * MIB);

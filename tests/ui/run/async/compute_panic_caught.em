@@ -13,5 +13,5 @@ body () =
   println (show (try_panic (fn () -> Async.compute (fn () -> (panic "boom" : Int)))))
   println (show (Async.await t))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

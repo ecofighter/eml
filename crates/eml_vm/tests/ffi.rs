@@ -539,8 +539,8 @@ fn run_counting(main: &str, refuse: bool) -> (String, (usize, usize)) {
 #[test]
 fn a_blocking_call_is_submitted_as_a_job() {
     let main = "
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> println (show (sub 7 2)))
+main : Unit -> <IO, Panic, Async> Unit
+main () = println (show (sub 7 2))
 ";
     assert_eq!(run_counting(main, false), ("5\n".to_string(), (1, 1)));
 }
@@ -550,14 +550,14 @@ main () = Async.run (fn () -> println (show (sub 7 2)))
 #[test]
 fn a_cancelled_task_submits_no_job() {
     let main = "
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let r = try_io (fn () -> Async.scope (fn s ->
     Async.cancel_scope s
     sub 7 2))
   match r with
     | Ok n -> println \"unreachable \\{show n}\"
-    | Err e -> println \"\\{show e.kind}: \\{e}\")
+    | Err e -> println \"\\{show e.kind}: \\{e}\"
 ";
     assert_eq!(
         run_counting(main, false),
@@ -580,9 +580,9 @@ body () =
   Async.yield_now ()
   Async.cancel t
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println (show (frees 100011))
 "
     );
@@ -592,11 +592,11 @@ main () =
 #[test]
 fn a_blocking_call_whose_job_cannot_run_fails_with_io() {
     let main = "
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   match try_io (fn () -> sub 7 2) with
     | Ok n -> println \"unreachable \\{show n}\"
-    | Err e -> println \"\\{show e.kind}: \\{e}\")
+    | Err e -> println \"\\{show e.kind}: \\{e}\"
 ";
     assert_eq!(
         run_counting(main, true),
@@ -611,8 +611,8 @@ main () = Async.run (fn () ->
 #[test]
 fn a_blocking_range_panic_creates_no_record() {
     let main = "
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> println (show (try_panic (fn () -> sub 1 2147483648))))
+main : Unit -> <IO, Panic, Async> Unit
+main () = println (show (try_panic (fn () -> sub 1 2147483648)))
 ";
     assert_eq!(
         run_counting(main, false),
@@ -634,9 +634,9 @@ make value =
   let h = handle_new 100012 value
   drop h
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  println (show (Async.run (fn () -> try_panic (fn () -> make (0 - 1)))))
+  println (show (Async.scope (fn _ -> try_panic (fn () -> make (0 - 1)))))
   println (show (frees 100012))
 "
     );
@@ -655,14 +655,14 @@ fn two_loads_of_a_blocking_row_compare_equal() {
 {BLOCKING}
 extern \"C\" blocking symbol \"rs_fill\" fill : MutUnboxedArray Float -> Int -> Float -> <IO, Async> (Unit, MutUnboxedArray Float)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let m = MutUnboxedArray.make 3 0.0
   let ((), m) = fill m 3 1.5
   let (x, m) = MutUnboxedArray.read m 2
   drop m
   println (show x)
-  println (show (sub 7 2)))
+  println (show (sub 7 2))
 "
     );
     let program = eml_test_support::lir(&src);
@@ -723,10 +723,10 @@ call s ns b nb =
   let l2 = UnboxedArray.to_list (MutUnboxedArray.freeze m2)
   println \"\\{show r} \\{show l1} \\{show l2}\"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   call (\"a\" ++ \"b\") 2 (Bytes.empty ()) 0
-  call \"\" 0 (Bytes.of_string \"xy\") 2)
+  call \"\" 0 (Bytes.of_string \"xy\") 2
 ";
 
 const MIXED: &str = "195000 [196, 197, 198] [10, 20, 30]\n241 [1, 2, 3] [251, 261, 271]\n";
@@ -760,14 +760,14 @@ import MutUnboxedArray
 
 extern \"C\" blocking symbol \"rs_fill\" fill : MutUnboxedArray Float -> Int -> Float -> <IO, Async> (Unit, MutUnboxedArray Float)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let m = MutUnboxedArray.make 3 0.0
   let ((), m) = fill m 3 1.5
   let (x, m) = MutUnboxedArray.read m 1
   let (y, m) = MutUnboxedArray.read m 2
   drop m
-  println \"\\{show x} \\{show y}\")
+  println \"\\{show x} \\{show y}\"
 ";
     assert_eq!(run_real(src, 1).0, "1.5 3.0\n");
 }
@@ -786,8 +786,8 @@ body () =
   Async.await b
   println (show (Async.await a))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     );
     assert_eq!(run_real(&src, 1).0, "b opens the gate\n0\n");
@@ -804,8 +804,8 @@ body () =
   let t = Async.start (fn () -> sub 7 2)
   println (show (Async.await t))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     );
     let (out, finished) = run_real(&src, 2);
@@ -844,9 +844,9 @@ body () =
   Async.cancel a
   gate_open 100023
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run body
+  Async.scope (fn _ -> body ())
   println (show (frees 100021))
 "
     );
@@ -882,8 +882,8 @@ body () =
   println (show (Async.await a))
   Async.await b
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     );
     let program = eml_test_support::lir(&src);
@@ -940,8 +940,8 @@ body () =
   Async.cancel a
   gate_open 100014
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     );
     assert_eq!(run_real(&src, 1).0, "Cancelled: task was cancelled\n");
@@ -987,11 +987,11 @@ import UnboxedArray
 extern \"C\" pure symbol \"rs_ptr\" at : UnboxedArray Int -> Int
 extern \"C\" blocking symbol \"rs_ptr\" at_blocking : UnboxedArray Int -> <IO, Async> Int
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let a = MutUnboxedArray.freeze (MutUnboxedArray.make {elements} 0)
   let p = at a
-  println (show (p == at_blocking a)))
+  println (show (p == at_blocking a))
 "
     )
 }
@@ -1022,14 +1022,14 @@ import MutUnboxedArray
 
 extern \"C\" blocking symbol \"rs_fill\" fill : MutUnboxedArray Float -> Int -> Float -> <IO, Async> (Unit, MutUnboxedArray Float)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let m = MutUnboxedArray.make 10000 0.0
   let ((), m) = fill m 10000 1.5
   let (x, m) = MutUnboxedArray.read m 0
   let (y, m) = MutUnboxedArray.read m 9999
   drop m
-  println \"\\{show x} \\{show y}\")
+  println \"\\{show x} \\{show y}\"
 ";
     assert_eq!(run_real_both(src, 1), "0.0 14998.5\n");
 }
@@ -1076,8 +1076,8 @@ body () =
   let _ = gate_wait 100132
   ()
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     );
     assert_eq!(run_real_both(&src, 1), "60692 1 10000\n");
@@ -1114,8 +1114,8 @@ body () =
   let s = grow 10 \"ab\"
   Async.await (Async.start (fn () -> read s))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     );
     assert_eq!(run_real_both(&src, 2), "True 199680\n");
@@ -1126,8 +1126,8 @@ main () = Async.run body
 fn a_blocking_call_reads_a_large_constant_string() {
     let src = format!(
         "{TEXT_AT}
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> read \"{}\")
+main : Unit -> <IO, Panic, Async> Unit
+main () = read \"{}\"
 ",
         "ab".repeat(1024)
     );
@@ -1148,8 +1148,8 @@ import UnboxedArray
 extern \"C\" symbol \"rs_publish\" publish : UnboxedArray Int -> Int -> <IO> Int
 extern \"C\" blocking symbol \"rs_publish\" publish_blocking : UnboxedArray Int -> Int -> <IO, Async> Int
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let a = MutUnboxedArray.freeze (MutUnboxedArray.make 10000 0)
   let _ = publish a 100133
   let r = try_io (fn () -> Async.scope (fn s ->
@@ -1157,7 +1157,7 @@ main () = Async.run (fn () ->
     publish_blocking a 100134))
   match r with
     | Ok _ -> println \"unreachable\"
-    | Err e -> println (show e.kind))
+    | Err e -> println (show e.kind)
 ";
     let program = eml_test_support::lir(src);
     for debug_heap in [true, false] {

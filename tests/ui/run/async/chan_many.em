@@ -42,5 +42,5 @@ body () =
   let (n2, s2) = Async.await v
   println "\{show (n1 + n2)} items, sum \{show (s1 + s2)}"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

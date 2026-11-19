@@ -32,8 +32,8 @@ reader () =
   Stream.close r
   println "all: \{show (String.byte_length all)} bytes"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let t = Async.start reader
   let _ = spin 40
-  Async.await t)
+  Async.await t

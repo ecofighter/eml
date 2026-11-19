@@ -996,8 +996,8 @@ fn main() -> unit {
 const WAITS_ON_A_LISTEN: &str = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Net.close_listener (Net.listen \"127.0.0.1\" 0)
 ";
 
 /// 待ちの中で driver の `wait` が誤りを返すと、run は壊れた run として driver の誤りで終わる
@@ -1173,11 +1173,11 @@ fn a_cancelled_wait_resumes_only_after_the_driver_completes() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   match Async.timeout 20 (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0)) with
     | Some _ -> println \"Some\"
-    | None -> println \"None\")
+    | None -> println \"None\"
 ";
     let (out, finished, log) = run_on_stub(src);
     assert_eq!(out, "None\n");
@@ -1193,13 +1193,13 @@ fn an_exit_quiesces_pending_driver_work() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () -> Net.listen \"127.0.0.1\" 0)
   Async.yield_now ()
   println \"exiting\"
   (exit 3 : Unit)
-  Net.close_listener (Async.await t))
+  Net.close_listener (Async.await t)
 ";
     let (out, finished, log) = run_on_stub(src);
     assert_eq!(finished.exit, Some(3));
@@ -1354,8 +1354,8 @@ body () =
   let y = Async.start (fn () -> (exit 3 : Unit))
   Async.await x
   Async.await y
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 ",
     );
 }
@@ -1383,8 +1383,8 @@ body () =
   let y = Async.start (fn () -> (exit 3 : Unit))
   Async.await x
   Async.await y
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 ",
             ),
             &eml_vm::Linked::default(),
@@ -1425,8 +1425,8 @@ body () =
   Async.yield_now ()
   (exit 3 : Unit)
   Async.await x
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 ",
     );
 }

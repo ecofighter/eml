@@ -212,12 +212,12 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.MutUnboxedArray.MutUnboxed Float.fill`、`MutUnboxed Int.fill` | `Lin`、`Unr` | `Lin` |
   | `Std.MutUnboxedArray.freeze` | `Lin` | `Unr` (`UnboxedArray a`) |
   | `Std.Par.par` | `poly`、`poly` | `poly` |
-  | `Std.Async.start_raw`、`run_raw` | `poly` | `Lin` (`Task a`) |
+  | `Std.Async.start_raw`、`root_start` | `poly` | `Lin` (`Task a`) |
   | `Std.Async.park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_signal` | `Unr`、`Lin` | `Unr` |
   | `Std.Async.ready` | `Lin` | `Unr` |
   | `Std.Async.finish_ok` | `poly` | `Unr` |
   | `Std.Async.task_cell` | `Lin` | `Unr` (`Cell`) |
-  | `Std.Async.take_result`、`run_result` | `Lin` | `poly` |
+  | `Std.Async.take_result`、`root_result` | `Lin` | `poly` |
   | `Std.Async.detach`、`cancel_raw` | `Lin` | `Unr` |
   | `Std.Async.start_in_raw` | `Unr`、`poly` | `Lin` (`Task a`) |
   | `Std.Async.fork_job` | `poly` | `Unr` |
@@ -324,6 +324,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   - 一様な位置の型引数は `Flexible` なので、大きくなる成分を通る型の大きさは有界になる。大きくなる成分の外の位置に流れ込む型も、有界な型と `Flexible` から作られるので有界である。そのため、instance を集める手順は止まる。instance の総数に上限は置かない ([実装の現在地](../implementation/status.md) の「コンパイルの時間と深さ」)
   - エントリの関数の鍵は、型変数を持たなければ空の列、持てばすべて `Flexible` である。その Kind は、一様な位置と同じく `uniform_kind` が決める。エントリは `main` とは限らず、変換の呼び出し側が選ぶ
   - ランタイムが名前で呼ぶ関数 (`Std.Async.start_task` と `Std.Async.resume_task`。[標準ライブラリ](stdlib.md) の「`Std.Async`」) も根にする。eml のコードは呼ばないので、エントリから届かないためである。そのモジュールを読み込んでいるときだけ、`モジュール名.関数名` で引ける関数を、型引数も row のビットも空の instance にする。どれも単相なので、名前は元の名前のままである
+  - エントリの宣言の型の最初の矢印のrowにラベル`Std.Async.Async`があれば、エントリの結果の型での`Std.Async.root`のinstance (`Std.Async.root@[T]`。rowのビットは空) も根にする。エントリの関数が呼び、emlのコードは呼ばないためである
   - instance は、エントリの instance から始めて、見つけた順に処理する (FIFO)。各 instance の本体では、関数への参照を HIR の式の ID の順にたどり、まだない鍵を列の後ろに足す。すべて集めてから、instance を HIR の関数の順に並べ、同じ関数の instance は見つけた順に並べて、その順に関数の番号を振る。`TypeId` の値の順には並べない。後の段階が `TypeId` の値に意味を持たせないためである。型変数を持たない関数だけのプログラムでは、関数の並びは HIR の関数の順になる
   - 型変数を持つ関数の instance の名前は、元の名前 (モジュールの修飾を含む) に `@[型引数, …]` を付けた形である (`map@[Int, String]`、`Prelude.>>@[Int, Int, Int]`、`length@[List Int]`)。一様な位置の型引数 (`Flexible`) は `_` と書く (`depth@[_]`)。矢印の線形性は、`Lin` を `once a -> b`、`Poly` を `poly a -> b`、`Unr` を `a -> b` と書く ([型と Kind](types.md) の「Kind の書き出し」)。線形性だけが違う具体化は、別の instance として別の名前になる (`id@[once Int -> Int]` と `id@[Int -> Int]`)。一様な位置と操作ごとの型変数も Kind を書く (`_:poly`、`a:lin`。`Unr` は書かない)。Kind だけが違う鍵の名前を重ねないためである。名前は型引数だけで決まり、ほかの instance の有無や見つけた順によらない。REPL の追記が、名前が同じ関数はいつも同じコードになることに頼るためである ([VM](vm.md) の「追記」)
   - 型引数の型とクラスの名前は、名前のための表 (`NameTable`) で書く。診断の表示名は名前が重なるときだけ修飾するので、ほかのモジュールや後の入力が同じ名前を定義すると表示が変わり、名前が型引数だけで決まらなくなるためである。表は、Prelude の型とクラスを修飾しない (`Int`、`Show`)。Prelude は固定なので、修飾しなくても重なりは入力で変わらない。エントリのモジュールと REPL のセッションの型とクラスは中段の名前 (下の「REPL の入力」) で書き、Prelude の型かクラスと同じ名前のものは `Main.` で修飾する (`Main.Bool`)。ほかのモジュールの型とクラスは、モジュール名で修飾する (`Std.FileIn.FileIn`)
@@ -333,7 +334,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   - データの配置は、instance によらずスキームから作る。データの配置まで型ごとに分けると、一様な位置を通るコードと配置が食い違うためである (上の「translate の配置」)。`$op$`、`$con$`、`$cont$`、`$cont$state` は、参照か `k` の型ごとの instance である (`$op$read@[Int]`、`$cont$state@[Int, Int, Int]`)。型変数のないスキームでは名前に型引数を書かない
 - テキストの形 ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」) は関数とエフェクトを名前で引くので、モジュールをまたいで名前が重なってはいけない。エントリ以外のモジュールでは、関数、操作を包む関数、コンストラクタを包む関数、エフェクトの表の名前に `モジュール名.` を付ける (`Report.Csv.parse`、`$con$Report.Csv.Row`)。標準ライブラリのモジュールもこの規則に含め、正式な名前を使う (`Prelude.not`、ラムダは `Prelude.>>$lambda0`)。エントリのモジュールの名前には付けない (`parse`、`$op$get`)。extern の呼び出し (`extern <正式な名前>(…)`) は、正式な名前をそのまま使う (`extern Std.FileIn.open`)。
 - 持ち上げた関数の番号 (`$lambdaN`、`$handleN`、`$externN` の N) は、外側の関数の本体の中で、HIR の式の ID の順に振る。変換の順に依らないようにするためである。ローカル関数の定義のラムダは `$lambdaN` の番号を使わない。
-- 変換は、`main` を `()` で呼ぶエントリの関数を作る。等式に引数のない `main` は関数値を返すので、エントリの関数が返った値に `()` を適用する。
+- 変換は、`main`を`()`で呼ぶエントリの関数を作る。等式に引数のない`main`は関数値を返すので、エントリの関数が返った値に`()`を適用する。エントリの宣言の型の最初の矢印のrowに`Async`があれば、エントリの関数はエントリを`()`で呼ばず、エントリの値 (等式に引数のない`main`では、それが返す関数値) を`Std.Async.root@[T]`に渡し、`root`がそれをrunの根のタスクとして動かす ([標準ライブラリ](stdlib.md)の「`Std.Async`」)。エントリの関数が結果をどう扱うかは、どちらの形でも同じである。
 - `handle`、`perform`、`resume` は、translate の出力では呼び出しの一種である。表面の構文に `resume` はなく、`resume` は変換が作る Core IR の内部の命令 (`Call::Resume`) である。EP がどれも基本操作と普通の呼び出しに置き換える (下の「evidence passing」)。
 - 呼び出し (`Rhs::Call` の `Call::Direct`、`Call::Apply`、`Call::Resume`、`Call::Par`) は `mask` を持つ ([エフェクトと handler](effects.md) の「handler の意味」)。`mask` は、呼び出しの間に飛ばす handler を表す項目の並びである。項目 (`eml_lir::MaskItem`) は、エフェクトの番号と、残す数 n と、飛ばす数 m を持つ。m は 1 以上である。項目はエフェクトの番号の真に昇順に並ぶので、同じエフェクトの項目は2つない。空なら `mask` なしである。extern のエフェクトは入れない。`Call::Handle` と `Call::Perform` は `mask` を持たない。LIR の呼び出しは `mask` を持たない。`handle` の本体の中の呼び出しは、持ち上げた本体の関数の中の呼び出しとして `mask` を持つ。
 - 変換は、型検査が呼び出しの矢印ごとに記録した `mask` の項目 ([型と Kind](types.md) の「推論」) を、エフェクトの番号に写して昇順に並べ、Core IR の呼び出しに付ける。型検査の項目は、エフェクトが rest に初めて現れた順に並ぶ。
@@ -433,7 +434,7 @@ row は「yield しうるか」だけで単相化する。handler を使わな�
 
 - translate は、関数の型の「引数の数番目の矢印」の row が yield しうるとき (`RowYield` をその instance のビットで解いて立つとき) に立てる。本体はその矢印の row で動くためである ([型と Kind](types.md) の「推論」)。`f : Int -> <State> (Int -> Int)` の `f x = …` では1番目の矢印である。引数のない値は純粋なので立てない
 - トップレベルの関数は宣言の型から、ラムダとローカル関数は外側の instance の代入をかけた自分の型から決める。row が閉じたローカル関数は、最後の矢印のラベルだけで決まる。末尾が開いたままのものは、ラムダと同じく外側の instance の row のビットで分類する
-- エントリの関数 `entry$<名前>` の印と、その中の `apply f(())` の印は、エントリの関数の宣言の型の最初の矢印から決める。等式に引数のないエントリ (`main = fn () -> ..`) では、エントリの関数の instance の印 (引数の数が 0 なので立たない) が使えないためである。型検査が記録したその矢印の分類 (`BodyTypes::first_arrow_yield`、[型と Kind](types.md) の「row の具体化の記録」) を、エントリの instance のビットで解く
+- エントリの関数`entry$<名前>`の印と、その中の`apply f(())`の印は、エントリの関数の宣言の型の最初の矢印から決める。等式に引数のないエントリ (`main = fn () -> ..`) では、エントリの関数のinstanceの印 (引数の数が0なので立たない) が使えないためである。型検査が記録したその矢印の分類 (`BodyTypes::first_arrow_yield`、[型と Kind](types.md)の「row の具体化の記録」) を、エントリのinstanceのビットで解く。`Std.Async.root`を呼ぶエントリの関数は印を立てない。`root`のrowにyieldしうるラベルがないためである
 - handle の本体はいつも立てる。本体の row は扱うエフェクトのラベルを含むので、多くの場合は yield しうる。扱うエフェクトのすべての操作が `never` のとき (`Fail.to_result` の handle など) は、そのラベルは yield しうるラベルでなく ([型と Kind](types.md) の「row の具体化の記録」)、本体の row が yield しないこともあるが、それでも立てる。印が保守的なだけで、本体に置いた yield の確かめは yield を見つけないので、意味は変わらない (この節の最後の項)。費用は、そうした本体の末尾でない呼び出しに残る確かめと、本体の中で設けた handler の節が印を写して `yields` になることだけである。印は本体の row の分類では決めない
 - 操作の節と `return` の節は、handle を含む関数の印と同じにする。節は handle の外側の row で動き、その row は handle を含む関数が動いている row である
 - `$op$` は、その操作を呼ぶ形なので立てる。`$cont$` と `$cont$state` は、どの文脈からも呼ばれる補助の関数なので立てる。`$con$`、導出とタプルの生成器が作る関数、`tag$`、表示関数、`$externN` は立てない。`$externN` は行が `Effectful` でも立てない。`Effectful` の extern の呼び出しは yield の地点でないためである (下の「IO の extern」)
@@ -562,8 +563,9 @@ V2 は、`lin` の値を `unr` の受け手に渡すことだけを拒む。`unr
 
 ### REPL の入力
 
-REPL の入力から作る関数 `input$N` (N は入力の番号) は、`()` を1つ受ける関数で、`main` と同じく `entry$input$N` から `()` で呼ばれる ([VM](vm.md) の「追記」)。入力の関数は普通の関数のまま入力の値を返し、入力の種類ごとの扱いは `entry$input$N` に置く。
+REPLの入力から作る関数`input$N` (Nは入力の番号) は、`()`を1つ受ける関数である。`entry$input$N`は、`main`と同じくそれを`()`で呼ぶか、入力のrowに`Async`があれば`Std.Async.root@[T]`に渡す ([VM](vm.md)の「追記」)。入力の関数は普通の関数のまま入力の値を返し、入力の種類ごとの扱いは`entry$input$N`に置く。
 
+- 入力の関数の宣言の型のrowに`Async`があれば ([型と Kind](types.md)の「REPL の入力」)、`entry$input$N`は`main`のエントリの関数 (上の「変換の規則」) と同じく包む。`input$N`を`()`で呼ばずに`Std.Async.root@[T]`に渡し、その結果を下のとおり入力の種類ごとに扱う
 - 式の入力の `entry$input$N` は、型検査が記録した表示の仕方 ([型と Kind](types.md) の「REPL の入力」) に従う。`Unit` なら、結果をそのまま返す。`Value` と `Typed` なら、`println` を呼ばずに、値を書いた文字列 (型の ` : T` を含まない) を返す。`ret` は `obj` である。`Repl` がその文字列を整形し、`Typed` なら ` : T` を付けて書く ([REPL の端末](repl.md) の「結果の表示」)
   - 入力の値の型を構造で書くなら、表示関数 `display$N$0("", 300, 0, 0, v)` を呼び、結果の組の文字列を返す (下の「表示関数」)
   - `show_prec` で書く型なら、`show` を呼んだ結果を返す。`show` は補間の穴と同じく `LangItems` (`show_method`) で引くので、利用者が同じ名前を定義しても変わらない

@@ -6,10 +6,10 @@ import Net
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   println "before"
-  Async.run (fn () ->
+  Async.scope (fn _ ->
     let l = Net.listen "127.0.0.1" 0
     let t = Async.start (fn () ->
       let (s, l) = Net.accept l

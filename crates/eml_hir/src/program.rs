@@ -476,6 +476,21 @@ impl Program {
         self.externs.panic
     }
 
+    /// std のモジュール`Std.Async`のエフェクト`Async`を宣言したitem。そのモジュールを読み込んでいなければ`None`。rowに
+    /// これを持つ`main`は、runの根のタスクとして動く (docs/spec/stdlib.md の「`Std.Async`」)。
+    pub fn async_effect(&self) -> Option<EffectId> {
+        self.modules.iter().find_map(|(id, data)| {
+            if data.origin != ModuleOrigin::Std || data.name != "Std.Async" {
+                return None;
+            }
+            data.items
+                .effects
+                .iter()
+                .find(|(_, item)| item.name == "Async")
+                .map(|(local, _)| ItemId::new(id, local))
+        })
+    }
+
     pub fn file(&self, module: ModuleId) -> FileId {
         self.modules[module].file
     }

@@ -1296,11 +1296,11 @@ fn the_workers_mark_needs_a_reason() {
     );
 }
 
-/// `Async.run` だけのプログラムはタスクを置かず、ハーネスが落とす。
+/// `Async.scope`だけのプログラムはタスクを置かず、ハーネスが落とす。
 #[test]
 #[should_panic(expected = "placed no task on another worker")]
 fn an_async_file_that_places_no_task_fails() {
-    let source = "import Async\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> 1)))\n";
+    let source = "import Async\n\nmain : Unit -> <IO, Panic, Async.Async> Unit\nmain () = println (show (Async.scope (fn _ -> 1)))\n";
     let session = Session::load("run/async/short.em", source, &eml_cli::MemorySource(&[]));
     let program = session.compile().program.expect("the program compiles");
     let root = ui_root().join("run/async");

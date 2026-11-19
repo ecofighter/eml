@@ -20,11 +20,11 @@ awaits ts sum =
     | Nil -> sum
     | t :: rest -> awaits rest (sum + Async.await t)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let k = int_arg 0 8
   let m = int_arg 1 27
-  println "spread done \{show (awaits (starts k m Nil) 0)}")
+  println "spread done \{show (awaits (starts k m Nil) 0)}"
 
 int_arg : Int -> Int -> <IO, Panic> Int
 int_arg i default =

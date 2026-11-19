@@ -22,8 +22,8 @@ connected () =
   let c = Net.connect "127.0.0.1" port
   (c, Async.await t)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let (a, b) = connected ()
   match Async.timeout 10 (fn () -> Net.read_chunk (Bytes.empty ()) b) with
     | Some (_, b) ->
@@ -32,4 +32,4 @@ main () = Async.run (fn () ->
     | None -> println "None"
   let (buf, a) = Net.read_chunk (Bytes.empty ()) a
   Net.close a
-  if Bytes.length buf == 0 then println "eof" else println "data")
+  if Bytes.length buf == 0 then println "eof" else println "data"

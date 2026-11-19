@@ -177,7 +177,7 @@ fn stream_open_refuses_a_named_pipe() {
     std::fs::create_dir_all(&dir).unwrap();
     let program = dir.join("pipe.em");
     let source = format!(
-        "import Async (Async)\nimport Stream\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () ->\n  match try_io (fn () -> Stream.close (Stream.open \"{}\")) with\n    | Ok _ -> println \"opened\"\n    | Err e -> println \"\\{{show e.kind}}: \\{{e.message}}\")\n",
+        "import Async (Async)\nimport Stream\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = Async.scope (fn _ ->\n  match try_io (fn () -> Stream.close (Stream.open \"{}\")) with\n    | Ok _ -> println \"opened\"\n    | Err e -> println \"\\{{show e.kind}}: \\{{e.message}}\")\n",
         name.replace('\\', "\\\\")
     );
     std::fs::write(&program, source).unwrap();
@@ -489,10 +489,10 @@ fn an_interrupt_stops_a_sleeping_program_with_130() {
     let text = "\
 import Async
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   eprintln \"sleeping\"
-  Async.run (fn () -> Async.sleep_ms 100000)
+  Async.scope (fn _ -> Async.sleep_ms 100000)
 ";
     let dir = temp_project("cli-sigint-sleep", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
@@ -1096,8 +1096,8 @@ body () =
   Async.await (Async.start (report \"started\"))
   Async.await (Async.start_on_main (report \"main-worker\"))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 ";
     let dir = temp_project("cli-child-signals", &[("main.em", text)]);
     let output = eml_in(&dir, &["run", "--workers", "2", "main.em"]);
@@ -1127,8 +1127,8 @@ import Async (Async)
 import Async
 import Exec
 
-main : Unit -> <IO, Panic> Unit
-main () = println (show (Async.run (fn () -> Exec.run `sh -c 'echo started >&2; exec sleep 30'`)))
+main : Unit -> <IO, Panic, Async> Unit
+main () = println (show (Async.scope (fn _ -> Exec.run `sh -c 'echo started >&2; exec sleep 30'`)))
 ";
     let dir = temp_project("cli-sigint-exec", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
@@ -1215,11 +1215,10 @@ fn a_terminate_ends_an_idle_program_with_143() {
     let text = "\
 import Async
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    eprintln \"ready\"
-    Async.sleep_ms 600000)
+  eprintln \"ready\"
+  Async.sleep_ms 600000
 ";
     let dir = temp_project("cli-sigterm-sleep", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
@@ -1270,12 +1269,12 @@ fn an_unheard_signal_stops_a_program_with_a_task_on_worker_1(
     let text = "\
 import Async
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () ->
     eprintln \"ready\"
     Async.sleep_ms 600000)
-  Async.await t)
+  Async.await t
 ";
     let dir = temp_project(name, &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
@@ -1339,8 +1338,8 @@ drain buf s =
   let (buf, s) = Net.read_chunk buf s
   if Bytes.length buf == n then (buf, s) else drain buf s
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let server = Async.start (fn () ->
@@ -1356,7 +1355,7 @@ main () = Async.run (fn () ->
   Net.close a
   Async.await server
   println (show (sum_all ts 0))
-  println (String.decode buf))
+  println (String.decode buf)
 ";
     let dir = temp_project("cli-four-workers", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
@@ -1481,14 +1480,14 @@ fn a_terminate_reaches_a_waiting_task() {
 import Async
 import Signal
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () ->
     Signal.wait Signal.Terminate
     eprintln \"got\")
   Async.yield_now ()
   eprintln \"ready\"
-  Async.await t)
+  Async.await t
 ";
     let dir = temp_project("cli-sigterm-wait", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
@@ -1520,15 +1519,15 @@ fn an_interrupt_after_a_delivered_one_ends_the_program_with_130() {
 import Async
 import Signal
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () ->
     Signal.wait Signal.Interrupt
     eprintln \"got\")
   Async.yield_now ()
   eprintln \"ready\"
   Async.await t
-  Async.sleep_ms 600000)
+  Async.sleep_ms 600000
 ";
     let dir = temp_project("cli-sigint-delivered", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
@@ -1578,14 +1577,14 @@ import Async
 import Signal
 import Stdin
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.spawn (fn () -> Signal.wait Signal.{kind})
   Async.yield_now ()
   eprintln \"ready\"
   let (line, h) = Stdin.read_line (Stdin.open ())
   Stdin.close h
-  println (show line))
+  println (show line)
 "
     );
     let dir = temp_project(name, &[("main.em", &text)]);

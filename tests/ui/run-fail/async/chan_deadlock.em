@@ -6,10 +6,10 @@ import Chan
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   println "before"
-  Async.run (fn () ->
+  Async.scope (fn _ ->
     let c : Chan.Chan Int = Chan.new 0
     let t = Async.start (fn () -> Chan.recv c)
     let _ = spin 40

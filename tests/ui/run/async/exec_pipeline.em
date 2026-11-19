@@ -10,12 +10,12 @@ import Proc ((.|))
 import Stdin
 import String
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   match Env.args () with
     | ["emit"] -> emit 0
     | ["copy", prefix] -> copy (Stdin.open ()) prefix
-    | _ -> Async.run parent
+    | _ -> Async.scope (fn _ -> parent ())
 
 -- 1行は60バイト余りで、4096 行で 256 KiB を超える
 emit : Int -> <IO, Panic> Unit

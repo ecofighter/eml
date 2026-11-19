@@ -10,8 +10,8 @@ spin n = if n == 0 then 0 else spin (n - 1)
 reader : Unit -> <IO, Async> Unit
 reader () = Stream.close (Stream.open "missing.txt")
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let t = Async.start reader
   let _ = spin 40
-  Async.await t)
+  Async.await t

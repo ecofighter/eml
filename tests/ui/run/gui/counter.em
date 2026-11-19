@@ -27,7 +27,6 @@ counter () =
       | Quit -> println "final \{show n}"
   loop 0
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  use Async.run
   Gui.run counter

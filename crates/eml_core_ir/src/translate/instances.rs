@@ -173,6 +173,9 @@ pub(super) struct Instances {
     /// ランタイムか処理系が名前で呼ぶ関数の instance。読み込んだ std にある entry だけを持つ。translate が `blocking` の
     /// 呼び出しを下ろすときに `io_wait` を引く (docs/spec/core-ir.md の「組を返す extern」)。
     pub(super) runtime: FxHashMap<RuntimeEntry, InstanceId>,
+    /// エントリが根のタスクとして動くときに、エントリの関数が呼ぶ`Std.Async.root`のinstance
+    /// (docs/spec/core-ir.md の「変換の規則」)。
+    pub(super) root: Option<InstanceId>,
     /// 型検査の型の表に、代入の結果を足した表。
     pub(super) store: TypeStore,
     /// instance の名前と、変換が作る型ごとの包む関数の名前 (`wrapper_name`) に使う表。
@@ -835,6 +838,25 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     // (docs/spec/core-ir.md の「row のビットと instance の鍵」)
     let entry_bits = vec![true; row_vars(hir, entry).len()];
     let entry_index = collector.add(entry, entry_args, entry_bits);
+    // 宣言の型の最初の矢印のrowに`Async`を持つエントリは、runの根のタスクとして動く。エントリの関数は、エントリの結果の
+    // 型で`Std.Async.root`のinstanceを呼ぶ。emlのコードからは呼ばれないので、エントリと同じく根にする
+    // (docs/spec/core-ir.md の「変換の規則」)
+    let root_index = hir.async_effect().and_then(|effect| {
+        let TypeKind::Fn { effects, ret, .. } = collector
+            .store
+            .kind(typed.decls[&ValueItem::Function(entry)].ty)
+        else {
+            return None;
+        };
+        if !effects.iter().any(|label| label.id == effect) {
+            return None;
+        }
+        let ret = *ret;
+        let root = hir
+            .function_by_canonical_name("Std.Async.root")
+            .expect("`Std.Async` defines `root`");
+        Some(collector.add(root, vec![ret], vec![]))
+    });
     // ランタイムが名前で呼ぶ関数は、eml のコードから呼ばれないので、エントリと同じく根にする。どれも単相なので、型引数も
     // row のビットもない (docs/spec/core-ir.md の「変換の規則」)
     let mut runtime_entries = FxHashMap::default();
@@ -875,6 +897,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
         collector.found,
         entry_index,
         &runtime_entries,
+        root_index,
         display,
         collector.store,
     )
@@ -1060,6 +1083,7 @@ fn order(
     found: Vec<Found>,
     entry: usize,
     runtime: &FxHashMap<RuntimeEntry, usize>,
+    root: Option<usize>,
     display: Option<FoundPart>,
     store: TypeStore,
 ) -> Instances {
@@ -1173,6 +1197,7 @@ fn order(
             .iter()
             .map(|(&entry, &index)| (entry, InstanceId(renumbered[index])))
             .collect(),
+        root: root.map(|index| InstanceId(renumbered[index])),
         display: display.map(|part| part.renumber(&renumbered)),
         store,
         names,

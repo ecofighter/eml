@@ -432,7 +432,7 @@ fn a_parameter_live_across_a_yield_point_is_owned_and_moved_into_the_continuatio
     // `s`は`yield_now`の後でも読むので、待ちをまたいで生きる。継続の閉包が捕まえることは消費する位置なので、
     // `s`は借りられず、閉包へ`dup`なしで移る (docs/spec/lir.mdの「借用の推論」)
     let text = format!(
-        "import Async (Async)\nimport String\n\n{HIDE}pause_then_read : String -> <IO, Async> Int\npause_then_read s =\n  Async.yield_now ()\n  String.byte_length s\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 pause_then_read\n  println (show (Async.run (fn () -> f \"s\")))"
+        "import Async (Async)\nimport String\n\n{HIDE}pause_then_read : String -> <IO, Async> Int\npause_then_read s =\n  Async.yield_now ()\n  String.byte_length s\n\nmain : Unit -> <IO, Panic, Async> Unit\nmain () =\n  let Box f = hide 0 pause_then_read\n  println (show (f \"s\"))"
     );
     let shown = lir_text(&text, eml_lir::Pass::Perceus);
     let pause = function(&shown, "pause_then_read");

@@ -1,10 +1,10 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-assertion_line: 329
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
-input_file: tests/ui/run/async/cancel_reaches_nested_run.em
+input_file: tests/ui/run/async/main_is_the_root.em
 ---
 --- stdout ---
-worker: Cancelled: task was cancelled
-after run
+answer 42
+main returns
+late child
 --- stderr ---

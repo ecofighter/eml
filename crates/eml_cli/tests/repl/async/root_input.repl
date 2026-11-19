@@ -1,0 +1,17 @@
+# rowに`Async`を持つ入力は、その入力のrunの根のタスクとして動く。`Async`を持たない入力はどのタスクの外でも動き、
+# 失敗は位置を持つ (docs/spec/types.md の「REPL の入力」)
+> import Async
+> 1 + 1
+> let x = Async.await (Async.start (fn () -> [1, 2, 3]))
+> x
+> Async.await (Async.start (fn () -> (1, "one")))
+> let p = Async.await (Async.start (fn () -> (2, "two")))
+> p
+> Async.spawn (fn () -> println "child")
+> Async.await (Async.start (fn () -> panic "boom"))
+> 10 / 0
+> effect Ask where
+.   ask : Unit -> Int
+.
+> ask ()
+> println "next"

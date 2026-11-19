@@ -1,4 +1,4 @@
-//! `Std.Async` のタスクの始めと終わり、待ち、失敗と `Async.run` (docs/spec/vm.md の「`Async` のタスク」)。どのプログラムも検査モードの
+//! `Std.Async`のタスクの始めと終わり、待ち、失敗と根のタスク (docs/spec/vm.mdの「`Async`のタスク」)。どのプログラムも検査モードの
 //! 逐次と速いモードで流し、標準出力を比べる。
 
 use eml_sched::config::Sched;
@@ -16,40 +16,87 @@ fn run_both(src: &str) -> String {
 }
 
 #[test]
-fn run_returns_the_value_of_its_body() {
+fn scope_returns_the_value_of_its_body() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = println (show (Async.run (fn () -> 41 + 1)))
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = println (show (Async.scope (fn _ -> 41 + 1)))
 ";
     assert_eq!(run_both(src), "42\n");
 }
 
-/// タスクの中の `Async.run` は、そのタスクのスタックの上で自分の根のスコープを待つ。
+/// rowに`Async`を持つ`main`は、runの根のタスクとして動く。runは、待たれていない子が終わるまで終わらない。
 #[test]
-fn a_run_inside_a_task_waits_for_its_own_scope() {
-    let src = "\
-import Async
-main : Unit -> <IO, Panic> Unit
-main () =
-  Async.run (fn () ->
-    Async.run (fn () -> println \"inner\")
-    println \"outer\")
-";
-    assert_eq!(run_both(src), "inner\nouter\n");
+fn main_is_the_root_task() {
+    let body = "  Async.spawn (fn () ->
+    Async.sleep_ms 10
+    println \"late\")
+  println \"main\"";
+    for row in [
+        "<Async>",
+        "<IO, Async>",
+        "<Panic, Async>",
+        "<IO, Panic, Async>",
+    ] {
+        // タスクを始める操作はどれも`IO`を求めるので、`IO`のない`main`は何もせずに終わる
+        let (body, expected) = if row.contains("IO") {
+            (body, "main\nlate\n")
+        } else {
+            ("  ()", "")
+        };
+        let src = format!(
+            "import Async (Async)\nimport Async\nmain : Unit -> {row} Unit\nmain () =\n{body}\n"
+        );
+        assert_eq!(run_both(&src), expected, "{row}");
+    }
+    let point_free = format!(
+        "import Async (Async)\nimport Async\nmain : Unit -> <IO, Async> Unit\nmain = fn () ->\n{body}\n"
+    );
+    assert_eq!(run_both(&point_free), "main\nlate\n");
 }
 
-/// `Async.run` は、本体が始めた子と、子が始めた孫を待ってから戻る。孫も同じ根のスコープに入る。seed の方針は実行待ちの
-/// 列から乱数で選ぶので、出力の順がスケジュールによらないように、`b` を出力するタスクは `a` を出力した後で始める。
+/// 根のタスクの失敗は、`main`の中で起きても子のタスクで起きても、位置を持たず`main`の名前を付けて報告する
+/// (docs/spec/vm.md の「誤り、止めること、終わり」)。
+#[test]
+fn a_root_failure_names_main() {
+    let in_main = "\
+import Async (Async)
+main : Unit -> <IO, Panic, Async> Unit
+main () =
+  println \"before\"
+  panic \"boom\"
+";
+    let in_child = "\
+import Async (Async)
+import Async
+main : Unit -> <IO, Panic, Async> Unit
+main () =
+  Async.spawn (fn () ->
+    Async.sleep_ms 10
+    panic \"boom\")
+  println \"before\"
+";
+    for src in [in_main, in_child] {
+        let (out, checked) = run(src);
+        assert_eq!(out, "before\n");
+        let checked = checked.expect_err("the checked run fails").to_string();
+        assert_eq!(checked, "panicked: boom in `main`");
+        let (fast_out, fast) = execute(&lir(src), &RunConfig::default());
+        assert_eq!(fast_out, out);
+        assert_eq!(fast.expect_err("the fast run fails").to_string(), checked);
+    }
+}
+
+/// 根のタスクは、本体が始めた子と、子が始めた孫を待ってから終わる。孫も同じ根のスコープに入る。seedの方針は実行待ちの
+/// 列から乱数で選ぶので、出力の順がスケジュールによらないように、`b`を出力するタスクは`a`を出力した後で始める。
 const TWO_CHILDREN: &str = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    println \"main\"
-    Async.spawn (fn () ->
-      println \"a\"
-      Async.spawn (fn () -> println \"b\")))
+  println \"main\"
+  Async.spawn (fn () ->
+    println \"a\"
+    Async.spawn (fn () -> println \"b\"))
 ";
 
 #[test]
@@ -81,14 +128,13 @@ fn the_seeded_runs_agree_with_the_sequential_run() {
 fn await_returns_the_value_before_and_after_the_task_ends() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let before = Async.start (fn () -> \"x\")
-    println (Async.await before)
-    let after = Async.start (fn () -> \"x\")
-    Async.yield_now ()
-    println (Async.await after))
+  let before = Async.start (fn () -> \"x\")
+  println (Async.await before)
+  let after = Async.start (fn () -> \"x\")
+  Async.yield_now ()
+  println (Async.await after)
 ";
     assert_eq!(run_both(src), "x\nx\n");
 }
@@ -105,44 +151,39 @@ twice name () =
   Async.yield_now ()
   println (name ++ \"2\")
   Async.yield_now ()
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
-    Async.spawn (twice \"a\")
-    Async.spawn (twice \"b\")
-    Async.spawn (twice \"c\"))
+  Async.spawn (twice \"a\")
+  Async.spawn (twice \"b\")
+  Async.spawn (twice \"c\")
 ";
     assert_eq!(run_both(src), "a1\nb1\nc1\na2\nb2\nc2\n");
 }
 
-/// 子の `panic` は `await` が文言のまま起こし直す。捕まえなければ `run` がもう一度起こし直して run の誤りになり、
-/// `await` を `try_panic` で囲めば捕まえられる。
+/// 子の`panic`は`await`が文言のまま起こし直す。捕まえなければ根のタスクの失敗になって`main`の名前で報告され、
+/// `await`を`try_panic`で囲めば捕まえられる。
 #[test]
 fn await_raises_the_panic_of_the_task_again() {
     let uncaught = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () -> panic \"boom\")
-    let n : Int = Async.await t
-    println (show n))
+  let t = Async.start (fn () -> panic \"boom\")
+  let n : Int = Async.await t
+  println (show n)
 ";
     let (_, checked) = run(uncaught);
     let checked = checked.expect_err("the checked run fails").to_string();
-    // 起こし直した失敗の位置は、`run` の中の std の呼び出しである (docs/spec/stdlib.md の「実行時エラー」)
-    assert!(
-        checked.starts_with("panicked: boom\n  at <std>/Async.em:"),
-        "{checked}"
-    );
+    // 根の失敗には位置がなく、エントリの関数の名前が付く (docs/spec/vm.md の「誤り、止めること、終わり」)
+    assert_eq!(checked, "panicked: boom in `main`");
     let (_, fast) = execute(&lir(uncaught), &RunConfig::default());
     assert_eq!(fast.expect_err("the fast run fails").to_string(), checked);
     let caught = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   let r = try_panic (fn () ->
-    Async.run (fn () ->
+    Async.scope (fn _ ->
       let t = Async.start (fn () -> panic \"boom\")
       match try_panic (fn () -> Async.await t) with
         | Ok n -> println (show (n + 0))
@@ -160,11 +201,10 @@ fn an_unawaited_lin_result_does_not_leak() {
     let src = "\
 import Async
 import MutArray
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    drop (Async.start (fn () -> MutArray.make 3 \"a\"))
-    println \"started\")
+  drop (Async.start (fn () -> MutArray.make 3 \"a\"))
+  println \"started\"
 ";
     assert_eq!(run_both(src), "started\n");
 }
@@ -175,14 +215,13 @@ fn await_returns_a_lin_result() {
     let src = "\
 import Async
 import MutArray
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () -> MutArray.empty ())
-    let m : MutArray String = Async.await t
-    let (n, m) = MutArray.length m
-    drop m
-    println (show n))
+  let t = Async.start (fn () -> MutArray.empty ())
+  let m : MutArray String = Async.await t
+  let (n, m) = MutArray.length m
+  drop m
+  println (show n)
 ";
     assert_eq!(run_both(src), "0\n");
 }
@@ -194,11 +233,10 @@ fn a_task_result_is_marked_before_it_is_deposited() {
         format!(
             "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () -> {result})
-    println {print})
+  let t = Async.start (fn () -> {result})
+  println {print}
 "
         )
     };
@@ -219,10 +257,10 @@ main () =
 fn the_second_failure_of_a_scope_is_counted_as_dropped() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   let r = try_panic (fn () ->
-    Async.run (fn () ->
+    Async.scope (fn _ ->
       Async.spawn (fn () -> panic \"one\")
       Async.spawn (fn () -> panic \"two\")))
   match r with
@@ -242,15 +280,14 @@ main () =
 fn the_task_counts_do_not_depend_on_the_schedule() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let x = \"a\" ++ show 1
-    let y = \"b\" ++ show 2
-    let a = Async.start (fn () -> x)
-    let b = Async.start (fn () -> y)
-    println (Async.await a)
-    println (Async.await b))
+  let x = \"a\" ++ show 1
+  let y = \"b\" ++ show 2
+  let a = Async.start (fn () -> x)
+  let b = Async.start (fn () -> y)
+  println (Async.await a)
+  println (Async.await b)
 ";
     let program = lir(src);
     let checked = || RunConfig::default().with_debug_heap(true);
@@ -285,13 +322,12 @@ forever : Unit -> <IO, Async> Int
 forever () =
   Async.yield_now ()
   forever ()
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () -> Async.await (Async.start forever))
-    Async.yield_now ()
-    drop t
-    println \"dropped\")
+  let t = Async.start (fn () -> Async.await (Async.start forever))
+  Async.yield_now ()
+  drop t
+  println \"dropped\"
 ";
     assert_eq!(run_both(src), "dropped\n");
     let (_, stats) = run_stats(src);
@@ -316,8 +352,8 @@ checks n =
   else
     Async.check_cancelled ()
     checks (n - 1)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> checks {n})
+main : Unit -> <IO, Panic, Async> Unit
+main () = checks {n}
 "
         )
     };
@@ -333,11 +369,10 @@ main () = Async.run (fn () -> checks {n})
 fn a_task_sleeps_and_prints() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    Async.sleep_ms 100
-    println \"a\")
+  Async.sleep_ms 100
+  println \"a\"
 ";
     assert_eq!(run_both(src), "a\n");
     let (_, stats) = run_stats(src);
@@ -355,15 +390,14 @@ nap : Int -> <IO, Async> Unit
 nap ms =
   Async.sleep_ms ms
   println (show ms)
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
-    let a = Async.start (fn () -> nap 50)
-    let b = Async.start (fn () -> nap 100)
-    let c = Async.start (fn () -> nap 70)
-    Async.await a
-    Async.await b
-    Async.await c)
+  let a = Async.start (fn () -> nap 50)
+  let b = Async.start (fn () -> nap 100)
+  let c = Async.start (fn () -> nap 70)
+  Async.await a
+  Async.await b
+  Async.await c
 ";
     assert_eq!(run_both(src), "50\n70\n100\n");
     let program = lir(src);
@@ -390,13 +424,12 @@ main () =
 fn a_sleep_of_zero_or_less_yields() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    Async.sleep_ms 0
-    println \"zero\"
-    Async.sleep_ms (-1)
-    println \"negative\")
+  Async.sleep_ms 0
+  println \"zero\"
+  Async.sleep_ms (-1)
+  println \"negative\"
 ";
     assert_eq!(run_both(src), "zero\nnegative\n");
     let (_, stats) = run_stats(src);
@@ -409,15 +442,14 @@ main () =
 fn a_dropped_handle_cancels_a_sleeping_task() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () ->
-      Async.sleep_ms 10000
-      println \"woke\")
-    Async.yield_now ()
-    drop t
-    println \"dropped\")
+  let t = Async.start (fn () ->
+    Async.sleep_ms 10000
+    println \"woke\")
+  Async.yield_now ()
+  drop t
+  println \"dropped\"
 ";
     assert_eq!(run_both(src), "dropped\n");
     let (_, stats) = run_stats(src);
@@ -431,16 +463,15 @@ main () =
 fn a_shielded_sleep_is_not_cancelled() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    drop (Async.start (fn () ->
-      Async.shield (fn () ->
-        Async.sleep_ms 10
-        println \"slept\")
-      Async.check_cancelled ()
-      println \"not cancelled\"))
-    println \"dropped\")
+  drop (Async.start (fn () ->
+    Async.shield (fn () ->
+      Async.sleep_ms 10
+      println \"slept\")
+    Async.check_cancelled ()
+    println \"not cancelled\"))
+  println \"dropped\"
 ";
     assert_eq!(run_both(src), "dropped\nslept\n");
     let (_, stats) = run_stats(src);
@@ -453,14 +484,13 @@ main () =
 fn the_longest_sleeps_saturate() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    Async.sleep_ms 9223372036854775807
-    Async.sleep_ms 9223372036854775807
-    Async.sleep_ms 1
-    Async.sleep_ms 1
-    println \"end\")
+  Async.sleep_ms 9223372036854775807
+  Async.sleep_ms 9223372036854775807
+  Async.sleep_ms 1
+  Async.sleep_ms 1
+  println \"end\"
 ";
     assert_eq!(run_both(src), "end\n");
 }
@@ -470,11 +500,10 @@ main () =
 fn a_long_sleep_on_the_virtual_clock_does_not_wait() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    Async.sleep_ms 60000
-    println \"woke\")
+  Async.sleep_ms 60000
+  println \"woke\"
 ";
     assert_eq!(run_both(src), "woke\n");
 }
@@ -484,24 +513,24 @@ main () =
 fn timeout_runs_the_body_in_the_calling_task() {
     let programs = [
         (
-            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 100 (fn () -> 42))))\n",
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = println (show (Async.scope (fn _ -> Async.timeout 100 (fn () -> 42))))\n",
             "Some 42\n",
-            (2, 3, 1, 1),
+            (2, 4, 1, 1),
         ),
         (
-            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 50 (fn () ->\n  Async.sleep_ms 100\n  1))))\n",
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = println (show (Async.scope (fn _ -> Async.timeout 50 (fn () ->\n  Async.sleep_ms 100\n  1))))\n",
             "None\n",
-            (2, 4, 2, 1),
+            (2, 5, 2, 1),
         ),
         (
-            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 100 (fn () ->\n  Async.sleep_ms 50\n  1))))\n",
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = println (show (Async.scope (fn _ -> Async.timeout 100 (fn () ->\n  Async.sleep_ms 50\n  1))))\n",
             "Some 1\n",
-            (2, 4, 2, 1),
+            (2, 5, 2, 1),
         ),
         (
-            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 0 (fn () ->\n  Async.sleep_ms 50\n  1))))\n",
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = println (show (Async.scope (fn _ -> Async.timeout 0 (fn () ->\n  Async.sleep_ms 50\n  1))))\n",
             "None\n",
-            (1, 3, 0, 1),
+            (1, 4, 0, 1),
         ),
     ];
     for (src, out, counts) in programs {
@@ -521,14 +550,14 @@ fn timeout_runs_the_body_in_the_calling_task() {
 fn race_decides_the_winner_in_one_claim() {
     let programs = [
         (
-            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.race (fn () ->\n  Async.sleep_ms 30\n  1) (fn () ->\n  Async.sleep_ms 60\n  2))))\n",
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = println (show (Async.scope (fn _ -> Async.race (fn () ->\n  Async.sleep_ms 30\n  1) (fn () ->\n  Async.sleep_ms 60\n  2))))\n",
             "Left 1\n",
-            (3, 5, 2, 1, 0),
+            (3, 6, 2, 1, 0),
         ),
         (
-            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.try_all (fn () -> Async.race (fn () ->\n  Async.sleep_ms 30\n  let x : Int = panic \"a\"\n  x) (fn () ->\n  match try_io (fn () -> Async.sleep_ms 60) with\n    | Ok () -> 2\n    | Err _ -> panic \"b\")))))\n",
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = println (show (Async.scope (fn _ -> Async.try_all (fn () -> Async.race (fn () ->\n  Async.sleep_ms 30\n  let x : Int = panic \"a\"\n  x) (fn () ->\n  match try_io (fn () -> Async.sleep_ms 60) with\n    | Ok () -> 2\n    | Err _ -> panic \"b\")))))\n",
             "Err (Panicked \"a\")\n",
-            (3, 5, 2, 1, 1),
+            (3, 6, 2, 1, 1),
         ),
     ];
     for (src, out, counts) in programs {
@@ -553,19 +582,19 @@ fn race_decides_the_winner_in_one_claim() {
 fn drain_within_waits_until_the_scope_has_no_task() {
     let programs = [
         (
-            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 30)\n  Async.drain_within 100 s\n  let t = Async.start_in s (fn () -> 5)\n  println (show (Async.await t))))\n",
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = Async.scope (fn _ -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 30)\n  Async.drain_within 100 s\n  let t = Async.start_in s (fn () -> 5)\n  println (show (Async.await t))))\n",
             "5\n",
-            (4, 7, 2, 1),
+            (4, 8, 2, 1),
         ),
         (
-            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 300)\n  Async.drain_within 100 s\n  println \"after\"))\n",
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = Async.scope (fn _ -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 300)\n  Async.drain_within 100 s\n  println \"after\"))\n",
             "after\n",
-            (3, 7, 2, 2),
+            (3, 8, 2, 2),
         ),
         (
-            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () ->\n  let s = Async.scope (fn s -> s)\n  Async.drain_within 100 s\n  Async.drain_within 0 s\n  println \"at once\")\n",
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic, Async> Unit\nmain () = Async.scope (fn _ ->\n  let s = Async.scope (fn s -> s)\n  Async.drain_within 100 s\n  Async.drain_within 0 s\n  println \"at once\")\n",
             "at once\n",
-            (2, 9, 1, 2),
+            (2, 10, 1, 2),
         ),
     ];
     for (src, out, counts) in programs {
@@ -586,12 +615,11 @@ fn drain_within_waits_until_the_scope_has_no_task() {
 fn a_task_parked_on_a_job_lets_the_worker_run_other_tasks() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () -> println \"t\")
-    println (show (Async.compute (fn () -> 41)))
-    Async.await t)
+  let t = Async.start (fn () -> println \"t\")
+  println (show (Async.compute (fn () -> 41)))
+  Async.await t
 ";
     assert_eq!(run_both(src), "t\n41\n");
     let (_, stats) = run_stats(src);
@@ -607,19 +635,18 @@ fn a_cancel_reaches_a_task_parked_on_a_job_only_after_the_job() {
 import Async (Async)
 import Async
 import MutArray
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
-    Async.scope (fn s ->
-      Async.spawn_in s (fn () ->
-        match try_io (fn () -> Async.compute (fn () -> MutArray.make 2 7)) with
-          | Ok a ->
-            drop a
-            println \"job: done\"
-          | Err e -> println \"job: \\{show e.kind}\")
-      Async.yield_now ()
-      Async.cancel_scope s)
-    println \"after\")
+  Async.scope (fn s ->
+    Async.spawn_in s (fn () ->
+      match try_io (fn () -> Async.compute (fn () -> MutArray.make 2 7)) with
+        | Ok a ->
+          drop a
+          println \"job: done\"
+        | Err e -> println \"job: \\{show e.kind}\")
+    Async.yield_now ()
+    Async.cancel_scope s)
+  println \"after\"
 ";
     let (out, stats) = run_stats(src);
     let s = stats.unwrap_or_else(|error| panic!("the checked run failed: {error}"));
@@ -639,18 +666,17 @@ import Async
 import MutArray
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () ->
-      Async.scope (fn s ->
-        Async.cancel_scope s
-        match try_io (fn () -> {job}) with
-          | Ok a ->
-            drop a
-            println \"done\"
-          | Err e -> println \"job: \\{{show e.kind}}\"))
-    Async.await t)
+  let t = Async.start (fn () ->
+    Async.scope (fn s ->
+      Async.cancel_scope s
+      match try_io (fn () -> {job}) with
+        | Ok a ->
+          drop a
+          println \"done\"
+        | Err e -> println \"job: \\{{show e.kind}}\"))
+  Async.await t
 "
         )
     };
@@ -685,18 +711,17 @@ main () =
 fn a_job_releases_its_fork_evv() {
     let bare = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> println (show (Async.compute (fn () -> 1))))
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = println (show (Async.compute (fn () -> 1)))
 ";
     assert_eq!(run_both(bare), "1\n");
     let mirrored = "\
 import Async
 import Fail (Fail(..))
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let r = Fail.to_result (fn () -> Async.compute (fn () -> if 1 == 1 then 1 else Fail.fail \"no\"))
-    println (show r))
+  let r = Fail.to_result (fn () -> Async.compute (fn () -> if 1 == 1 then 1 else Fail.fail \"no\"))
+  println (show r)
 ";
     assert_eq!(run_both(mirrored), "Ok 1\n");
 }
@@ -706,12 +731,11 @@ main () =
 fn exit_abandons_a_queued_job() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    Async.spawn (fn () -> println (show (Async.compute (fn () -> 1))))
-    Async.yield_now ()
-    (exit 3 : Unit))
+  Async.spawn (fn () -> println (show (Async.compute (fn () -> 1))))
+  Async.yield_now ()
+  (exit 3 : Unit)
 ";
     let (host, out) = eml_vm::capture_host(Default::default());
     let config = RunConfig::default()

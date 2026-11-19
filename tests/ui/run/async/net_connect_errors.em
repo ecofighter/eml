@@ -13,8 +13,8 @@ report r =
     | Ok _ -> println "ok"
     | Err e -> println "\{show e.kind}: \{e.message}"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () -> spin 40)
   let _ = spin 40
   report (try_io (fn () -> Net.close (Net.connect "127.0.0.1" 9)))
@@ -28,4 +28,4 @@ main () = Async.run (fn () ->
   report (try_io (fn () -> Net.close_listener (Net.listen "127.0.0.1" (-1))))
   Net.close_listener l
   let _ = Async.await t
-  println "done")
+  println "done"

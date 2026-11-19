@@ -38,8 +38,8 @@ ask port msg =
   Net.close c
   String.decode buf
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen "127.0.0.1" 0
   let (port, l) = Net.local_port l
   let server = Async.start (fn () -> Async.scope (fn sc -> accept_loop sc 3 l))
@@ -49,4 +49,4 @@ main () = Async.run (fn () ->
   let c = ask port "c"
   Async.await server
   println c
-  println "server finished")
+  println "server finished"

@@ -1,5 +1,5 @@
 -- max-bytes: 268435456 soft 4194304
--- 捕まえなかったメモリの柔らかい上限の印は、`main` でも捕まえなければ `run_result` の位置の実行時エラーで run を止める
+-- 捕まえなかったメモリの柔らかい上限の印は、`main`でも捕まえなければ、`main`の失敗として実行時エラーで実行を止める
 -- (docs/spec/stdlib.md の「実行時エラー」)
 import Async (Async)
 
@@ -26,8 +26,8 @@ body () =
     ())
   Async.spawn (fn () -> grow 0 [])
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  Async.run body
+  Async.scope (fn _ -> body ())
   println "unreachable"

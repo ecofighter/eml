@@ -11,14 +11,14 @@ import Stdin
 import Stdout
 import String
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   match Env.args () with
     | ["cat"] -> Stdout.close (Stdout.write (Stdin.read_text ()) (Stdout.open ()))
     | ["count"] ->
       let text = Stdin.read_text ()
       println "child: bytes \{show (String.byte_length text)} lines \{show (List.length (String.lines text))}"
-    | _ -> Async.run parent
+    | _ -> Async.scope (fn _ -> parent ())
 
 -- 1行は64バイトで、3200 行で 200 KiB になる
 build : Int -> String -> <Panic> String

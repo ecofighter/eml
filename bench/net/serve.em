@@ -48,8 +48,8 @@ clients sc k each size port =
       Net.close (rounds each size (Bytes.make size 'x'u8) (Bytes.empty ()) c))
     clients sc (k - 1) each size port
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let n = int_arg 0 20480
   let size = int_arg 1 16
   let conns = int_arg 2 32
@@ -59,7 +59,7 @@ main () = Async.run (fn () ->
   let server = Async.start (fn () -> Async.scope (fn sc -> accept_loop sc conns l))
   Async.scope (fn sc -> clients sc conns each size port)
   Async.await server
-  println "serve done \{show (each * conns)}")
+  println "serve done \{show (each * conns)}"
 
 int_arg : Int -> Int -> <IO, Panic> Int
 int_arg i default =

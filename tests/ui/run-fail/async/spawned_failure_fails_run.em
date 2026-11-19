@@ -1,4 +1,4 @@
--- 待たない子の IO の失敗は `run` で起こし直り、本体の値は捨てる (docs/spec/stdlib.md の「`Std.Async`」)。
+-- 待たない子のIOの失敗はスコープで起こし直り、本体の値は捨てる (docs/spec/stdlib.mdの「`Std.Async`」)。
 import Async (Async)
 import FileIn
 
@@ -14,8 +14,8 @@ body () =
   let _ = spin 40
   1
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   println "before"
-  let n = Async.run body
+  let n = Async.scope (fn _ -> body ())
   println "unreachable \{show n}"

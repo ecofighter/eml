@@ -11,14 +11,14 @@ import Stdin
 import Stream
 import String
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   match Env.args () with
     | ["exit3"] ->
       println "one"
       exit 3
     | ["copy"] -> copy (Stdin.open ())
-    | _ -> Async.run parent
+    | _ -> Async.scope (fn _ -> parent ())
 
 copy : Stdin.Stdin -> <IO, Panic> Unit
 copy h =

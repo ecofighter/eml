@@ -11,11 +11,11 @@ import List
 import Stream
 import String
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   match Env.args () with
     | ["talk"] -> talk 0
-    | _ -> Async.run parent
+    | _ -> Async.scope (fn _ -> parent ())
 
 -- 1行は60バイト余りで、2048 行で 128 KiB を超える
 talk : Int -> <IO, Panic> Unit

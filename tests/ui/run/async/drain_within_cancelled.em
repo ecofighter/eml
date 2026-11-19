@@ -42,5 +42,5 @@ body () =
     Async.shield (fn () -> Async.drain_within 50 s)
     println "the shielded drain returned")
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

@@ -114,6 +114,93 @@ fn main_with_a_row_variable_is_rejected() {
     );
 }
 
+#[test]
+fn main_may_perform_async() {
+    // `Std.Async`を読み込んだプログラムでは、`main`のrowに`Async`も書ける (docs/spec/modules.md の「モジュール」)
+    for row in [
+        "<Async>",
+        "<IO, Async>",
+        "<Panic, Async>",
+        "<IO, Panic, Async>",
+    ] {
+        let text = format!("import Async (Async)\n\nmain : Unit -> {row} Unit\nmain () = ()");
+        assert_eq!(check_short(&text), Vec::<String>::new(), "{row}");
+    }
+}
+
+#[test]
+fn main_with_async_and_another_effect_is_rejected() {
+    let text = "import Async (Async)\n\neffect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Async, Ask> Unit\nmain () = ()";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2004 6:8 `main` must have type `Unit -> <IO, Panic, Async> Unit`, with each label optional"
+        ]
+    );
+}
+
+#[test]
+fn main_with_a_repeated_async_is_rejected() {
+    // 根のタスクの底は`Async`のhandlerを1つだけかぶせるので、`Async`は1回だけ書ける。重ねた`IO`と`Panic`は
+    // 1つにまとまるので、今までどおり書ける (docs/spec/modules.md の「モジュール」)
+    let text = "import Async (Async)\n\nmain : Unit -> <IO, Async, Async> Unit\nmain () = ()";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2004 3:8 `main` must have type `Unit -> <IO, Panic, Async> Unit`, with each label optional"
+        ]
+    );
+    let merged = "import Async (Async)\n\nmain : Unit -> <IO, IO, Panic, Async> Unit\nmain () = ()";
+    assert_eq!(check_short(merged), Vec::<String>::new());
+}
+
+#[test]
+fn a_second_async_in_main_is_not_suggested() {
+    let text = "import Async (Async)\n\nmain : Unit -> <IO, Panic, Async> Unit\nmain () =\n  Async.compute (fn () -> Async.yield_now ())";
+    insta::assert_snapshot!(check_full(text), @"
+    E2002 5:3 `compute` performs `Async`, which the signature of `main` does not allow
+      5:3 this call performs `Async`
+      3:8 the row of this signature does not include it
+    E2020 5:3 the row passed to `compute` may perform `IO`, but `compute` allows only `never` operations
+      5:3 `compute` is used here
+      5:27 `IO` is performed here
+      164:25 `compute` bounds this row variable by `never`
+      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    ");
+    insta::assert_snapshot!(fix_text(text), @"");
+}
+
+#[test]
+fn only_the_labels_other_than_a_second_async_are_suggested_for_main() {
+    let text = "import Async (Async)\n\neffect Ask where\n  ask : Unit -> Int\n\ntwice : Unit -> <Async, Async, Ask> Unit\ntwice () = ()\n\nmain : Unit -> <IO, Async> Unit\nmain () = twice ()";
+    insta::assert_snapshot!(check_full(text), @"
+    E2002 10:11 `twice` performs `Async`, `Ask`, which the signature of `main` does not allow
+      10:11 this call performs `Async`, `Ask`
+      9:8 the row of this signature does not include it
+      help: add `Ask` to the row of the signature of `main`, as in `-> <Ask> ...`
+    ");
+    insta::assert_snapshot!(fix_text(text), @r#"
+    E2002 10:11 add `Ask` to the signature of `main`
+      9:26..9:26 ", Ask"
+    "#);
+}
+
+#[test]
+fn a_main_without_async_is_told_to_add_it() {
+    let text =
+        "import Async (Async)\n\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.yield_now ()";
+    insta::assert_snapshot!(check_full(text), @"
+    E2002 4:11 `yield_now` performs `Async`, which the signature of `main` does not allow
+      4:11 this call performs `Async`
+      3:8 the row of this signature does not include it
+      help: add `Async` to the row of the signature of `main`, as in `-> <Async> ...`
+    ");
+    insta::assert_snapshot!(fix_text(text), @r#"
+    E2002 4:11 add `Async` to the signature of `main`
+      3:26..3:26 ", Async"
+    "#);
+}
+
 fn fix_text(text: &str) -> String {
     let checked = eml_test_support::check(text);
     eml_test_support::fixes(checked.files(), &checked.diagnostics)

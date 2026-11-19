@@ -14,12 +14,12 @@ report r =
     | Ok _ -> println "ok"
     | Err e -> println "\{show e.kind}: \{e.message}"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let t = Async.start (fn () -> spin 40)
   let _ = spin 40
   report (try_io (fn () -> Stream.close (Stream.open ".")))
   report (try_io (fn () -> Stream.close_writer (Stream.create ".")))
   report (try_io (fn () -> Stream.close_writer (Stream.append ".")))
   report (try_io (fn () -> Stream.close (Stream.open "missing.txt")))
-  println (show (Async.await t)))
+  println (show (Async.await t))

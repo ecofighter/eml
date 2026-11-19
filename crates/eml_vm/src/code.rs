@@ -4,7 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use eml_cabi::{CCall, Dtor};
-use eml_extern::{CFunction, CHandleType};
+use eml_extern::{CFunction, CHandleType, Extern};
 use eml_lir::{FloatBits, Loc, Repr, VerifyError};
 use eml_rt::{Control, Ctx, Frozen, HeapError, HostRef, MaskItem, Mode, Word};
 use rustc_hash::FxHashMap;
@@ -350,6 +350,19 @@ impl<M: Mode> CodeBase<M> {
     pub(crate) fn error(&self, Failure { fault, pc }: Failure, task: &Task) -> RuntimeError {
         if matches!(fault, RunFault::Deadlock) {
             return RuntimeError::Deadlock;
+        }
+        // 根の結果を取る命令が起こし直した失敗は、根のタスクの失敗である。位置を持たず、`entry$`を除いたエントリの関数の
+        // 名前を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)。スケジューラの状態でなく命令を読むので、古い
+        // 状態が後の誤りに名前を付けることはない
+        if let Some(&Op::Async { at, .. }) = self.tables.code.get(pc as usize)
+            && Extern::ALL[self.tables.operands[at as usize] as usize] == Extern::AsyncRootResult
+        {
+            let entry = &self.functions[task.entry as usize].name;
+            return RuntimeError::Fault {
+                fault,
+                function: entry.strip_prefix("entry$").unwrap_or(entry).to_string(),
+                at: None,
+            };
         }
         let function = self
             .function_at(pc)

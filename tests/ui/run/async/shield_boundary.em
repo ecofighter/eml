@@ -60,5 +60,5 @@ body () =
           println "nested scopes in the shield run")))
     Async.yield_now ())
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()

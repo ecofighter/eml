@@ -2,10 +2,9 @@
 -- (docs/spec/stdlib.md の「`Std.Async`」)。
 import Async
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let t = Async.start (fn () -> 1)
-    let x = Async.await t
-    let y = Async.await t
-    println (show (x + y)))
+  let t = Async.start (fn () -> 1)
+  let x = Async.await t
+  let y = Async.await t
+  println (show (x + y))

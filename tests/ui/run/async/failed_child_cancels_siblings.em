@@ -1,5 +1,5 @@
 -- 失敗した子は、同じスコープのほかのタスクを取り消す。`await` で待つ兄弟も、`yield_now` で回り続ける兄弟も
--- 取り消され、`run` は最初の失敗を起こし直す (docs/spec/stdlib.md の「取り消し」)。
+-- 取り消され、スコープは最初の失敗を起こし直す (docs/spec/stdlib.mdの「取り消し」)。
 import Async (Async)
 
 spin : Int -> <Panic> Int
@@ -32,8 +32,8 @@ body () =
   let _ = spin 40
   ()
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  match try_io (fn () -> Async.run body) with
+  match try_io (fn () -> Async.scope (fn _ -> body ())) with
     | Ok () -> println "unreachable"
     | Err e -> println "run: \{show e.kind}: \{e}"
