@@ -1071,36 +1071,6 @@ impl Core {
 }
 
 impl<M: Mode> Heap<M> {
-    /// 速いモードで、`alloc_immortal`の前に読めたこのヒープの語は、後も読めて、rcも変わらない。
-    pub(super) proof fn lemma_built_keeps(
-        &self,
-        old: Heap<M>,
-        w: Word,
-        meta: Meta,
-        payload: usize,
-        u: Word,
-    )
-        requires
-            old.wf(),
-            old.consistent(),
-            old.settleable(),
-            self.built(old, w, meta, 0, payload),
-            old.of_this_heap(u),
-            old.readable(u),
-        ensures
-            self.word_in(u),
-            self.readable(u),
-            u.is_ptr_spec() ==> self.rc_value(u) == old.rc_value(u),
-    {
-        old.core.lemma_settled_view();
-        if u.is_ptr_spec() {
-            let b = u.bits_spec();
-            old.lemma_live_block(b);
-            assert(old.core.dom().contains(b));
-            assert(self.core.dom().contains(b));
-        }
-    }
-
     /// `set_field`は、どの語の`word_in`、`readable`、rcも、どのブロックの状態と`meta`も変えない。
     pub(super) proof fn lemma_field_set_keeps(&self, old: Heap<M>, w: Word, i: int, v: Word)
         requires

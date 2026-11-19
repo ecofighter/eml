@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use super::host::{MemoryHost, host};
 use crate::{
-    Control, Ctx, Fault, Form, Handle, Heap, HeapError, Kind, Limits, MaskItem, Mode, ReadAmount,
-    Stop, Word,
+    Control, Ctx, Fault, Form, Handle, HeapError, Limits, MaskItem, Mode, ReadAmount, Stop, Word,
 };
 
 pub(super) const UNIT: Word = Word::imm(0);
@@ -894,154 +893,6 @@ fn evv_word_reads_the_list_without_rc_work<M: Mode>() {
     assert_eq!(super::mortal(&mut ctx), 0);
 }
 
-/// forkの表は、走査する語にエントリを順に並べた、tag 0の不死の`Data`である。エントリは即値か不死の物体である
-/// (docs/spec/object-model.mdの「evidence の3つの物体」)。
-fn fork_table_holds_its_immortal_entries<M: Mode>() {
-    let mut heap = Heap::<M>::new();
-    let s = heap.alloc_string_immortal("clause");
-    let entries = [Word::imm(1), s, Word::imm(2)];
-    unsafe {
-        let t = heap.alloc_fork_table(&entries).unwrap();
-        assert_eq!(
-            heap.meta(t).map(|m| (m.tag(), m.kind())),
-            Ok((0, Kind::Data))
-        );
-        for (i, &e) in entries.iter().enumerate() {
-            assert_eq!(heap.field(t, i), Ok(e));
-        }
-        assert!(heap.is_immortal(t));
-    }
-}
-
-/// 不死でないエントリは確保の前に断るので、ヒープの物体は増えない。
-fn fork_table_refuses_a_mortal_entry<M: Mode>() {
-    let mut heap = Heap::<M>::new();
-    let cell = heap.alloc_data(0, 0, 0, false);
-    let live = heap.live_objects().len();
-    assert_eq!(
-        unsafe { heap.alloc_fork_table(&[Word::imm(1), cell]) },
-        Err(HeapError::NotImmortal)
-    );
-    assert_eq!(heap.live_objects().len(), live);
-    unsafe { heap.decref(cell) }.unwrap();
-}
-
-/// `Panic`の末尾は、不死のfork evidence `[table, 即値 0, ()]`を指す不死の節点`[ev, ()]`である。どちらのtagも
-/// エフェクトの番号に1を足した値で、不死の物体だけを持つヒープは凍結できる。
-fn fork_tail_is_an_immortal_node_of_a_fork_evidence<M: Mode>() {
-    let mut heap = Heap::<M>::new();
-    let panic = 4;
-    unsafe {
-        let table = heap.alloc_fork_table(&[Word::imm(1)]).unwrap();
-        let node = heap.alloc_fork_tail(panic, table).unwrap();
-        assert_eq!(heap.meta(node).map(|m| m.tag()), Ok(panic + 1));
-        assert!(heap.is_immortal(node));
-        let ev = heap.field(node, 0).unwrap();
-        assert_eq!(heap.field(node, 1), Ok(Word::UNIT));
-        assert_eq!(heap.meta(ev).map(|m| m.tag()), Ok(panic + 1));
-        assert!(heap.is_immortal(ev));
-        assert_eq!(
-            [heap.field(ev, 0), heap.field(ev, 1), heap.field(ev, 2)],
-            [Ok(table), Ok(Word::imm(0)), Ok(Word::UNIT)]
-        );
-    }
-    heap.freeze().unwrap();
-}
-
-/// エフェクトの番号65535にはtagがなく、不死でない表も断る。どちらもモードによらず確かめる。
-fn fork_tail_refuses_the_last_effect_number<M: Mode>() {
-    let mut heap = Heap::<M>::new();
-    let table = unsafe { heap.alloc_fork_table(&[Word::imm(1)]) }.unwrap();
-    assert_eq!(
-        unsafe { heap.alloc_fork_tail(u16::MAX, table) },
-        Err(HeapError::BadEvidence)
-    );
-    let mortal = heap.alloc_data(0, 1, 0, false);
-    assert_eq!(
-        unsafe { heap.alloc_fork_tail(0, mortal) },
-        Err(HeapError::NotImmortal)
-    );
-    unsafe { heap.decref(mortal) }.unwrap();
-}
-
-/// fork evidenceは`evv`に足せるevidenceで、節をforkの表から読み、エフェクトの番号と深さを読み返せる。evidenceは表の参照を
-/// 1つ持つので、手放すと検査モードの不死の数が0に戻る。
-fn fork_ev_is_pushed_and_its_clause_read<M: Mode>() {
-    let mut ctx = ctx::<M>();
-    unsafe {
-        let table = ctx
-            .heap_mut()
-            .alloc_fork_table(&[Word::imm(5), Word::imm(6)])
-            .unwrap();
-        let ev = ctx.fork_ev(3, table, 2).unwrap();
-        assert_eq!(ctx.fork_of(ev), Ok((3, 2)));
-        ctx.heap_mut().dup(ev).unwrap();
-        let list = ctx.evv_push(UNIT, ev).unwrap();
-        assert_eq!(ctx.ev_clause(ev, 1), Ok(Word::imm(6)));
-        ctx.heap_mut().decref(list).unwrap();
-        ctx.heap_mut().decref(ev).unwrap();
-    }
-    assert!(ctx.check_finished());
-    // 残るのは不死の表だけである
-    assert_eq!(super::mortal(&mut ctx), 1);
-}
-
-/// 検査モードは、tagのないエフェクトの番号と不死でない表を、確保の前に断る。
-fn fork_ev_refuses_a_bad_effect_or_table<M: Mode>() {
-    if !M::CHECKED {
-        return;
-    }
-    let mut ctx = ctx::<M>();
-    unsafe {
-        let table = ctx.heap_mut().alloc_fork_table(&[Word::imm(1)]).unwrap();
-        assert_eq!(ctx.fork_ev(u16::MAX, table, 0), Err(HeapError::BadEvidence));
-        let mortal = ctx.heap_mut().alloc_data(0, 1, 0, false);
-        assert_eq!(ctx.fork_ev(0, mortal, 0), Err(HeapError::BadEvidence));
-        ctx.heap_mut().decref(mortal).unwrap();
-    }
-    assert_eq!(super::mortal(&mut ctx), 1);
-}
-
-/// 検査モードの`fork_of`は、evidenceでない物体と、状態が即値でないevidenceを断る。
-fn fork_of_refuses_an_object_that_is_not_a_fork_evidence<M: Mode>() {
-    if !M::CHECKED {
-        return;
-    }
-    let mut ctx = ctx::<M>();
-    unsafe {
-        let cell = ctx.heap_mut().alloc_data(1, 2, 0, false);
-        assert_eq!(ctx.fork_of(cell), Err(HeapError::BadEvidence));
-        let state = ctx.heap_mut().alloc_string("state");
-        let ev = ctx.ev_new(0, 1, state, UNIT).unwrap();
-        assert_eq!(ctx.fork_of(ev), Err(HeapError::BadEvidence));
-        for w in [cell, ev] {
-            ctx.heap_mut().decref(w).unwrap();
-        }
-    }
-    assert_eq!(super::mortal(&mut ctx), 0);
-}
-
-/// `evv_step`は先頭の節点のエフェクトの番号と次の節点を返し、空のリストには`None`を返す。
-fn evv_step_walks_a_list_head_first<M: Mode>() {
-    let mut ctx = ctx::<M>();
-    let e0 = push(&mut ctx, 0, 1);
-    let e1 = push(&mut ctx, 1, 1);
-    unsafe {
-        let list = ctx.evv_word();
-        let (effect, n0) = ctx.evv_step(list).unwrap().unwrap();
-        assert_eq!(effect, 1);
-        assert_eq!(ctx.heap().field(n0, 0), Ok(e0));
-        assert_eq!(ctx.evv_step(n0), Ok(Some((0, UNIT))));
-        assert_eq!(ctx.evv_step(UNIT), Ok(None));
-        clear(&mut ctx);
-        for e in [e0, e1] {
-            ctx.heap_mut().decref(e).unwrap();
-        }
-    }
-    assert!(ctx.check_finished());
-    assert_eq!(super::mortal(&mut ctx), 0);
-}
-
 /// エフェクト0、操作1つのevidenceを作り、エントリに節の本体を入れる。状態と外側のevvは`()`である。
 fn retirable<M: Mode>(ctx: &mut Ctx<M>) -> (Word, Word) {
     unsafe {
@@ -1198,14 +1049,6 @@ both_modes!(
     taking_the_outer_list_leaves_a_retired_evidence,
     the_outer_list_of_a_shared_evidence_is_not_writable,
     evv_word_reads_the_list_without_rc_work,
-    fork_table_holds_its_immortal_entries,
-    fork_table_refuses_a_mortal_entry,
-    fork_tail_is_an_immortal_node_of_a_fork_evidence,
-    fork_tail_refuses_the_last_effect_number,
-    fork_ev_is_pushed_and_its_clause_read,
-    fork_ev_refuses_a_bad_effect_or_table,
-    fork_of_refuses_an_object_that_is_not_a_fork_evidence,
-    evv_step_walks_a_list_head_first,
     ev_retire_returns_a_unique_evidence_itself,
     ev_retire_copies_a_shared_evidence,
     ev_retire_refuses_a_state_or_an_outer_list,
