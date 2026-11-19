@@ -833,7 +833,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `box` の束縛: `` `b.2` (int) is bound to a box, which is tobj ``
   - `unbox` のオペランド: `` `p.0` (obj) is unboxed, but only tobj can be ``、``5 is unboxed, but only tobj can be``
   - `unbox` の束縛: `` `n.2` (tobj) is bound to an unbox, which gives int, float or enum ``
-- 引き継ぐ検査は次のとおりである。2つの IR のすべての段で走る。直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数と、`extern Std.Par.par` を拒むこと (`` `Std.Par.par` is not an extern instruction ``。`Extern::Par` の行は std の宣言を型検査に結ぶためだけにあり、translate は呼び出しを `par` にする。[Core IR](core-ir.md) の「`par` の呼び出し」)、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`。Core IR のエフェクトの命令の検査は [Core IR](core-ir.md) の「verifier」にある
+- 引き継ぐ検査は次のとおりである。2つのIRのすべての段で走る。直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern`命令の引数の数と、`extern Std.Par.fork_join`を拒むこと (`` `Std.Par.fork_join` is not an extern instruction ``。`Extern::Par`の行はstdの宣言を型検査に結ぶためだけにあり、translateは呼び出しを`par`にする。[Core IR](core-ir.md) の「`par`の呼び出し」)、caseの種類 (1つの`switch`のcaseが同じ種類であること、リテラルのcaseがフィールドを持たないこと)、`switch`が行き先を1つ以上持つこと、フィールドを束縛するcaseを持つ`switch`のscrutineeがRCの対象 (`obj`か`tobj`) の変数であること、リテラルの`switch`の`default`。Core IRのエフェクトの命令の検査は [Core IR](core-ir.md) の「verifier」にある
 - 基本操作と`evidence`と`clause`の検査は次のとおりである。Core IRのEPの段と、LIRの6つの段のすべてで走る
   - `prim`の即値の`mask`の項目のエフェクトがエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask`の項目は、呼び出しの`mask`と同じく空でなく、番号の真に昇順に並び (同じエフェクトの項目が2つない)、どの項目も1つ以上のevidenceを飛ばす (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``、``an item of `prim evv_mask[State*0]` skips no handler``)
   - `clause`の操作がエフェクトの表にあり、引数の数が操作の引数の数と同じである

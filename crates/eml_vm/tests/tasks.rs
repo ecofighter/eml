@@ -705,27 +705,6 @@ main () =
     }
 }
 
-/// 仕事の `evv` は、never だけの handler がなければ凍結した末尾で、あれば鏡の evidence を持つ新しい節点である。どちらも
-/// 仕事の終わりが手放すので、検査モードで RC のずれも漏れも出ない (docs/spec/vm.md の「`compute` の仕事」)。
-#[test]
-fn a_job_releases_its_fork_evv() {
-    let bare = "\
-import Async
-main : Unit -> <IO, Panic, Async.Async> Unit
-main () = println (show (Async.compute (fn () -> 1)))
-";
-    assert_eq!(run_both(bare), "1\n");
-    let mirrored = "\
-import Async
-import Fail (Fail(..))
-main : Unit -> <IO, Panic, Async.Async> Unit
-main () =
-  let r = Fail.to_result (fn () -> Async.compute (fn () -> if 1 == 1 then 1 else Fail.fail \"no\"))
-  println (show r)
-";
-    assert_eq!(run_both(mirrored), "Ok 1\n");
-}
-
 /// 実行待ちに積んだままの仕事があっても、`exit` は run を捨てて終わる。
 #[test]
 fn exit_abandons_a_queued_job() {

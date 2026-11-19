@@ -1477,14 +1477,14 @@ fn par_tree() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 7,
-        rc_increments: 0,
-        rc_decrements: 7977,
+        rc_increments: 30,
+        rc_decrements: 8161,
         boxes: 0,
         unboxes: 0,
-        allocations: 7978,
-        reuses: 4354,
-        peak_objects: 4101,
-        peak_stack: 141,
+        allocations: 8132,
+        reuses: 4350,
+        peak_objects: 4133,
+        peak_stack: 165,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -1509,14 +1509,14 @@ fn pfib() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 4,
-        rc_increments: 0,
-        rc_decrements: 32836,
+        rc_increments: 21890,
+        rc_decrements: 164176,
         boxes: 32836,
         unboxes: 32836,
-        allocations: 32837,
+        allocations: 142287,
         reuses: 0,
-        peak_objects: 3481,
-        peak_stack: 205,
+        peak_objects: 21922,
+        peak_stack: 338,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -1674,8 +1674,8 @@ fn unwind_points() {
     nbody: 93
     orders: 13
     orders_by_hand: 13
-    par_tree: 37
-    pfib: 23
+    par_tree: 48
+    pfib: 34
     push_fold: 4
     push_fold_by_hand: 4
     rbtree: 15

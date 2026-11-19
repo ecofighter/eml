@@ -156,16 +156,11 @@ fn main_with_a_repeated_async_is_rejected() {
 
 #[test]
 fn a_second_async_in_main_is_not_suggested() {
-    let text = "import Async (Async)\n\nmain : Unit -> <IO, Panic, Async> Unit\nmain () =\n  Async.compute (fn () -> Async.yield_now ())";
+    let text = "import Async (Async)\n\ntwice : Unit -> <Async, Async> Unit\ntwice () = ()\n\nmain : Unit -> <IO, Async> Unit\nmain () = twice ()";
     insta::assert_snapshot!(check_full(text), @"
-    E2002 5:3 `compute` performs `Async`, which the signature of `main` does not allow
-      5:3 this call performs `Async`
-      3:8 the row of this signature does not include it
-    E2020 5:3 the row passed to `compute` may perform `IO`, but `compute` allows only `never` operations
-      5:3 `compute` is used here
-      5:27 `IO` is performed here
-      164:25 `compute` bounds this row variable by `never`
-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    E2002 7:11 `twice` performs `Async`, which the signature of `main` does not allow
+      7:11 this call performs `Async`
+      6:8 the row of this signature does not include it
     ");
     insta::assert_snapshot!(fix_text(text), @"");
 }

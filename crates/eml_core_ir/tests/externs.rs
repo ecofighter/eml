@@ -7,7 +7,7 @@ use eml_extern::{Extern, ExternType, Mark, OpRet, Purity, Repr, RuntimeEntry};
 use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
 use eml_lir::{FALSE, TRUE, TUPLE};
 use eml_test_support::Checked;
-use eml_types::{Lin, RowTail, Substitution, TypeId, TypeKind, TypeStore};
+use eml_types::{Lin, Substitution, TypeId, TypeKind, TypeStore};
 
 /// 型の行ごとに、その型の値をそのまま返す関数を置く。型検査がその型に与える型を、関数の引数の型から読む。標準
 /// ライブラリは使うモジュールだけを読み込むので、すべてのモジュールを import する (`probes`)。
@@ -441,8 +441,7 @@ fn faulting_rows_carry_panic() {
     // 行の `purity` は、std の型の最後の外側の矢印の row と合う。`Panics` は `Panic` を起こし `IO` を起こさない。
     // `Effectful` は `IO` を起こし、`Std.Env.arg` のように `Panic` も起こしうる。`Pure` は何も起こさない。ただし
     // instance の `extern` で結んだ `Pure` の行は、クラスのメソッドの型が書く `Panic` だけを持ってよい (`Num Float`)
-    // (docs/spec/effects.md の「組み込みの `Panic`」)。外側の矢印の row が開いてよいのは、末尾が関数型の引数の row の
-    // 末尾でもあるときだけである。コールバックのエフェクトを呼んだ側へ通す高階の extern (`Std.Par.par`) の形である
+    // (docs/spec/effects.mdの「組み込みの`Panic`」)。外側の矢印のrowはどれも閉じている
     let checked = checked();
     let program = &checked.program;
     let (io, panic) = (program.io(), program.panic());
@@ -450,7 +449,6 @@ fn faulting_rows_carry_panic() {
     for &e in Extern::ALL {
         let row = e.row();
         let mut ty = row_type(&checked, &mut store, e);
-        let callback_tails = callback_tails(&store, ty, row.params.len());
         let mut labels = Vec::new();
         for _ in row.params {
             let TypeKind::Fn {
@@ -459,12 +457,7 @@ fn faulting_rows_carry_panic() {
             else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
-            assert!(
-                tail.as_ref()
-                    .is_none_or(|tail| callback_tails.contains(tail)),
-                "{}",
-                row.name
-            );
+            assert!(tail.is_none(), "{}", row.name);
             labels = effects.iter().map(|label| label.id).collect();
             ty = *ret;
         }
@@ -486,23 +479,6 @@ fn faulting_rows_carry_panic() {
     assert_eq!(function.name, "panic");
     assert_eq!(Extern::Panic.row().purity, Purity::Panics);
     assert_eq!(Extern::Panic.row().ret, OpRet::Never);
-}
-
-/// 一番外側の `arity` 個の矢印の引数のうち、関数型のものの矢印の row の末尾。
-fn callback_tails(types: &TypeStore, mut ty: TypeId, arity: usize) -> Vec<RowTail> {
-    let mut tails = Vec::new();
-    for _ in 0..arity {
-        let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
-            break;
-        };
-        let mut arrow = *param;
-        while let TypeKind::Fn { tail, ret, .. } = types.kind(arrow) {
-            tails.extend(tail.clone());
-            arrow = *ret;
-        }
-        ty = *ret;
-    }
-    tails
 }
 
 #[test]
@@ -554,7 +530,7 @@ fn declared_mark(types: &TypeStore, ty: TypeId, program: &eml_hir::Program) -> M
 }
 
 /// 型の Kind を行の印に写す。関数でない引数の型変数は、extern のスキームが `Unr` に固定する。関数型の引数
-/// (`Std.Par.par` の子) の矢印の Kind は固定しないので、どの印の閉包も渡せる。結果だけに現れる型変数は固定しないが、
+/// (`Std.Par.fork_join`の子) の矢印のKindは固定しないので、どの印の閉包も渡せる。結果だけに現れる型変数は固定しないが、
 /// 結果がその型変数に依存する行 (`MutArray.empty` の `MutArray a`) は `Lin` である。固定しない位置は `Poly` の行と
 /// 比べる (docs/spec/core-ir.md の「表の印の列」)。
 fn mark_of(lin: Lin) -> Mark {
@@ -574,7 +550,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn`の7つ、`Stdin`の7つ、`Stdout`の6つ、`Stderr`の5つ、`Child`の13、`MutArray`を扱う7つ、`MutUnboxedArray`を扱う12、
-/// `Std.Par.par`、`Std.Async`の20行、`Std.Chan`の2行、`Std.Net`の12行、`Std.Stream`の8行、`Std.Exec`の8行、`Std.Tls`の12行、`Std.Gui`の16行以外は、引数も結果も`Unr`である。
+/// `Std.Par.fork_join`、`Std.Async`の20行、`Std.Chan`の2行、`Std.Net`の12行、`Std.Stream`の8行、`Std.Exec`の8行、`Std.Tls`の12行、`Std.Gui`の16行以外は、引数も結果も`Unr`である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -642,7 +618,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.MutUnboxedArray.MutUnboxed Float.fill"
             | "Std.MutUnboxedArray.MutUnboxed Int.fill" => (&[Lin, Unr], Lin),
             "Std.MutUnboxedArray.freeze" => (&[Lin], Unr),
-            "Std.Par.par" => (&[Poly, Poly], Poly),
+            "Std.Par.fork_join" => (&[Poly, Poly], Poly),
             "Std.Async.start_raw"
             | "Std.Async.start_main_raw"
             | "Std.Async.start_off_main_raw"

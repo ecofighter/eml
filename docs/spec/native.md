@@ -382,7 +382,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - `rows::INLINE`は、CLIFの演算としてインラインに下ろす45の行である。VMの算術と比較の専用の命令 ([VM](vm.md)の「基本操作と extern」) の行から`FloatMod`を除いたものである。Craneliftの`LibCall`には`fmod`がないので、`FloatMod`は呼ぶ行にする
 - タスクの行でも`Par`でもなく、`rows::INLINE`にない行は、エントリ`eml_x_<Variant>`の呼び出しとして下ろす。`rows::lowering(ext)`は、行がこの2つのどちらであるかを返し、タスクの行と`Par`には`None`を返す (「行の下ろし方」)
 - 預かる引数を持つ行はどれもタスクの行なので、ネイティブのコードは預かる引数を扱わない。テストがこれを`Extern::ALL`の全体で確かめる
-- ネイティブのコードには、Rustからemlの閉包を呼ぶ行もない。関数を引数に取るstdのexternは、タスクの行と`Std.Par.par`だけで、どれも断るからである
+- ネイティブのコードには、Rustからemlの閉包を呼ぶ行もない。関数を引数に取るstdのexternは、タスクの行と`Std.Par.fork_join`だけで、どれも断るからである
 - `prim empty_mut_array`は、読み込み時の値`a:mut`を読むので断らない (「値と定数」)
 - `blocking`でない利用者のCの関数の行 (`ExternRef::C`) は断らず、`eml_c$<名前>`の直接の呼び出しに下ろす (「Cの関数の呼び出し」)
 

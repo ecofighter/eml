@@ -1,4 +1,4 @@
--- E2020: `compute` は `IO` と `Async` を行うので、`par` の子の中では呼べない (docs/spec/stdlib.md の「`Std.Par`」)。
+-- E2002: `compute`は`IO`と`Async`を行うので、`par`の子の中では呼べない (docs/spec/stdlib.mdの「`Std.Par`」)。
 import Std.Par
 import Async (Async)
 

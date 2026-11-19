@@ -1458,7 +1458,7 @@ fn g(a.0: tobj, b.1: tobj) -> obj {
     ");
 }
 
-/// 子は `never` の操作しか起こさず、親は継続を作らずに起こし直すので、`mask` のない `par` は yield の地点にならない。
+/// 子は全域でどの操作も親へ届かないので、`mask`のない`par`はyieldの地点にならない。
 /// 末尾の位置の呼び出しにもならない (docs/spec/core-ir.md の「Core IR の命令」)。
 #[test]
 fn an_unmasked_par_is_not_a_yield_point() {

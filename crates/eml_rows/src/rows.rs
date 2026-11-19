@@ -772,7 +772,7 @@ macro_rules! defs {
                     }
                 )*
                 $(Extern::$engine)|* => Err(RunFault::Internal("Panic and Exit run in the engine")),
-                $(Extern::$lir)|* => Err(RunFault::Internal("`Std.Par.par` is not an extern instruction")),
+                $(Extern::$lir)|* => Err(RunFault::Internal("`Std.Par.fork_join` is not an extern instruction")),
                 $(Extern::$task)|* => Err(RunFault::Internal("Async externs run through Op::Async")),
             }
         }

@@ -4,9 +4,9 @@ expression: counts
 ---
 accepted 492
 skipped 5
-rejected 149
-  async row 127
-  par 22
+rejected 145
+  async row 126
+  par 19
 unlowered 27
   AsyncJobCell
   ChanToCell

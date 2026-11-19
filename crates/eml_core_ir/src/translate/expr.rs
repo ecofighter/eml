@@ -413,13 +413,11 @@ impl FnLowering<'_> {
     }
 
     /// 引数がちょうどそろったときの命令を足し、型 `ty` の結果を返す。
-    /// `mask` を付けるのは本体のある関数と `Std.Par.par` だけである。ほかの extern の関数、操作、コンストラクタは、
-    /// 型検査が row を開かずに宣言のまま含めるので、`mask` が記録されない。`par` の結果の row は開いた `<e>` なので、
-    /// 型検査が最後の矢印に `mask` を記録する (docs/spec/core-ir.md の「`par` の呼び出し」)。
+    /// `mask`を付けるのは本体のある関数だけである。externの関数、操作、コンストラクタは、
+    /// 型検査がrowを開かずに宣言のまま含めるので、`mask`が記録されない (docs/spec/core-ir.mdの「`par`の呼び出し」)。
     fn saturated(&mut self, id: ExprId, callee: Callee, args: Vec<Atom>, ty: TypeId) -> Atom {
         // `Perform` と `Con` は `mask` を持てない (docs/spec/core-ir.md)。型検査が `mask` を記録するように変わると、
-        // ここで気づかないうちに落とすことになる。extern は最後の矢印の `mask` を読み、`par` のほかの行で空である
-        // ことは `extern_call` が確かめる
+        // ここで気づかないうちに落とすことになる。externの呼び出しの`mask`が空であることは`Callee::Extern`の腕が確かめる
         debug_assert!(
             matches!(
                 callee,
@@ -452,23 +450,17 @@ impl FnLowering<'_> {
                 ("t", masked_call(Call::Direct(target, args), mask))
             }
             Callee::Extern { row, callee } => {
-                // 前の矢印は部分適用なので、関数と同じく最後の矢印の `mask` だけを使う
-                let mask = match args.len() {
-                    0 => Vec::new(),
-                    n => self.mask(id, n - 1),
-                };
+                // externの矢印のrowはどれも閉じているので、型検査は呼び出しに`mask`を記録しない
+                // (docs/spec/declarations.mdの「`extern`」)
+                debug_assert!(
+                    args.is_empty() || self.mask(id, args.len() - 1).is_empty(),
+                    "a call of an extern has no mask"
+                );
                 let at = Some(self.loc(callee));
                 let (hir, store) = (self.ctx.hir, self.ctx.store);
-                return self.program.extern_call(
-                    &mut self.builder,
-                    hir,
-                    store,
-                    row,
-                    args,
-                    mask,
-                    at,
-                    ty,
-                );
+                return self
+                    .program
+                    .extern_call(&mut self.builder, hir, store, row, args, at, ty);
             }
             Callee::Operation { op, .. } => ("t", Rhs::call(perform_call(self.ctx.hir, op, args))),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
@@ -1292,7 +1284,6 @@ impl FnLowering<'_> {
                     store,
                     Extern::ArrayGet.into(),
                     vec![array, index],
-                    Vec::new(),
                     at,
                     ty,
                 )

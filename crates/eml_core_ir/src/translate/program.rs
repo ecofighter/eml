@@ -16,8 +16,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
-    Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet,
-    OperationInfo, Prim, Repr, StructShape, Structs, TUPLE, VarInfo,
+    Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark, OpRet, OperationInfo,
+    Prim, Repr, StructShape, Structs, TUPLE, VarInfo,
 };
 
 use crate::builder::FnBuilder;
@@ -561,16 +561,7 @@ impl ProgramBuilder {
             })
             .collect();
         // 包む関数の本体は最後の矢印の呼び出しでないので `mask` を持たない。`mask` は包む関数を呼ぶ `apply` が持つ
-        let result = self.extern_call(
-            &mut builder,
-            hir,
-            types,
-            row,
-            args,
-            Vec::new(),
-            Some(at),
-            result_type,
-        );
+        let result = self.extern_call(&mut builder, hir, types, row, args, Some(at), result_type);
         builder.terminate(Term::Return(result));
         let info = self.var_info("t", hir, types, result_type);
         // `IO` を起こす extern も、失敗すると継続を作らずに巻き戻すので yield の地点でない。包む関数は extern を呼ぶだけ
@@ -587,8 +578,7 @@ impl ProgramBuilder {
     /// extern の行 `ext` を呼び、型 `ty` の値を返す文を足す。`with_args` の行は、行の結果と `with_args` の引数を
     /// `con` で組にする。extern は借りた引数を消費しないので、組がそれを受け取る (docs/spec/core-ir.md の
     /// 「組を返す extern」)。
-    /// `Std.Par.par` は extern の命令でなく `par` の呼び出しにし、`mask` はそれに付ける。ほかの行の `mask` は空である
-    /// (docs/spec/core-ir.md の「`par` の呼び出し」)。
+    /// `Std.Par.fork_join`はexternの命令でなく`par`の呼び出しにする (docs/spec/core-ir.mdの「`par`の呼び出し」)。
     #[expect(clippy::too_many_arguments, reason = "the parts of one extern call")]
     pub(super) fn extern_call(
         &mut self,
@@ -597,7 +587,6 @@ impl ProgramBuilder {
         types: &TypeStore,
         ext: ExternRef,
         args: Vec<Atom>,
-        mask: Vec<MaskItem>,
         at: Option<Loc>,
         ty: TypeId,
     ) -> Atom {
@@ -616,9 +605,8 @@ impl ProgramBuilder {
                 pair,
                 at,
             };
-            return Atom::Var(builder.bind(info, Rhs::Call { call, mask }));
+            return Atom::Var(builder.bind(info, Rhs::call(call)));
         }
-        debug_assert!(mask.is_empty(), "only par has a mask among the externs");
         let (ext, args) = match ext {
             ExternRef::C(id) if self.c_functions[id.0 as usize].blocking => {
                 self.blocking_call(builder, id, args, at)

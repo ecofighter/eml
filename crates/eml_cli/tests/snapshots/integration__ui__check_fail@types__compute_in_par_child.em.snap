@@ -3,20 +3,12 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/types/compute_in_par_child.em
 ---
-[E2020] Error: the row passed to `par` may perform `IO`, but `par` allows only `never` operations
-   ╭─[ check-fail/types/compute_in_par_child.em:7:16 ]
+[E2002] Error: `compute` performs `IO`, `Async`, which this lambda does not allow
+   ╭─[ check-fail/types/compute_in_par_child.em:7:34 ]
    │
  7 │   let (a, b) = Par.par (fn () -> Async.compute (fn () -> 1)) (fn () -> 2)
    │                ───┬───           ─────────────┬────────────  
-   │                   ╰────────────────────────────────────────── `par` is used here
+   │                   ╰────────────────────────────────────────── argument 1 of `par` does not allow it
    │                                               │              
-   │                                               ╰────────────── `IO` is performed here
-   │
-   ├─[ <std>/Par.em:6:28 ]
-   │
- 6 │ pub extern par : (Unit -> <never e> a) -> (Unit -> <never e> b) -> <e> (a, b)
-   │                            ──┬──  
-   │                              ╰──── `par` bounds this row variable by `never`
-   │ 
-   │ Note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+   │                                               ╰────────────── this call performs `IO`, `Async`
 ───╯

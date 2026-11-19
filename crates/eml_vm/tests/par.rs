@@ -918,7 +918,6 @@ mod source {
 
     const DEEP: &str = "\
 import Std.Par
-import Fail (Fail(..))
 
 deep_left : Int -> <Panic> Int
 deep_left n = 1 + deep_left (n + 1)
@@ -945,11 +944,11 @@ deep_right n = 1 + deep_right (n + 1)
         (out, result)
     }
 
-    /// 左の子の中断は、右の子の誤りを救わない。
+    /// 左の子の`Panic`は、右の子の誤りを救わない。
     #[test]
-    fn a_left_abort_does_not_rescue_a_right_error() {
+    fn a_left_panic_does_not_rescue_a_right_error() {
         let (out, result) = run(
-            "  let r = Fail.to_result (fn () -> Par.par (fn () -> (Fail.fail \"l\" : Int)) (fn () -> deep_right 0))\n  println (show r)\n",
+            "  let r = try_panic (fn () -> Par.par (fn () -> (panic \"l\" : Int)) (fn () -> deep_right 0))\n  println (show r)\n",
         );
         assert_eq!(out, "before\n");
         assert_eq!(

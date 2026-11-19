@@ -1269,7 +1269,7 @@ table! {
         // std の宣言を型検査に結ぶためだけの行である。translate は呼び出しを `par` の命令にするので、
         // `Rhs::Extern` にならない (docs/spec/core-ir.md の「`par` の呼び出し」)
         Par => kinded(
-            "Std.Par.par",
+            "Std.Par.fork_join",
             &[TObj, TObj],
             &[Poly, Poly],
             Obj,

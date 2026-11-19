@@ -1,5 +1,5 @@
--- 子の中の `Panic` は、子の中の `try_panic` か、親の `try_panic` に届く。親に届く `Panic` は、ほかの中断と同じく
--- join の後で起こし直す (docs/spec/vm.md の「`par` の fork と join」)。
+-- 子の中の`Panic`は、子の中の`try_panic`か、親の`try_panic`に届く。親に届く`Panic`は、`par`が
+-- 両方の子が終わった後で起こし直す (docs/spec/stdlib.mdの「`Std.Par`」)。
 import Std.Par
 
 spin : Int -> <Panic> Int

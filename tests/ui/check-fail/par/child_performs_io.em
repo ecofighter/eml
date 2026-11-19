@@ -1,4 +1,4 @@
--- E2020: `par` の子は `IO` を起こせない。
+-- E2001: `par`の子は`IO`を起こせない。
 import Std.Par
 
 noisy : Unit -> <IO> Int

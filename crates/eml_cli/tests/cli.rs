@@ -417,7 +417,7 @@ fn an_interrupt_stops_a_running_program_with_130() {
     assert!(stderr.contains("interrupted"), "{stderr}");
 }
 
-/// 左の子が回り続ける `par`。子は `never` の row なので出力できない。親が子の前に標準エラーへ1行書くので、テストは
+/// 左の子が回り続ける `par`。子のrowは`<Panic>`なので出力できない。親が子の前に標準エラーへ1行書くので、テストは
 /// その行を待ってから SIGINT を送れる。
 #[cfg(unix)]
 const SPIN_IN_PAR: &str = "\
