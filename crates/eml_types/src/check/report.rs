@@ -298,8 +298,13 @@ impl BodyCheck<'_, '_> {
         range: TextRange,
         name: &str,
     ) -> Diagnostic {
-        let quoted: Vec<String> = missing.iter().map(|name| format!("`{name}`")).collect();
-        let quoted = quoted.join(", ");
+        let quote = |names: &[String]| {
+            let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+            quoted.join(", ")
+        };
+        let quoted = quote(missing);
+        let (added, fixable) = self.labels_to_add(missing, fixable);
+        let added_quoted = quote(&added);
         let file = self.file();
         match &self.ambient_source {
             AmbientSource::Signature => {
@@ -313,34 +318,35 @@ impl BodyCheck<'_, '_> {
                     | FunctionKind::Input(_) => None,
                 };
                 let help = match method {
+                    _ if added.is_empty() => None,
                     // メソッドのシグネチャはクラスが決めるので、`()` を取る関数に変えられない。クラスの row が
                     // エフェクトを許す矢印まで引数を書けば、本体の row がその矢印の row になる。そのような矢印がなければ、
                     // 直す先はクラスのシグネチャである。標準ライブラリのクラスは書き換えられず、矢印のないメソッドには
                     // row がないので、help を出さない
                     Some(method) => {
-                        match allowing_arrow(self.program, &method.signature, self.body.params.len(), missing) {
+                        match allowing_arrow(self.program, &method.signature, self.body.params.len(), &added) {
                             Some(arrow) => {
                                 let count = arrow + 1;
                                 let noun = if count == 1 { "parameter" } else { "parameters" };
                                 Some(format!(
-                                    "define `{}` with {count} {noun}, so that it performs {quoted} when it is called",
+                                    "define `{}` with {count} {noun}, so that it performs {added_quoted} when it is called",
                                     method.name
                                 ))
                             }
                             None if self.program.origin(method.class.module).is_std() => {
                                 let class = self.program.names.class(method.class);
-                                Some(if missing == ["Panic"] {
-                                    format!("methods of `{class}` cannot perform {quoted}; catch it inside the body with `try_panic`")
+                                Some(if added == ["Panic"] {
+                                    format!("methods of `{class}` cannot perform {added_quoted}; catch it inside the body with `try_panic`")
                                 } else {
-                                    format!("methods of `{class}` cannot perform {quoted}")
+                                    format!("methods of `{class}` cannot perform {added_quoted}")
                                 })
                             }
                             None => (method.signature.arity() > 0).then(|| {
                                 format!(
-                                    "the signature of `{}` comes from the class `{}`; add {quoted} to its row there, as in `-> <{}> ...`",
+                                    "the signature of `{}` comes from the class `{}`; add {added_quoted} to its row there, as in `-> <{}> ...`",
                                     method.name,
                                     self.program.names.class(method.class),
-                                    missing.join(", ")
+                                    added.join(", ")
                                 )
                             }),
                         }
@@ -348,12 +354,12 @@ impl BodyCheck<'_, '_> {
                     // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する
                     // (docs/spec/declarations.md)
                     None if self.body.params.is_empty() => Some(format!(
-                        "`{function}` takes no parameters, so it cannot perform {quoted}; make it a function taking `()`, as in `{function} : Unit -> <{}> ...` with `{function} () = ...`",
-                        missing.join(", ")
+                        "`{function}` takes no parameters, so it cannot perform {added_quoted}; make it a function taking `()`, as in `{function} : Unit -> <{}> ...` with `{function} () = ...`",
+                        added.join(", ")
                     )),
                     None => Some(format!(
-                        "add {quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
-                        missing.join(", ")
+                        "add {added_quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
+                        added.join(", ")
                     )),
                 };
                 let secondary = match method {
@@ -386,27 +392,31 @@ impl BodyCheck<'_, '_> {
                     .and_then(|effects| self.row_edit(&effects));
                 match edit {
                     Some(edit) => diagnostic.with_fix(
-                        format!("add {quoted} to the signature of `{function}`"),
+                        format!("add {added_quoted} to the signature of `{function}`"),
                         vec![edit],
                     ),
                     None => diagnostic,
                 }
             }
             AmbientSource::Input => {
-                // `Std.Async`を読み込んでいれば、入力は`Async`も行える (docs/spec/types.md の「REPL の入力」)
+                // `Std.Async`を読み込んでいれば、入力は`Async`も行える (docs/spec/types.mdの「REPL の入力」)
                 let allowed = if self.program.async_effect().is_some() {
                     "`IO`, `Panic` and `Async`"
                 } else {
                     "`IO` and `Panic`"
                 };
-                Diagnostic::error(
+                let diagnostic = Diagnostic::error(
                     codes::INPUT_EFFECT,
                     format!("{name} performs {quoted}, but an input may perform only {allowed}"),
                     Label::new(file, range, format!("this call performs {quoted}")),
-                )
-                .with_help(format!(
-                    "handle {quoted} inside the input, as in `handle … with …`"
-                ))
+                );
+                if added.is_empty() {
+                    diagnostic
+                } else {
+                    diagnostic.with_help(format!(
+                        "handle {added_quoted} inside the input, as in `handle … with …`"
+                    ))
+                }
             }
             AmbientSource::Lambda(origin) => {
                 let diagnostic = Diagnostic::error(
@@ -449,6 +459,43 @@ impl BodyCheck<'_, '_> {
                     _ => diagnostic,
                 }
             }
+        }
+    }
+
+    /// helpとfixで足すラベルと、fixで足すエフェクト。足りないラベルから、すでに`Async`を持つ`main`か入力のrowに
+    /// 足りない`Async`を除く。`main`のrowに`Async`は高々1回しか書けず、入力のrowはすでに`Async`を1つ許すので、
+    /// 2つ目を足しても誤りは直らない (docs/spec/types.mdの「推論」と「REPL の入力」)。
+    fn labels_to_add(
+        &self,
+        missing: &[String],
+        fixable: Option<Vec<EffectId>>,
+    ) -> (Vec<String>, Option<Vec<EffectId>>) {
+        let once = match self.ambient_source {
+            AmbientSource::Signature => self.program.main() == Some(self.function_id),
+            AmbientSource::Input => true,
+            AmbientSource::Lambda(_) => false,
+        };
+        let repeated = self.program.async_effect().filter(|&effect| {
+            once && fixable
+                .as_ref()
+                .is_some_and(|effects| effects.contains(&effect))
+                && self
+                    .table
+                    .resolve_row(&self.ambient)
+                    .labels
+                    .iter()
+                    .any(|label| label.effect == effect)
+        });
+        match (repeated, fixable) {
+            (Some(effect), Some(mut effects)) => {
+                effects.retain(|&e| e != effect);
+                let added = effects
+                    .iter()
+                    .map(|&e| self.program.names.effect(e).to_string())
+                    .collect();
+                (added, Some(effects))
+            }
+            (_, fixable) => (missing.to_vec(), fixable),
         }
     }
 

@@ -541,6 +541,45 @@ mod tests {
         );
     }
 
+    /// セッションを検査し、E2015の見出しとhelpを並べる。
+    fn input_effect_helps(inputs: &[&str]) -> Vec<(String, Vec<String>)> {
+        let (program, files) = crate::test_session(inputs);
+        let (_, diagnostics) = crate::check(&program, &files);
+        diagnostics
+            .into_iter()
+            .filter(|d| d.code.to_string() == "E2015")
+            .map(|d| (d.message, d.help))
+            .collect()
+    }
+
+    #[test]
+    fn a_second_async_in_an_input_is_not_suggested_to_be_handled() {
+        assert_eq!(
+            input_effect_helps(&[
+                "import Async",
+                "Async.compute (fn () -> Async.yield_now ())"
+            ]),
+            [(
+                "`compute` performs `Async`, but an input may perform only `IO`, `Panic` and `Async`"
+                    .to_string(),
+                Vec::new()
+            )]
+        );
+        assert_eq!(
+            input_effect_helps(&[
+                "import Async",
+                "effect Ask where\n  ask : Unit -> Int",
+                "twice : Unit -> <Async.Async, Async.Async, Ask> Unit\ntwice () = ()",
+                "twice ()"
+            ]),
+            [(
+                "`twice` performs `Async`, `Ask`, but an input may perform only `IO`, `Panic` and `Async`"
+                    .to_string(),
+                vec!["handle `Ask` inside the input, as in `handle … with …`".to_string()]
+            )]
+        );
+    }
+
     #[test]
     fn an_input_without_async_keeps_its_row() {
         let (program, typed, diagnostics) = session(&["import Async", "1 + 1"]);

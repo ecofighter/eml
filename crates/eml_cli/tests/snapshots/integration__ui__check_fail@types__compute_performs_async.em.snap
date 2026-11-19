@@ -15,8 +15,6 @@ input_file: tests/ui/check-fail/types/compute_performs_async.em
  5 │ main : Unit -> <IO, Panic, Async> Unit
    │        ───────────────┬───────────────  
    │                       ╰───────────────── the row of this signature does not include it
-   │ 
-   │ Help: add `Async` to the row of the signature of `main`, as in `-> <Async> ...`
 ───╯
 [E2020] Error: the row passed to `compute` may perform `IO`, but `compute` allows only `never` operations
      ╭─[ check-fail/types/compute_performs_async.em:7:3 ]

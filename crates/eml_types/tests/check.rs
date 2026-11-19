@@ -154,6 +154,53 @@ fn main_with_a_repeated_async_is_rejected() {
     assert_eq!(check_short(merged), Vec::<String>::new());
 }
 
+#[test]
+fn a_second_async_in_main_is_not_suggested() {
+    let text = "import Async (Async)\n\nmain : Unit -> <IO, Panic, Async> Unit\nmain () =\n  Async.compute (fn () -> Async.yield_now ())";
+    insta::assert_snapshot!(check_full(text), @"
+    E2002 5:3 `compute` performs `Async`, which the signature of `main` does not allow
+      5:3 this call performs `Async`
+      3:8 the row of this signature does not include it
+    E2020 5:3 the row passed to `compute` may perform `IO`, but `compute` allows only `never` operations
+      5:3 `compute` is used here
+      5:27 `IO` is performed here
+      171:25 `compute` bounds this row variable by `never`
+      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    ");
+    insta::assert_snapshot!(fix_text(text), @"");
+}
+
+#[test]
+fn only_the_labels_other_than_a_second_async_are_suggested_for_main() {
+    let text = "import Async (Async)\n\neffect Ask where\n  ask : Unit -> Int\n\ntwice : Unit -> <Async, Async, Ask> Unit\ntwice () = ()\n\nmain : Unit -> <IO, Async> Unit\nmain () = twice ()";
+    insta::assert_snapshot!(check_full(text), @"
+    E2002 10:11 `twice` performs `Async`, `Ask`, which the signature of `main` does not allow
+      10:11 this call performs `Async`, `Ask`
+      9:8 the row of this signature does not include it
+      help: add `Ask` to the row of the signature of `main`, as in `-> <Ask> ...`
+    ");
+    insta::assert_snapshot!(fix_text(text), @r#"
+    E2002 10:11 add `Ask` to the signature of `main`
+      9:26..9:26 ", Ask"
+    "#);
+}
+
+#[test]
+fn a_main_without_async_is_told_to_add_it() {
+    let text =
+        "import Async (Async)\n\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.yield_now ()";
+    insta::assert_snapshot!(check_full(text), @"
+    E2002 4:11 `yield_now` performs `Async`, which the signature of `main` does not allow
+      4:11 this call performs `Async`
+      3:8 the row of this signature does not include it
+      help: add `Async` to the row of the signature of `main`, as in `-> <Async> ...`
+    ");
+    insta::assert_snapshot!(fix_text(text), @r#"
+    E2002 4:11 add `Async` to the signature of `main`
+      3:26..3:26 ", Async"
+    "#);
+}
+
 fn fix_text(text: &str) -> String {
     let checked = eml_test_support::check(text);
     eml_test_support::fixes(checked.files(), &checked.diagnostics)
