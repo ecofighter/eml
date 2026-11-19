@@ -51,9 +51,9 @@ fn a_real_socket_handshake_rejects_the_expired_fixtures() {
         r#"import Async
 import Fs
 import Tls
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  let r = Async.run (fn () ->
+  let r = Async.scope (fn _ ->
     try_io (fn () -> Tls.close (Tls.connect_with_ca (Fs.read_text "ca.pem") "127.0.0.1" {port})))
   match r with
     | Ok () -> println "connected"

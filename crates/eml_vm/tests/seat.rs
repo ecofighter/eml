@@ -79,10 +79,10 @@ fn a_separate_machine_refuses_an_injected_driver() {
 /// `Async.sleep_ms 10`の後に書くプログラム。
 const SLEEP: &str = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.sleep_ms 10
-  println \"slept\")
+  println \"slept\"
 ";
 
 /// 分かれた`Machine`は続けてrunできる。どちらのrunもworker 0を作り直し、driverをそのスレッドで作って落とす。
@@ -213,10 +213,10 @@ main () = println \"boom\"
         let program = eml_test_support::lir(
             "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () -> println \"boom\")
-  Async.await t)
+  Async.await t
 ",
         );
         let (host, _) = RecordingHost::new(Some("boom"));
@@ -261,13 +261,13 @@ main () =
             "\
 import Async
 import Stdin
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () ->
     let h = Stdin.open ()
     println \"boom\"
     Stdin.close h)
-  Async.await t)
+  Async.await t
 ",
         );
     }

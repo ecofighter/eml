@@ -27,8 +27,8 @@ import Byte
 import Bytes
 import Net
 import String
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Async.scope (fn _ ->
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let t = Async.start (fn () ->
@@ -58,7 +58,7 @@ fn a_write_counts_one_completion() {
 ",
     );
     assert_eq!(out, "wrote\n");
-    assert_eq!((s.completions, s.parks, s.cancels), (4, 5, 0));
+    assert_eq!((s.completions, s.parks, s.cancels), (4, 6, 0));
 }
 
 /// 相手が閉じたストリームの読みは、読めるようになった後の読みが 0 バイトで終わり、buffer の中身を変えずに返す。足した
@@ -73,7 +73,7 @@ fn a_read_at_the_peer_eof_returns_the_buffer_unchanged() {
 ",
     );
     assert_eq!(out, "keep 4\n");
-    assert_eq!((s.completions, s.parks), (5, 5));
+    assert_eq!((s.completions, s.parks), (5, 6));
 }
 
 /// `Net.listen` は driver の操作を1つ出し、完了を1つ受けて、待っていたタスクを再開する。リスナーは完了の中身から
@@ -83,12 +83,12 @@ fn a_listen_counts_one_completion() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   Net.close_listener l
-  println (show port))
+  println (show port)
 ";
     let (out, result) = run(src);
     result.unwrap_or_else(|error| panic!("{error}"));
@@ -105,8 +105,8 @@ fn an_accept_and_a_connect_count_three_completions() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let t = Async.start (fn () ->
@@ -119,7 +119,7 @@ main () = Async.run (fn () ->
   let (b, c) = Net.peer_addr c
   Net.close s
   Net.close c
-  println \"\\{a} \\{b}\")
+  println \"\\{a} \\{b}\"
 ";
     let (out, result) = run(src);
     result.unwrap_or_else(|error| panic!("{error}"));
@@ -362,8 +362,8 @@ writer a =
       Net.close a
       println \"wrote\"
     | Err e -> println \"\\{show e.kind}: \\{e}\"
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let u = Async.start (fn () ->
     let (s, l) = Net.accept l
@@ -374,7 +374,7 @@ main () = Async.run (fn () ->
   let t = Async.start (fn () -> writer a)
   Async.yield_now ()
   Async.cancel t
-  Net.close b)
+  Net.close b
 ";
     let (host, out) = capture_host(Default::default());
     // SAFETY: R-3: `HoldingDriver`が貸された記憶に書くのは取り消した読みの先頭2バイトだけで、
@@ -413,8 +413,8 @@ reader b =
       Net.close b
       println \"read \\{show (Bytes.length buf)}\"
     | Err e -> println \"\\{show e.kind}: \\{e}\"
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let u = Async.start (fn () ->
     let (s, l) = Net.accept l
@@ -426,7 +426,7 @@ main () = Async.run (fn () ->
   Async.yield_now ()
   Async.yield_now ()
   Async.cancel t
-  Net.close a)
+  Net.close a
 ";
     let (host, out) = capture_host(Default::default());
     // SAFETY: R-3: `HoldingDriver`が貸された記憶に書くのは取り消した読みの先頭2バイトだけで、
@@ -456,8 +456,8 @@ fn an_op_record_left_at_an_exit_does_not_leak() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let t = Async.start (fn () ->
     let (s, l) = Net.accept l
@@ -467,7 +467,7 @@ main () = Async.run (fn () ->
   Async.yield_now ()
   println \"waiting\"
   (exit 3 : Unit)
-  Net.close (Async.await t))
+  Net.close (Async.await t)
 ";
     let (host, out) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
@@ -586,8 +586,8 @@ import Async
 import Bytes
 import Net
 import String
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let a = Net.connect \"127.0.0.1\" port
@@ -597,7 +597,7 @@ main () = Async.run (fn () ->
   let (buf, b) = Net.read_chunk (Bytes.with_capacity 16) b
   Net.close a
   Net.close b
-  println (String.decode buf))
+  println (String.decode buf)
 ";
     let log = Arc::new(std::sync::Mutex::new(Log::default()));
     let driver = Recorder {
@@ -634,8 +634,8 @@ import Async
 import Bytes
 import Net
 import String
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let a = Net.connect \"127.0.0.1\" port
@@ -647,7 +647,7 @@ main () = Async.run (fn () ->
   let (buf, b) = Net.read_chunk (Bytes.with_capacity 16) b
   Net.close a
   Net.close b
-  println \"\\{show (Bytes.length buf)}\")
+  println \"\\{show (Bytes.length buf)}\"
 ";
     let log = Arc::new(std::sync::Mutex::new(Log::default()));
     let driver = Recorder {
@@ -699,8 +699,8 @@ import Async
 import Net
 loop : Int -> Net.TcpStream -> <IO, Panic, Async> Net.TcpStream
 loop n s = if n == 0 then s else loop (n - 1) (Net.set_nodelay True s)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let t = Async.start (fn () ->
@@ -709,7 +709,7 @@ main () = Async.run (fn () ->
     s)
   let a = loop {n} (Net.connect \"127.0.0.1\" port)
   Net.close a
-  Net.close (Async.await t))
+  Net.close (Async.await t)
 "
         );
         let (host, _) = capture_host(Default::default());
@@ -760,15 +760,15 @@ echo n msg r q a b =
     let (r, b) = Net.write_bytes r b
     let (q, a) = Net.read_chunk (Bytes.truncate 0 q) a
     echo (n - 1) msg r q a b
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let a = Net.connect \"127.0.0.1\" port
   let (b, l) = Net.accept l
   Net.close_listener l
   let q = echo {rounds} (Bytes.of_string \"ping\") (Bytes.with_capacity 16) (Bytes.with_capacity 16) a b
-  println (String.decode q))
+  println (String.decode q)
 "
         );
         let (out, stats) = run_stats(src.as_str());
@@ -811,8 +811,8 @@ ask n got c =
     let c = Net.write \"ping\" c
     let (buf, c) = Net.read_chunk (Bytes.empty ()) c
     ask (n - 1) (got + Bytes.length buf) c
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let t = Async.start (fn () ->
@@ -822,7 +822,7 @@ main () = Async.run (fn () ->
   let c = Net.connect \"127.0.0.1\" port
   let got = ask 20 0 c
   Async.await t
-  println (show got))
+  println (show got)
 ";
     let program = eml_test_support::lir(src);
     let counts: Vec<_> = [1, 2, 3]
@@ -859,8 +859,8 @@ spin_io n counter buf a b =
     let (buf, b) = Net.read_chunk (Bytes.truncate 0 buf) b
     let _ = Atomic.add 1 counter
     spin_io (n - 1) counter buf a b
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () = Async.scope (fn _ ->
   let counter = Atomic.new 0
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
@@ -1036,8 +1036,8 @@ import Async
 import Bytes
 import Net
 import String
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let a = Net.connect \"127.0.0.1\" port
@@ -1047,7 +1047,7 @@ main () = Async.run (fn () ->
   let (buf, b) = Net.read_chunk ({buf}) b
   Net.close a
   Net.close b
-  println (String.decode buf))
+  println (String.decode buf)
 "
     );
     let log = Arc::new(std::sync::Mutex::new(Log::default()));
@@ -1156,8 +1156,8 @@ import Async
 import Bytes
 import Net
 import String
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let t = Async.start (fn () ->
@@ -1170,7 +1170,7 @@ main () = Async.run (fn () ->
   let a = Net.write \"hello\" a
   let got = Async.await t
   Net.close a
-  println got)
+  println got
 ";
     let (alone, _) = run_on(src, 1, RunConfig::default());
     assert_eq!(alone, "hello\n");
@@ -1188,8 +1188,8 @@ import Async
 import Bytes
 import Net
 import String
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let t = Async.start (fn () ->
@@ -1203,7 +1203,7 @@ main () = Async.run (fn () ->
   let (rest, a) = Net.read_chunk (Bytes.with_capacity 16) a
   Net.close a
   Net.close (Async.await t)
-  println \"\\{String.decode buf} \\{show (Bytes.length rest)}\")
+  println \"\\{String.decode buf} \\{show (Bytes.length rest)}\"
 ";
     let (alone, _) = run_on(src, 1, RunConfig::default());
     assert_eq!(alone, "bye 0\n");
@@ -1220,8 +1220,8 @@ fn a_forwarded_control_in_a_cancelled_scope_completes() {
 import Async
 import Bytes
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let t = Async.start (fn () ->
@@ -1234,7 +1234,7 @@ main () = Async.run (fn () ->
   let (buf, a) = Net.read_chunk (Bytes.with_capacity 16) a
   Net.close a
   Net.close (Async.await t)
-  println (show (Bytes.length buf)))
+  println (show (Bytes.length buf))
 ";
     let (alone, _) = run_on(src, 1, RunConfig::default());
     assert_eq!(alone, "0\n");
@@ -1261,8 +1261,8 @@ drain s n =
     Net.close s
     n
   else drain s (n + k)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let c = Async.start (fn () ->
@@ -1274,7 +1274,7 @@ main () = Async.run (fn () ->
     Net.close_listener l
     drain b 0)
   Async.await c
-  println (show (Async.await s)))
+  println (show (Async.await s))
 ";
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1309,8 +1309,8 @@ drain s n =
     Net.close s
     n
   else drain s (n + k)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let c = Async.start (fn () ->
@@ -1321,7 +1321,7 @@ main () = Async.run (fn () ->
   let a = Net.connect \"127.0.0.1\" port
   let n = drain a 0
   Async.await c
-  println (show n))
+  println (show n)
 ";
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1337,7 +1337,7 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }
 
-/// 本物の時計で、worker 0の`Async.run`の根が接続して書き、自分で閉じたストリームを、worker 1に置いたサーバーが
+/// 本物の時計で、worker 0の根のタスク(`main`)が接続して書き、自分で閉じたストリームを、worker 1に置いたサーバーが
 /// EOFまで読む。閉じた後の根は待たずに計算し、回るたびに`Async.yield_now`を呼ぶので、worker 0はdriverで眠らない。
 /// 閉じたことはhostの次の切り替えの集める地点で相手に届く (docs/spec/vm.mdの「時計と driver」)。計算を終わらせる旗は
 /// サーバーが立てる。3秒は止まりの見張りで、時間は確かめない。
@@ -1374,8 +1374,8 @@ spin flag =
     let _ = fib 15
     Async.yield_now ()
     spin flag
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let flag = Atomic.new 0
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
@@ -1390,7 +1390,7 @@ main () = Async.run (fn () ->
   Net.close c
   spin flag
   let n = Async.await server
-  println (show n))
+  println (show n)
 ";
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1422,8 +1422,8 @@ drain buf s =
   let n = Bytes.length buf
   let (buf, s) = Net.read_chunk buf s
   if Bytes.length buf == n then (buf, s) else drain buf s
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let c = Async.start (fn () ->
@@ -1437,7 +1437,7 @@ main () = Async.run (fn () ->
   let (buf, s) = drain (Bytes.of_string \"echo: \") s
   let (_, s) = Net.write_bytes buf s
   Net.close s
-  println (Async.await c))
+  println (Async.await c)
 ";
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1474,8 +1474,8 @@ drain buf s =
   let n = Bytes.length buf
   let (buf, s) = Net.read_chunk buf s
   if Bytes.length buf == n then (buf, s) else drain buf s
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let server = Async.start (fn () ->
@@ -1489,7 +1489,7 @@ main () = Async.run (fn () ->
   let (buf, a) = drain (Bytes.empty ()) a
   Net.close a
   Async.await server
-  println (String.decode buf))
+  println (String.decode buf)
 ";
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1528,8 +1528,8 @@ drain s n =
     Net.close s
     n
   else drain s (n + k)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let a = Net.connect \"127.0.0.1\" port
@@ -1541,7 +1541,7 @@ main () = Async.run (fn () ->
     Net.close b)
   let n = drain a 0
   Async.await c
-  println (show n))
+  println (show n)
 ";
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1575,8 +1575,8 @@ drain s n =
     Net.close s
     n
   else drain s (n + k)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let c = Async.start (fn () ->
@@ -1586,7 +1586,7 @@ main () = Async.run (fn () ->
   let a = Net.connect \"127.0.0.1\" port
   let n = drain a 0
   Async.await c
-  println (show n))
+  println (show n)
 ";
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1615,15 +1615,15 @@ fn an_accepted_stream_left_at_an_exit_is_closed() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   eprintln (show port)
   let (b, l) = Net.accept l
   (exit 3 : Unit)
   Net.close b
-  Net.close_listener l)
+  Net.close_listener l
 ";
     let host = eml_vm::CaptureHost::new(Default::default());
     let (out, errors) = (host.output(), host.errors());
@@ -1817,11 +1817,11 @@ opener () =
   match try_io (fn () -> Stream.close_writer (Stream.create \"out.txt\")) with
     | Ok _ -> println \"opened\"
     | Err e -> println \"\\{show e.kind}: \\{e.message}\"
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let t = Async.start opener
   Async.yield_now ()
-  Async.cancel t)
+  Async.cancel t
 ";
     let (driver, log) = FileWatch::new(true);
     let out = run_on_watch(src, driver);
@@ -1845,9 +1845,9 @@ reopen : Unit -> <IO, Async> Unit
 reopen () =
   Stream.close_writer (Stream.create \"out.txt\")
   reopen ()
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
+  Async.scope (fn _ ->
     let t = Async.start reopen
     Async.yield_now ()
     Async.yield_now ()
@@ -1956,8 +1956,8 @@ reader r () =
   let (text, r) = Stream.read_all r
   Stream.close r
   text
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let c = Exec.spawn (child \"count\")
   let (w, c) = Exec.stdin c
   let (r, c) = Exec.stdout c
@@ -1966,7 +1966,7 @@ main () = Async.run (fn () ->
   Async.await t
   let text = Async.await u
   println \"read 6: \\{show (String.contains \"child read 6\" text)}\"
-  println \"exit \\{show (Exec.wait c)}\")
+  println \"exit \\{show (Exec.wait c)}\"
 ";
     let (out, finished) = run_exec(src, 4, Sched::Sequential);
     assert_eq!(out, "read 6: True\nexit 0\n");
@@ -1984,12 +1984,12 @@ import Exec
 import Proc
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let t = Async.start (fn () -> spin 40)
   let u = Async.start (fn () -> Exec.run (child \"exit7\"))
   let _ = Async.await t
-  println \"exit \\{show (Async.await u)}\")
+  println \"exit \\{show (Async.await u)}\"
 ";
     let (out, finished) = run_exec(src, 4, Sched::Sequential);
     assert_eq!(out, "exit 7\n");
@@ -2013,14 +2013,14 @@ holder ready () =
     | Chan.Sent -> ()
     | Chan.Rejected _ -> println \"unreachable\"
   println \"unreachable \\{show (Exec.wait c)}\"
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let ready = Chan.new 1
   let t = Async.start (holder ready)
   match Chan.recv ready with
     | Some () -> ()
     | None -> println \"unreachable\"
-  Async.cancel t)
+  Async.cancel t
 ";
     for workers in [1, 4] {
         let start = std::time::Instant::now();

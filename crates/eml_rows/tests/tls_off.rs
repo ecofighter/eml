@@ -3,11 +3,11 @@
 const SRC: &str = "import Async
 import Tls
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   match try_io (fn () -> Tls.connect \"tls.localhost\" 1) with
     | Ok s -> Tls.close s
-    | Err e -> println (show e))
+    | Err e -> println (show e)
 ";
 
 #[test]

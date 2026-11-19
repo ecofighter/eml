@@ -69,8 +69,8 @@ body () =
   println (show (Async.await x))
   Async.await y
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     )
 }
@@ -81,8 +81,8 @@ main () = Async.run body
 fn hangs(ready: i64, gate: i64) -> String {
     format!(
         "{HEAD}
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> println (show (Async.await (Async.start (fn () -> hang {ready} {gate})))))
+main : Unit -> <IO, Panic, Async> Unit
+main () = println (show (Async.await (Async.start (fn () -> hang {ready} {gate}))))
 "
     )
 }
@@ -139,8 +139,8 @@ body () =
   println (show (Async.await z))
   Async.await y
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     );
     exit_keeps_its_code(&src, 3, &[100035, 100037]);
@@ -242,8 +242,8 @@ body () =
   println (show (Async.await x))
   Async.await y
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = body ()
 "
     );
     let program = eml_test_support::lir(&src);
@@ -286,8 +286,8 @@ body () =
   Async.await x
   Async.await y
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = body ()
 "
     );
     let program = eml_test_support::lir(&src);
@@ -339,8 +339,8 @@ body () =
   Async.await x
   Async.await y
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = body ()
 "
     )
 }
@@ -386,8 +386,8 @@ extern \"C\" blocking symbol \"rs_sum_gated\" sum_gated : String -> Int -> Int -
 grow : Int -> String -> <Panic> String
 grow k s = if k == 0 then s else grow (k - 1) (s ++ s)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> sum_gated (grow 10 \"ab\") 2048 100156)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = sum_gated (grow 10 \"ab\") 2048 100156
 "
     );
     let program = eml_test_support::lir(&src);

@@ -289,30 +289,29 @@ fn second() -> unit {
     machine.close().unwrap();
 }
 
-/// 本体が `FileIn` を持ち、別のタスクが入れ子の `run` で待つ間に、タスク `t` が `exit 3` を呼ぶ。タスクの底の `exit` は
-/// ほかのタスクを動かさずに run を捨て、回復がヒープを入れ替えるので、`close` はリークを報告せず、同じ `Machine` の次の
-/// run も動く (docs/spec/vm.md の「誤り、止めること、終わり」)。
+/// 本体が`FileIn`を持ち、別のタスクが中の`Async.scope`で待つ間に、タスク`t`が`exit 3`を呼ぶ。タスクの底の`exit`は
+/// ほかのタスクを動かさずにrunを捨て、回復がヒープを入れ替えるので、`close`はリークを報告せず、同じ`Machine`の次の
+/// runも動く (docs/spec/vm.mdの「誤り、止めること、終わり」)。
 #[test]
 fn an_exit_from_a_task_recovers_and_reports_the_code() {
     let src = "\
 import Async
 import FileIn
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let f = FileIn.open \"a.txt\"
-    let t = Async.start (fn () ->
+  let f = FileIn.open \"a.txt\"
+  let t = Async.start (fn () ->
+    Async.yield_now ()
+    println \"exiting\"
+    (exit 3 : Unit))
+  let u = Async.start (fn () ->
+    Async.scope (fn _ ->
       Async.yield_now ()
-      println \"exiting\"
-      (exit 3 : Unit))
-    let u = Async.start (fn () ->
-      Async.run (fn () ->
-        Async.yield_now ()
-        Async.yield_now ()
-        println \"never\"))
-    Async.await t
-    Async.await u
-    FileIn.close f)
+      Async.yield_now ()
+      println \"never\"))
+  Async.await t
+  Async.await u
+  FileIn.close f
 ";
     let quiet = "\
 fn second() -> unit {
@@ -346,8 +345,8 @@ fn an_interrupt_wakes_a_sleeping_worker() {
 
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Async.sleep_ms 100000)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Async.sleep_ms 100000
 ";
     let program = eml_test_support::lir(src);
     let control = Arc::new(Control::new(Limits::default()));
@@ -440,8 +439,8 @@ impl eml_rt::IoDriver for DeadlineRecorder {
 fn an_injected_driver_waits_until_its_deadline() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Async.sleep_ms 50)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Async.sleep_ms 50
 ";
     let driver = DeadlineRecorder::default();
     let calls = Arc::clone(&driver.calls);
@@ -471,8 +470,8 @@ fn a_real_run_with_a_doorbell_has_a_monitor_from_its_start() {
 
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Async.sleep_ms 100000)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Async.sleep_ms 100000
 ";
     let program = eml_test_support::lir(src);
     let control = Arc::new(Control::new(Limits::default()));
@@ -583,8 +582,8 @@ fn a_real_connection_is_accepted() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let t = Async.start (fn () ->
@@ -599,7 +598,7 @@ main () = Async.run (fn () ->
   Net.close c
   println (show port)
   println a
-  println b)
+  println b
 ";
     let (out, result, closed, _) = run_real(src, None);
     result.unwrap_or_else(|error| panic!("{error}"));
@@ -621,8 +620,8 @@ import Bytes
 import Byte
 import Net
 import String
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () = Async.scope (fn _ ->
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let u = Async.start (fn () ->
@@ -888,8 +887,8 @@ fn an_interrupt_stops_a_run_blocked_in_a_real_accept() {
 import Async
 import Net
 import Stdout
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let t = Async.start (fn () ->
     let (s, l) = Net.accept l
@@ -898,7 +897,7 @@ main () = Async.run (fn () ->
   Async.yield_now ()
   println \"waiting\"
   Stdout.close (Stdout.flush (Stdout.open ()))
-  Net.close (Async.await t))
+  Net.close (Async.await t)
 ";
     let (out, result, closed, _) = run_real(src, Some("waiting"));
     let error = result.unwrap_err();
@@ -921,13 +920,13 @@ fn an_interrupt_stops_a_run_waiting_on_a_lookup() {
 import Async
 import Net
 import Stdout
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () -> Net.connect \"slow.test\" 80)
   Async.yield_now ()
   println \"waiting\"
   Stdout.close (Stdout.flush (Stdout.open ()))
-  Net.close (Async.await t))
+  Net.close (Async.await t)
 ";
     let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
     // SAFETY: R-3: 名前の解決だけを差し替えた`RealDriver`である
@@ -946,13 +945,13 @@ fn a_timeout_around_a_slow_lookup_returns_none() {
     let src = "\
 import Async
 import Net
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   match Async.timeout 20 (fn () -> Net.connect \"slow.test\" 80) with
     | Some s ->
       Net.close s
       println \"Some\"
-    | None -> println \"None\")
+    | None -> println \"None\"
 ";
     let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
     // SAFETY: R-3: 名前の解決だけを差し替えた`RealDriver`である
@@ -1019,10 +1018,10 @@ writer () =
   let (text, r) = Stream.read_all r
   Stream.close r
   text
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let t = Async.start writer
-  println (Async.await t))
+  println (Async.await t)
 ";
     for workers in [1, 4] {
         let root = fresh_dir(&format!("file-{workers}"));
@@ -1050,14 +1049,14 @@ fn a_stream_open_of_a_fifo_or_a_socket_fails_at_once() {
     let src = "\
 import Async (Async)
 import Stream
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   show_open (fn () -> Stream.close (Stream.open \"pipe\"))
   show_open (fn () -> Stream.close_writer (Stream.create \"pipe\"))
   show_open (fn () -> Stream.close_writer (Stream.append \"pipe\"))
   show_open (fn () -> Stream.close (Stream.open \"sock\"))
   show_open (fn () -> Stream.close_writer (Stream.create \"sock\"))
-  show_open (fn () -> Stream.close_writer (Stream.append \"sock\")))
+  show_open (fn () -> Stream.close_writer (Stream.append \"sock\"))
 show_open : (Unit -> <IO, Async> Unit) -> <IO, Async> Unit
 show_open f =
   match try_io f with
@@ -1082,11 +1081,11 @@ fn a_stream_open_of_a_device_fails_at_once() {
     let src = "\
 import Async (Async)
 import Stream
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   match try_io (fn () -> Stream.close (Stream.open \"\\\\\\\\.\\\\NUL\")) with
     | Ok _ -> println \"opened\"
-    | Err e -> println \"\\{show e.kind}: \\{e.message}\")
+    | Err e -> println \"\\{show e.kind}: \\{e.message}\"
 ";
     assert_eq!(
         run_on_files(src, &root, 1),

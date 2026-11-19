@@ -105,9 +105,8 @@ counter () =
       | Quit -> println \"final \\{show n}\"
   loop 0
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  use Async.run
   Gui.run counter
 ";
 
@@ -179,14 +178,14 @@ fn counter() {
 fn a_program_without_a_gui_runs_as_under_the_default_park() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let p = Async.start_on_main (fn () ->
     Async.sleep_ms 3
     println \"pinned\")
   Async.sleep_ms 1
   println \"main\"
-  Async.await p)
+  Async.await p
 ";
     let control = limits(2);
     let gui = RunConfig::default()
@@ -239,11 +238,11 @@ fn with_app(main: &str) -> String {
 fn two_sequential_runs_share_one_loop_and_one_holds_period() {
     let src = with_app(
         "\
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
     Gui.run (app \"one\")
-    Gui.run (app \"two\")))
+    Gui.run (app \"two\"))
 ",
     );
     let (lines, transcript, result) = run(&src, "close 1:0\nclose 2:0\n", 1);
@@ -278,12 +277,12 @@ second old () =
   Gui.text old \"stale\"
   println \"changed\"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let l = Gui.run first
-  match try_io (fn () -> Async.run (fn () -> Gui.run (second l))) with
+  match try_io (fn () -> Async.scope (fn _ -> Gui.run (second l))) with
     | Ok () -> println \"ok\"
-    | Err e -> println (show e))
+    | Err e -> println (show e)
 ",
     );
     let (lines, transcript, result) = run(&src, "close 1:0\n", 1);
@@ -324,8 +323,8 @@ flood () =
   drain n
   println \"drained\"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Gui.run flood)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Gui.run flood
 ",
     );
     let (lines, _, result) = run(&src, "", 1);
@@ -367,8 +366,8 @@ flood () =
   drain 200
   println \"drained\"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Gui.run flood)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Gui.run flood
 ",
     );
     let (lines, _, result) = run(&src, "", 2);
@@ -387,14 +386,14 @@ boom () =
   use _ <- Gui.window \"boom\" Quit
   panic \"boom\"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  match try_panic (fn () -> Async.run (fn () -> Gui.run boom)) with
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
+  match try_panic (fn () -> Async.scope (fn _ -> Gui.run boom)) with
     | Ok () -> println \"ok\"
     | Err m -> println m
   let c : Chan.Chan Int = Chan.new 1
   let _ = Chan.recv c
-  println \"unreachable\")
+  println \"unreachable\"
 ",
     );
     let (lines, transcript, result) = run(&src, "click 9:9\n", 1);
@@ -412,14 +411,14 @@ main () = Async.run (fn () ->
 fn a_cancelled_run_is_reaped_and_a_later_deadlock_is_reported() {
     let src = with_app(
         "\
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   match Async.timeout 5 (fn () -> Gui.run (app \"slow\")) with
     | Some () -> println \"done\"
     | None -> println \"timed out\"
   let c : Chan.Chan Int = Chan.new 1
   let _ = Chan.recv c
-  println \"unreachable\")
+  println \"unreachable\"
 ",
     );
     let (lines, transcript, result) = run(&src, "click 9:9\n", 1);
@@ -438,12 +437,12 @@ main () = Async.run (fn () ->
 fn a_run_cancelled_before_the_open_leaves_the_gui_usable() {
     let src = with_app(
         "\
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   match Async.timeout 0 (fn () -> Gui.run (app \"never\")) with
     | Some () -> println \"opened\"
     | None -> println \"timed out\"
-  Gui.run (app \"later\"))
+  Gui.run (app \"later\")
 ",
     );
     let (lines, transcript, result) = run(&src, "", 1);
@@ -476,8 +475,8 @@ flood () =
   println (name (Gui.wait ()))
   println (name (Gui.wait ()))
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Gui.run flood)
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Gui.run flood
 ",
     );
     let (lines, _, result) = run(&src, "click 1:1\n", 1);
@@ -491,8 +490,8 @@ main () = Async.run (fn () -> Gui.run flood)
 fn a_virtual_interrupt_ends_a_run_with_an_open_ui() {
     let src = with_app(
         "\
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Gui.run (app \"wait\"))
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Gui.run (app \"wait\")
 ",
     );
     let control = limits(1);
@@ -529,8 +528,8 @@ main () = Async.run (fn () -> Gui.run (app \"wait\"))
 fn quit_with_an_open_ui_requests_every_window_to_close() {
     let src = with_app(
         "\
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> Gui.run (app \"quit\"))
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Gui.run (app \"quit\")
 ",
     );
     let (lines, _, result) = run(&src, "quit\n", 1);
@@ -544,11 +543,11 @@ main () = Async.run (fn () -> Gui.run (app \"quit\"))
 fn quit_after_the_run_returned_interrupts_the_program() {
     let src = with_app(
         "\
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Gui.run (app \"first\")
   Async.run_on_main (fn () -> Async.sleep_ms 100000)
-  println \"unreachable\")
+  println \"unreachable\"
 ",
     );
     let control = limits(2);
@@ -575,12 +574,12 @@ report r = match r with
   | Ok () -> println \"ok\"
   | Err e -> println (show e)
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   Async.run_on_main (fn () ->
-    let a = Async.start (fn () -> report (try_io (fn () -> Async.run (fn () -> Gui.run (app \"a\")))))
-    report (try_io (fn () -> Async.run (fn () -> Gui.run (app \"b\"))))
-    Async.await a))
+    let a = Async.start (fn () -> report (try_io (fn () -> Async.scope (fn _ -> Gui.run (app \"a\")))))
+    report (try_io (fn () -> Async.scope (fn _ -> Gui.run (app \"b\"))))
+    Async.await a)
 ",
     );
     let (lines, _, result) = run(&src, "", 1);
@@ -602,11 +601,11 @@ main () = Async.run (fn () ->
 fn without_the_gui_park_the_gui_is_not_available() {
     let src = with_app(
         "\
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  match try_io (fn () -> Async.run (fn () -> Gui.run (app \"none\"))) with
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
+  match try_io (fn () -> Async.scope (fn _ -> Gui.run (app \"none\"))) with
     | Ok () -> println \"opened\"
-    | Err e -> println (show e))
+    | Err e -> println (show e)
 ",
     );
     let (lines, transcript, result) = run_with(&src, RunConfig::default().with_control(limits(1)));
@@ -628,9 +627,9 @@ main () = Async.run (fn () ->
 #[test]
 fn a_failed_backend_creation_fails_each_run_and_lowers_the_holds() {
     let attempt = "\
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let attempt () = match try_io (fn () -> Async.run (fn () -> Gui.run (app \"native\"))) with
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () = Async.scope (fn _ ->
+  let attempt () = match try_io (fn () -> Async.scope (fn _ -> Gui.run (app \"native\"))) with
     | Ok () -> println \"opened\"
     | Err e -> println (show e)
   attempt ()
@@ -689,9 +688,9 @@ fn assert_the_native_backend_is_made_only_when_a_run_asks_for_a_gui(error: &str)
     };
     let plain = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  Async.run_on_main (fn () -> println \"pinned\"))
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
+  Async.run_on_main (fn () -> println \"pinned\")
 ";
     let (lines, _, result) = native(plain);
     let default = RunConfig::default()
@@ -705,13 +704,13 @@ main () = Async.run (fn () ->
 
     let (lines, _, result) = native(&with_app(
         "\
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let attempt () = match try_io (fn () -> Async.run (fn () -> Gui.run (app \"native\"))) with
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
+  let attempt () = match try_io (fn () -> Async.scope (fn _ -> Gui.run (app \"native\"))) with
     | Ok () -> println \"opened\"
     | Err e -> println (show e)
   attempt ()
-  attempt ())
+  attempt ()
 ",
     ));
     assert_eq!(texts(&lines), [error, error]);
@@ -792,9 +791,8 @@ app () =
       | Quit -> ()
   loop ()
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  use Async.run
   Gui.run app
 ";
 
@@ -832,8 +830,8 @@ client port () =
     | Some text -> println \"pinned: \\{text}\"
     | None -> println \"eof\"
 
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let l = Net.listen \"127.0.0.1\" 0
   let (port, l) = Net.local_port l
   let g = Async.start (fn () -> Gui.run (client port))
@@ -845,7 +843,7 @@ main () = Async.run (fn () ->
   Async.await g
   match line with
     | Some text -> println \"main: \\{text}\"
-    | None -> println \"eof\")
+    | None -> println \"eof\"
 ";
     let control = limits(1);
     let config = RunConfig::default()

@@ -140,18 +140,18 @@ internal uniform from 0 fn Std.Async.start_task$handle0$return(p.0: unit, p.1: u
   return ()
 }
 fn entry$main() -> unit {
-  let t.1: obj lin = extern Std.Async.run_raw(&"Std.Async.bottom@[Unit]{0=main$lambda0}")
+  let t.1: obj lin = extern Std.Async.run_raw(&"Std.Async.bottom@[Unit]{0=main}")
   let t.2: unit = extern Std.Async.run_result(t.1)
   return t.2
 }
-yields fn "Std.Async.bottom@[Unit]{0=main$lambda0}"(p.1: unit) -> unit {
-  let t.12: obj = call "Prelude.try_io@#70c9981cb5940bd2"()
+yields fn "Std.Async.bottom@[Unit]{0=main}"(p.1: unit) -> unit {
+  let t.12: obj = call "Prelude.try_io@#03d00e2d575ca42f"()
   let y.26: int = prim yielding()
   switch y.26 { 0 -> b2, _ -> b1 }
 b1:
   decref t.12
   let k.27: tobj poly = prim yield_cont_take()
-  let k.28: tobj poly = closure compose$(k.27, &"Std.Async.bottom@[Unit]{0=main$lambda0}$k0")
+  let k.28: tobj poly = closure compose$(k.27, &"Std.Async.bottom@[Unit]{0=main}$k0")
   let u.29: unit = prim yield_cont_set(k.28)
   return ()
 b2:
@@ -174,39 +174,39 @@ b6:
   let t.9: unit = extern Std.Async.finish_ok(x.18)
   return t.9
 }
-yields fn "Prelude.try_io@#70c9981cb5940bd2"() -> obj {
+yields fn "Prelude.try_io@#03d00e2d575ca42f"() -> obj {
   let w.3: evv = prim evv_get()
   dup w.3
-  let ev.4: ev lin = evidence Prelude.IO((), w.3) [&"Prelude.try_io@#b12fbf5b85ccaa63$entry"]
+  let ev.4: ev lin = evidence Prelude.IO((), w.3) [&"Prelude.try_io@#a262fb419d51b6f0$entry"]
   let w.5: evv = prim evv_enter(w.3, ev.4)
   let u.6: unit = prim evv_set(w.5)
-  let x.7: tobj poly = yields apply &"Prelude.try_io@#1e74c3d30a482244"(()) prompt ev.4
-  tail call prompt$(ev.4, &"Prelude.try_io@#4d6854fb746ffdb8", x.7)
+  let x.7: tobj poly = yields apply &"Prelude.try_io@#fffc70ce1db935a5"(()) prompt ev.4
+  tail call prompt$(ev.4, &"Prelude.try_io@#d475a0df4bc646f7", x.7)
 }
-yields fn "Prelude.try_panic@[Unit]<e>{0=main$lambda0}"() -> obj {
+yields fn "Prelude.try_panic@[Unit]<e>{0=main}"() -> obj {
   let w.3: evv = prim evv_get()
   dup w.3
-  let ev.4: ev lin = evidence Prelude.Panic((), w.3) [&"Prelude.try_panic@#b463fd5a69ae6ed2$entry"]
+  let ev.4: ev lin = evidence Prelude.Panic((), w.3) [&"Prelude.try_panic@#a4b769f13fbf9d55$entry"]
   let w.5: evv = prim evv_enter(w.3, ev.4)
   let u.6: unit = prim evv_set(w.5)
-  let x.7: tobj poly = yields apply &"Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}"(()) prompt ev.4
-  tail call prompt$(ev.4, &"Prelude.try_panic@#64740e57080cab89", x.7)
+  let x.7: tobj poly = yields apply &"Prelude.try_panic@[Unit]<e>$handle0{0=main}"(()) prompt ev.4
+  tail call prompt$(ev.4, &"Prelude.try_panic@#0cbe69ee86f46852", x.7)
 }
-internal yields uniform from 0 fn "Prelude.try_io@#1e74c3d30a482244"(p.1: unit) -> obj {
-  tail call "Prelude.try_panic@[Unit]<e>{0=main$lambda0}"()
+internal yields uniform from 0 fn "Prelude.try_io@#fffc70ce1db935a5"(p.1: unit) -> obj {
+  tail call "Prelude.try_panic@[Unit]<e>{0=main}"()
 }
-internal yields uniform from 0 fn "Prelude.try_io@#b12fbf5b85ccaa63"(kind.5: tobj, message.1: obj, p.2: unit) -> obj {
+internal yields uniform from 0 fn "Prelude.try_io@#a262fb419d51b6f0"(kind.5: tobj, message.1: obj, p.2: unit) -> obj {
   let kind.0: enum = unbox kind.5
   decref kind.5
   let d.6: obj = con Prelude.IOError #0(kind.0, message.1)
   let d.4: obj = con Prelude.Result #0(d.6)
   return d.4
 }
-internal yields uniform from 0 fn "Prelude.try_io@#4d6854fb746ffdb8"(x.0: obj, p.1: unit) -> obj {
+internal yields uniform from 0 fn "Prelude.try_io@#d475a0df4bc646f7"(x.0: obj, p.1: unit) -> obj {
   let d.2: obj = con Prelude.Result #1(x.0)
   return d.2
 }
-internal yields uniform from 0 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}"(p.1: unit) -> unit {
+internal yields uniform from 0 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main}"(p.1: unit) -> unit {
   let t.3: obj lin = extern "Std.MutUnboxedArray.MutUnboxed Int.make"(200, 0)
   let t.4: obj = extern Std.MutUnboxedArray.freeze(t.3)
   let t.5: int = extern Main.publish(t.4, 100160)
@@ -229,7 +229,7 @@ b3:
   switch y.30 { 0 -> b5, _ -> b4 }
 b4:
   let k.31: tobj poly = prim yield_cont_take()
-  let c.32: tobj = closure "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k0"(t.4)
+  let c.32: tobj = closure "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k0"(t.4)
   let k.33: tobj poly = closure compose$(k.31, c.32)
   let u.34: unit = prim yield_cont_set(k.33)
   return ()
@@ -241,7 +241,7 @@ b6:
   switch y.35 { 0 -> b8, _ -> b7 }
 b7:
   let k.36: tobj poly = prim yield_cont_take()
-  let c.37: tobj = closure "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k1"(t.4, op.6)
+  let c.37: tobj = closure "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k1"(t.4, op.6)
   let k.38: tobj poly = closure compose$(k.36, c.37)
   let u.39: unit = prim yield_cont_set(k.38)
   return ()
@@ -269,7 +269,7 @@ b12:
   switch y.40 { 0 -> b14, _ -> b13 }
 b13:
   let k.41: tobj poly = prim yield_cont_take()
-  let k.42: tobj poly = closure compose$(k.41, &"Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k2")
+  let k.42: tobj poly = closure compose$(k.41, &"Prelude.try_panic@[Unit]<e>$handle0{0=main}$k2")
   let u.43: unit = prim yield_cont_set(k.42)
   return ()
 b14:
@@ -280,7 +280,7 @@ b15:
   switch y.44 { 0 -> b17, _ -> b16 }
 b16:
   let k.45: tobj poly = prim yield_cont_take()
-  let c.46: tobj = closure "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k3"(op.17)
+  let c.46: tobj = closure "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k3"(op.17)
   let k.47: tobj poly = closure compose$(k.45, c.46)
   let u.48: unit = prim yield_cont_set(k.47)
   return ()
@@ -292,11 +292,11 @@ b18(w.25: enum, op.26: int):
   let t.29: unit = extern Prelude.println(t.28)
   return t.29
 }
-internal yields uniform from 0 fn "Prelude.try_panic@#b463fd5a69ae6ed2"(message.0: obj, p.1: unit) -> obj {
+internal yields uniform from 0 fn "Prelude.try_panic@#a4b769f13fbf9d55"(message.0: obj, p.1: unit) -> obj {
   let d.2: obj = con Prelude.Result #0(message.0)
   return d.2
 }
-internal yields uniform from 0 fn "Prelude.try_panic@#64740e57080cab89"(x.0: unit, p.1: unit) -> obj {
+internal yields uniform from 0 fn "Prelude.try_panic@#0cbe69ee86f46852"(x.0: unit, p.1: unit) -> obj {
   let d.2: obj = con Prelude.Result #1(x.0)
   return d.2
 }
@@ -359,15 +359,15 @@ internal yields clause Std.Async.Async.await_signal fn Std.Async.start_task$hand
   let u.3: unit = prim yield_to(e.0, c.2, &id$)
   return #0
 }
-internal clause Prelude.IO.io_failed fn "Prelude.try_io@#b12fbf5b85ccaa63$entry"(e.0: cev, kind.1: enum, message.2: obj) -> obj poly {
+internal clause Prelude.IO.io_failed fn "Prelude.try_io@#a262fb419d51b6f0$entry"(e.0: cev, kind.1: enum, message.2: obj) -> obj poly {
   let kind.6: tobj = box kind.1
-  let c.3: tobj = closure "Prelude.try_io@#b12fbf5b85ccaa63"(kind.6, message.2)
+  let c.3: tobj = closure "Prelude.try_io@#a262fb419d51b6f0"(kind.6, message.2)
   let u.4: unit = prim yield_abort(e.0, c.3)
   let d.5: obj poly = prim dummy()
   return d.5
 }
-internal clause Prelude.Panic.panicked fn "Prelude.try_panic@#b463fd5a69ae6ed2$entry"(e.0: cev, message.1: obj) -> obj poly {
-  let c.2: tobj = closure "Prelude.try_panic@#b463fd5a69ae6ed2"(message.1)
+internal clause Prelude.Panic.panicked fn "Prelude.try_panic@#a4b769f13fbf9d55$entry"(e.0: cev, message.1: obj) -> obj poly {
+  let c.2: tobj = closure "Prelude.try_panic@#a4b769f13fbf9d55"(message.1)
   let u.3: unit = prim yield_abort(e.0, c.2)
   let d.4: obj poly = prim dummy()
   return d.4
@@ -438,7 +438,7 @@ b1:
 b2:
   tail yields apply c.1(r.3)
 }
-internal yields uniform from 0 fn "Std.Async.bottom@[Unit]{0=main$lambda0}$k0"(t.5: obj) -> unit {
+internal yields uniform from 0 fn "Std.Async.bottom@[Unit]{0=main}$k0"(t.5: obj) -> unit {
   switch t.5 Prelude.Result { #0(e.10: tobj) -> b1, #1(x.7: obj) -> b2 }
 b1:
   let (e.0.11: enum, e.1.12: obj) = unbox e.10 Prelude.IOError
@@ -458,29 +458,29 @@ b4:
   let t.2: unit = extern Std.Async.finish_ok(x.9)
   return t.2
 }
-internal yields uniform from 1 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k0"(t.0: obj, t.5: tobj lin) -> unit {
+internal yields uniform from 1 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k0"(t.0: obj, t.5: tobj lin) -> unit {
   let (t.0.6: tobj, t.1.8: tobj) = unbox t.5 (,)
   let t.0.7: enum = unbox t.0.6
   let t.1.9: int = unbox t.1.8
   let u.10: unit = drop t.5
-  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j5"(t.0, t.0.7, t.1.9)
+  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main}$j5"(t.0, t.0.7, t.1.9)
 }
-internal yields uniform from 2 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k1"(t.0: obj, op.1: int, t.4: tobj) -> unit {
+internal yields uniform from 2 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k1"(t.0: obj, op.1: int, t.4: tobj) -> unit {
   decref t.4
-  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j5"(t.0, #0, op.1)
+  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main}$j5"(t.0, #0, op.1)
 }
-internal yields uniform from 0 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k2"(t.4: tobj lin) -> unit {
+internal yields uniform from 0 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k2"(t.4: tobj lin) -> unit {
   let (t.0.5: tobj, t.1.7: tobj) = unbox t.4 (,)
   let t.0.6: enum = unbox t.0.5
   let t.1.8: int = unbox t.1.7
   let u.9: unit = drop t.4
-  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j10"(t.0.6, t.1.8)
+  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main}$j10"(t.0.6, t.1.8)
 }
-internal yields uniform from 1 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k3"(op.0: int, t.3: tobj) -> unit {
+internal yields uniform from 1 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k3"(op.0: int, t.3: tobj) -> unit {
   decref t.3
-  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j10"(#0, op.0)
+  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main}$j10"(#0, op.0)
 }
-yields uniform from 3 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j5"(t.0: obj, w.1: enum, op.2: int) -> unit {
+yields uniform from 3 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main}$j5"(t.0: obj, w.1: enum, op.2: int) -> unit {
   let t.3: int = extern take Main.publish_blocking(op.2, w.1, t.0)
   decref t.0
   let op.4: int = extern submit Main.sub(7, 2)
@@ -491,7 +491,7 @@ b1:
   let t.7: enum = extern "Prelude.Eq Int.=="(t.5, 2)
   switch t.7 Prelude.Bool { #0 -> b3, #1 -> b6 }
 b2:
-  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j10"(#0, op.4)
+  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main}$j10"(#0, op.4)
 b3:
   let t.22: obj lin = clause Std.Async.Async.await_io(op.4)
   let (_, _) = unbox t.22 (,)
@@ -500,26 +500,26 @@ b3:
 b4:
   let u.28: unit = drop t.22
   let k.12: tobj poly = prim yield_cont_take()
-  let k.13: tobj poly = closure compose$(k.12, &"Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k2")
+  let k.13: tobj poly = closure compose$(k.12, &"Prelude.try_panic@[Unit]<e>$handle0{0=main}$k2")
   let u.14: unit = prim yield_cont_set(k.13)
   return ()
 b5:
-  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k2"(t.22)
+  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k2"(t.22)
 b6:
   let t.9: enum = clause Std.Async.Async.reschedule(())
   let y.16: int = prim yielding()
   switch y.16 { 0 -> b8, _ -> b7 }
 b7:
   let k.17: tobj poly = prim yield_cont_take()
-  let c.18: tobj = closure "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k3"(op.4)
+  let c.18: tobj = closure "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k3"(op.4)
   let k.19: tobj poly = closure compose$(k.17, c.18)
   let u.20: unit = prim yield_cont_set(k.19)
   return ()
 b8:
   let t.23: tobj = box t.9
-  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k3"(op.4, t.23)
+  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main}$k3"(op.4, t.23)
 }
-yields uniform from 2 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j10"(w.0: enum, op.1: int) -> unit {
+yields uniform from 2 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main}$j10"(w.0: enum, op.1: int) -> unit {
   let t.2: int = extern take Main.sub(op.1, w.0)
   let t.3: obj = extern "Prelude.Show Int.show"(t.2)
   let t.4: unit = extern Prelude.println(t.3)

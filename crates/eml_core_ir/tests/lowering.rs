@@ -177,10 +177,10 @@ go s a =
   let ((), a) = fill n a
   (n, a)
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
   let a : MutUnboxedArray Float = MutUnboxedArray.empty ()
-  let (n, a) = Async.run (fn () -> go \"x\" a)
+  let (n, a) = Async.scope (fn _ -> go \"x\" a)
   drop a
   println (show n)
 ";

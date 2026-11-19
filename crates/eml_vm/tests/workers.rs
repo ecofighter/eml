@@ -308,11 +308,11 @@ fn an_interrupt_reaches_a_parked_worker_without_a_doorbell() {
     let src = "\
 import Std.Par
 import Async
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
   let (a, b) = Par.par (fn () -> 1) (fn () -> 2)
   println (show (a + b))
-  Async.run (fn () -> Async.sleep_ms 5000)
+  Async.scope (fn _ -> Async.sleep_ms 5000)
 ";
     interrupted(src, |config| config.with_clock(Clock::Real));
 }
@@ -331,8 +331,8 @@ body () =
     println (show (a + b)))
   Async.yield_now ()
   (exit 3 : Unit)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     );
     let (out, result) = run(&src, 2);
@@ -415,13 +415,13 @@ fn a_depth_error_in_a_job_stops_the_run() {
 import Async
 deep : Int -> <Panic> Int
 deep n = if n == 0 then 0 else 1 + deep (n - 1)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let d = Async.start (fn () -> ())
   Async.await d
   Async.sleep_ms 1
   println \"before\"
-  println (show (Async.compute (fn () -> deep 100000))))
+  println (show (Async.compute (fn () -> deep 100000)))
 ";
     let program = eml_test_support::lir(src);
     let depth = |workers| {
@@ -460,12 +460,12 @@ total : List Int -> <Panic> Int
 total xs = match xs with
   | [] -> 0
   | y :: ys -> y + total ys
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let d = Async.start (fn () -> ())
   Async.await d
   Async.sleep_ms 1
-  println (show (total (Async.compute (fn () -> build 200)))))
+  println (show (total (Async.compute (fn () -> build 200))))
 ";
     let (alone, result) = run(src, 1);
     assert_eq!(alone, "20100\n");
@@ -502,8 +502,8 @@ body () =
   let d = Async.start (fn () -> ())
   Async.await d
   Async.await a
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
+main : Unit -> <IO, Panic, Async> Unit
+main () = body ()
 "
     );
     let (out, result) = run(&src, 3);
@@ -525,21 +525,20 @@ import Async
 import MutArray
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
-    let d = Async.start (fn () -> ())
-    Async.await d
-    Async.sleep_ms 1
-    let t = Async.start (fn () ->
-      Async.scope (fn s ->
-        Async.cancel_scope s
-        match try_io (fn () -> Async.compute (fn () -> MutArray.make 2 (spin 40))) with
-          | Ok a ->
-            drop a
-            println \"done\"
-          | Err e -> println \"job: \\{show e.kind}\"))
-    Async.await t)
+  let d = Async.start (fn () -> ())
+  Async.await d
+  Async.sleep_ms 1
+  let t = Async.start (fn () ->
+    Async.scope (fn s ->
+      Async.cancel_scope s
+      match try_io (fn () -> Async.compute (fn () -> MutArray.make 2 (spin 40))) with
+        | Ok a ->
+          drop a
+          println \"done\"
+        | Err e -> println \"job: \\{show e.kind}\"))
+  Async.await t
 ";
     let (out, result) = run(src, 3);
     assert_eq!(out, "job: Cancelled\n");
@@ -585,8 +584,8 @@ import Std.Par
 import Async
 count : Int -> Int -> <Panic> Int
 count n acc = if n == 0 then acc else count (n - 1) (acc + 1)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let d = Async.start (fn () -> ())
   Async.await d
   Async.sleep_ms 1
@@ -595,7 +594,7 @@ main () = Async.run (fn () ->
     println \"timer\")
   let (a, b) = Par.par (fn () -> 1) (fn () -> count 20000 0)
   println (show (a + b))
-  Async.await t)
+  Async.await t
 ";
     let (alone, result) = run(src, 1);
     assert_eq!(alone, "20001\ntimer\n");
@@ -634,10 +633,10 @@ main () = println (show (tree 3))
 fn the_first_start_places_on_worker_1() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () -> 20 + 1)
-  println (show (Async.await t)))
+  println (show (Async.await t))
 ";
     let (alone, result) = run(src, 1);
     assert_eq!(alone, "21\n");
@@ -649,37 +648,17 @@ main () = Async.run (fn () ->
     assert_eq!((finished.workers, finished.placed_tasks), (3, 1));
 }
 
-/// 入れ子の`Async.run`から戻ったタスクの`start`も、ほかのworkerに置く。入れ子のrunの根のタスクは呼んだworkerに
-/// 置く。
-#[test]
-fn a_start_after_a_nested_run_places_on_another_worker() {
-    let src = "\
-import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let a = Async.run (fn () -> 1)
-  let t = Async.start (fn () -> a + 1)
-  println (show (Async.await t)))
-";
-    let (alone, _) = run(src, 1);
-    assert_eq!(alone, "2\n");
-    let (out, result) = run(src, 2);
-    assert_eq!(out, alone);
-    let finished = result.unwrap();
-    assert_eq!((finished.workers, finished.placed_tasks), (1, 1));
-}
-
 /// worker 1 に置いたタスクの `exit` は、run を捨てて `END` を立て、すべての worker を起こす。`await` で眠る worker 0
 /// も止まり、run は `exit` の終了コードで終わる (docs/spec/vm.md の「誤り、止めること、終わり」)。
 #[test]
 fn exit_in_a_task_on_another_worker() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () -> (exit 7 : Unit))
   Async.await t
-  println \"unreachable\")
+  println \"unreachable\"
 ";
     let (out, result) = run(src, 2);
     assert_eq!(out, "");
@@ -694,13 +673,13 @@ main () = Async.run (fn () ->
 fn a_timer_on_worker_1_advances_the_virtual_clock() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () ->
     Async.sleep_ms 5
     println \"timer\")
   Async.await t
-  println \"done\")
+  println \"done\"
 ";
     let (alone, _) = run(src, 1);
     assert_eq!(alone, "timer\ndone\n");
@@ -715,13 +694,13 @@ main () = Async.run (fn () ->
 fn a_timer_on_worker_1_fires_on_the_real_clock() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () ->
     Async.sleep_ms 5
     println \"timer\")
   Async.await t
-  println \"done\")
+  println \"done\"
 ";
     for sched in [Sched::Sequential, Sched::Normal] {
         let (host, out) = eml_vm::capture_host(Default::default());
@@ -772,10 +751,10 @@ await_all ts = match ts with
   | t :: rest ->
     Async.await t
     await_all rest
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   await_all (start_all 16)
-  println \"done\")
+  println \"done\"
 ";
     let (out, result) = run(src, 4);
     assert_eq!(out, "done\n");
@@ -799,8 +778,8 @@ sum_all : List (Async.Task Int) -> Int -> <IO, Panic, Async> Int
 sum_all ts acc = match ts with
   | [] -> acc
   | t :: rest -> sum_all rest (acc + Async.await t)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> println (show (sum_all (start_all 16) 0)))
+main : Unit -> <IO, Panic, Async> Unit
+main () = println (show (sum_all (start_all 16) 0))
 ";
     let cancel = include_str!("../../../tests/ui/run/async/cancel.em");
     let echo = include_str!("../../../tests/ui/run/async/net_echo.em");
@@ -817,49 +796,6 @@ main () = Async.run (fn () -> println (show (sum_all (start_all 16) 0)))
         assert_eq!(out.contents(), alone);
         assert!(finished.placed_tasks >= 1, "{finished:?}");
     }
-}
-
-/// 検査モードで、方針 `sched` と worker を `workers` 個まで持てる run を1回行う。ファイルは `root` から読む。
-fn run_sched_in(
-    src: &str,
-    workers: usize,
-    sched: Sched,
-    root: std::path::PathBuf,
-) -> (String, Result<Finished, RuntimeError>) {
-    let (host, out) = eml_vm::capture_host(root);
-    let config = RunConfig::default()
-        .with_debug_heap(true)
-        .with_sched(sched)
-        .with_control(limits(workers));
-    let result = eml_vm::execute(
-        &eml_test_support::lir(src),
-        &eml_vm::Linked::default(),
-        &config,
-        host,
-    );
-    (out.contents(), result)
-}
-
-fn run_sched(src: &str, workers: usize, sched: Sched) -> (String, Result<Finished, RuntimeError>) {
-    run_sched_in(src, workers, sched, Default::default())
-}
-
-/// worker 1に置いたタスクの中の入れ子の`Async.run`は終わり、出力はworkerが1つのrunと同じである
-/// (docs/spec/vm.mdの「`Async`のタスク」)。
-#[test]
-fn a_nested_run_inside_a_task_on_worker_1_ends() {
-    let src = "\
-import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let t = Async.start (fn () -> Async.run (fn () -> 20) + 1)
-  println (show (Async.await t)))
-";
-    let (alone, _) = run(src, 1);
-    assert_eq!(alone, "21\n");
-    let (out, result) = run_sched(src, 2, Sched::Sequential);
-    assert_eq!(out, alone);
-    result.unwrap_or_else(|error| panic!("{error}"));
 }
 
 /// 行 "a" の書き込みを、別のスレッドが "b" を書くまで止める Host。lock は持たずに条件変数で待ち、10 秒で自分から抜ける。
@@ -912,11 +848,11 @@ impl eml_rt::Host for BlockingHost {
 fn tasks_on_other_workers_run_while_main_blocks_in_an_extern() {
     let src = "\
 import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let t = Async.start (fn () -> println \"b\")
   println \"a\"
-  Async.await t)
+  Async.await t
 ";
     let inner = eml_vm::CaptureHost::new(Default::default());
     let out = inner.output();

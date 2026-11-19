@@ -7,7 +7,7 @@ use eml_core_ir::Pass;
 
 fn program(result: &str, import: &str) -> String {
     format!(
-        "import Async\n{import}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  Async.run (fn () ->\n    let t = Async.start (fn () -> {result})\n    let x = Async.await t\n    let y = Async.run (fn () -> {result})\n    drop x\n    drop y)\n"
+        "import Async\n{import}\nmain : Unit -> <IO, Panic, Async.Async> Unit\nmain () =\n  let t = Async.start (fn () -> {result})\n  let x = Async.await t\n  let y = Async.scope (fn _ -> {result})\n  drop x\n  drop y\n"
     )
 }
 

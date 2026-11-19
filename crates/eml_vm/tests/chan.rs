@@ -39,12 +39,11 @@ consume c acc =
   match Chan.recv c with
     | Some x -> consume c (acc + x)
     | None -> acc
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
-    let c = Chan.new 1
-    Async.spawn (fn () -> produce 1 c)
-    println (show (consume c 0)))
+  let c = Chan.new 1
+  Async.spawn (fn () -> produce 1 c)
+  println (show (consume c 0))
 ";
     assert_eq!(run_both(src), "6\n");
     let (_, stats) = run_stats(src);
@@ -67,16 +66,15 @@ fn waiting_senders_are_woken_in_order() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let c = Chan.new 0
-    Async.spawn (fn () -> println (show (Chan.send \"a\" c)))
-    Async.spawn (fn () -> println (show (Chan.send \"b\" c)))
-    Async.yield_now ()
-    println (show (Chan.recv c))
-    println (show (Chan.recv c))
-    Chan.close c)
+  let c = Chan.new 0
+  Async.spawn (fn () -> println (show (Chan.send \"a\" c)))
+  Async.spawn (fn () -> println (show (Chan.send \"b\" c)))
+  Async.yield_now ()
+  println (show (Chan.recv c))
+  println (show (Chan.recv c))
+  Chan.close c
 ";
     assert_eq!(run_both(src), "Sent\nSome \"a\"\nSent\nSome \"b\"\n");
 }
@@ -87,16 +85,15 @@ fn waiting_receivers_are_woken_in_order() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let c = Chan.new 0
-    Async.spawn (fn () -> println (\"a \" ++ show (Chan.recv c)))
-    Async.spawn (fn () -> println (\"b \" ++ show (Chan.recv c)))
-    Async.yield_now ()
-    let _ = Chan.send 1 c
-    let _ = Chan.send 2 c
-    Chan.close c)
+  let c = Chan.new 0
+  Async.spawn (fn () -> println (\"a \" ++ show (Chan.recv c)))
+  Async.spawn (fn () -> println (\"b \" ++ show (Chan.recv c)))
+  Async.yield_now ()
+  let _ = Chan.send 1 c
+  let _ = Chan.send 2 c
+  Chan.close c
 ";
     assert_eq!(run_both(src), "a Some 1\nb Some 2\n");
 }
@@ -108,20 +105,19 @@ fn close_wakes_every_waiter() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let c : Chan.Chan Int = Chan.new 0
-    let d = Chan.new 0
-    let a = Async.start (fn () -> Chan.recv c)
-    let b = Async.start (fn () -> Chan.recv c)
-    let s = Async.start (fn () -> Chan.send \"kept\" d)
-    Async.yield_now ()
-    Chan.close c
-    Chan.close d
-    println (show (Async.await a))
-    println (show (Async.await b))
-    println (show (Async.await s)))
+  let c : Chan.Chan Int = Chan.new 0
+  let d = Chan.new 0
+  let a = Async.start (fn () -> Chan.recv c)
+  let b = Async.start (fn () -> Chan.recv c)
+  let s = Async.start (fn () -> Chan.send \"kept\" d)
+  Async.yield_now ()
+  Chan.close c
+  Chan.close d
+  println (show (Async.await a))
+  println (show (Async.await b))
+  println (show (Async.await s))
 ";
     assert_eq!(run_both(src), "None\nNone\nRejected \"kept\"\n");
     let (_, stats) = run_stats(src);
@@ -144,20 +140,19 @@ text r =
       drop a
       \"Some\"
     | None -> \"None\"
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let c = Chan.new 0
-    let s = Async.start (fn () ->
-      match Chan.send (MutArray.make 2 1) c with
-        | Chan.Sent -> ()
-        | Chan.Rejected a -> drop a)
-    Async.yield_now ()
-    Async.cancel s
-    let r = Async.start (fn () -> Chan.recv c)
-    Async.yield_now ()
-    Chan.close c
-    println (text (Async.await r)))
+  let c = Chan.new 0
+  let s = Async.start (fn () ->
+    match Chan.send (MutArray.make 2 1) c with
+      | Chan.Sent -> ()
+      | Chan.Rejected a -> drop a)
+  Async.yield_now ()
+  Async.cancel s
+  let r = Async.start (fn () -> Chan.recv c)
+  Async.yield_now ()
+  Chan.close c
+  println (text (Async.await r))
 ";
     assert_eq!(run_both(src), "None\n");
     let (_, stats) = run_stats(src);
@@ -172,18 +167,17 @@ fn a_woken_receiver_waits_again_when_the_item_was_taken() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let c = Chan.new 1
-    let a = Async.start (fn () -> Chan.recv c)
-    Async.yield_now ()
-    let _ = Chan.try_send 1 c
-    println (show (Chan.try_recv c))
-    Async.yield_now ()
-    let _ = Chan.try_send 2 c
-    println (show (Async.await a))
-    Chan.close c)
+  let c = Chan.new 1
+  let a = Async.start (fn () -> Chan.recv c)
+  Async.yield_now ()
+  let _ = Chan.try_send 1 c
+  println (show (Chan.try_recv c))
+  Async.yield_now ()
+  let _ = Chan.try_send 2 c
+  println (show (Async.await a))
+  Chan.close c
 ";
     assert_eq!(run_both(src), "Got 1\nSome 2\n");
     let (_, stats) = run_stats(src);
@@ -199,20 +193,19 @@ fn a_sender_woken_for_a_cancelled_receiver_waits_again() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let c = Chan.new 0
-    let s = Async.start (fn () -> Chan.send 1 c)
-    Async.yield_now ()
-    let r = Async.start (fn () -> Chan.recv c)
-    Async.yield_now ()
-    Async.cancel r
-    Async.yield_now ()
-    println (show (Chan.try_recv c))
-    println (show (Chan.recv c))
-    println (show (Async.await s))
-    Chan.close c)
+  let c = Chan.new 0
+  let s = Async.start (fn () -> Chan.send 1 c)
+  Async.yield_now ()
+  let r = Async.start (fn () -> Chan.recv c)
+  Async.yield_now ()
+  Async.cancel r
+  Async.yield_now ()
+  println (show (Chan.try_recv c))
+  println (show (Chan.recv c))
+  println (show (Async.await s))
+  Chan.close c
 ";
     assert_eq!(run_both(src), "Empty\nSome 1\nSent\n");
     let (_, stats) = run_stats(src);
@@ -227,21 +220,20 @@ fn a_woken_receiver_receives_before_its_cancellation_is_raised() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  Async.run (fn () ->
-    let c = Chan.new 0
-    let r = Async.start (fn () ->
-      println (show (Chan.recv c))
-      Async.yield_now ()
-      println \"unreachable\")
+  let c = Chan.new 0
+  let r = Async.start (fn () ->
+    println (show (Chan.recv c))
     Async.yield_now ()
-    let _ = Chan.send 1 c
-    Async.cancel r
-    Async.yield_now ()
-    Async.yield_now ()
-    println (show (Chan.try_recv c))
-    Chan.close c)
+    println \"unreachable\")
+  Async.yield_now ()
+  let _ = Chan.send 1 c
+  Async.cancel r
+  Async.yield_now ()
+  Async.yield_now ()
+  println (show (Chan.try_recv c))
+  Chan.close c
 ";
     assert_eq!(run_both(src), "Some 1\nEmpty\n");
 }
@@ -289,12 +281,11 @@ fill n c =
   else
     let _ = {op} n c
     fill (n - 1) c
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async> Unit
 main () =
-  Async.run (fn () ->
-    let c = Chan.new 1000
-    fill {n} c
-    println (show (Chan.recv c)))
+  let c = Chan.new 1000
+  fill {n} c
+  println (show (Chan.recv c))
 "
         )
     };
@@ -401,8 +392,8 @@ collect n acc c =
     match Chan.recv c with
       | Some x -> collect (n - 1) (acc + x) c
       | None -> acc
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let c = Chan.new 1
   let p1 = Async.start (fn () -> produce 1 100 c)
   let p2 = Async.start (fn () -> produce 101 200 c)
@@ -410,7 +401,7 @@ main () = Async.run (fn () ->
   Chan.close c
   Async.await p1
   Async.await p2
-  println (show total))
+  println (show total)
 "
     );
     let (out, finished) = run_at(&src, 2);
@@ -426,8 +417,8 @@ fn parked_receivers_on_both_workers_are_woken_by_the_root() {
 import Async
 import Chan
 import List
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let c = Chan.new 0
   let r1 = Async.start (fn () -> Chan.recv c)
   let r2 = Async.start (fn () -> Chan.recv c)
@@ -436,7 +427,7 @@ main () = Async.run (fn () ->
   let _ = Chan.send 2 c
   let a = Async.await r1
   let b = Async.await r2
-  println (show (List.sort [a, b])))
+  println (show (List.sort [a, b]))
 ";
     let (out, finished) = run_at(src, 3);
     assert_eq!(out, "[Some 1, Some 2]\n");
@@ -472,8 +463,8 @@ second o =
       drop a
       x
     | None -> 0
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let inbox = Chan.new 0
   let outbox = Chan.new 2
   let left = Chan.new 2
@@ -485,7 +476,7 @@ main () = Async.run (fn () ->
   let y = second (Chan.recv outbox)
   Async.await e1
   Async.await e2
-  println \"\\{show x} \\{show y}\")
+  println \"\\{show x} \\{show y}\"
 ";
     let (out, finished) = run_at(src, 2);
     assert_eq!(out, "7 7\n");
@@ -499,8 +490,8 @@ fn receivers_cancelled_on_both_workers_leave_the_queue() {
     let src = "\
 import Async
 import Chan
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
   let c = Chan.new 0
   Async.scope (fn s ->
     Async.spawn_in s (fn () ->
@@ -514,7 +505,7 @@ main () = Async.run (fn () ->
   match Chan.try_send 1 c with
     | Chan.Accepted -> println \"Accepted\"
     | Chan.Full x -> println \"Full \\{show x}\"
-    | Chan.Refused x -> println \"Refused \\{show x}\")
+    | Chan.Refused x -> println \"Refused \\{show x}\"
 ";
     let (out, finished) = run_at(src, 3);
     assert_eq!(out, "Full 1\n");
@@ -539,8 +530,8 @@ consume c n items acc =
       let _ = Atomic.add 1 n
       consume c n (items + 1) (acc + x)
     | None -> (items, acc)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let c = Chan.new 2
   let n = Atomic.new 0
   let p1 = Async.start (fn () -> produce 1 100 c)
@@ -556,7 +547,7 @@ main () = Async.run (fn () ->
   let (i1, s1) = Async.await c1
   let (i2, s2) = Async.await c2
   let (i3, s3) = Async.await c3
-  println \"\\{{show (i1 + i2 + i3)}} items, sum \\{{show (s1 + s2 + s3)}}, counted \\{{show (Atomic.load n)}}\")
+  println \"\\{{show (i1 + i2 + i3)}} items, sum \\{{show (s1 + s2 + s3)}}, counted \\{{show (Atomic.load n)}}\"
 "
     );
     let (out, finished) = run_at(&src, 8);
@@ -584,15 +575,15 @@ work : Atomic.Counter -> Unit -> <IO, Panic, Async> Int
 work c () =
   adds 1000 c
   makes 1 0
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
+main : Unit -> <IO, Panic, Async> Unit
+main () =
   let c = Atomic.new 0
   let t1 = Async.start (work c)
   let t2 = Async.start (work c)
   let t3 = Async.start (work c)
   let t4 = Async.start (work c)
   let made = Async.await t1 + Async.await t2 + Async.await t3 + Async.await t4
-  println \"\\{show (Atomic.load c)} \\{show made}\")
+  println \"\\{show (Atomic.load c)} \\{show made}\"
 ";
     let (out, finished) = run_at(src, 4);
     assert_eq!(out, "4000 5100\n");
