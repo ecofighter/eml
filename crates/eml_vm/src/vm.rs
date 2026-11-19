@@ -2458,7 +2458,6 @@ fn reraise<R: Exec>(
     let (effect, depth, clause) = abort;
     // 子が見た `depth` 番目の evidence に届くように、親の `evv` を mask する。`reperform$` は今の `evv` の最初の
     // evidence で perform して戻らないので、mask した `evv` は handler の `prompt$` が手放す
-    // (docs/spec/core-ir.md の「`par` の子の中断」)
     if depth > 0 {
         unsafe {
             let w = ctx.evv_get()?;
@@ -4707,7 +4706,7 @@ fn \"prompt$\"(p.0: unit) -> unit {
             "mask$[State]",
             "mask$[Yield@1]",
         ];
-        let raises = ["f", "$cont$@[X]", "fork$E.op", "compose$x"];
+        let raises = ["f", "$cont$@[X]", "compose$x"];
         let text: String = defers
             .iter()
             .chain(&raises)

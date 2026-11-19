@@ -157,7 +157,7 @@ base + 0 .. base + frame_size: スロット
 - **末尾の位置の `apply` と `clause`** (`TailApply`、`TailClause`): 今のフレームの見出しを引き継ぎ、引数は作業用の領域を通す。足りなければ、作ったクロージャを戻りと同じに返す。余れば、`ApplyRest` のフレームが今のフレームの位置と見出しを受け継ぐ
 - **末尾呼び出しの結果**: 末尾の位置の呼び出しは、結果の Repr が関数の `rets` と互換なときだけ `tail` になる ([LIR](lir.md) の「末尾の位置の呼び出し」)。そのため、`TailCall`、`TailApply`、`TailClause` は結果を変えずに見出しを引き継ぎ、結果を変えるフレームはない
 - **安全点**: 呼び出し (末尾呼び出し、`apply`、`clause`、`ApplyRest`の適用を含む)、戻り、自己末尾呼び出しのジャンプで、フレームを移した後に`Ctx::poll(深さ)`を呼び、続けて方針に切り替えるかを尋ねる (「タスクとスケジュール」)。中断の巻き戻しでフレームを外すときは呼ばない (「巻き戻し」)
-- **関数のエントリの安全点**: `Call`、`CallN`、`TailCall`、`TailSelf`、関数に入った `Apply`、`TailApply`、`ApplyRest`、`Clause`、`TailClause` の後と、`par` の fork の後の安全点では、最上段のフレームが関数の最初の命令の位置で止まっている。`Async` のタスクの深さの上限で `ResourceLimit` を起こすのは、この安全点だけである。ただし、入った関数が EP の補助の関数 `id$`、`compose$`、`prompt$`、`resume$`、`rewind$`、`mask$[..]` (`eml_lir::ep_helper` が真になる名前。[Core IR](core-ir.md) の「EP が作る補助の関数」の表) なら起こさない。`fork$E.op` と `reperform$E.op` はこれに入らない。`Ret`、`RetN` の後、部分適用を返した `apply` の後、`par` の join の後と、補助の関数のエントリでは保留にして、次の起こせるエントリで起こす。起こせるエントリかどうかは、`Tables::unwind_at(pc)` の行が `UnwindEntry::Raises` かで決める (「`Async` のタスク」の「タスクの上限」)
+- **関数のエントリの安全点**: `Call`、`CallN`、`TailCall`、`TailSelf`、関数に入った `Apply`、`TailApply`、`ApplyRest`、`Clause`、`TailClause` の後と、`par` の fork の後の安全点では、最上段のフレームが関数の最初の命令の位置で止まっている。`Async` のタスクの深さの上限で `ResourceLimit` を起こすのは、この安全点だけである。ただし、入った関数が EP の補助の関数 `id$`、`compose$`、`prompt$`、`resume$`、`rewind$`、`mask$[..]` (`eml_lir::ep_helper` が真になる名前。[Core IR](core-ir.md) の「EP が作る補助の関数」の表) なら起こさない。`Ret`、`RetN` の後、部分適用を返した `apply` の後、`par` の join の後と、補助の関数のエントリでは保留にして、次の起こせるエントリで起こす。起こせるエントリかどうかは、`Tables::unwind_at(pc)` の行が `UnwindEntry::Raises` かで決める (「`Async` のタスク」の「タスクの上限」)
 
 ## 命令ごとの実行
 
@@ -617,7 +617,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ## `par` の fork と join
 
-`par` (LIR の `Call::Par`) は、左の子を親のタスクのスタックの上で、右の子を新しいタスクで動かす。右の子は、空いている worker があればその worker に置き、なければ親と同じ worker で動く。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」に、子の中断のための関数をコンパイラが作る規則は [Core IR](core-ir.md) の「`par` の子の中断」にある。ここでは VM の側の手順を定める。
+`par` (LIRの`Call::Par`) は、左の子を親のタスクのスタックの上で、右の子を新しいタスクで動かす。右の子は、空いているworkerがあればそのworkerに置き、なければ親と同じworkerで動く。`par`の意味は [マルチコア対応の設計](../future/multicore.md) の「`par`の意味」にある。ここではVMの側の手順を定める。
 
 ### 命令と境目のフレーム
 
@@ -712,7 +712,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 route を切り替えより先に行うのは、起こしを受け箱に積んで相手を動いている形にしてから、この worker が眠るためである。順を逆にすると、worker 0 が `running` が 0 で受け箱も空なのを見て、デッドロックを誤って決めうる (「時計と driver」)。
 
-仕事の中の実行時エラーは、深さの上限とほかの extern の誤りを含め、どれもその場で run を止める。仕事のセルは誤りの終わりを持たないので、出したタスクが受け取ることはない。仕事の中で捕まえない `Panic` は実行時エラーでなく、`Prelude.Panic` の操作の中断として出したタスクで起こし直す ([Core IR](core-ir.md) の「`par` の子の中断」)。
+仕事の中の実行時エラーは、深さの上限とほかのexternの誤りを含め、どれもその場でrunを止める。仕事のセルは誤りの終わりを持たないので、出したタスクが受け取ることはない。仕事の中で捕まえない`Panic`が、仕事の誤りとして終わることはない。stdの`compute`は仕事を`try_panic`の下で走らせる ([標準ライブラリ](stdlib.md) の「`compute`」)。
 
 `take_job j` と `drop_job j` は、次の順に動く。
 

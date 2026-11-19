@@ -145,7 +145,6 @@ fn verify_at(
                 )
             }),
     )?;
-    forks(program)?;
     let callees = program.lends();
     with_tables(program, |tables| {
         // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
@@ -249,108 +248,6 @@ fn walk(
             function: function.name.clone(),
             message,
         })
-}
-
-/// 子を fork しうるプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を持つ
-/// `fork$E.op` と `reperform$E.op` を持つ。VM は子の evidence をこの名前で作るためである
-/// (docs/spec/core-ir.md の「`par` の子の中断」)。関数の形は、ほかの関数と同じく本体の検査が確かめる。
-/// 規則Fはどのプログラムでも成り立つ。`E.op`のforkの名前の関数は`E.op`の節で、evidenceと操作の引数を受け、evidenceを
-/// `fev`で受ける。`fev`を受ける節の関数は、その操作のforkの名前を持つ。エンジンは持つすべての関数から名前でforkのエント
-/// リを探し、どの読み込みもプログラムを確かめるので、forkの名前の関数はその名前の下で確かめてある (docs/spec/lir.mdの
-/// 「verifier」)。
-fn forks(program: &Program) -> Result<(), VerifyError> {
-    let effects = &program.effects;
-    let by_name: FxHashMap<&str, &LirFn> = program
-        .functions
-        .iter()
-        .map(|function| (function.name.as_str(), function))
-        .collect();
-    let find = |name: &str| by_name.get(name).copied();
-    for (effect, info) in effects.iter().enumerate() {
-        let effect = effect as u32;
-        for (op, operation) in info.operations.iter().enumerate() {
-            let op = op as u32;
-            let fork = crate::fork_name(effects, effect, op);
-            let Some(function) = find(&fork) else {
-                continue;
-            };
-            let refuse = |message: String| VerifyError {
-                function: fork.clone(),
-                message,
-            };
-            if function.clause != Some((effect, op)) {
-                return Err(refuse(format!(
-                    "the fork entry is not a clause of `{}`",
-                    operation_text(effects, effect, op)
-                )));
-            }
-            let params = function.params();
-            if params.len() != 1 + operation.params.len() {
-                return Err(refuse(format!(
-                    "the fork entry has {} parameters, but it takes the evidence and {} arguments of the operation",
-                    params.len(),
-                    operation.params.len()
-                )));
-            }
-            let evidence = function.repr(params[0]);
-            if evidence != Repr::Fev {
-                return Err(refuse(format!(
-                    "the fork entry takes its evidence as {}, not fev",
-                    evidence.name()
-                )));
-            }
-        }
-    }
-    for function in &program.functions {
-        let Some((effect, op)) = function.clause else {
-            continue;
-        };
-        let Some(operation) = effects
-            .get(effect as usize)
-            .and_then(|info| info.operations.get(op as usize))
-        else {
-            continue;
-        };
-        let params = function.params();
-        // 引数が足りない節の関数は`clause_function`が拒む
-        let Some(captures) = params.len().checked_sub(1 + operation.params.len()) else {
-            continue;
-        };
-        let fork = crate::fork_name(effects, effect, op);
-        if function.repr(params[captures]) == Repr::Fev && function.name != fork {
-            return Err(VerifyError {
-                function: function.name.clone(),
-                message: format!(
-                    "`{}` takes a fork evidence, but its name is not `{fork}`",
-                    function.name
-                ),
-            });
-        }
-    }
-    if !program.may_fork() {
-        return Ok(());
-    }
-    for effect in crate::fork_effects(&program.effects) {
-        let info = &program.effects[effect as usize];
-        for op in 0..info.operations.len() as u32 {
-            let missing = |kind: &str, name: String| VerifyError {
-                function: name,
-                message: format!(
-                    "`{}` has no {kind} entry, but the program may fork",
-                    operation_text(&program.effects, effect, op)
-                ),
-            };
-            let fork = crate::fork_name(&program.effects, effect, op);
-            if find(&fork).is_none() {
-                return Err(missing("fork", fork));
-            }
-            let reperform = crate::reperform_name(&program.effects, effect, op);
-            if find(&reperform).is_none() {
-                return Err(missing("reperform", reperform));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// 捕獲を `captured` 個受けた後の引数と、結果がどれも一様か。

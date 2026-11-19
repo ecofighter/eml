@@ -1367,7 +1367,7 @@ fn set_width_formats_results_at_that_width() {
 const REJECTED: &str = "import Std.Par\n\neffect Fail where\n  never fail : String -> a\n\nsafe : Int -> String\nsafe n =\n  handle (if n > 0 then show n else fail \"not positive\") with\n    | ctl fail message -> message\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, _) = Par.par (fn () -> 1) (fn () -> 2)\n  println (safe a)";
 
 /// 断る形ごとにE0004を1つ、エントリの`main`の名前に置く (docs/spec/native.mdの「断る形」)。スナップショットは、
-/// このプログラムが持つ2つの形 (`par`と、分けた子の中断) の文を写す。
+/// このプログラムが持つ形 (`par`) の文を写す。
 #[test]
 fn compile_native_reports_each_rejected_form_once() {
     let session = single(REJECTED);
@@ -1386,7 +1386,7 @@ fn compile_native_reports_each_rejected_form_once() {
         .collect();
     let unique: std::collections::BTreeSet<_> = messages.iter().collect();
     assert_eq!(unique.len(), messages.len(), "{messages:#?}");
-    let stable: Vec<&str> = ["support `par` yet", "the abort of a forked child"]
+    let stable: Vec<&str> = ["support `par` yet"]
         .iter()
         .map(|form| {
             let mut found = messages.iter().filter(|message| message.contains(form));
@@ -1400,7 +1400,6 @@ fn compile_native_reports_each_rejected_form_once() {
     insta::assert_debug_snapshot!(stable, @r#"
     [
         "native code does not support `par` yet (first in `entry$main`)",
-        "native code does not support the abort of a forked child (`par` or `compute`) yet (first in `fork$Prelude.Panic.panicked`)",
     ]
     "#);
 }

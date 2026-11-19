@@ -476,7 +476,7 @@ fn compose_and_mask_drop_r_on_their_slow_paths() {
 
 /// EPはdocs/spec/core-ir.mdの「EP が作る補助の関数」の不変条件を守る。yieldの地点で生きている文脈の変数はない。プログラムは
 /// 文脈の変数を束縛するすべての形 (handleの所、`mask`の包み、underの形のエントリ、再開するエントリ、`never`のエントリ、補助
-/// の関数、`par`を通る`fork$`) を持ち、EPの出力のどのyieldの地点でも、遅い道の入口で生きている変数は文脈のReprを持たない。
+/// の関数) を持ち、EPの出力のどのyieldの地点でも、遅い道の入口で生きている変数は文脈のReprを持たない。
 /// 継続は遅い道で作るので、そこで生きている変数が継続の区間に持ち越すものである。速い道は`mask`の包みが`w0`を使うので見ない。
 #[test]
 fn no_context_variable_is_live_at_a_yield_point() {
@@ -524,13 +524,6 @@ fn ret(x.0: tobj, s.1: unit) -> tobj {
     );
     super::evidence(&mut program);
     let shown = shown(&program);
-    assert!(
-        program
-            .functions
-            .iter()
-            .any(|function| function.name.starts_with("fork$")),
-        "{shown}"
-    );
     let mut points = 0;
     for function in &program.functions {
         let live_in = crate::liveness::live_in(function);
