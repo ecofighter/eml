@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/async/compute_out_of_range.em
 before
 --- stderr ---
 --- runtime error ---
-panicked: array index 5 is out of range for length 2
-  at <std>/Async.em:75:9
+panicked: array index 5 is out of range for length 2 in `main`

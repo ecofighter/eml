@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/async/exec_write_after_exit.em
 exit 0
 --- stderr ---
 --- runtime error ---
-cannot write to `eml`: broken pipe
-  at <std>/Async.em:75:9
+cannot write to `eml`: broken pipe in `main`

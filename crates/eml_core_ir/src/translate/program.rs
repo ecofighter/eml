@@ -716,6 +716,7 @@ impl ProgramBuilder {
     /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。`yields` は、エントリの
     /// 関数の宣言の型の最初の矢印が yield しうるかで、作る関数とその `apply` の印にする。`after` は、REPL の入力の
     /// 結果を根に置くか、値を書いた文字列を返すかである。入力の関数は普通の関数のまま `T` を返し、入力ごとの扱いはここに置く。
+    /// `root`は、エントリが根のタスクとして動くときに呼ぶ`Std.Async.root`のinstanceで、エントリの関数の値をそれに渡す。
     #[expect(clippy::too_many_arguments, reason = "the parts of one entry function")]
     pub(super) fn entry(
         &mut self,
@@ -726,6 +727,7 @@ impl ProgramBuilder {
         target_type: TypeId,
         yields: bool,
         after: EntryAfter,
+        root: Option<FnIdx>,
     ) -> FnIdx {
         let function = self.reserve(0);
         let name = format!(
@@ -736,21 +738,29 @@ impl ProgramBuilder {
         let (_, result_type) = split_arrows(types, target_type, 1);
         let mut builder = FnBuilder::new();
         let unit = vec![Atom::Unit];
-        let call = if self.arity(target) == 0 {
+        let point_free = (self.arity(target) == 0).then(|| {
             let info = self.var_info("f", hir, types, target_type);
             let value = builder.var(info);
             builder.emit(Stmt::Let {
                 var: value,
                 rhs: Rhs::call(Call::Direct(target, Vec::new())),
             });
-            Call::Apply {
-                callee: Atom::Var(value),
+            Atom::Var(value)
+        });
+        // 根のタスクとして動くエントリは、エントリの関数の値を`root`に渡す。`root`のrowはyieldするラベルを持たないので、
+        // エントリの関数はyieldしない (docs/spec/core-ir.md の「変換の規則」)
+        let yields = yields && root.is_none();
+        let call = match (root, point_free) {
+            (Some(root), point_free) => {
+                Call::Direct(root, vec![point_free.unwrap_or(Atom::Fn(target))])
+            }
+            (None, Some(callee)) => Call::Apply {
+                callee,
                 args: unit,
                 yields,
                 prompt: None,
-            }
-        } else {
-            Call::Direct(target, unit)
+            },
+            (None, None) => Call::Direct(target, unit),
         };
         let info = self.var_info("t", hir, types, result_type);
         let result = builder.var(info);

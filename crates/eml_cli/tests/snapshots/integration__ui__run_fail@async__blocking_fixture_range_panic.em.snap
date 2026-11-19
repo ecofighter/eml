@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/async/blocking_fixture_range_panic.em
 before
 --- stderr ---
 --- runtime error ---
-panicked: argument 1 of `Main.add` does not fit in C `int32_t`: 3000000000
-  at <std>/Async.em:75:9
+panicked: argument 1 of `Main.add` does not fit in C `int32_t`: 3000000000 in `main`

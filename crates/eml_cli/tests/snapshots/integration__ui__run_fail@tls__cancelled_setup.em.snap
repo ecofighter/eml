@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/tls/cancelled_setup.em
 Cancelled
 --- stderr ---
 --- runtime error ---
-task was cancelled
-  at <std>/Async.em:75:9
+task was cancelled in `main`

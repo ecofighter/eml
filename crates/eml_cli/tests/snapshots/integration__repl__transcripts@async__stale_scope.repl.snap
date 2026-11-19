@@ -7,8 +7,7 @@ input_file: crates/eml_cli/tests/repl/async/stale_scope.repl
 > let s = Async.run (fn () -> Async.scope (fn s -> s))
 > Async.run (fn () -> Async.cancel_scope s)
 > Async.run (fn () -> Async.scope (fn t -> Async.spawn_in s (fn () -> println "unreachable")))
-runtime error: panicked: the scope is closed
-  at <std>/Async.em:75:9
+runtime error: panicked: the scope is closed in `input$4`
 > println "next"
 next
 --- close ---

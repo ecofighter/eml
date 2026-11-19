@@ -114,6 +114,46 @@ fn main_with_a_row_variable_is_rejected() {
     );
 }
 
+#[test]
+fn main_may_perform_async() {
+    // `Std.Async`を読み込んだプログラムでは、`main`のrowに`Async`も書ける (docs/spec/modules.md の「モジュール」)
+    for row in [
+        "<Async>",
+        "<IO, Async>",
+        "<Panic, Async>",
+        "<IO, Panic, Async>",
+    ] {
+        let text = format!("import Async (Async)\n\nmain : Unit -> {row} Unit\nmain () = ()");
+        assert_eq!(check_short(&text), Vec::<String>::new(), "{row}");
+    }
+}
+
+#[test]
+fn main_with_async_and_another_effect_is_rejected() {
+    let text = "import Async (Async)\n\neffect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Async, Ask> Unit\nmain () = ()";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2004 6:8 `main` must have type `Unit -> <IO, Panic, Async> Unit`, with each label optional"
+        ]
+    );
+}
+
+#[test]
+fn main_with_a_repeated_async_is_rejected() {
+    // 根のタスクの底は`Async`のhandlerを1つだけかぶせるので、`Async`は1回だけ書ける。重ねた`IO`と`Panic`は
+    // 1つにまとまるので、今までどおり書ける (docs/spec/modules.md の「モジュール」)
+    let text = "import Async (Async)\n\nmain : Unit -> <IO, Async, Async> Unit\nmain () = ()";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2004 3:8 `main` must have type `Unit -> <IO, Panic, Async> Unit`, with each label optional"
+        ]
+    );
+    let merged = "import Async (Async)\n\nmain : Unit -> <IO, IO, Panic, Async> Unit\nmain () = ()";
+    assert_eq!(check_short(merged), Vec::<String>::new());
+}
+
 fn fix_text(text: &str) -> String {
     let checked = eml_test_support::check(text);
     eml_test_support::fixes(checked.files(), &checked.diagnostics)

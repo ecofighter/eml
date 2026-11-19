@@ -131,7 +131,7 @@ struct Fix {
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | エントリのモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
-| E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが、row のラベルが `IO` と `Panic` だけの `Unit -> <…> Unit` でない ([モジュールと名前解決](modules.md) の「モジュール」) |
+| E2004 | `INVALID_MAIN_TYPE` | `main`のシグネチャが、rowのラベルが`IO`と`Panic`と、`Std.Async`を読み込んでいれば高々1回の`Async`だけの`Unit -> <…> Unit`でない。文言は書けるラベルのrowを示し、`Std.Async`を読み込んでいれば`with each label optional`、いなければ`with either label optional`で終わる ([モジュールと名前解決](modules.md)の「モジュール」) |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む |
 | E2006 | `NO_INSTANCE` | 制約 `C T` を満たす instance がない。上位クラスの instance がないこと、導出した instance のフィールドの型が instance を持たないことを含む ([型と Kind](types.md) の「制約の解決」) |
 | E2009 | `AMBIGUOUS_CONSTRAINT` | 制約の型が最後まで決まらない。`:type` の問い合わせでは、型に現れない型変数を `Unit` とみなして解けないとき |

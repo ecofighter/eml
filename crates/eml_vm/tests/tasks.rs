@@ -25,6 +25,68 @@ main () = println (show (Async.run (fn () -> 41 + 1)))
     assert_eq!(run_both(src), "42\n");
 }
 
+/// rowに`Async`を持つ`main`は、runの根のタスクとして動く。runは、待たれていない子が終わるまで終わらない。
+#[test]
+fn main_is_the_root_task() {
+    let body = "  Async.spawn (fn () ->
+    Async.sleep_ms 10
+    println \"late\")
+  println \"main\"";
+    for row in [
+        "<Async>",
+        "<IO, Async>",
+        "<Panic, Async>",
+        "<IO, Panic, Async>",
+    ] {
+        // タスクを始める操作はどれも`IO`を求めるので、`IO`のない`main`は何もせずに終わる
+        let (body, expected) = if row.contains("IO") {
+            (body, "main\nlate\n")
+        } else {
+            ("  ()", "")
+        };
+        let src = format!(
+            "import Async (Async)\nimport Async\nmain : Unit -> {row} Unit\nmain () =\n{body}\n"
+        );
+        assert_eq!(run_both(&src), expected, "{row}");
+    }
+    let point_free = format!(
+        "import Async (Async)\nimport Async\nmain : Unit -> <IO, Async> Unit\nmain = fn () ->\n{body}\n"
+    );
+    assert_eq!(run_both(&point_free), "main\nlate\n");
+}
+
+/// 根のタスクの失敗は、`main`の中で起きても子のタスクで起きても、位置を持たず`main`の名前を付けて報告する
+/// (docs/spec/vm.md の「誤り、止めること、終わり」)。
+#[test]
+fn a_root_failure_names_main() {
+    let in_main = "\
+import Async (Async)
+main : Unit -> <IO, Panic, Async> Unit
+main () =
+  println \"before\"
+  panic \"boom\"
+";
+    let in_child = "\
+import Async (Async)
+import Async
+main : Unit -> <IO, Panic, Async> Unit
+main () =
+  Async.spawn (fn () ->
+    Async.sleep_ms 10
+    panic \"boom\")
+  println \"before\"
+";
+    for src in [in_main, in_child] {
+        let (out, checked) = run(src);
+        assert_eq!(out, "before\n");
+        let checked = checked.expect_err("the checked run fails").to_string();
+        assert_eq!(checked, "panicked: boom in `main`");
+        let (fast_out, fast) = execute(&lir(src), &RunConfig::default());
+        assert_eq!(fast_out, out);
+        assert_eq!(fast.expect_err("the fast run fails").to_string(), checked);
+    }
+}
+
 /// タスクの中の `Async.run` は、そのタスクのスタックの上で自分の根のスコープを待つ。
 #[test]
 fn a_run_inside_a_task_waits_for_its_own_scope() {
@@ -130,11 +192,8 @@ main () =
 ";
     let (_, checked) = run(uncaught);
     let checked = checked.expect_err("the checked run fails").to_string();
-    // 起こし直した失敗の位置は、`run` の中の std の呼び出しである (docs/spec/stdlib.md の「実行時エラー」)
-    assert!(
-        checked.starts_with("panicked: boom\n  at <std>/Async.em:"),
-        "{checked}"
-    );
+    // 根の失敗には位置がなく、エントリの関数の名前が付く (docs/spec/vm.md の「誤り、止めること、終わり」)
+    assert_eq!(checked, "panicked: boom in `main`");
     let (_, fast) = execute(&lir(uncaught), &RunConfig::default());
     assert_eq!(fast.expect_err("the fast run fails").to_string(), checked);
     let caught = "\

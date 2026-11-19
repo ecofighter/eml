@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/async/blocking_fixture_null_handle.em
 before
 --- stderr ---
 --- runtime error ---
-panicked: `Main.handle_new` returned a null handle
-  at <std>/Async.em:75:9
+panicked: `Main.handle_new` returned a null handle in `main`

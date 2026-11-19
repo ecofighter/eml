@@ -5,6 +5,6 @@ expression: counts
 accepted 45
 checked only 0
 skipped 2
-rejected 34
-  async row 33
+rejected 35
+  async row 34
   par 1

@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/async/await_rethrows_panic.em
 before
 --- stderr ---
 --- runtime error ---
-panicked: boom
-  at <std>/Async.em:75:9
+panicked: boom in `main`

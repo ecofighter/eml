@@ -7,5 +7,4 @@ input_file: tests/ui/run-fail/async/spawned_failure_fails_run.em
 before
 --- stderr ---
 --- runtime error ---
-cannot open `missing.txt`: not found
-  at <std>/Async.em:75:9
+cannot open `missing.txt`: not found in `main`

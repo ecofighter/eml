@@ -359,6 +359,11 @@ signal_wait s =
 resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit
 resume_io k w op = k (w, op)
 
+-- エントリの関数のrowに`Async`があるrunの根のタスク。translateが作るエントリの関数だけが呼ぶ
+-- (docs/spec/stdlib.md の「`Std.Async`」)
+root : (Unit -> <IO, Panic, Async> a) -> <IO, Panic> a
+root f = run_result (run_raw (bottom f))
+
 -- ランタイムのインターフェース。生の行を`pub`にせず、結果の型の`a`は`start`、`start_in`、`start_on_main`、`start_off_main`、`run`、`await`、`compute`のシグネチャだけが結ぶ。
 -- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`start_main_raw`、`start_off_main_raw`、`run_raw`、`ready`、`finish_ok`、
 -- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`park_drain`、`park_send`、
