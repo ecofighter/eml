@@ -2,7 +2,7 @@
 source: crates/eml_cli/tests/ui.rs
 assertion_line: 328
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
-input_file: tests/ui/run/async/handle_outlives_run.em
+input_file: tests/ui/run/async/handle_outlives_scope.em
 ---
 --- stdout ---
 42

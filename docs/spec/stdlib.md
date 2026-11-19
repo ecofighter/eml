@@ -1948,9 +1948,9 @@ main () =
 
 ## 実行時エラー
 
-標準ライブラリのexternの誤りの文言は次のとおりである。I/Oの失敗の理由は`not found`、`permission denied`、`not available`、`I/O error`のどれかである。ただし`Std.Net`、`Std.Stream`、`Std.Exec`のdriverの誤りは、OSの誤りの表示を理由にする。位置はexternを呼んだ所で、標準ライブラリの関数の中のexternなら`<std>/…`の位置になる。`Async.await`が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置はstdの中の呼び出しになる。根のスコープの失敗は位置を持たない(上の「`Std.Async`」)。
+標準ライブラリのexternの誤りの文言は次のとおりである。I/Oの失敗の理由は`not found`、`permission denied`、`not available`、`I/O error`のどれかである。ただし`Std.Net`、`Std.Stream`、`Std.Exec`のdriverの誤りは、OSの誤りの表示を理由にする。位置はexternを呼んだ所で、標準ライブラリの関数の中のexternなら`<std>/…`の位置になる。`Async.await`が起こし直したタスクの失敗は、タスクの中の文言を保つ。捕まえなければ根まで届いて根の失敗になり、位置を持たない(上の「`Std.Async`」)。
 
-I/Oの失敗の一部は`try_io`で捕まえられる(上の「`try_io`」)。`Async`のタスクの中の深さの上限は、種類`ResourceLimit`のIOの失敗`the call depth limit is exceeded`で、メモリの柔らかい上限も同じ種類のIOの失敗`the memory soft limit is exceeded`である(どちらも上の「`Std.Async`」の「タスクの上限」)。捕まえなければ、根まで届いた失敗は、位置を持たず`main` (REPLでは`input$N`)の名前を付けた実行時エラーになる。`scope`が起こし直した失敗は、`scope`の起こし直しの位置を持つ。`byte_at`、`char_at`、`slice`の誤りと、`Bytes`の範囲の誤りと、`decode`の妥当でないUTF-8と、`Std.Float`の変換と`to_fixed`の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルと、`Async.start_in`と`spawn_in`の閉じたスコープは`Panic`で、`try_panic`で捕まえられる(上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/Oの失敗の一部は`try_io`で捕まえられる(上の「`try_io`」)。`Async`のタスクの中の深さの上限は、種類`ResourceLimit`のIOの失敗`the call depth limit is exceeded`で、メモリの柔らかい上限も同じ種類のIOの失敗`the memory soft limit is exceeded`である(どちらも上の「`Std.Async`」の「タスクの上限」)。捕まえなければ、根まで届いた失敗は、位置を持たず`main` (REPLでは`input$N`)の名前を付けた実行時エラーになる。`scope`が起こし直した失敗も、捕まえなければ同じく根の失敗になる。`byte_at`、`char_at`、`slice`の誤りと、`Bytes`の範囲の誤りと、`decode`の妥当でないUTF-8と、`Std.Float`の変換と`to_fixed`の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルと、`Async.start_in`と`spawn_in`の閉じたスコープは`Panic`で、`try_panic`で捕まえられる(上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|
