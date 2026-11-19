@@ -159,10 +159,8 @@ counter () =
       | Quit -> println "final \{show n}"
   loop 0
 
-main : Unit -> <IO, Panic> Unit
-main () =
-  use Async.run
-  Gui.run counter
+main : Unit -> <IO, Panic, Async> Unit
+main () = Gui.run counter
 ```
 
 - toolkitはRustのcrate `crates/eml_gui`である。ウィジェットはOSのtoolkitのもので、LinuxではQt 6、Windows 11ではWindows App SDK 2のWinUI 3、macOS 26ではAppKitを使う。汎用の層 (`Toolkit`、Taffyの配置、`EventQueue`) が、backendごとに実装する2つのtrait `Widgets`と`EventLoop`の上にある。呼び分けは動的で、stubとネイティブのbackendが1つのバイナリに同居する ([コンパイラの構成](../implementation/architecture.md)の「`eml_gui`の内部」)

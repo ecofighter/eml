@@ -29,7 +29,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `async-root`: `main`を根のタスクにし、`Async.run`、`run_raw`、`run_result`を消す。rowに`Async`を持つ`main`は、runの根のタスクとして動く。translateはそれに、`Std.Async.bottom`の下で`main`を動かす根のエントリを与え、runは根のタスクが終わって根のスコープが空になったときに終わる。`Async`を持たない`main`は今と同じに動く。根のタスクが捕まえなかった`IO`の失敗と`Panic`は、同期の`main`と同じ実行時エラーになり、`main`を名指す。どのタスクも深さの上限の全体を持って始まる。REPLは、rowに`Async`を持つ入力を、その入力のrunの根のタスクとして動かす。`Async.run`を呼ぶプログラム、テスト、文書はすべて書き直す。前提: なし。設計: [非同期の設計](async.md)の「確定した設計判断」の2、[マルチコア対応の設計](multicore.md)の「`Async.run` と入れ子」
+- `async-root`: `main`を根のタスクにし、`Async.run`、`run_raw`、`run_result`を消す。rowに`Async`を持つ`main`は、runの根のタスクとして動く。translateはそれに、`Std.Async.bottom`の下で`main`を動かす根のエントリを与え、runは根のタスクが終わって根のスコープが空になったときに終わる。`Async`を持たない`main`は今と同じに動く。根のタスクが捕まえなかった`IO`の失敗と`Panic`は、同期の`main`と同じ実行時エラーになり、`main`を名指す。どのタスクも深さの上限の全体を持って始まる。REPLは、rowに`Async`を持つ入力を、その入力のrunの根のタスクとして動かす。`Async.run`を呼ぶプログラム、テスト、文書はすべて書き直す。前提: なし。設計: [非同期の設計](async.md)の「確定した設計判断」の2
 - `par-total`: `par`と`compute`の子を全域にする。`par`は、子のrowが空のstdの中だけのextern `fork_join`の上に書いたstdのコードになる。どちらの子も`try_panic`で包み、どちらかの子の`Panic`は、両方が動き終えた後に起こし直す。子の実行時エラーはrunを終わらせ、子は上限の種類`Stops`で動く。forkのevidence、`child_abort`、中断の起こし直しは、Core IR、LIR、VM、`eml_rt`、ネイティブのコードからなくなり、利用者の`never`のエフェクトは`par`も`compute`もまたがなくなる。前提: なし。設計: [マルチコア対応の設計](multicore.md)の「`par` の意味」
 - `task-limits`: メモリの上限を、runを終わらせる`max_bytes`の1つにする。メモリの柔らかい上限、監視のスレッドの圧力の役目、タスクごとのバイトの数、上限の種類`Pending`と`Aborting { pending }`をなくし、上限の種類は`Stops`、`Task`、`Aborting`になる。タスクの深さの上限は、タスクが捕まえられる`ResourceLimit`のままである。前提: `async-root`、`par-total`。設計: [VM](../spec/vm.md)の「タスクの上限」
 - `std-par`: `std/Par`のデータ並列の関数 (`for_range`、`reduce_range`とその`_grain`の形、`tabulate`、`map`、`mapi`、`reduce`、`for_mut`、`try_map`、`tabulate_unboxed`、`for_mut_unboxed`) を、`par`の上にemlで書いて入れる。範囲は1024要素の塊に切り、塊はその数の平方根ほどずつの組にまとめる。そのため形は長さと粒度だけで決まり、`reduce`はその形の順に合わせる。結果は純粋な行`Array.concat`と`UnboxedArray.concat`でつなぐ。範囲の上でforkする実行系のエントリはなく、2つのスレッドが書くブロックもない。前提: `par-total`。設計: [マルチコア対応の設計](multicore.md)の「データ並列での使い勝手」
@@ -248,14 +248,14 @@
   - 見直す条件: ネイティブの展開で巻き上げの不足を測ったとき。
   - 残りの作業: R2 を、ループの頭への後ろ向きの辺だけを許す形に緩めることと、変換にループ化を足すこと。ブロックはすでに複数の引数を持てる
   - 生存解析、縮約、verifier は、辺がすべて前向きであることを使って1回のループで済ませている。ループ化では、ループの頭に印を付け、そこだけ不動点を計算する。支配木の計算も、後ろ向きの辺を含む形に広げる
-- 実行時エラーのbacktrace: 呼び出しの連なり (backtrace) と、stdの中の誤りに最も近い利用者のフレームは、下の「ネイティブ化」の「ネイティブのコードの位置」に置く。位置のない誤り (externの外で起きたヒープの誤りや内部の誤り) の利用者向けの表示は、その後に足す
+- 実行時エラーのbacktrace: 呼び出しの連なり(backtrace)と、stdの中の誤りに最も近い利用者のフレームは、下の「ネイティブ化」の「ネイティブのコードの位置」に置く。位置のない誤り(externの外で起きたヒープの誤りや内部の誤り)の利用者向けの表示は、その後に足す。`Async`をrowに持つ`main`の捕まえられなかった失敗は、値として根のタスクの底を越えるので、位置を持たない。タスクの底を通るbacktraceが、その位置の出どころになる
   - 利用者のコードからstdへの末尾呼び出しでは利用者のフレームが残らないので、そのときに何を示すかも、その項目で決める
 - HIR の位置を source map に移す: HIR のノードが `TextRange` を直接持つ形をやめる。位置を別の表に分けると、編集で位置だけが変わったときに HIR を作り直さずに済む。この利点はインクリメンタル化 (salsa) に載せ替えるまで効かないので、そのときに移す
 - フォーマッタ: CST がロスレスなので、その上に作る
 - n 列の `match`: 今は決定木の列に、最初の行でコンストラクタ、タプル、リテラルのどれかのパターンを持ついちばん左の列を選ぶ ([Core IR](../spec/core-ir.md))。行列によっては部分木が大きくなりうる。今の選び方でも決定木は正しいので、部分木の大きさが問題になる例が出てから列の選び方を見直す
 - doc comment: trivia の付け方を決める。doc comment を解釈するドキュメント生成と LSP の hover ([字句](../spec/lexical.md)) がまだないので、それを作るときに、使う側に合わせて決める。前提: LSP
 - JIT (投機的): バイトコードから機械語を安く作る copy-and-patch や、トレース JIT。VM が安定し、起動時間が支配的になってから検討する。トレース JIT はバイトコードにスタックのスタックを持たせる別の道で、evidence passing とは前提が合わない。前提: `native-aot`
-- `miri.rs` のテストの1つあたりの Miri の費用: `crates/eml_vm/tests/miri.rs` の `par_switches_between_tasks`、`shared_struct_boxes_with_scalar_leaves`、`multi_value_returns`、`an_immediate_clause_reads_and_writes_the_state_of_its_evidence`、`a_blocking_call_runs_on_the_test_driver` の5つは、1つのテストの上限 (Tree Borrows の下で 10 秒) を超える ([テスト戦略](../implementation/testing.md) の「Miri」)。最後の1つは `Async.run` の機構を含む約 450 行の LIR を読んで流すので、検査モードだけで流しても上限の数倍かかる。上限に収めるには、1回の実行ごとの準備を安くする必要がある
+- `miri.rs`のテストの1つあたりのMiriの費用: `crates/eml_vm/tests/miri.rs`の`par_switches_between_tasks`、`shared_struct_boxes_with_scalar_leaves`、`multi_value_returns`、`an_immediate_clause_reads_and_writes_the_state_of_its_evidence`、`a_blocking_call_runs_on_the_test_driver`の5つは、1つのテストの上限(Tree Borrowsの下で10秒)を超える([テスト戦略](../implementation/testing.md)の「Miri」)。最後の1つは根のタスクの機構を含む約450行のLIRを読んで流すので、検査モードだけで流しても上限の数倍かかる。上限に収めるには、1回の実行ごとの準備を安くする必要がある
   - 後に回した理由: コマンド全体の `user` は予算に収まっている。5つはどれも、VM が核の操作の前提を守ることを別の道 (`par` の切り替え、構造体と箱の変換、共有の箱の葉、節の状態の読み書き、`blocking` の呼び出しの受け付けから取り出しまで) で確かめるので、削れない。テストの大きさは `cfg!(miri)` で変えない。
   - 見直す条件: `miri.rs` にテストを足すとき。または、`eml_vm` の `miri::` のコマンド全体の `user` が予算の半分を超えたとき。
   - 右の子を worker 1 に置く `par` の run (`--workers 2`) は `miri.rs` にない。足すと、Tree Borrows の下で `miri::` のコマンド全体の `user` が 15 秒増え、1つのテストの上限を超えた。worker をまたぐ道は、`eml_rt` の `trusted` の2つのスレッドのテストと ThreadSanitizer ([テスト戦略](../implementation/testing.md) の「ThreadSanitizer」) と、検査モードの N = 2 と 8 の UI テストで確かめる。1回の実行ごとの準備を安くしたときに、足すかを決め直す

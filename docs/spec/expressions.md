@@ -356,7 +356,7 @@ with_log path action =
 
 ## 並行処理
 
-並行処理のための構文は追加しない。`par`、`Async.start`、`Async.run` は、ラムダと `use` で書ける ([標準ライブラリ](stdlib.md) の「`Std.Par`」と「`Std.Async`」)。非同期の処理は、row に `Async` を持つ普通の関数として直接の形で書け、`async` / `await` も関数の色分けも要らない。
+並行処理のための構文は追加しない。`par`、`Async.start`、`Async.scope`は、ラムダと`use`で書ける([標準ライブラリ](stdlib.md)の「`Std.Par`」と「`Std.Async`」)。非同期の処理は、rowに`Async`を持つ普通の関数として直接の形で書け、`async` / `await`も関数の色分けも要らない。
 
 ```haskell
 import Async (Async)
@@ -367,14 +367,14 @@ import String
 line_count : String -> <IO, Panic, Async> Int
 line_count path = List.length (String.lines (Fs.read_text path))
 
-line_counts : List String -> <IO, Panic> List Int
+line_counts : List String -> <IO, Panic, Async> List Int
 line_counts paths =
-  use Async.run
+  use _ <- Async.scope
   let tasks = List.map (fn path -> Async.start (fn () -> line_count path)) paths
   List.map Async.await tasks
 ```
 
-`use Async.run` は、ブロックの残りを本体のラムダとして `Async.run` に渡す (上の「`use`」)。`line_counts` はファイルごとにタスクを1つ始め、始めた順に結果を待つ。タスクは1つの worker の上で切り替えて動く ([VM](vm.md) の「`Async` のタスク」)。
+`use _ <- Async.scope`は、ブロックの残りを本体のラムダとして`Async.scope`に渡す(上の「`use`」)。`line_counts`はファイルごとにタスクを1つ始め、始めた順に結果を待つ。タスクは1つのworkerの上で切り替えて動く([VM](vm.md)の「`Async`のタスク」)。
 
 ## 型の明示
 

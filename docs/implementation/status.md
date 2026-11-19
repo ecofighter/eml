@@ -35,7 +35,7 @@
 - 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)。要素を箱に入れず生の 8 バイトの語で並べる `UnboxedArray a` (`Std.UnboxedArray`) と、線形な `MutUnboxedArray a` (`Std.MutUnboxedArray`) もある。要素の型は `Float` と `Int` だけで、添字の式 `e[i]` と `var` の配列の変数は使えない ([標準ライブラリ](../spec/stdlib.md) の「`Std.UnboxedArray`」と「`Std.MutUnboxedArray`」)
 - 連想配列と集合: キーの順の `Map k v` (`Std.Map`) と `Set a` (`Std.Set`)。どちらも釣り合いを取った木で、キーと要素は `Unr` に限る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」)
 - 2つの計算の組: `Std.Par`の`par`は2つの子を動かして両方を待ち、子の`never`の操作を親で起こし直す。子のrowの上限は`never`で、`IO`や`var`を使う子はE2020になる。`both`は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md)の「`Std.Par`」)。`eml run`と`eml repl`は、子を切り替える方針がいつも普通の方針 (`Normal`。自分からはタスクを切り替えない) である。逐次 (`Sequential`) とseedで決まる切り替え (`Seeded`) は、ライブラリのAPIから渡すテストのための方針である ([VM](../spec/vm.md)の「タスクとスケジュール」)。`eml run`の`--workers`でworkerのスレッドの数を選び、右の子は空いているworkerで動く ([標準ライブラリ](../spec/stdlib.md)の「起動」)
-- 非同期のタスク: `Std.Async`の`run`が根のスコープを開いて本体をタスクとして動かし、`start`と`spawn`が今のスコープにタスクを足し、`await`がタスクの値を受け取るか失敗を起こし直す。`run`はスコープのすべてのタスクを待ってから戻る。`scope`が名前付きのスコープを開き、`start_in`と`spawn_in`がそこにタスクを足す。`cancel`と`cancel_scope`がタスクとスコープを取り消し、`shield`が取り消しの地点を守り、`check_cancelled`と`cancel_requested`が待たないループの中で取り消しを確かめる。ほかに`yield_now`、`try_all`、`Failure`と、時間を扱う`sleep_ms`、`timeout`、`race`、`drain_within`と、CPUを使う仕事を子が1つの`par`と同じ仕事として動かし、呼んだタスクだけを待たせる`compute`がある。タスクは`start`のときに置けるworkerをworker 1から順に回して置く。同じworkerのタスクはスケジュールの方針に従って切り替えて動く ([標準ライブラリ](../spec/stdlib.md)の「`Std.Async`」、[VM](../spec/vm.md)の「`Async`のタスク」)
+- 非同期のタスク: rowに`Async`を持つ`main`がrunの根のタスクで、`start`と`spawn`が今のスコープにタスクを足し、`await`がタスクの値を受け取るか失敗を起こし直す。`scope`はスコープを開き、そのスコープのすべてのタスクを待ってから戻る。根のスコープは、すべてのタスクが終わってからrunを終える。`start_in`と`spawn_in`は名前を付けたスコープにタスクを足し、`start_in`と`spawn_in`がそこにタスクを足す。`cancel`と`cancel_scope`がタスクとスコープを取り消し、`shield`が取り消しの地点を守り、`check_cancelled`と`cancel_requested`が待たないループの中で取り消しを確かめる。ほかに`yield_now`、`try_all`、`Failure`と、時間を扱う`sleep_ms`、`timeout`、`race`、`drain_within`と、CPUを使う仕事を子が1つの`par`と同じ仕事として動かし、呼んだタスクだけを待たせる`compute`がある。タスクは`start`のときに置けるworkerをworker 1から順に回して置く。同じworkerのタスクはスケジュールの方針に従って切り替えて動く([標準ライブラリ](../spec/stdlib.md)の「`Std.Async`」、[VM](../spec/vm.md)の「`Async`のタスク」)
 - メインのworker: `eml run`では、`Machine`を持つプロセスのメインのスレッドがメインのworkerになり、`Async.start_on_main`と`Async.run_on_main`で始めた固定したタスクを動かす。`main`はworker 0で動く。固定したタスクが始めるタスクも固定し、`par`の子と`compute`の仕事はほかのタスクと同じく置く。`eml repl`ではworker 0がメインのworkerを兼ねる ([標準ライブラリ](../spec/stdlib.md)の「メインのworker」、[VM](../spec/vm.md)の「メインのworker」)
 - タスクごとの上限: `Async`のタスクの中で呼び出しの深さが上限を超えると、runは止まらず、そのタスクに種類`ResourceLimit`のIOの失敗が起きる。確保量がメモリの柔らかい上限 (既定は`max_bytes`の7/8) の閾値を越えたときも、確保の数がいちばん大きいタスクに同じ失敗が起きる。どちらも関数に入るところで起き、`try_io`と`try_all`で捕まえられる。タスクの外の深さの上限と、メモリの硬い上限`max_bytes`はrunを止める ([標準ライブラリ](../spec/stdlib.md)の「タスクの上限」、[VM](../spec/vm.md)の「上限と割り込み」と「タスクの上限」)。空の物体を作る`Bytes.empty`と`MutArray.empty`は、`max_bytes`を確かめない ([オブジェクトモデル](../spec/object-model.md)の「バイト列の操作」)
 - タスクの間の channel と共有の数: `Std.Chan` の channel (`send`、`recv`、`try_send`、`try_recv`、`close`、`merge`) と、`Std.Atomic` の `Counter` がある。どちらも worker をまたいで使える ([標準ライブラリ](../spec/stdlib.md) の「`Std.Chan`」と「`Std.Atomic`」、[VM](../spec/vm.md) の「channel」)
@@ -165,13 +165,13 @@
 - `compute` の仕事は取り消せない。取り消しは仕事が終わってから届くので、`timeout` で囲んだ `compute` は期限が過ぎても仕事が終わるまで戻らず、仕事の後で `None` を返す。`race` で負けた腕の仕事も最後まで動く ([標準ライブラリ](../spec/stdlib.md) の「`compute`」)
 - `compute` の仕事の中の、`Panic` でない実行時エラーは、呼んだタスクの `try_all` も捕まえず、その場で run を止める。捕まえない `Panic` は、呼んだタスクの `Panicked` になる ([標準ライブラリ](../spec/stdlib.md) の「`compute`」)
 - タスクの中の `par` は、`compute` と違ってスタックを持ったまま子を待ち、その間は取り消しの地点でない ([VM](../spec/vm.md) の「待ちの2種類」)
-- タスクの中で `Async.run` を入れ子に呼ぶと、中のスコープのタスクがすべて終わるまで、呼んだタスクはスタックを持ったまま待ち、その間は取り消しの地点でない。中のタスクには取り消しが届く。`shield` の中では、入れ子の `run` の根が境目になる ([VM](../spec/vm.md) の「待ちの2種類」)
+- `Async`のrowを持つ`main`のエントリの関数は、根のスコープのタスクがすべて終わるまで、スタックを持ったまま待ち、その間は取り消しの地点でない。`par`のjoinで待つ親と同じ扱いである([VM](../spec/vm.md)の「待ちの2種類」)
 - `shield` の中で自分の属するスコープを `drain_within` で待つなど、自分を待つ形は、ほかに進むものがなくなったときにだけ実行時エラー `deadlock` で止まる。ほかのタスクが動くか眠る間は、互いを待つタスクも待ち続ける ([VM](../spec/vm.md) の「時計と driver」)
 - `race` の勝ちは、run に1つの登録表の lock の下で、1つの行が決める。同時に終わる2つの腕のどちらが勝つかは、スケジュールと腕を置いた worker で決まる ([標準ライブラリ](../spec/stdlib.md) の「時間」、[VM](../spec/vm.md) の「セルと登録表」)
 - タスクは置いたworkerの上で終わるまで動く。置いた後にworkerの間で仕事を動かすものはない。タスクは`Async`の操作でだけ切り替わり、CPUを使うタスクやその場の読み込みは、待つか戻るまで同じworkerのほかのタスクを待たせる。`compute`はforkのときにCPUの仕事を空いたworkerへ移し、空いたworkerがなければ呼んだworkerで動かす。タスクを置くworkerは順に回すだけで、workerの混み具合を見ない ([ロードマップ](../future/roadmap.md)の「マルチコア対応」と、その「workerの間でのタスクの移動」)
 - 仮想の時計では、同じ期限のタイマーの worker をまたいだ順は決まらない。区画ごとに持ち主の worker が自分の集める地点で外すためである ([VM](../spec/vm.md) の「時計と driver」、[ロードマップ](../future/roadmap.md) の「マルチコア対応」)
 - worker をまたぐ容量 0 の channel の往復は、1つの worker の上の往復より費用が大きい。4つの worker で往復だけを繰り返すプログラムは、1つの worker より遅い ([計測の基準](benchmarks.md) の「worker の数と実時間」、[ロードマップ](../future/roadmap.md) の「マルチコア対応」)
-- スコープの失敗は、終わった順で最初のものだけを `run` と `scope` が起こし直す。2つ目からは報告せず、`RunStats.dropped_failures` に数えるだけである
+- スコープの失敗は、終わった順で最初のものだけを`root`と`scope`が起こし直す。2つ目からは報告せず、`RunStats.dropped_failures`に数えるだけである
 - 操作の予算を使うのは、`check_cancelled` と、`Std.Chan` の速い道と、`Std.Net` の待ちである。`Std.Net` の待ちは操作が終わっていたかによらず1回ごとに使い、書きの待ちは長さに応じて多く使う。64 KiB の書きは1回で予算を使い切る。`try_send` と `try_recv` は使うだけで譲らない ([標準ライブラリ](../spec/stdlib.md) の「操作の予算」)
 - 閉じない channel は run の終わりまで登録表に残り、残った品物もそのときまで落とさない (`RunStats.channels_swept`。[ロードマップ](../future/roadmap.md) の「非同期」)
 - `Counter` の表は `Machine` が持ち、放さない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Atomic`」、[ロードマップ](../future/roadmap.md) の「非同期」)
@@ -197,7 +197,7 @@
 - ウィンドウのネイティブの最小の大きさは初めて表示するときに決め、後で中身が増えても変えない
 - 拡張の継ぎ目はcfgのfeatureで、`Plugin`のtraitはない ([FFI と拡張の設計](../future/ffi.md)の「拡張」)
 - `eml repl`ではGUIを開けず、`Gui.run`は`NotAvailable`で失敗する ([ロードマップ](../future/roadmap.md)の「REPL」)
-- GUIのタスクが待つタスク (`await`するタスクや、`app`の中の`Async.run`の本体) から満ちたchannelへの`Gui.post`は、いつまでも待つ。GUIが開いている間はrunの外の待ちの印が立つので、デッドロックとしても報告しない ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)
+- GUIのタスクが待つタスク(`await`するタスクや、`app`の中の`Async.scope`の本体)から満ちたchannelへの`Gui.post`は、いつまでも待つ。GUIが開いている間はrunの外の待ちの印が立つので、デッドロックとしても報告しない([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)
 
 ### 子のプロセス
 
@@ -211,7 +211,7 @@
 
 - 1つの driver で同時に走る `blocking` の呼び出しは24までで、ファイルの読み書きのために8本を残す。戻らない呼び出しを run の終わりに待つ予算は、run 全体で1秒である。どちらも測らずに決めた値で、`eml` からは変えられない ([宣言](../spec/declarations.md) の「`extern "C"`」、[ロードマップ](../future/roadmap.md) の「非同期」)
 - 走っている`blocking`の呼び出しは止められない。戻らない呼び出しを抱えたrunは、`exit`やCtrl-Cで止めると予算だけ終わりが遅れる。その後runはほかと同じく終わってヒープを放すが、呼び出しはdriverの`Op::Job`のスレッド1本と、引数の写しと、大きい引数のページを持ち続け、そのハンドルのdtorは呼び出しが戻ったときに走る。1つのdriverで24の呼び出しを見捨てたREPLのセッションでは、後の`blocking`の呼び出しはどれも列で待つ ([VM](../spec/vm.md)の「時計と driver」)
-- 失敗したスコープの中の `blocking` の呼び出しは、取り消されても C の関数が戻るまで待つ。戻らない呼び出しを抱えて失敗した `run` は戻らず、Ctrl-C でしか終わらない。Ctrl-C の後は予算が効く ([宣言](../spec/declarations.md) の「`extern "C"`」)
+- 失敗したスコープの中の`blocking`の呼び出しは、取り消されてもCの関数が戻るまで待つ。戻らない呼び出しを抱えて失敗した`scope`と根のスコープは戻らず、Ctrl-Cでしか終わらない。Ctrl-Cの後は予算が効く([宣言](../spec/declarations.md)の「`extern "C"`」)
 - 仮想の時計の run (テストとライブラリの既定) では、`blocking` の仕事は worker 0 の上でその場で動く。戻らない呼び出しは `exit` でも Ctrl-C でも止まらず、run は終わらない。ほかのタスクを待つ C の関数も、worker 0 を止めたまま戻らない ([宣言](../spec/declarations.md) の「`extern "C"`」、[テスト戦略](testing.md) の「UI テスト」)
 - コールバック、C の構造体、可変長の引数は渡せない。型の対応は表にある形だけである ([FFI と拡張の設計](../future/ffi.md) の「未決の論点と将来の拡張」)
 - C に貸せる配列は、要素が 64 bit の `UnboxedArray` と `MutUnboxedArray` (`Float` と `Int`) だけである。`float` や 32 bit の整数の buffer を求める API (LP64 の LAPACK など) は呼べない

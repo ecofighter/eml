@@ -17,7 +17,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | # | 領域 | 決定 |
 |---|---|---|
 | 1 | エフェクト | `Async` は普通の eml のエフェクトで、extern のエフェクトにしない。待ちの生の操作の結果はいつも `Wake` の値を持ち、ランタイムとの ABI として公開して文書に書く |
-| 2 | エントリ | `Async.run : (Unit -> <IO, Panic, Async> a) -> <IO, Panic> a` が根のスコープで、`main` では `use Async.run` と書く。VM では呼んだ側を待たせる組み込みの上に作る |
+| 2 | エントリ | rowに`Async`を持つ`main`とREPLの入力が、runの根のタスクである。根のスコープはrunに1つで、runは根のタスクが終わって根のスコープが空になったときに終わる。runを開く関数はなく、タスクの組を待つには`Async.scope`を使う。VMではエントリの関数が根のスコープをスタックを持ったまま待つ。ネイティブのコードの待ち方は[ネイティブ化の設計](native.md)の「並列の実行」にある |
 | 3 | スコープ | nursery の形にする。子が失敗したら、その時点でスコープのほかのタスクをすべて取り消す。`Task a` は `Lin` で、捨てると取り消しになる |
 | 4 | 分離 | 接続ごとの分離は、タスクの中で `Async.try_all` を使って行う。失敗は `Failure` の `IOFailed` か `Panicked` で受ける |
 | 5 | 取り消し | 取り消しは `Wake.Cancelled` で届け、std の包みが IO の失敗 `Prelude.Cancelled` として投げる。タスクは自分のフレームとスコープの後始末を通って巻き戻る。継続を捨てる強い取り消しは `exit`、致命的な誤り、run の終わり、回復のときだけにする。柔らかい確かめの名前は `check_cancelled` と `cancel_requested` である |
@@ -59,19 +59,19 @@ pub data Wake = | Woke | Cancelled
 - 9つの生の操作はすべて実装してある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
 - `Async` は extern のエフェクトにしない。extern のエフェクトは yield しうるラベルでなく ([型と Kind](../spec/types.md) の「row の具体化の記録」)、`Async` の操作は継続を取り出して待つためである
 - 生の操作は eml とランタイムの間の ABI である。`Async` は抽象エフェクトで、名前は見えるが操作は見えない。操作はランタイムの ABI として文書に書く。利用者は下の節の包みの関数を呼ぶ。`Cell` は登録表の添字を持つ `Unr` の即値 (`Repr::Int`) で、`OpId` は操作の記録の番号を持つ token の即値 (`Repr::Int`) である。どれも std の中で使う。`OpId` は `Lin` で、待つ間はランタイムが継続を預かり、再開するときに token を `Wake` と組にして返す
-- ランタイムが名前で呼ぶエントリは、単相の `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である。単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` は、生の操作ごとに節を1つ持つ handler をタスクの本体にかぶせる。節は継続 `k` をランタイムに預けて (待ちに入れるか、実行待ちに戻す) そのまま戻る。ランタイムは後で `resume_task` で `k` に `Wake` の値を渡し、タスクを再開する ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。タスクの本体は std の底の関数で包む。底は `Panic` と IO の失敗を捕まえ、結果を値のまま、引数を預かる extern (`finish_ok`) に渡す。`await` と `run` は預けた値を `take_result` と `run_result` で1回受け取る。`Lin` の結果も thunk に包まずに渡せる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
+- ランタイムが名前で呼ぶエントリは、単相の`start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit`と`resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit`である。単相なので、名前でABIが決まり、instanceの名前が正式な名前のままになる。`start_task`は、生の操作ごとに節を1つ持つhandlerをタスクの本体にかぶせる。節は継続`k`をランタイムに預けて(待ちに入れるか、実行待ちに戻す)そのまま戻る。ランタイムは後で`resume_task`で`k`に`Wake`の値を渡し、タスクを再開する([マルチコア対応の設計](multicore.md)の「スケジューラ」)。タスクの本体はstdの底の関数で包む。底は`Panic`とIOの失敗を捕まえ、結果を値のまま、引数を預かるextern (`finish_ok`)に渡す。`await`と`root`は預けた値を`take_result`と`root_result`で1回受け取る。`Lin`の結果もthunkに包まずに渡せる([標準ライブラリ](../spec/stdlib.md)の「`Std.Async`」)
 - 生の操作の結果はどれも `Wake` を持つ (`Wake` そのものか、`Wake` と預けた token の組)。そのため、ランタイムはどの待ちのタスクにも即値の `Cancelled` (`await_io` と `await_io_until` では預かった token との組) を渡して再開でき、型が合う。これは std の約束で、テストで確かめる
 - 待ちうる包みの関数はどれも取り消しの地点である。取り消しはここで届く ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
 - 操作の予算: 待たずに済む速い道 (channelの送りと受け取り) と`Std.Net`の待ちは、`check_cancelled`と同じくタスクのセルの予算 ([標準ライブラリ](../spec/stdlib.md)の「操作の予算」) を使う。`Std.Net`の待ちは操作が終わっていたかによらず1回ごとに使い、書きの待ちは長さに応じて多く使う。予算を使い切ると速い道は先に譲るよう答え、包みは`reschedule`を通ってほかのタスクにworkerを渡す。終わった操作の待ちは、先にOSを1回見て完了を集め、走れるタスクがなければ予算を戻して譲らずに続ける。`try_send`と`try_recv`は予算を使っても譲らず、`send`、`recv`、`check_cancelled`が譲る。ネイティブのコードも同じ核のエントリで予算を使う。予算はworkerの止める語に触れず、VMでもネイティブでも速い道の連続を抑える
 
 ## スコープとタスク
 
-`run`、`start`、`spawn`、`await`、`yield_now`、名前付きのスコープ (`scope`、`start_in`、`spawn_in`、`cancel_scope`)、`cancel` と `Task a` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」と「スコープ」にあり、セルの形は [VM](../spec/vm.md) の「セルと登録表」にある。ここには、複数の worker とネイティブのコードのために足すものを書く。
+`start`、`spawn`、`await`、`yield_now`、名前付きのスコープ(`scope`、`start_in`、`spawn_in`、`cancel_scope`)、`cancel`と`Task a`は[標準ライブラリ](../spec/stdlib.md)の「`Std.Async`」と「スコープ」にあり、セルの形は[VM](../spec/vm.md)の「セルと登録表」にある。ここには、複数のworkerとネイティブのコードのために足すものを書く。
 
 - タスクの閉じた row `<IO, Panic, Async>` は `Heap h` も除く
 - 複数のworkerでは、タスクのセルは持ち主のworkerを持つ。取り消しのビット、スコープの旗、スコープの属するタスクと入れ子のスコープの一覧は、どれもrunの登録表のlockの下で読み書きする。印を付ける手順は1つのworkerのときと同じで、届け方だけが持ち主で分かれる ([VM](../spec/vm.md) の「取り消しの届け方」、[マルチコア対応の設計](multicore.md) の「`Async`のタスク」)
 - `cancel` とスコープの取り消しは、取り消しをタスクのセルの持ち主の worker へ届ける。印を付けた worker が持ち主なら run の mail に積み、ほかの worker なら持ち主の受け箱に知らせを送る。`Task a` の `drop` は run の mail に項を積み、それを処理した worker が同じ形で届ける。`Task a` はほかの `Lin` の値と同じく `Chan` で送れる
-- ネイティブのコードでは、`Async.run` はマシンのスタックの上で worker のループを入れ子にする。呼んだ側が完了の後に再開するという約束は VM と同じである ([VM](../spec/vm.md) の「待ちの2種類」、[ネイティブ化の設計](native.md) の「並列の実行」)
+- ネイティブのコードで`main`の根のスコープの終わりをどう待つかは、[ネイティブ化の設計](native.md)の「並列の実行」にある。エントリが根の結果を受け取る約束はVMと同じである([VM](../spec/vm.md)の「待ちの2種類」)
 - ハンドルにスコープの型引数は付けない。付けると `run_heap` のようなランク2の特別な形が要るためである。スコープの外へ出た `Task a` は、取り消されたものでもありうる
 
 ## 失敗と `exit`
@@ -89,9 +89,9 @@ probe host =
     Net.close conn
     Bytes.length chunk)
 
-probe_all : List String -> <IO, Panic> List (Option (Result Failure Int))
+probe_all : List String -> <IO, Panic, Async.Async> List (Option (Result Failure Int))
 probe_all hosts =
-  use Async.run
+  use _ <- Async.scope
   let tasks = List.map (fn h -> Async.start (fn () -> Async.timeout 5000 (fn () -> probe h))) hosts
   List.map Async.await tasks
 ```
@@ -269,9 +269,9 @@ read_chunk buf s =
 | 場合 | 語を持つもの | 扱い |
 |---|---|---|
 | 普通の完了 | なし。引数は待つタスクの継続が持つ | 完了がタスクのセルの持ち主へ届き、取り出しが記録を放して結果を返す |
-| 仕事の途中でタスクが取り消された | なし | 仕事は止められない。タスクは完了を待ってから取り消しで再開する。スコープの失敗による取り消しも同じで、失敗を起こし直す `run` と `scope` は仕事が終わるまで戻らない |
+| 仕事の途中でタスクが取り消された | なし | 仕事は止められない。タスクは完了を待ってから取り消しで再開する。スコープの失敗による取り消しも同じで、失敗を起こし直す`scope`と`root`は仕事が終わるまで戻らない |
 | 受け付けの時点で取り消しが決まっていた | なし | 仕事を出さず、取り消しで終わった記録にする。後の `io_wait` が `Cancelled` で再開する ([VM](../spec/vm.md) の「`blocking` の呼び出し」) |
-| runを止める終わり (`exit`、Ctrl-C、確保量の上限、致命的な誤り、デッドロック、`Async.run`の外へ出た実行時エラー) | なし | 静止が`Op::Job`をrunごとに1つの予算 (既定1秒) まで待ち、予算を過ぎても走る仕事は見捨てる。見捨ててもヒープには触れない。仕事は自分の写しと、ページを留めた大きい引数だけを使い、runは回復して`exit`の終了コードを返す。予算が効くのは静止だけで、失敗したスコープの取り消しは完了を待つ。2回目のCtrl-Cは今と同じく130で終わる |
+| runを止める終わり(`exit`、Ctrl-C、確保量の上限、致命的な誤り、デッドロック、`main`の外へ出た実行時エラー) | なし | 静止が`Op::Job`をrunごとに1つの予算(既定1秒)まで待ち、予算を過ぎても走る仕事は見捨てる。見捨ててもヒープには触れない。仕事は自分の写しと、ページを留めた大きい引数だけを使い、runは回復して`exit`の終了コードを返す。予算が効くのは静止だけで、失敗したスコープの取り消しは完了を待つ。2回目のCtrl-Cは今と同じく130で終わる |
 | REPLの回復 | なし | 回復の前の静止は予算をまるごと受け取る。予算の後もまだ走る仕事は見捨て、セッションは続く ([VM](../spec/vm.md)の「追記」) |
 | 持ち主が入力をその場で書き換える | なし | 起きない。継続が数えた参照を1つ持つので、ほかに持ち手がいれば rc が 2 以上になり、`is_unique` が成り立たないので、書き込みは写す |
 | 検査モード | なし | プールの中身の書き込みは所有者を確かめない。その場で動く C の呼び出しが `MutUnboxedArray` を書くときと同じで、宣言を信頼する |
@@ -302,9 +302,8 @@ acceptor conns slots l =
     ())
   acceptor conns slots l                              -- 取り消されたときは巻き戻しが l を落とす
 
-main : Unit -> <IO, Panic> Unit
+main : Unit -> <IO, Panic, Async.Async> Unit
 main () =
-  use Async.run
   let slots = Chan.new 10000
   use conns <- Async.scope
   let _ = Async.race (fn () -> acceptor conns slots (Net.listen "0.0.0.0" 8080))
