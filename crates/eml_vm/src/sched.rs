@@ -324,6 +324,8 @@ pub(crate) struct JoinNode {
     pub(crate) right_worker: u32,
     /// fork のときの親の `evv`。左の子が終わったら `Ctx` に戻す。
     pub(crate) parent_evv: eml_rt::Word,
+    /// forkのときの親の上限の状態。joinが戻し、子の間に届いた旗はここに付く (docs/spec/vm.mdの「深さ」)。
+    pub(crate) parent_limit: crate::vm::Limit,
     pub(crate) left: Option<Outcome>,
     pub(crate) right_outcome: Option<Outcome>,
     /// `par` の命令の次の位置と、組を書くスロット。

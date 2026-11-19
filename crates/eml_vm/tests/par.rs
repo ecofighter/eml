@@ -1,7 +1,6 @@
 //! `par` の fork と join を、evidence passing の出力の形の手書きの LIR で確かめる (docs/spec/vm.md の
-//! 「`par` の fork と join」)。fork の関数 (`fork$E.op` と `reperform$E.op`) は evidence passing が作る形で書く
-//! (docs/spec/core-ir.md の「`par` の子の中断」)。各プログラムは検査モードで逐次と2つの seed で流して結果を比べ、
-//! 通れば速いモードの逐次でも流す。子の誤りの規則は、ソースから作ったコードでも確かめる (`source`)。
+//! 「`par`のforkとjoin」)。各プログラムは検査モードで逐次と2つのseedで流して結果を比べ、通れば速いモードの逐次でも
+//! 流す。子の誤りの規則は、ソースから作ったコードでも確かめる (`source`)。
 
 use std::sync::Arc;
 
@@ -295,124 +294,7 @@ fn main() -> unit {
     assert_eq!(out, "1\n2\n");
 }
 
-/// 左の子の中断は、両方の子が終わった後で親の handler に起こし直す。右の子の値は捨てる。
-#[test]
-fn a_left_abort_is_raised_again_in_the_parent_handler() {
-    let (out, result) = run_par(
-        "\
-fn main() -> unit {
-  let t.0: tobj = call with_outer(&body)
-  tail call show_pair(t.0)
-}
-fn body(p.0: unit) -> tobj {
-  let t.1: obj = par (,) #0(&fail7, &two)
-  return t.1
-}
-",
-    );
-    assert!(result.is_ok(), "{result:?}");
-    assert_eq!(out, "7\n100\n");
-}
-
-/// 左の子が値を返し、右の子が中断すると、左の値を捨てて右の中断を起こし直す。
-#[test]
-fn a_right_abort_drops_the_left_value() {
-    let (out, result) = run_par(
-        "\
-fn main() -> unit {
-  let t.0: tobj = call with_outer(&body)
-  tail call show_pair(t.0)
-}
-fn body(p.0: unit) -> tobj {
-  let t.1: obj = par (,) #0(&one, &fail7)
-  return t.1
-}
-",
-    );
-    assert!(result.is_ok(), "{result:?}");
-    assert_eq!(out, "7\n100\n");
-}
-
-/// 両方の子が中断すれば、いちばん左の中断を起こし直す。右の子も最後まで走り、その中断は捨てる。
-#[test]
-fn the_leftmost_abort_wins() {
-    let (out, result) = run_par(
-        "\
-fn main() -> unit {
-  let t.0: tobj = call with_outer(&body)
-  tail call show_pair(t.0)
-}
-fn body(p.0: unit) -> tobj {
-  let t.1: obj = par (,) #0(&fail8, &fail7)
-  return t.1
-}
-",
-    );
-    assert!(result.is_ok(), "{result:?}");
-    assert_eq!(out, "8\n100\n");
-}
-
-/// mask を持つ `par` は evidence passing の `mask` の包みの中にある。子の `evv` は mask した後の親の `evv` の鏡なので、
-/// 子の中断は内側の handler を飛ばして外側の handler に届く。
-#[test]
-fn a_masked_par_raises_past_the_inner_handler() {
-    let (out, result) = run_par(
-        "\
-fn main() -> unit {
-  let t.0: tobj = call with_outer(&middle)
-  tail call show_pair(t.0)
-}
-fn middle(p.0: unit) -> tobj {
-  tail call with_inner(&body)
-}
-fn body(p.0: unit) -> tobj {
-  let w.1: evv = prim evv_get()
-  let w.2: evv = prim evv_mask[Fail](w.1)
-  let u.3: unit = prim evv_set(w.2)
-  let t.4: obj = par (,) #0(&fail7, &two)
-  let u.5: unit = prim evv_set(w.1)
-  return t.4
-}
-",
-    );
-    assert!(result.is_ok(), "{result:?}");
-    assert_eq!(out, "7\n100\n");
-}
-
-/// 子の中の `mask` は、親の列と同じ形の fork evidence を数で飛ばす。2つ目の `Fail` の fork evidence は深さ 1 を持ち、
-/// 親は mask した `evv` で起こし直すので、外側の handler に届く。左の子でも右の子でも同じである。
-#[test]
-fn a_mask_inside_a_child_reaches_the_second_parent_handler() {
-    for (left, right) in [("skip7", "two"), ("one", "skip7")] {
-        let (out, result) = run_par(&format!(
-            "\
-fn main() -> unit {{
-  let t.0: tobj = call with_outer(&middle)
-  tail call show_pair(t.0)
-}}
-fn middle(p.0: unit) -> tobj {{
-  tail call with_inner(&body)
-}}
-fn body(p.0: unit) -> tobj {{
-  let t.1: obj = par (,) #0(&{left}, &{right})
-  return t.1
-}}
-fn skip7(p.0: unit) -> tobj {{
-  let w.1: evv = prim evv_get()
-  let w.2: evv = prim evv_mask[Fail](w.1)
-  let u.3: unit = prim evv_set(w.2)
-  let t.4: tobj = call fail7(())
-  let u.5: unit = prim evv_set(w.1)
-  return t.4
-}}
-"
-        ));
-        assert!(result.is_ok(), "{left}, {right}: {result:?}");
-        assert_eq!(out, "7\n100\n", "{left}, {right}");
-    }
-}
-
-/// 子の中の `try_panic` は、子の中の `panic` を捕まえる。fork evidence の `Panic` より内側にあるためである。
+/// 子の中の`try_panic`は、子の中の`panic`を捕まえる。
 #[test]
 fn a_child_panic_is_caught_by_the_child_try_panic() {
     for (left, right, expected) in [("catches", "two", "42\n2\n"), ("one", "catches", "1\n42\n")] {
@@ -433,18 +315,36 @@ fn catches(p.0: unit) -> tobj {{
     }
 }
 
-/// 子の中で捕まえられない `panic` は、末尾の `Panic` の fork evidence から親で起こし直し、親の `try_panic` に届く。
+/// 子の中で捕まえられない`panic`はrunの実行時エラーで、子の関数の名前を持つ。
 #[test]
-fn a_child_panic_is_caught_by_the_parent_try_panic() {
+fn an_uncaught_child_panic_is_a_runtime_error() {
     for (left, right) in [("boom", "two"), ("one", "boom")] {
         let (out, result) = run_par(&format!(
             "\
 fn main() -> unit {{
-  let c.0: tobj = box 3
-  let d.1: tobj = box 4
-  let p.2: obj = con (,) #0(c.0, d.1)
-  let t.3: tobj = call try_panic(&body, p.2)
-  tail call show_pair(t.3)
+  let t.0: obj = par (,) #0(&{left}, &{right})
+  tail call show_pair(t.0)
+}}
+"
+        ));
+        assert_eq!(out, "", "{left}, {right}");
+        assert_eq!(
+            error_text(result),
+            "panicked: boom in `boom`",
+            "{left}, {right}"
+        );
+    }
+}
+
+/// 子の`evv`は空である。子が行う操作は、親のhandlerに届かない。
+#[test]
+fn a_child_does_not_reach_the_handler_of_its_parent() {
+    for (left, right) in [("fail7", "two"), ("one", "fail7")] {
+        let (out, result) = run_par(&format!(
+            "\
+fn main() -> unit {{
+  let t.0: tobj = call with_outer(&body)
+  tail call show_pair(t.0)
 }}
 fn body(p.0: unit) -> tobj {{
   let t.1: obj = par (,) #0(&{left}, &{right})
@@ -452,27 +352,13 @@ fn body(p.0: unit) -> tobj {{
 }}
 "
         ));
-        assert!(result.is_ok(), "{left}, {right}: {result:?}");
-        assert_eq!(out, "3\n4\n", "{left}, {right}");
+        assert_eq!(out, "", "{left}, {right}");
+        assert_eq!(
+            error_text(result),
+            "no evidence of the effect is in the evv in `fail7`",
+            "{left}, {right}"
+        );
     }
-}
-
-/// どこでも捕まえられない子の `panic` は、起こし直した `reperform$` の中の実行時エラーになり、ソースの位置を持たない。
-#[test]
-fn an_uncaught_child_panic_names_the_reperform() {
-    let (out, result) = run_par(
-        "\
-fn main() -> unit {
-  let t.0: obj = par (,) #0(&one, &boom)
-  tail call show_pair(t.0)
-}
-",
-    );
-    assert_eq!(out, "");
-    assert_eq!(
-        error_text(result),
-        "panicked: boom in `reperform$Prelude.Panic.panicked`"
-    );
 }
 
 /// 入れ子の `par`。左の子の左の子は親のスタックの上で、右の子の右の子は右の子のタスクから作るタスクで動く。
@@ -501,32 +387,6 @@ fn right(p.0: unit) -> tobj {
     );
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(out, "1\n2\n2\n1\n");
-}
-
-/// 入れ子の `par` の中の中断。右の子の右の子の中断は、2つの join を通って外側の handler に届く。左の子の中の `par`
-/// の中断も同じである。
-#[test]
-fn an_abort_in_a_nested_par_crosses_both_joins() {
-    for (left, right) in [("one", "nested"), ("nested", "two")] {
-        let (out, result) = run_par(&format!(
-            "\
-fn main() -> unit {{
-  let t.0: tobj = call with_outer(&body)
-  tail call show_pair(t.0)
-}}
-fn body(p.0: unit) -> tobj {{
-  let t.1: obj = par (,) #0(&{left}, &{right})
-  return t.1
-}}
-fn nested(p.0: unit) -> tobj {{
-  let t.1: obj = par (,) #0(&spin_two, &fail8)
-  return t.1
-}}
-"
-        ));
-        assert!(result.is_ok(), "{left}, {right}: {result:?}");
-        assert_eq!(out, "8\n100\n", "{left}, {right}");
-    }
 }
 
 /// 深さの上限で止まる子の関数と、出力してから値を返す子の関数。
@@ -588,28 +448,6 @@ fn main() -> unit {
     assert_eq!(
         error_text(result),
         "the call depth limit is exceeded in `deep_left`"
-    );
-}
-
-/// 子の誤りは、左の子の中断では救わない。
-#[test]
-fn a_left_abort_does_not_rescue_a_right_error() {
-    let (out, result) = run_deep(
-        "\
-fn main() -> unit {
-  let t.0: tobj = call with_outer(&body)
-  tail call show_pair(t.0)
-}
-fn body(p.0: unit) -> tobj {
-  let t.1: obj = par (,) #0(&fail7, &deep_right)
-  return t.1
-}
-",
-    );
-    assert_eq!(out, "");
-    assert_eq!(
-        error_text(result),
-        "the call depth limit is exceeded in `deep_right`"
     );
 }
 
@@ -845,8 +683,12 @@ fn body(p.0: unit) -> tobj {
   decref t.1
   let u.4: unit = call show_pair(a.2)
   let u.5: unit = call show_pair(b.3)
-  let t.6: obj = par (,) #0(&spin_one, &fail7)
+  let t.6: obj = par (,) #0(&spin_one, &caught)
   return t.6
+}
+fn caught(p.0: unit) -> tobj {
+  let c.1: tobj = box 7
+  tail call try_panic(&boom, c.1)
 }
 fn left(p.0: unit) -> tobj {
   let t.1: obj = par (,) #0(&spin_one, &spin_two)
@@ -867,7 +709,7 @@ fn inner(p.0: unit) -> tobj {
 #[test]
 fn seeds_preempt_long_children_and_sequential_never_preempts() {
     let (out, result) = run_par(LONG);
-    assert_eq!(out, "1\n2\n2\n1\n7\n100\n");
+    assert_eq!(out, "1\n2\n2\n1\n1\n7\n");
     assert_eq!(result.map(|finished| finished.preemptions), Ok(0));
     let program = trusted(&with_prelude(LONG));
     for seed in [1, 2026] {

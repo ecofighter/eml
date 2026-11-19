@@ -32,7 +32,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 
 ## `CodeBase` と `FnEntry`
 
-`CodeBase::new(control)`は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Trusted, linked: &Linked) -> Result<u32, CompileError>`は空の表にプログラムを読み込んでエントリの関数の番号を返し、同じ形の`unsafe fn CodeBase::extend`は関数を持つ表にプログラムを追記する (「追記」)。1つのプログラムだけを読むときも、空の表に`load`する。呼び出しは関数の番号で指し、VMが`FnEntry`から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError`は、verifierが拒むプログラム (`Invalid`。「追記」)、スロットが`u16`に収まらない関数 (`TooManySlots`)、`Heap::freeze`の誤り (`Freeze`)、debugビルドの一致の確かめの食い違いと、すでにある名前のCの関数かハンドルの型と違う項 (`Mismatch`。「C の関数の命令」)、結果が複数の値のエントリの関数 (`MultiValueEntry`)、forkしうるプログラムで名前が引けない`fork$`の関数 (`MissingFork`。「`par` の fork と join」)、`Async`の命令を持つプログラムで名前が引けないランタイムのエントリの関数 (`MissingEntry`。「`Async` のタスク」) である。エントリの`ret`は値1つで ([Core IR](core-ir.md)の「構造体にする型」)、`Finish`は値を1つだけ受けるためである。どれも正しいプログラムでは起きないので、`execute`は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)`が`CompileError`をその内部の誤りの`RuntimeError`にし (`Invalid`は破った規則を残す`RunFault::Invalid`にし、関数を名指さない配置の規則ではエントリの関数の名前を付ける)、`execute`と、REPLの`Machine::extend`の失敗 (`Outcome::Broken`) がこれを使う。
+`CodeBase::new(control)`は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Trusted, linked: &Linked) -> Result<u32, CompileError>`は空の表にプログラムを読み込んでエントリの関数の番号を返し、同じ形の`unsafe fn CodeBase::extend`は関数を持つ表にプログラムを追記する (「追記」)。1つのプログラムだけを読むときも、空の表に`load`する。呼び出しは関数の番号で指し、VMが`FnEntry`から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError`は、verifierが拒むプログラム (`Invalid`。「追記」)、スロットが`u16`に収まらない関数 (`TooManySlots`)、`Heap::freeze`の誤り (`Freeze`)、debugビルドの一致の確かめの食い違いと、すでにある名前のCの関数かハンドルの型と違う項 (`Mismatch`。「Cの関数の命令」)、結果が複数の値のエントリの関数 (`MultiValueEntry`)、`Async`の命令を持つプログラムで名前が引けないランタイムのエントリの関数 (`MissingEntry`。「`Async`のタスク」) である。エントリの`ret`は値1つで ([Core IR](core-ir.md)の「構造体にする型」)、`Finish`は値を1つだけ受けるためである。どれも正しいプログラムでは起きないので、`execute`は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)`が`CompileError`をその内部の誤りの`RuntimeError`にし (`Invalid`は破った規則を残す`RunFault::Invalid`にし、関数を名指さない配置の規則ではエントリの関数の名前を付ける)、`execute`と、REPLの`Machine::extend`の失敗 (`Outcome::Broken`) がこれを使う。
 
 | 欄 | 中身 |
 |---|---|
@@ -48,7 +48,6 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 | `files` | 位置のファイルの表示用のパス。読み込んだ `Program.files` のパスを、初めて現れた順に並べる |
 | `index` | 追記で番号を引き直す表。関数の名前、エフェクトの名前、ファイルのパス、文字列と整数と浮動小数の定数の中身、C の関数とハンドルの型の名前から番号を引く (「追記」) |
 | `control` | 定数の塊のページを数える `Control`。実行のヒープと同じものである |
-| `forks` | `par` の子の `evv` の凍結した部分。実行時のエフェクトの番号ごとの fork の表と、`Panic` の fork evidence の末尾である (「`par` の fork と join」) |
 | `entries` | ランタイムが名前で呼ぶ `Std.Async.start_task` と `Std.Async.resume_task` の関数の番号。引けるまでは `None` である (「`Async` のタスク」) |
 | `c_functions` | `Op::Ffi` が番号で指す C の関数の項 (`CEntry`)。ハンドルの型の番号を付け直した `CFunction` と、`CCall` を持つ (「C の関数の命令」) |
 | `c_handles` | C の関数の引数と結果が番号で指すハンドルの型の項 (`CHandleEntry`)。`CHandleType` と dtor を持つ |
@@ -57,7 +56,6 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - `FnEntry` は crate の中だけの欄を2つ持つ。引数の語の Repr の並び (`params`) は、クロージャを作るときと入るときに、捕まえた値を走査する語と生の語のどちらに置くかを引くためにある ([オブジェクトモデル](object-model.md) の「クロージャ」)。結果が RC の Repr か (`ret_rc`) は、その関数をエントリとして実行したときに `Finish` が結果を手放すかを決める (「誤り、止めること、終わり」)
 - 定数は、`load`が`Heap::with_control(control)`で作った作業用のヒープに不死の物体として作り、`freeze`で塊にする。文字列のリテラルは、`Program.strings`の順にすべて引く。塊のページは同じ`Control`の確保量に数える。worker 0のヒープは、塊を付け替えてから次のエントリを実行する。ほかのworkerのヒープは、メインのworkerを含め、`Ctx`を作るときに塊を付ける (`CodeBase::worker_ctx`。[オブジェクトモデル](object-model.md)の「凍結した領域」の「付ける」)
 - 塊の物体は、検査モードでも参照を数えない。そのため、文字列の定数を読む命令は `acquire_immortal` を呼ばず、語を写すだけにする
-- `par` の子の `evv` のための fork の表と末尾も、定数の後に同じく作業用のヒープで作って凍結する。`fork$E.op` がすべて名前で引けるようになったエフェクトの表だけを、そのロードで作る (「`par` の fork と join」)
 - `CodeBase` は実行中は読むだけで、`CodeBase<M>: Sync` を型の assert で固定する。書き換えるのは入力の境目の `load` だけである。`CodeBase` は `M` ごとに作るので、検査モードと速いモードを両方動かすテストは2回変換する
 
 ### 追記
@@ -216,7 +214,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - token を受ける `con L #t(a..) reuse r [in place]` (`ConReuse`) のオペランドは、token のスロット、タグ、走査する語の数、生の語の数、`lin`、`in place` の印、引数の並びである。引数の並びは `con` と同じ [物理的な位置, スロット] で、書かない引数の位置には `SKIP` のビットを立てる
   - token が空なら、`con` と同じく `alloc_data` で確保し、書かない印の引数も含めてすべてのフィールドを書く
   - 空でなければ、`in place`なら`reuse_in_place(r, meta)`、そうでなければ`con_at(r, 走査する語の数 + 生の語の数, meta)`で箱を得る。`meta`は`eml_rt::layout::data_meta(tag, 走査する語の数, lin)`で、`lin`は`con`と同じく束縛する変数の印で決める。そのうえで、書かない印の引数を飛ばしてフィールドを書く。箱は中身を消さないので、飛ばしたフィールドには元の値が残っている
-  - 組になる形は走査する語が`Shape::REUSE_SCANNED_LIMIT`個未満に限る (`Shape::reuse_words`、[オブジェクトモデル](object-model.md) の「ペイロード」)。`eml_vm`のコンパイル時のassertがこの上限を`layout::INLINE_SCAN_LIMIT`以下に保つので、数の語はなく、`data_meta`の前提が成り立つ。前提は実行時には確かめない。守るのは、LIRのverifierのreuseの組の確かめ、コード生成のデバッグビルドのassert、`compile/forks.rs`の表を作る所の`assert!`、コンパイル時のassertである。`data_raw_first`の前提 (`scanned < usize::MAX`) も実行時には確かめない。呼ぶのは実在する物体と形の走査する語の数だけで、`usize::MAX`には届かない
+  - 組になる形は走査する語が`Shape::REUSE_SCANNED_LIMIT`個未満に限る (`Shape::reuse_words`、[オブジェクトモデル](object-model.md) の「ペイロード」)。`eml_vm`のコンパイル時のassertがこの上限を`layout::INLINE_SCAN_LIMIT`以下に保つので、数の語はなく、`data_meta`の前提が成り立つ。前提は実行時には確かめない。守るのは、LIRのverifierのreuseの組の確かめ、コード生成のデバッグビルドのassert、コンパイル時のassertである。`data_raw_first`の前提 (`scanned < usize::MAX`) も実行時には確かめない。呼ぶのは実在する物体と形の走査する語の数だけで、`usize::MAX`には届かない
   - 検査モードでは、空でない token を使った回数を `RunStats` の `reuses` に数える
 - `drop_token r` (`DropToken`) は、`Heap::drop_token` を呼ぶ。空の token なら何もしない
 - token の命令を1つも持たない関数には、reuse の命令も、その費用も加わらない
@@ -630,13 +628,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 子の `evv`
 
-- 子の `evv` は、親の `evv` と同じ形の列にする。親の `evv` の never-only のエフェクト `E` の evidence ごとに、fork evidence を1つ置く。fork evidence は evidence と同じ形の `Data` (tag は `E` の番号 + 1、走査する語は3つ) で、欄は [`E` の fork の表, 即値 d, `()`] である。d は、親の列の中でその evidence が `E` の evidence のうち何番目か (0 から) である。子の中の `mask` は evidence を数で飛ばすので、列が同じ形なら、子の中で飛ばした先の evidence の d が、親の列で同じ数だけ飛ばした先の evidence を指す
-- fork の表は、エントリの表と同じ形の `Data(tag 0)` で、操作ごとに即値 `&fork$E.op` を並べる。子の中で `E` の evidence を探すと fork evidence が見つかり、その節のエントリは `fork$E.op` である。`fork$E.op` は `prim child_abort` で子を中断する (下の「子の中断」)
-- `Panic` の evidence は、子の `evv` の末尾の1つが受け持つ。extern のエフェクトは mask されないので ([エフェクトと handler](effects.md) の「組み込みの `IO`」)、深さはいつも 0 である。子の中の extern の `Panic` (`failed` と `panic`) は、子の中の `try_panic` か、末尾の `Panic` の fork evidence に届く
-- 凍結した部分: fork の表と末尾 (`Panic` の fork evidence `[Panic の表, 即値 0, ()]` を持つ節点) は、定数と同じく作業用のヒープに不死の物体として作り、凍結する。`CodeBase::load` は、読み込んだプログラムの never-only のエフェクトのうち、`fork$E.op` がすべて名前で引けるようになったものの表を作る。名前は前のロードの関数からも引く。操作のないエフェクトの表は空である。fork の関数は、プログラムが fork しうるとき (`eml_lir::Program::may_fork`) だけ作られるので、表は名前が初めてそろったロードで1回だけ作る。再開する操作を持つエフェクトは子の中で使えないので、表を持たない
-- forkごとの部分: forkは、maskを当てた後の親の`evv`を`Ctx::evv_step`で頭からたどり、`Panic`を除くnever-onlyのエフェクトのevidenceごとに`Ctx::fork_ev`でfork evidenceを作り、`Ctx::evv_push`で節点にして、凍結した末尾につなぐ。表は`Heap::alloc_fork_table`、末尾は`Heap::alloc_fork_tail`が作る。VMは物体の欄の位置を書かない ([オブジェクトモデル](object-model.md)の「evidence の3つの物体」)。該当するevidenceがなければ、子の`evv`は末尾そのもので、確保しない。表のないnever-onlyのエフェクトのevidenceがあれば、内部の誤り (`a never-only evidence of a par parent has no fork table`) にする。親のevidenceは子に渡さない。子は状態の欄を書き換える親のhandlerに届かないためである
-- fork evidence を包む `prompt$` はなく、`fork$E.op` の節は状態の欄を書かないので、fork evidence は `ev_take_state`、`ev_set_state`、`ev_take_evv` の的にならない ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)
-- `may_fork()` のプログラムで `fork$E.op` の名前が引けなければ、`load` は `CompileError::MissingFork` を返す (「`CodeBase` と `FnEntry`」)
+子の`evv`は`()`である。`fork_join`の子は全域なので ([標準ライブラリ](stdlib.md) の「`Std.Par`」)、子は親のhandlerに届かない。子の中のhandlerは空の列に積む。子の中で、その中にhandlerがない操作を行うと、実行時エラー`no evidence of the effect is in the evv`になる。
 
 ### fork
 
@@ -645,13 +637,13 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 1. 左の閉包 `f` と右の閉包 `g` を読む。どちらも `par` が消費する参照である
 2. `heap.fork_worker()` で右の子の ID を出す
 3. まだ印のないセッションの根の語 `r` ごとに `heap.share(r, child)` を呼び、続けて `heap.share(g, child)` で、右の閉包から届く物体に印を付ける。根に印を付けるのは、右の子が `root_get` で REPL の束縛を読むためである。印は回復まで残るので、`Machine` が印を付け終えた先頭の根の数を実行をまたいで持ち、fork はそれより後ろの根にだけ印を付ける ([オブジェクトモデル](object-model.md) の「セッションの根」)。右の子が閉包を手放すと子の ID の物体を解放しうるので、印付けは右の子が始まる前に送り手の ID で行う ([マルチコア対応の設計](../future/multicore.md) の「印付けの表」)。値から届く evidence は退いたものだけなので、根と `g` の `share` は、親がその場で書き換える evidence とエントリの表に届かない ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)
-4. `ctx.evv_word()` で親の `evv` の語を RC に触れずに読み、その列から子の `evv` を作る (上の「子の `evv`」)。子の `evv` を `dup` してから `share(子の evv, child)` で印を付け、`ctx.switch_task(子の evv, 親の ID, 親の depth_offset)` の1回で `Ctx` に入れる。返る親の `evv` の参照は join の節点に移す。2つの子が子の `evv` の参照を1つずつ持つ。左の子は親の ID で動く
-5. 右の子のタスクを作る。worker は `child`、`evv` は子の `evv`、深さの起点 `depth_offset` は fork のときの親の深さ、状態は始まっていない (`Unstarted(g)`)、`boundaries` は今の join だけである
-6. join の節点を作る。節点は、親と右の子のタスクの番号、右の子の ID、親の `evv`、2つの子の結果の欄、`par` の次の位置と `dst`、親を失った印 `orphan` を持つ。節点は Rust の構造で、ヒープの物体にしない。節点は親の worker の `Scheduler` にあり、その worker だけが読み書きする
+4. `ctx.switch_task((), 親のID, 親のdepth_offset)`で空の`evv`を`Ctx`に入れる。返る親の`evv`の参照は、親の上限の状態と一緒にjoinの節点に移し、タスクの状態は左の子のために`Stops`にする。左の子は親のIDで動く
+5. 右の子のタスクを作る。workerは`child`、`evv`は`()`、上限の状態は`Stops`、深さの起点`depth_offset`はforkのときの親の深さ、状態は始まっていない (`Unstarted(g)`)、`boundaries`は今のjoinだけである
+6. joinの節点を作る。節点は、親と右の子のタスクの番号、右の子のID、親の`evv`と上限の状態、2つの子の結果の欄、`par`の次の位置と`dst`、親を失った印`orphan`を持つ。節点はRustの構造で、ヒープの物体にしない。節点は親のworkerの`Scheduler`にあり、そのworkerだけが読み書きする
 7. 右の子を置く先を決める。worker 1..N-1 を作った run (`Workers` が `Started` か `Peer`) で、`idle` から空いている worker `k` を1つ取り出せれば、右の子をそこに置く。検査モードでは、印を付け終えた根の数が根の表の長さと等しいことを確かめる。根に印を付けるのは worker 0 の fork だけなので、置いた子が読む根にはもう印が付いている。違えば内部の誤り (`a placed child may read an unshared root`) にする。根を持つセッションは worker を作らないので、どちらも 0 である。置くときは、右の子のタスクに親の worker の番号と `par` の位置 (`Task::placed`) を持たせ、節点の右の子の番号を置いた印 (`PLACED`) にし、`in_flight` と `placed` に1を足してから、`Child` の知らせで `k` に送る (「タスクとスケジュール」)。右の子のタスクの番号は、受けた worker が振る。worker を作っていない run と、空いている worker がない fork では、右の子をこの worker のタスクの表に入れる
 8. 左の子の境目のフレームを積み、`boundaries` に join を足し、`f` に `()` を適用する。右の子をこの worker の表に入れたときは、走れるタスクの列の後ろに入れる。そして安全点に進む
 
-まだ始まっていない右の子は、閉包の語1つで表す。切り替えでそのタスクに入るときは、`switch_task` で右の子の ID に替えた後で `g` に `()` を適用する。閉包の捕まえた値を取り出すと閉包の物体を解放しうるためである。置いた右の子も同じで、置いた先の worker が自分の `Ctx` の上で始める。`g` と子の `evv` には fork が印を付けてあるので、置いた先の worker は共有の物体だけを読み、自分のヒープに確保する。
+まだ始まっていない右の子は、閉包の語1つで表す。切り替えでそのタスクに入るときは、`switch_task`で右の子のIDに替えた後で`g`に`()`を適用する。閉包の捕まえた値を取り出すと閉包の物体を解放しうるためである。置いた右の子も同じで、置いた先のworkerが自分の`Ctx`の上で始める。`g`にはforkが印を付けてあるので、置いた先のworkerは共有の物体だけを読み、自分のヒープに確保する。
 
 ### 子の終わりと join
 
@@ -659,7 +651,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 - 右の子: 結果を節点に記録し、`heap.decref(ctx.switch_task((), 右の子の ID, 右の子の depth_offset))` で、子の ID のまま子の残りの `evv` を手放してタスクを捨てる。親がこの join を待っていれば起こし (逐次は列の先頭に、seed の方針は後ろに入れる)、次のタスクに切り替える
 - 置いた右の子: 置いた先の worker の上で、子の境目を外して `boundaries` が空になり、`Task::placed` があるときである。join の節点は親の worker にあるので、自分の worker の表を引かない。先に `heap.decref(ctx.switch_task((), 右の子の ID, 右の子の depth_offset))` で子の残りの `evv` を手放し、`ctx.switch_task((), その worker の run の始めの ID, 0)` でヒープの worker を戻す (worker 1..N-1 では 0、worker 0 ではエントリのタスクの ID)。そのあとで `Joined { join, outcome }` の知らせで結果を親の worker に送り、次のタスクに切り替える。手放すのを公開より先にするのは、親が知らせを受けた後に join で子の ID を退かせるとき、子の ID の物体を残さないためである。知らせの lock が、子のスレッドの書き込みを親のスレッドに見せる
-- 左の子: 結果を節点に記録し、境目のフレームを外し、`heap.decref(ctx.switch_task(親の evv, 親の ID, 親の depth_offset))` で親の `evv` に戻す。右の子が終わっていれば join を完了し、まだなら親を待つ状態にして次のタスクに切り替える。待っていた親は、起こされて切り替わった後で join を完了する。置いた右の子の終わりは集める地点が節点に記録するので、親を待つ状態にして切り替える途中の集める地点が届けることもある。そのとき親はまだ表になく起こせないので、切り替えをやめてその場で join を完了する
+- 左の子: 結果を節点に記録し、境目のフレームを外し、`heap.decref(ctx.switch_task(親のevv, 親のID, 親のdepth_offset))`で親の`evv`に戻し、節点から親の上限の状態も戻す。右の子が終わっていればjoinを完了し、まだなら親を待つ状態にして次のタスクに切り替える。待っていた親は、起こされて切り替わった後でjoinを完了する。置いた右の子の終わりは集める地点が節点に記録するので、親を待つ状態にして切り替える途中の集める地点が届けることもある。そのとき親はまだ表になく起こせないので、切り替えをやめてその場でjoinを完了する
 
 join の完了は、親の文脈と ID で次の順に行う。
 
@@ -693,7 +685,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 - 右の子の深さは、fork のときの親の深さ `depth_offset` から数える。`Task::depth` は `depth_offset + base + frame_size` で、スタックの容量の上限は `max_depth - depth_offset` から作る。安全点は起点を足さずに `base + frame_size` を `Ctx::poll` に渡し、`Ctx` は `max_depth - depth_offset` と比べる。上限から起点を引くのは切り替えのときの `switch_task` なので、安全点の速い道で足し算をしない ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)。比べる値は同じなので、`par` を通る再帰も `(f (), g ())` と同じく深さの上限で止まる。エントリのタスクの `depth_offset` は 0 である
 - `peak_stack` は、タスクごとの `depth_offset + stack.len()` の最大である (「`RunStats`」)
-- `Async` のタスクの中の右の子は `Limit::Task` で始まり、左の子は親の `Task` の上で動く (「`Async` のタスク」の「タスクの上限」)。子の row は `never e` で `IO` を含められないので、子の `evv` に `IO` の evidence はない。そのため、タスクの中でも、左右どちらの子の深さの超過も `ResourceLimit` にならず、`compute` の仕事と同じく run を止める (上の「子の誤り」)。子の中で見たタスクの上限の旗は、捨てずに保留のまま残り、join の後の親の、`IO` の evidence のある次のエントリで起こす。右の子はセルを持たないので旗を受けず、`Task` で始めるのは `Stops` との区別のためだけである
+- すべての子は上限の状態`Stops`で動く (「`Async`のタスク」の「タスクの上限」)。深さの上限を超えた子は、`Async`のタスクの中でもrunを止める。タスクが子の中で動いている間に届いた上限の旗は、子には当てない。そのタスクの最も外のforkがjoinの節点に退避した状態に付けるので、joinの後の親の次の関数のエントリで起こす
 
 ### `compute` の仕事
 
@@ -702,9 +694,9 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 `fork_job g` は、次の順に動く。
 
 1. 今の `Task` のセルを読む。閉包 `g` は `fork_job` が消費する参照である
-2. fork の手順 2 から 4 と同じく、仕事の ID を出し、まだ印のない根と `g` に印を付け、`ctx.evv_word()` の列から子の `evv` を作る。子の `evv` の持ち手は仕事の `Task` だけなので、`dup` せずに `share(子の evv, 仕事の ID)` で1回だけ印を付ける。`Ctx` の `evv` には触れない
+2. forkの手順2と3と同じく、仕事のIDを出し、まだ印のない根と`g`に印を付ける
 3. 登録表の lock の下で仕事のセルを作る
-4. 仕事の `Task` を作る。worker は仕事の ID、`evv` は子の `evv`、深さの起点 `depth_offset` は 0、状態は始まっていない (`Unstarted(g)`)、`boundaries` は番兵の join `JOB` だけで、`Task.job` に仕事のセルと `fork_job` の命令の位置を持つ。深さを 0 から数えるのはエントリの `Task` と同じ規則で、呼んだタスクが park の後に作り直すフレームの数に `peak_stack` が左右されないためである
+4. 仕事の`Task`を作る。workerは仕事のID、`evv`は`()`、深さの起点`depth_offset`は0、状態は始まっていない (`Unstarted(g)`)、`boundaries`は番兵のjoin `JOB`だけで、`Task.job`に仕事のセルと`fork_job`の命令の位置を持つ。深さを0から数えるのはエントリの`Task`と同じ規則で、呼んだタスクがparkの後に作り直すフレームの数に`peak_stack`が左右されないためである
 5. 仕事の `Task` を置く先を、fork の手順 7 と同じく決める。空いている worker `k` を取り出せれば、`placed_jobs` に1を足してから、`Child` の知らせで `k` に送る。`Task::placed` は持たせず、`in_flight` にも足さない。仕事の終わりは join の節点でなく仕事のセルを通って、出したタスクを起こすためである。仕事の `Task` の番号は受けた worker が振る。置かないときは、呼んだ worker の走れるタスクの列の後ろに入れる
 6. 仕事のセルの番号を `Std.Async.Job` の即値で `dst` に書く
 
@@ -989,7 +981,7 @@ stdの行は、driverのブロックする呼び出しのプールでRustの処�
 
 ### タスクの上限
 
-`Async`のタスクの中で深さの上限を超えると、runを止めずに、そのタスクだけに種類`ResourceLimit`のIOの失敗を起こす ([標準ライブラリ](stdlib.md)の「`Std.Async`」)。1つの接続のタスクが上限に届いても、サーバ全体は止まらない。ただし、起こすには`IO`のevidenceが要る。タスクの外 (rowに`Async`を持たない`main`、`compute`の仕事) と、タスクの中でも`par`の子 (左も右も。子の`evv`に`IO`のevidenceはない。「`par` の fork と join」の「深さ」) の超過は、runを止める実行時エラーである (「上限と割り込み」)。
+`Async`のタスクの中で深さの上限を超えると、runを止めずに、そのタスクだけに種類`ResourceLimit`のIOの失敗を起こす ([標準ライブラリ](stdlib.md)の「`Std.Async`」)。1つの接続のタスクが上限に届いても、サーバ全体は止まらない。ただし、起こすには`IO`のevidenceが要る。タスクの外 (rowに`Async`を持たない`main`、`compute`の仕事) と、タスクの中でも`par`の子 (左も右も。子は`Stops`で動く。「`par`のforkとjoin」の「深さ」) の超過は、runを止める実行時エラーである (「上限と割り込み」)。
 
 VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの上限を決まった値にする。`real` は `max_depth` からタスクの深さの起点 `depth_offset` を引いた値で、`switch_task` が書く値と同じである ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)。
 
@@ -1002,12 +994,12 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 
 - `LIMIT_HEADROOM` は 2^18 語 (2 MiB) である。巻き戻しの途中の節のエントリが深くなってもすぐには止めず、それでも暴走すれば猶予の先で止める。`Task` と `Pending` でも、関数のエントリの安全点で深さが `real + LIMIT_HEADROOM` を超えていれば run を止める。補助の関数のエントリでは起こすのを延ばすので、この限度がないと、補助の関数のエントリが続く間は深さを止めるものがないためである
 - 状態を上限の値で表すので、`Ctx::poll`、`stop_reason`、`vm::poll`の`Ok`の枝はタスクの上限の状態を知らない。安全点の速い道は2つの比較のままである。`poll`の`DepthLimit`は「深さが今の上限を超えた」を表し、本当の超過か、保留か、猶予の超過かは冷たい道が決める。`polled_stop`は最初の`poll`と`poll`し直しの`DepthLimit`を`Polled::Limit { collect }`にし、安全点は`limit_hit`を呼んでから方針の`tick`を数える。方針の切り替えの後の`par`の安全点も同じである。`poll`し直す前に`NOTICE`を下ろしていれば、`collect`が立つ。安全点は`limit_hit`の前に知らせを集め、`limit_hit`の後で、`tick`が求めれば切り替えを試みる。中断を起こしたばかりかyieldの途中なら切り替えない。`tick`を飛ばすと、予算で切り替える方針 (`Seeded`) が保留のタスクを切り替えなくなる。方針の切り替えの後の`par`の安全点が切り替えを求めたときは、`preempt`の繰り返しがそのまま次のタスクへ進み、Rustの再帰を重ねない。空きの待ちの後の`poll`は関数のエントリでないので、`Stops`か`Aborting`のときだけrunを止め、ほかは保留のまま次の安全点に任せる
-- 作るとき: `Task::new` (`main`) と `compute` の仕事は `Stops`、エントリの `Task` は `Task` である。`par` の右の子は、親が `Stops` なら `Stops`、それ以外なら `Task` で始まる。子が `Pending` か `Aborting` で始まることはない
+- 作るとき: `Task::new` (`main`) と`compute`の仕事は`Stops`、エントリの`Task`は`Task`である。`par`の子はすべて`Stops`で動く。forkは親の状態をjoinの節点に退避して`Stops`に切り替え、joinが戻す
 - タスクの上限の旗はタスクのセルの欄 `limit` にあり、lock の下で立て、起こした実行系が `clear_limit` で下ろす。始める仕事と再開する仕事が動き始めるとき、`started` と `resumed` は旗を `TaskMarks` で返し、立っていればエントリの `Task` に旗を付ける
 - 旗を届ける道: 監視のスレッドは登録表のlockを取らないので、旗を立てるタスクのセルの番号をmailの項`MailItem::Limit(cell)`に積み、すべてのworkerの語に`NOTICE`を立てる。番号はlockなしで読んだもので、古いことがある。項はどのworkerも取り出し、取り出したworkerが登録表のlockの下で`Registry::limit_task`を呼ぶ。`limit_task`は、死んだセルと終わったセルでは何もしない。それ以外では旗を立て、届け先を決める。動いているタスクで持ち主がほかのworkerなら、持ち主の受け箱へ`Notice::Limit(cell)`を回す。`Seeded`に切り替えられてフレームを持ったまま待つタスクも動いている状態のままで、その`Task`を持つのは持ち主だからである。持ち主が自分なら、セルを集める地点に返す。置いたタスクと待っているタスクはVMの`Task`を持たないので旗だけを残し、次の`started`か`resumed`が返す。旗を立てるのは`limit_task`だけである
 - `Notice::Limit`を受けた持ち主は、登録表のlockの下で旗がまだ立っているかを確かめ (`limit_forwarded`)、立っていなければ何もしない。旗を立て直すこともしない。知らせが届く前にタスクが`ResourceLimit`を起こして旗を下ろしていれば、遅れた知らせが2度目の失敗を起こすためである。立っていてタスクが動いていれば、セルを集める地点に返す。置いたタスクと待っているタスクは旗だけを残す
 - 集める地点は、返されたセルのVMの`Task`に旗を付ける。今のタスクなら`mark_pending`で上限まで直す。表に退いたタスクは状態だけを変え、上限は切り替えで入るときに`switch_to`が当てる。同じセルの`Task`は2つありうる。待ちに入った後で`Finish`へ戻る前のエントリの`Task`と、次のエントリの`Task`である。そこで、今のタスクと表のタスクのうち、そのセルを持つものすべてに付ける。前のほうは`start_task`のhandlerの節から`Finish`へ戻るところで、底の`try_all`の外にいてIOのevidenceがないので、旗で起こすことはない (下の「IOのevidenceのない所」)。どれもなければ何もしない。`Finish`に着いたエントリの`Task`のときで、旗は次の`started`か`resumed`が返すか、セルと一緒に消える
-- 旗を受けた後の状態は、どの所でも `Limit::flagged` で決める。`Task` は `Pending` に、`Aborting` は `Aborting { pending: true }` にする。`Pending` はそのままで、`Stops` のタスクはセルを持たないので旗は届かない。上限の値は旗を付ける所で分かれる。今動いているタスク (`enter` のエントリの `Task` と、集める地点の今のタスク) は `mark_pending` を通り、`Task` から `Pending` に変わったときだけ上限を 0 にする。`Aborting` の上限は猶予のまま変えない。中断の途中で上限を 0 にすると、節のエントリの中の安全点が失敗するためである。表に退いたタスクは状態だけを変え、上限は切り替えで入るときに `switch_to` が当てる
+- 旗を受けた後の状態は、どの所でも`Limit::flagged`で決める。`Task`は`Pending`に、`Aborting`は`Aborting { pending: true }`にする。`Pending`と`Stops`はそのままである。`Stops`は、セルを持たないタスクか、`par`の子の中のタスクが退避した内側のforkの状態で、旗は届かない。上限の値は旗を付ける所で分かれる。今動いているタスク (`enter`のエントリの`Task`と、集める地点の今のタスク) は`mark_pending`を通り、`Task`から`Pending`に変わったときだけ上限を0にする。`Aborting`の上限は猶予のまま変えない。中断の途中で上限を0にすると、節のエントリの中の安全点が失敗するためである。表に退いたタスクは状態だけを変え、上限は切り替えで入るときに`switch_to`が当てる
 - 切り替え: `switch_task` は上限を `real` に書き直すので、VM は `switch_task` を包み `switch_to` からだけ呼び、その後で状態の値を当て直す (`Pending` は 0、`Aborting` は `real + LIMIT_HEADROOM`)。`resume`、`par` の fork と join の worker ID の切り替え、子の終わり、エントリの `Task` の `Finish`、誤りの後にエントリのタスクへ戻すことも、どれもこれを通る。通さないと保留と猶予が切り替えで消える。核の `with_worker` (ほかのタスクの ID の物体を扱う一時の切り替え) は、切り替える前の上限を `Ctx::depth_limit` で読み、戻した後に `set_depth_limit` で元の値に戻す
 - `limit_hit` は次の順に決める
   1. `Stops` か `Aborting` なら、`Stopped(Stop::DepthLimit)` で run を止める。文言は ``the call depth limit is exceeded in `f` `` である
@@ -1025,7 +1017,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - 起こす道: エントリの安全点では、呼ばれた関数 `g` のフレームが最初の命令の位置で止まっている。`abort_to` はその上に節のエントリのフレームを積み、戻り先を `g` の最初の命令にする。節のエントリの `yield_abort` が巻き戻しを始め、節のフレームを外すと `pc` は `g` の最初の命令に戻る。そこはエントリの行なので `g` の引数を手放して外し、呼び手の呼び出しの行に進んで、`try_io` の着地まで続く (「巻き戻しの手順」)
 - 囲み: `abort_to` (IO と `Panic` のすべての中断) は、evidence を見つけた後、状態が `Pending` なら `Aborting { pending: true }` にして猶予の上限を当てる。evidence がなく中断にならないときは状態を変えない。`vm::unwind` が `Ok` で戻るすべての所 (`exit` の `Finish`、`child_abort` の `ChildDone`、着地) で `landed` を呼び、`Aborting { pending: true }` を `Pending` (上限 0) に、`Aborting { pending: false }` を `Task` (上限 `real`) に戻す。そのため、巻き戻しの間と節のエントリの中では旗で失敗しない。すべての着地は `vm::unwind` を通るので、戻すのはここだけでよい
 - エントリを待つ間: エントリでない安全点では冷たい道を通り、何もせずに続ける。`Pending` では上限が 0 なので、次の起こせるエントリで起きる。`Task` のままの本当の超過は、深さが `real` を超える間だけ冷たい道を通る。`Ret` が続く間も、着地が `real` より深いときだけで、次の呼び出しで起きる。補助の関数のエントリで延ばした旗と超過は、補助の関数でない次の関数のエントリで起きる。再開の途中なら、鎖が κ の中の `f$kN` か `f$jJ` に着いたところで起きる。そこの `evv` は `resume$` と `mask$` が戻したもので、その地点のプログラムが見る `evv` である
-- IO の evidence のない所: 底の `try_all` の外 (`start_task` と `bottom` の `try_all` の前と、`try_all` が返った後) と `par` の子の中では evidence がない。そこで見た旗は捨てずに `Pending` のまま残し、evidence のある所の次のエントリで起こす。底の `try_all` が返った後なら、タスクはそのまま終わり、旗はセルと一緒に消える。保留の間は、どの安全点も冷たい道を通り、エントリの安全点ごとに `ev_find` で evidence を探す。この費用は受け入れる
+- IOのevidenceのない所: 底の`try_all`の外 (`start_task`と`bottom`の`try_all`の前と、`try_all`が返った後) ではevidenceがない。そこで見た旗は捨てずに`Pending`のまま残し、evidenceのある所の次のエントリで起こす。`par`の子の中で見た旗は、子に当てずに最も外のforkが退避した状態に付け、joinの後の親の次のエントリで起こす (「`par`のforkとjoin」の「深さ」)。底の`try_all`が返った後なら、タスクはそのまま終わり、旗はセルと一緒に消える。保留の間は、どの安全点も冷たい道を通り、エントリの安全点ごとに`ev_find`でevidenceを探す。この費用は受け入れる
 - 節のエントリで起こしたとき: `Clause` と `TailClause` の後の安全点で起こした失敗は、handler の外側でなく、perform した所のいちばん内側の `try_io` に届く。節のエントリが `evv` を handler の外側のものに替えるのはエントリの本体の中で、安全点はその前にあるためである。その `try_io` の着地は、節のフレームの下に生きている。VM が `abort_to` で積む `io_failed` と `panicked` のエントリには `Aborting` の間にしか来ないので、そこでは起こさない。一方、利用者が書いた `never` の操作の節は `Clause` で呼ばれ、そのエントリは起こすエントリである。保留の旗がそこで起きると、操作の節を動かす代わりに `ResourceLimit` が perform した所の `try_io` に届く。`reperform$E.op` のエントリと、`compute` の仕事の失敗を親で起こし直すコードのエントリも同じで、保留の旗が子の失敗の起こし直しに取って代わる。どれも取り消しとの競合 (下) と同じく、先に来た地点が先に巻き戻す
 - 取り消しとの競合: 取り消しと上限は、先に地点に来たほうが先に巻き戻す。旗の立ったタスクが取り消されると、`Cancelled` でなく `ResourceLimit` (スコープの失敗) で終わることがある。`Async.shield` は上限の失敗を後に回さない。保留は取り消しの中断を越えて残り (`Aborting { pending: true }` から `Pending` へ戻る)、着地の後の次のエントリで起こす
 - メモリの柔らかい上限: タスクの数 (「タスクとスケジュール」) のいちばん大きいタスクに旗を立てる。旗の届け方と起こし方は上のとおり深さと同じで、起こすときに深さが `real` を超えていなければ文言は `the memory soft limit is exceeded` である。起こすとタスクの数は 0 に戻る。越えたかは正味の確保量 (`Control::bytes`) で見て、候補は単調に増える数で選ぶ

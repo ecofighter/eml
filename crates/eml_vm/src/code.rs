@@ -76,8 +76,6 @@ pub struct CodeBase<M: Mode> {
     pub(crate) index: Index,
     /// 定数の塊のページを数える `Control`。実行のヒープと同じものである。
     pub(crate) control: Arc<Control>,
-    /// `par` の子の `evv` を作る、凍結した fork の表と末尾。
-    pub(crate) forks: Forks,
     /// ランタイムが名前で呼ぶ `Std.Async` のエントリ。`Std.Async` を読み込んだロードで引く。
     pub(crate) entries: Option<AsyncEntries>,
     /// `Op::Ffi` が番号で指す C の関数。名前で振り、読み込んだ順に並ぶ (docs/spec/vm.md の「C の関数の命令」)。
@@ -111,28 +109,6 @@ pub(crate) struct AsyncEntries {
     pub(crate) resume: u32,
     /// `Std.Async.resume_io`。
     pub(crate) resume_io: u32,
-}
-
-/// `par` の子の `evv` の凍結した部分 (docs/spec/vm.md の「`par` の fork と join」)。ロードごとに、新しく `fork$` の名前が
-/// 引けるようになったエフェクトの表を、定数と同じ凍結した塊に足す。
-pub(crate) struct Forks {
-    /// 実行時のエフェクトの番号ごとの表。読み込んだエフェクトの数だけ並ぶ。
-    pub(crate) tables: Vec<ForkTable>,
-    /// `Panic` の実行時の番号。`Panic` の evidence は末尾の1つが受け持つので、fork のたびには作らない。
-    pub(crate) panic: Option<u16>,
-    /// 子の `evv` の末尾。`Panic` の fork evidence の節点で、`Panic` の表がまだなければ `()` である。
-    pub(crate) tail: Word,
-}
-
-/// 1つのエフェクトの fork の表。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ForkTable {
-    /// 再開する操作を持つ。`par` の子はこのエフェクトを使えないので、子の `evv` に写さない。
-    Resumable,
-    /// never-only だが、`fork$` の名前がまだ全部は引けない。
-    Missing,
-    /// 凍結した表 `Data(tag 0)`。欄は操作ごとの即値 `&fork$E.op` である。
-    Table(Word),
 }
 
 /// 命令と、命令の位置で引く表。コード生成は関数をまたいで1つの `Tables` の末尾に書き、逆アセンブラも同じ形を読む。
@@ -265,9 +241,6 @@ pub enum CompileError {
     /// 結果が複数の値のエントリの関数。エントリの `ret` は値1つで、`Finish` は値を1つだけ受ける
     /// (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
     MultiValueEntry { function: String },
-    /// 子を fork しうるプログラムで、`fork$` の関数が名前で引けない。evidence passing はそのプログラムに fork の
-    /// 関数をすべて作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`par` の fork と join」)。
-    MissingFork { function: String },
     /// `Async` の命令を持つプログラムで、ランタイムが名前で呼ぶエントリの関数が引けない。translate は `Std.Async` を
     /// 読み込んだプログラムにエントリを必ず作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`Async` のタスク」)。
     MissingEntry { function: String },
@@ -282,7 +255,6 @@ impl CompileError {
             CompileError::Freeze(_) => "the constants cannot be frozen",
             CompileError::Mismatch { .. } => "a function with a known name has other code",
             CompileError::MultiValueEntry { .. } => "an entry function returns more than one value",
-            CompileError::MissingFork { .. } => "a program that may fork lacks a fork function",
             CompileError::MissingEntry { .. } => {
                 "a program that runs Async tasks lacks a runtime entry"
             }
@@ -298,7 +270,6 @@ impl fmt::Display for CompileError {
             CompileError::TooManySlots { function }
             | CompileError::Mismatch { function }
             | CompileError::MultiValueEntry { function }
-            | CompileError::MissingFork { function }
             | CompileError::MissingEntry { function } => {
                 write!(f, "{} in `{function}`", self.what())
             }
@@ -309,8 +280,8 @@ impl fmt::Display for CompileError {
 impl std::error::Error for CompileError {}
 
 impl<M: Mode> CodeBase<M> {
-    /// worker `k`の`Ctx`。コードの領域は作るときに付ける。forkの表、末尾、定数はどのworkerのヒープでも付けた塊と
-    /// して届くので、`fork_ev`などの前提がどのworkerでも成り立つ (docs/spec/object-model.mdの「凍結した領域」)。
+    /// worker `k`の`Ctx`。コードの領域は作るときに付ける。定数はどのworkerのヒープでも付けた塊として届くので、
+    /// 定数の物体を読む前提がどのworkerでも成り立つ (docs/spec/object-model.mdの「凍結した領域」)。
     /// 付けるのは`Arc`を1つ持つだけで何も確保しないので、検査モードで作るときに取るページの課金の順は変わらない。
     pub(crate) fn worker_ctx(&self, control: Arc<Control>, host: HostRef, k: usize) -> Ctx<M> {
         let mut ctx = Ctx::for_worker(control, host, k);

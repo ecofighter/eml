@@ -1681,7 +1681,6 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         CompileError::TooManySlots { ref function }
         | CompileError::Mismatch { ref function }
         | CompileError::MultiValueEntry { ref function }
-        | CompileError::MissingFork { ref function }
         | CompileError::MissingEntry { ref function } => {
             (RunFault::Internal(error.what()), function.clone())
         }
