@@ -731,7 +731,7 @@ fn a_seed_reruns_the_same_schedule() {
     assert_eq!(first, second);
 }
 
-/// 方針によらず `RunStats` が同じになるのは、切り替えが RC に触れず、fork と join の仕事が親の `evv` と子の値だけで
+/// 方針によらず`RunStats`が同じになるのは、切り替えがRCに触れず、forkとjoinの仕事が子の値だけで
 /// 決まるためである。同時に生きている物体の数だけは、子が交互に進む順で変わる。
 #[test]
 fn the_run_stats_do_not_depend_on_the_schedule() {

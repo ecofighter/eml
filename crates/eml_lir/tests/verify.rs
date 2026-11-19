@@ -2590,7 +2590,7 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
     assert_eq!(check_scopes(&put), Ok(()));
 }
 
-/// `State`の節の関数`get`と、捕獲を1つ持つ`put`、`Counter.put`の節`g`、節でない`h`、`State.get`のforkのエントリ。
+/// `State`の節の関数`get`と、捕獲を1つ持つ`put`、`Counter.put`の節`g`、節でない`h`。
 /// Perceusの前の段の形である。
 const EVIDENCE_ENTRIES: &str = "\
 internal clause State.get fn get(e.0: cev, u.1: unit) -> tobj {
@@ -2607,7 +2607,7 @@ fn h(e.0: cev, u.1: unit) -> tobj {
 }
 ";
 
-/// evidenceは操作ごとに1つのエントリを操作の順に持ち、エントリiは`clause E.i`の印を持ち、forkのevidenceを取らない関数で、
+/// evidenceは操作ごとに1つのエントリを操作の順に持ち、エントリiは`clause E.i`の印を持つ関数で、
 /// その関数がとる数だけ捕まえる。捕獲は文脈のReprでない。境界の段では、束縛は`ev`、状態は`tobj`、外側のリストは`evv`で、
 /// 捕獲は関数の引数に収まり`unr`に渡せる (docs/spec/lir.mdの「verifier」)。
 #[test]
@@ -4906,7 +4906,7 @@ fn the_owner_of_an_evidence_is_linear() {
     );
 }
 
-/// クロージャは`resume$`が新しくする退いたevidenceを捕獲できるが、実行中のevidence、節やforkのevidence、リストは捕獲で
+/// クロージャは`resume$`が新しくする退いたevidenceを捕獲できるが、実行中のevidence、節、リストは捕獲で
 /// きない (docs/spec/core-ir.mdの「EP が作る補助の関数」)。
 #[test]
 fn a_closure_captures_only_a_retired_evidence() {

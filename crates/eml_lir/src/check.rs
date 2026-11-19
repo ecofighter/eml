@@ -593,7 +593,7 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
-    /// クロージャは実行中のevidence、節やforkのevidence、リストを捕獲しない。捕獲できるのは退いたevidenceだけである (
+    /// クロージャは実行中のevidence、節、リストを捕獲しない。捕獲できるのは退いたevidenceだけである (
     /// docs/spec/lir.mdの「verifier」)。
     pub fn context_captures(&self, target: FnIdx, args: &[Atom]) -> Result<(), String> {
         let captured = args.iter().find_map(|&arg| match arg {
@@ -679,7 +679,7 @@ impl<'a> Context<'a> {
     }
 
     /// `evidence E(state, outer) [entries]`の、境界によらない検査。エントリはエフェクトの操作ごとに1つで、操作の順に
-    /// 並ぶ。エントリiは`clause E.i`の印を持ち、forkのevidenceを取らない関数で、「引数の数 - 1 - 操作の引数の数」個を
+    /// 並ぶ。エントリiは`clause E.i`の印を持つ関数で、「引数の数 - 1 - 操作の引数の数」個を
     /// ちょうど捕まえる。節の呼び出しはエントリを確かめずに読み、操作のシグネチャで呼ぶので、エントリはevidenceを作る所で
     /// 決める。`rev`のほかの文脈のReprを捕まえるエントリはない。束縛、状態、外側のリスト、捕獲のReprと印は、呼ぶ側が
     /// 境界の段で比べる (docs/spec/lir.mdの「verifier」)。
