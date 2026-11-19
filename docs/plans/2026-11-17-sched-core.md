@@ -26,7 +26,7 @@
 
 ## 3. Received from earlier stages
 
-- `async-root`: one root task per run; no nested root (the new `run.rs` has none).
+- `async-root`: one root task per run; no nested root (the new `run.rs` has none). The root is started by the row `root_start`, called on the worker's own ID before `drive(Until::Root)`, and its result is taken by the row `root_result` after the root scope has closed (00 §D D-10 (b)); `cells.rs` keeps `Take::Run` for it.
 - `par-total`: total children; a child's error ends the run; no join error record.
 - `task-limits`: three limit classes; no soft limit; the limit table that `eml_steps::limit::hit` restates (P-3 keeps three example rows from the VM's table).
 
