@@ -164,7 +164,7 @@ fn a_second_async_in_main_is_not_suggested() {
     E2020 5:3 the row passed to `compute` may perform `IO`, but `compute` allows only `never` operations
       5:3 `compute` is used here
       5:27 `IO` is performed here
-      171:25 `compute` bounds this row variable by `never`
+      164:25 `compute` bounds this row variable by `never`
       note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
     ");
     insta::assert_snapshot!(fix_text(text), @"");

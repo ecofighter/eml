@@ -140,8 +140,8 @@ internal uniform from 0 fn Std.Async.start_task$handle0$return(p.0: unit, p.1: u
   return ()
 }
 fn entry$main() -> unit {
-  let t.1: obj lin = extern Std.Async.run_raw(&"Std.Async.bottom@[Unit]{0=main}")
-  let t.2: unit = extern Std.Async.run_result(t.1)
+  let t.1: obj lin = extern Std.Async.root_start(&"Std.Async.bottom@[Unit]{0=main}")
+  let t.2: unit = extern Std.Async.root_result(t.1)
   return t.2
 }
 yields fn "Std.Async.bottom@[Unit]{0=main}"(p.1: unit) -> unit {

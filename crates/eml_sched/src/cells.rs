@@ -11,18 +11,18 @@
 //! セルが持つ語は数えた参照で、VM が1回入れて1回出す。`Registry` はヒープに触れる `Drop` を持たないので、誤りで終わった
 //! run と捨てた run では、触れずに捨てる。
 //!
-//! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、
-//! `wake_waiter` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))`、`Some(Time(_))`、`Some(Io(_))`、
-//! `Some(Signal(_))`、`Some(Job(_))` のどれかであることは同値である (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項
-//! `key → Due::Task(t)` があるのは、`t` の `wait` が `Some(Time(key))` のときか、`Some(Io(op))` で記録 `op` の
-//! `timer` が `Some(key)` のときだけで、時間の待ちの登録と記録が覚えた鍵には、いつも項がある。タスクがシグナルの
-//! 待ち手の列にあるのは、止まっていて `wait == Some(Signal(その番号))` のときだけで、1回だけ現れる。タスクの今のスコープ `current` から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
-//! `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed` の
-//! スコープは `closing` で、`members` が空である。スコープのセルを放すのは、閉じた後の `release_scope`
-//! (`Take::Run` は根の待ちが `closed` で起きた後に、`leave_scope` は今のスコープを親に戻した後に呼ぶ) と、run の終わりの
-//! `sweep_all` だけである。
-//! タスクのセルを放すのは、ハンドルを持つ側の `take`、自分のハンドルを落とした項の処理、`sweep_all` の3つだけで、
-//! 待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。
+//! 不変条件: スコープの`members`と`nested`の項は、いつも生きているセルを指す。`waiters`の項は古くてもよく、
+//! `wake_waiter`が`wait`で確かめる。`k.is_some()`と、`wait`が`Some(Cell(_))`、`Some(Time(_))`、`Some(Io(_))`、
+//! `Some(Signal(_))`、`Some(Job(_))`のどれかであることは同値である (`Ready`の継続は列に積んだ仕事が持つ)。`timers`の項
+//! `key → Due::Task(t)`があるのは、`t`の`wait`が`Some(Time(key))`のときか、`Some(Io(op))`で記録`op`の
+//! `timer`が`Some(key)`のときだけで、時間の待ちの登録と記録が覚えた鍵には、いつも項がある。タスクがシグナルの
+//! 待ち手の列にあるのは、止まっていて`wait == Some(Signal(その番号))`のときだけで、1回だけ現れる。タスクの今のスコープ`current`から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ`scope`で終わる。根のスコープは
+//! 親も`opener`も持たず、どのタスクの今のスコープにもならない。`closed`の
+//! スコープは`closing`で、`members`が空である。スコープのセルを放すのは、閉じた後の`release_scope`
+//! (`Take::Run`は根の待ちが`closed`で起きた後に、`leave_scope`は今のスコープを親に戻した後に呼ぶ) と、runの終わりの
+//! `sweep_all`だけである。
+//! タスクのセルを放すのは、ハンドルを持つ側の`take`、自分のハンドルを落とした項の処理、`sweep_all`の3つだけで、
+//! 待つ側はハンドルを持つので、待つ相手のセルはその`take`の前に放されない。
 //!
 //! channel の不変条件: タスクが `senders` か `receivers` にあるのは、そのタスクが止まっていて
 //! `wait == Some(Cell(その channel))` のときだけで、1回だけ現れる。`closed` の後に列に待ち手がいるのは、送りの予約
@@ -46,11 +46,11 @@
 //! park したタスクを途中で捨てる仕組みは、捨てるタスクを `submitter` に持つ仕事のセルを、`with_worker(仕事の ID)` と
 //! `retire_worker` の下で落とさなければならない (docs/spec/vm.md の「セルと登録表」)。
 //!
-//! 取り消しは、印を付ける `mark` と、持ち主が mail か受け箱の `Cancel` の知らせを処理して待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
-//! 仕事をほかのタスクのために作るのは、`unpark` と、取り消しを頼んだ操作の結果を当てる `settle_op` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
-//! `cancel`、`flag`、`cancel_new` はどのタスクの操作からも書く。`current` と `run` は持ち主だけが書き、印を付ける
-//! 操作が読む。スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
-//! そのタスクを動かすか取り消しを処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
+//! 取り消しは、印を付ける`mark`と、持ち主がmailか受け箱の`Cancel`の知らせを処理して待ちを外す`unpark`の2段で行う。`CANCELLED`で再開する
+//! 仕事をほかのタスクのために作るのは、`unpark`と、取り消しを頼んだ操作の結果を当てる`settle_op`だけである。外からの印付けは`shield`の境目`boundary`で止まる。
+//! `cancel`、`flag`、`cancel_new`はどのタスクの操作からも書く。`current`は持ち主だけが書き、印を付ける
+//! 操作が読む。スコープの`shield`と`boundary`は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
+//! そのタスクを動かすか取り消しを処理する持ち主だけが読み書きする (docs/spec/vm.mdの「取り消しの届け方」)。
 //!
 //! 呼ぶ側の約束: このモジュールの`Ctx`を取る公開の関数は`unsafe fn`で、呼ぶ側は、関数の`# Safety`が挙げる次の約束を守る
 //! (docs/spec/lir.md の「エンジンの約束」)。例外はfeature `testing`の`test_ctx`と`stream_on`で、物体を作るだけなので
@@ -164,7 +164,7 @@ pub enum Runnable {
 enum Waiter {
     /// 継続だけになって待つタスク。継続は待つタスクのセルが持つ。
     Task(CellRef),
-    /// スタックを持ったまま待つもの。`Async.run` を呼んだ VM の `Task` で、`owner` はその `Task` を持つ worker である。
+    /// スタックを持ったまま待つもの。`root_start`を呼んだエントリの関数のVMの`Task`で、`owner`はその`Task`を持つworkerである。
     Token { token: WaitToken, owner: u32 },
 }
 
@@ -303,8 +303,6 @@ struct TaskCell {
     /// 実行待ちからの再開と同じく取り消しの地点の規則で `Cancelled` に替えるかを決める (docs/spec/vm.md の
     /// 「取り消しの届け方」)。
     woke_from_job: bool,
-    /// 入れ子の `run` で待っている根。
-    run: Option<CellRef>,
     detached: bool,
     /// タスクの上限の旗。共有で、lock の下で誰でも立て、`ResourceLimit` を起こした実行系が `clear_limit` で下ろす
     /// (docs/spec/vm.md の「タスクの上限」)。
@@ -1920,10 +1918,10 @@ impl Registry {
         Ok(s)
     }
 
-    /// 親の旗と開いたタスクのビットを新しいスコープに写す。一覧と `current` (根なら `run`) に載せた後に呼ぶ。
-    /// 印を付ける側はビットと旗を立ててから一覧と `current` を読むので、どちらが先でも新しいスコープは旗を得る
-    /// (docs/spec/vm.md の「取り消しの届け方」)。境目は何も写さない。ビットは `shield` の外の取り消しから来ることが
-    /// あるので、写すのは深さ 0 で開くスコープだけである (docs/spec/stdlib.md の「取り消し」)。
+    /// 親の旗と開いたタスクのビットを新しいスコープに写す。一覧と`current`に載せた後に呼ぶ。
+    /// 印を付ける側はビットと旗を立ててから一覧と`current`を読むので、どちらが先でも新しいスコープは旗を得る
+    /// (docs/spec/vm.mdの「取り消しの届け方」)。境目は何も写さない。ビットは`shield`の外の取り消しから来ることが
+    /// あるので、写すのは深さ0で開くスコープだけである (docs/spec/stdlib.mdの「取り消し」)。
     fn inherit_flag(&mut self, s: CellRef) -> Result<(), CellFault> {
         let scope = self.scope_mut(s)?;
         if scope.boundary {
@@ -1943,18 +1941,10 @@ impl Registry {
         Ok(())
     }
 
-    /// 根のスコープを開く。入れ子の `run` の根は呼んだタスク `caller` を開いたタスクとして持つ。
-    pub fn open_root(
-        &mut self,
-        parent: Option<CellRef>,
-        caller: Option<CellRef>,
-    ) -> Result<CellRef, CellFault> {
-        let s = self.new_scope(parent, caller, true)?;
-        if let Some(c) = caller {
-            self.task_mut(c)?.run = Some(s);
-        }
-        self.inherit_flag(s)?;
-        Ok(s)
+    /// 根のスコープを開く。根はエントリの関数だけが開くので、親も開いたタスクも持たず、受け継ぐ旗もない
+    /// (docs/spec/vm.mdの「`Async` のタスク」)。
+    pub fn open_root(&mut self) -> Result<CellRef, CellFault> {
+        self.new_scope(None, None, true)
     }
 
     /// スコープ `scope` に新しいタスクを置き、セルと、持ち主が自分なら始める仕事を返す。持ち主がほかの worker なら、
@@ -2008,7 +1998,6 @@ impl Registry {
             budget: BUDGET,
             fast_yield: false,
             woke_from_job: false,
-            run: None,
             detached: false,
             limit: false,
             pinned,
@@ -2540,13 +2529,7 @@ impl Registry {
     /// 閉じたスコープのセルを、親の一覧から外してから放す。
     fn release_scope(&mut self, s: CellRef) -> Result<(), CellFault> {
         let scope = self.scope_mut(s)?;
-        let (parent, at, opener) = (scope.parent, scope.nested_at, scope.opener);
-        if let Some(o) = opener {
-            let task = self.task_mut(o)?;
-            if task.run == Some(s) {
-                task.run = None;
-            }
-        }
+        let (parent, at) = (scope.parent, scope.nested_at);
         if let Some(p) = parent {
             let p = self.scope_mut(p)?;
             p.nested.swap_remove(at as usize);
@@ -2771,14 +2754,10 @@ impl Registry {
                         continue;
                     }
                     task.cancel = true;
-                    // 開いているスコープは、入れ子の `run` の根から今のスコープを経て親へ、このタスクが開いたスコープが
-                    // 続く間である。内から外へ並べ、いちばん外の境目とその内側には印を付けない
-                    // (docs/spec/vm.md の「取り消しの届け方」)
-                    let (mut s, run, home) = (task.current, task.run, task.scope);
+                    // 開いているスコープは、今のスコープから親へ、このタスクが開いたスコープが続く間である。内から外へ
+                    // 並べ、いちばん外の境目とその内側には印を付けない (docs/spec/vm.mdの「取り消しの届け方」)
+                    let (mut s, home) = (task.current, task.scope);
                     let mut chain = Vec::new();
-                    if let Some(r) = run {
-                        chain.push((r, self.scope_mut(r)?.boundary));
-                    }
                     while s != home {
                         let scope = self.scope_mut(s)?;
                         chain.push((s, scope.boundary));
@@ -6178,7 +6157,6 @@ pub fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
         budget: BUDGET,
         fast_yield: false,
         woke_from_job: false,
-        run: None,
         detached: false,
         limit: false,
         pinned: false,
@@ -6213,7 +6191,7 @@ fn resumed_cells(out: &[Runnable]) -> Vec<(CellRef, i64)> {
 #[test]
 fn timers_with_the_same_deadline_expire_in_registration_order() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let first = running_task(&registry, scope);
     let second = running_task(&registry, scope);
     assert!(
@@ -6242,7 +6220,7 @@ fn timers_with_the_same_deadline_expire_in_registration_order() {
 #[test]
 fn unparking_a_sleeping_task_removes_its_timer() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let first = running_task(&registry, scope);
     let second = running_task(&registry, scope);
     registry.lock().park_time(0, 50, first, Word::UNIT).unwrap();
@@ -6264,7 +6242,7 @@ fn unparking_a_sleeping_task_removes_its_timer() {
 #[test]
 fn a_cancel_leaves_a_task_parked_on_a_job() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let job = registry.lock().new_job(1, me);
     assert!(
@@ -6313,7 +6291,7 @@ fn a_cancel_leaves_a_task_parked_on_a_job() {
 #[test]
 fn a_task_parked_on_a_finished_job_resumes_at_once() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let job = registry.lock().new_job(1, me);
     let mut out = Vec::new();
@@ -6341,7 +6319,7 @@ fn a_task_parked_on_a_finished_job_resumes_at_once() {
 #[test]
 fn a_job_of_another_task_is_an_internal_error() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let other = running_task(&registry, scope);
     let job = registry.lock().new_job(1, me);
@@ -6365,7 +6343,7 @@ fn a_job_of_another_task_is_an_internal_error() {
 #[test]
 fn a_poke_before_a_park_sets_the_flag() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let gate = registry.lock().open_gate().encode();
     let mut woken = Vec::new();
@@ -6384,7 +6362,7 @@ fn a_poke_before_a_park_sets_the_flag() {
 #[test]
 fn a_poke_after_a_park_wakes_the_waiter() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let gate = registry.lock().open_gate().encode();
     assert!(
@@ -6412,7 +6390,7 @@ fn a_poke_after_a_park_wakes_the_waiter() {
 #[test]
 fn the_cancellation_point_wins_over_the_flag() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let gate = registry.lock().open_gate().encode();
     registry.lock().poke_gate(gate, &mut Vec::new()).unwrap();
@@ -6430,7 +6408,7 @@ fn the_cancellation_point_wins_over_the_flag() {
 #[test]
 fn a_released_gate_ignores_pokes_and_cannot_be_waited_on() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let gate = registry.lock().open_gate().encode();
     registry.lock().release_gate(gate).unwrap();
@@ -6447,7 +6425,7 @@ fn a_released_gate_ignores_pokes_and_cannot_be_waited_on() {
 #[test]
 fn a_second_waiter_on_a_gate_is_an_internal_error() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let first = running_task(&registry, scope);
     let second = running_task(&registry, scope);
     let gate = registry.lock().open_gate().encode();
@@ -6468,7 +6446,7 @@ fn a_second_waiter_on_a_gate_is_an_internal_error() {
 #[test]
 fn releasing_a_gate_with_a_waiter_is_an_internal_error() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let gate = registry.lock().open_gate().encode();
     assert!(
@@ -6500,7 +6478,7 @@ fn a_gate_left_at_the_end_is_swept() {
 #[test]
 fn unparking_a_gate_waiter_clears_the_waiter() {
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let gate = registry.lock().open_gate().encode();
     assert!(
@@ -6545,7 +6523,7 @@ fn a_stale_poke_does_nothing() {
 #[test]
 fn a_slot_retires_instead_of_wrapping_its_generation() {
     let mut registry = Registry::new(vec![RETIRED - 2], 1);
-    let scope = registry.open_root(None, None).unwrap();
+    let scope = registry.open_root().unwrap();
     assert_eq!(
         scope,
         CellRef {
@@ -6554,7 +6532,7 @@ fn a_slot_retires_instead_of_wrapping_its_generation() {
         }
     );
     registry.release(scope.index);
-    let last = registry.open_root(None, None).unwrap();
+    let last = registry.open_root().unwrap();
     assert_eq!(
         last,
         CellRef {
@@ -6564,7 +6542,7 @@ fn a_slot_retires_instead_of_wrapping_its_generation() {
     );
     registry.release(last.index);
     // 進めた generation が一周の手前に来た添字は空けないので、次のセルは新しい添字に置く
-    let next = registry.open_root(None, None).unwrap();
+    let next = registry.open_root().unwrap();
     assert_eq!(
         next,
         CellRef {
@@ -6576,7 +6554,7 @@ fn a_slot_retires_instead_of_wrapping_its_generation() {
     // 退いた添字は次の run でも使わず、ほかの添字は generation を続ける
     assert_eq!(registry.next_generations(), [RETIRED, 1]);
     let mut later = Registry::new(registry.next_generations(), 1);
-    let reused = later.open_root(None, None).unwrap();
+    let reused = later.open_root().unwrap();
     assert_eq!(
         reused,
         CellRef {
@@ -6585,7 +6563,7 @@ fn a_slot_retires_instead_of_wrapping_its_generation() {
         }
     );
     assert_eq!(
-        later.open_root(None, None).unwrap(),
+        later.open_root().unwrap(),
         CellRef {
             index: 2,
             generation: 0
@@ -6830,7 +6808,7 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let token = submit_x(&registry, &mut ctx, &mut driver, 0);
     let op = CellRef::decode(token);
@@ -6884,7 +6862,7 @@ fn a_job_record_takes_the_boxed_answer() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let token = submit_ffi_job(&registry, &mut ctx, &mut driver, me);
     assert_eq!(driver.submits, 1);
@@ -6914,7 +6892,7 @@ fn a_cancelled_task_submits_no_job() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     registry.lock().task_mut(me).unwrap().cancel = true;
     let before = format!("{:?}", registry.lock().stats);
@@ -6940,7 +6918,7 @@ fn a_job_answer_of_another_type_is_an_internal_error() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let token = submit_ffi_job(&registry, &mut ctx, &mut driver, me);
     driver.done.push(Completion {
@@ -6978,7 +6956,7 @@ fn op_ready_counts_a_wait_only_on_a_finished_op() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let pending = submit_x(&registry, &mut ctx, &mut driver, 0);
     assert_eq!(registry.lock().op_ready(pending, 0, me).unwrap(), FAST_WAIT);
@@ -7035,7 +7013,7 @@ fn writes_spend_budget_by_their_length() {
         ..NoDriver::default()
     };
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let mut spent = Vec::new();
     for len in [0, 511, 512, 1500] {
@@ -7066,7 +7044,7 @@ fn going_on_after_a_spent_budget_counts_the_wait_and_refills() {
         ..NoDriver::default()
     };
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let done = submit_x(&registry, &mut ctx, &mut driver, 0);
     registry.lock().task_mut(me).unwrap().budget = 1;
@@ -7096,7 +7074,7 @@ fn a_cancel_during_a_fast_yield_is_counted_once() {
         ..NoDriver::default()
     };
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let done = submit_x(&registry, &mut ctx, &mut driver, 0);
     registry.lock().task_mut(me).unwrap().budget = 1;
@@ -7135,7 +7113,7 @@ fn an_op_used_by_another_task_is_an_internal_error() {
         ..NoDriver::default()
     };
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let other = running_task(&registry, scope);
     registry.lock().task_mut(other).unwrap().worker = 2;
     let token = submit_x(&registry, &mut ctx, &mut driver, 1);
@@ -7182,7 +7160,7 @@ fn sweep_all_frees_a_waited_op_before_its_task() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let worker = unsafe { ctx.heap_mut() }.fork_worker();
     registry.lock().task_mut(me).unwrap().worker = worker;
@@ -7334,7 +7312,7 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
         let shared = Shared::new(Registry::new(Vec::new(), 2));
         let mut ctx = test_ctx();
         let mut driver = NoDriver::default();
-        let scope = shared.lock().open_root(None, None).unwrap();
+        let scope = shared.lock().open_root().unwrap();
         let me = running_task(&shared, scope);
         let op = shared
             .lock()
@@ -7402,7 +7380,7 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
     let shared = Shared::new(Registry::new(Vec::new(), 2));
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
-    let scope = shared.lock().open_root(None, None).unwrap();
+    let scope = shared.lock().open_root().unwrap();
     let me = running_task(&shared, scope);
     let token = submit_x(&shared, &mut ctx, &mut driver, 0);
     let op = CellRef::decode(token);
@@ -7544,7 +7522,7 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     for room in [2 * READ_ROOM, 16, 0] {
         let me = running_task(&registry, scope);
         let buf = bytes_ab(&mut ctx, room);
@@ -7623,7 +7601,7 @@ fn growing_a_full_buffer_doubles_its_length() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes(&vec![7; 200_000]);
     assert_eq!(unsafe { ctx.heap_mut().bytes_lend(buf) }.unwrap().cap(), 0);
@@ -7658,7 +7636,7 @@ fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let buf = bytes_ab(&mut ctx, 0);
     let (token, op) = probed_read(&registry, &mut ctx, &mut driver, me, buf);
@@ -7885,7 +7863,7 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let token = submit_x(&registry, &mut ctx, &mut driver, 0);
     let key = driver.last_key;
@@ -7945,7 +7923,7 @@ fn cancelling_or_finishing_a_timed_op_wait_removes_its_timer() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let first = running_task(&registry, scope);
     let second = running_task(&registry, scope);
     let t1 = submit_x(&registry, &mut ctx, &mut driver, 0);
@@ -8009,7 +7987,7 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let token = submit_x(&registry, &mut ctx, &mut driver, 0);
     let key = driver.last_key;
@@ -8054,7 +8032,7 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let token = submit_x(&registry, &mut ctx, &mut driver, 0);
     let key = driver.last_key;
@@ -8101,7 +8079,7 @@ fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let listener = NetListener {
         bind: Bind::Bound {
@@ -8944,7 +8922,7 @@ fn a_read_line_lends_the_stream_buffer_and_frees_it_when_empty() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let mut stream = net_stream(&mut ctx);
     for (bytes, line, left, probed) in
         [(&b"ab\ncd"[..], "ab\n", 2, true), (b"\n", "cd\n", 0, false)]
@@ -9005,7 +8983,7 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let stream = net_stream(&mut ctx);
     let token = unsafe {
@@ -9066,7 +9044,7 @@ fn read_line_through(chunks: &[&[u8]]) -> (Result<usize, String>, Vec<usize>) {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let stream = net_stream(&mut ctx);
     let token = unsafe {
@@ -9166,7 +9144,7 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let registry = Shared::new(Registry::new(Vec::new(), 1));
-    let scope = registry.lock().open_root(None, None).unwrap();
+    let scope = registry.lock().open_root().unwrap();
     let me = running_task(&registry, scope);
     let stream = net_stream(&mut ctx);
     let token = unsafe {
@@ -9271,7 +9249,7 @@ impl Post for Posted {
 /// worker 0 が持ち主で、`Terminate` を待って止まっているタスクのセル。継続は即値で、誰も取り出さない。
 #[cfg(any(test, feature = "testing"))]
 pub fn terminate_waiter(shared: &Shared) -> CellRef {
-    let scope = shared.lock().open_root(None, None).unwrap();
+    let scope = shared.lock().open_root().unwrap();
     let cell = running_task(shared, scope);
     let run = shared.lock().park_signal(1, cell, Word::UNIT).unwrap();
     assert!(run.is_none());
@@ -9284,7 +9262,7 @@ pub fn terminate_waiter(shared: &Shared) -> CellRef {
 fn a_handle_dropped_under_the_registry_lock_does_not_deadlock() {
     let shared = Arc::new(Shared::new(Registry::new(Vec::new(), 1)));
     let mut ctx = test_ctx();
-    let scope = shared.lock().open_root(None, None).unwrap();
+    let scope = shared.lock().open_root().unwrap();
     let cell = running_task(&shared, scope);
     let handle = unsafe { task_handle(&mut ctx, &shared, cell) };
     {
@@ -9320,7 +9298,7 @@ fn a_stream_dropped_under_the_registry_lock_does_not_deadlock() {
 #[test]
 fn mail_keeps_arrival_order() {
     let shared = Shared::new(Registry::new(Vec::new(), 2));
-    let scope = shared.lock().open_root(None, None).unwrap();
+    let scope = shared.lock().open_root().unwrap();
     let (a, b) = (running_task(&shared, scope), running_task(&shared, scope));
     let posted = Posted::default();
     let here = |me| Here {
@@ -9379,7 +9357,7 @@ fn mail_keeps_arrival_order() {
 /// 持ち主 `owner` で、今から `ms` ミリ秒の時間を待って止まっているタスクのセル。継続は即値である。
 #[cfg(any(test, feature = "testing"))]
 pub fn sleeping_task(shared: &Shared, owner: u32, ms: i64) -> CellRef {
-    let scope = shared.lock().open_root(None, None).unwrap();
+    let scope = shared.lock().open_root().unwrap();
     let cell = running_task(shared, scope);
     shared.lock().task_mut(cell).unwrap().owner = owner;
     let run = shared.lock().park_time(0, ms, cell, Word::UNIT).unwrap();
@@ -9575,7 +9553,7 @@ fn a_limit_in_the_mail_is_taken_by_any_worker() {
 /// 持ち主 `owner` で動いているタスクのセル。持ち主の違う場合をスレッドなしで作るためである。
 #[cfg(any(test, feature = "testing"))]
 fn owned_task(shared: &Shared, owner: u32) -> CellRef {
-    let scope = shared.lock().open_root(None, None).unwrap();
+    let scope = shared.lock().open_root().unwrap();
     let cell = running_task(shared, scope);
     shared.lock().task_mut(cell).unwrap().owner = owner;
     cell
@@ -10079,7 +10057,7 @@ fn add_bytes_skips_a_released_cell() {
     shared.lock().add_bytes(&mut added).unwrap();
     assert!(added.is_empty());
     assert_eq!(shared.lock().task_mut(next).unwrap().bytes, 0);
-    let scope = shared.lock().open_root(None, None).unwrap();
+    let scope = shared.lock().open_root().unwrap();
     assert!(matches!(
         shared.lock().add_bytes(&mut vec![(scope, 0)]),
         Err(CellFault::Internal(_))

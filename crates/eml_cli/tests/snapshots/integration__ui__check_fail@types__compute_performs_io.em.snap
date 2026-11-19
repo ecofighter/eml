@@ -12,9 +12,9 @@ input_file: tests/ui/check-fail/types/compute_performs_io.em
      │                                 │        
      │                                 ╰──────── `IO` is performed here
      │
-     ├─[ <std>/Async.em:171:25 ]
+     ├─[ <std>/Async.em:164:25 ]
      │
- 171 │ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
+ 164 │ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
      │                         ──┬──  
      │                           ╰──── `compute` bounds this row variable by `never`
      │ 

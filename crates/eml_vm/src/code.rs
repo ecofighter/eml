@@ -355,7 +355,7 @@ impl<M: Mode> CodeBase<M> {
         // 名前を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)。スケジューラの状態でなく命令を読むので、古い
         // 状態が後の誤りに名前を付けることはない
         if let Some(&Op::Async { at, .. }) = self.tables.code.get(pc as usize)
-            && Extern::ALL[self.tables.operands[at as usize] as usize] == Extern::AsyncRunResult
+            && Extern::ALL[self.tables.operands[at as usize] as usize] == Extern::AsyncRootResult
         {
             let entry = &self.functions[task.entry as usize].name;
             return RuntimeError::Fault {

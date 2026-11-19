@@ -153,7 +153,7 @@ mod tests {
 
     /// workerが1つのrunのworker 0で仕事`job`を受け付け、テストのdriverで決着させて、tokenを返す。
     fn settled(registry: &Shared, ctx: &mut Ctx<Checked>, job: Op) -> i64 {
-        let scope = registry.lock().open_root(None, None).unwrap();
+        let scope = registry.lock().open_root().unwrap();
         let me = running_task(registry, scope);
         let mut driver = TestDriver::new(None);
         registry

@@ -299,7 +299,7 @@ pub(crate) enum TaskState {
         args: [eml_rt::Word; 3],
         argc: u8,
     },
-    /// `Async.run` で、根のスコープが閉じるのをスタックを持ったまま待つ。起こされたら `Async` の命令の次から続ける。
+    /// `root_start`で、根のスコープが閉じるのをスタックを持ったまま待つ。起こされたら`Async`の命令の次から続ける。
     WaitingCell(CellRef),
 }
 
@@ -1412,7 +1412,7 @@ mod tests {
         // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
         // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
         let value = unsafe { cells::with_worker(&mut home, x, 0, |ctx| ctx.fresh_string("left")) };
-        let scope = shared.lock().open_root(None, None).unwrap();
+        let scope = shared.lock().open_root().unwrap();
         let cell = cells::member_task(&shared, scope, x);
         {
             let post = Mailer::new(&run, &control);

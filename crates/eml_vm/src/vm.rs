@@ -2314,7 +2314,7 @@ fn resume<R: Exec>(
             let result = enter::<R>(code, ctx, task, sched, function, args, argc);
             at_par(code, task, sched, at, result).map(|()| None)
         }
-        // `Async.run` の待ちは、書いた `Async` の命令の次から続ける。起こすのは根のスコープが閉じたときだけである
+        // 根の待ちは、`root_start`の命令の次から続ける。起こすのは根のスコープが閉じたときだけである
         TaskState::WaitingCell(root) => {
             debug_assert!(
                 sched.cells.lock().closed(root).unwrap_or(false),
@@ -2799,21 +2799,17 @@ fn async_op<R: Exec>(
                 schedule(sched, run)?;
             }
         }
-        Extern::AsyncRunRaw => {
-            // 呼んだ `Task` はスタックを持ったまま、根のスコープが閉じるのを待つ
-            let (root, pinned) = {
-                let mut cells = sched.cells.lock();
-                let (parent, pinned) = match task.cell {
-                    Some(cell) => (Some(cells.current_of(cell)?), cells.pinned(cell)?),
-                    None => (None, false),
-                };
-                (cells.open_root(parent, task.cell)?, pinned)
-            };
-            // 根のタスクは呼んだworkerに置く。固定したタスクの入れ子の根も固定する (docs/spec/vm.mdの
-            // 「`Async`のタスク」)
+        Extern::AsyncRootStart => {
+            // 根はエントリの関数からだけ始まる。`root`はstdの外から呼べず、translateはエントリの関数からだけ呼ぶ
+            // (docs/spec/vm.mdの「`Async` のタスク」)
+            if task.cell.is_some() {
+                return Err(RunFault::Internal("a root starts inside a task"));
+            }
+            // 呼んだ`Task`はスタックを持ったまま、根のスコープが閉じるのを待つ。根のタスクは呼んだworkerに置く
+            let root = sched.cells.lock().open_root()?;
             let me = sched.me();
             let (handle, run) =
-                start_task::<R>(ctx, task, sched, root, me, task.get(arg(0)), pinned)?
+                start_task::<R>(ctx, task, sched, root, me, task.get(arg(0)), false)?
                     .ok_or(RunFault::Internal("a task starts in a closed scope"))?;
             let run = run.ok_or(RunFault::Internal("a root task is placed elsewhere"))?;
             sched
@@ -2846,8 +2842,8 @@ fn async_op<R: Exec>(
             deposit(task, cells::Outcome::Panic(message))?;
             task.set(dst, Word::UNIT);
         }
-        ext @ (Extern::AsyncTakeResult | Extern::AsyncRunResult) => {
-            let kind = if ext == Extern::AsyncRunResult {
+        ext @ (Extern::AsyncTakeResult | Extern::AsyncRootResult) => {
+            let kind = if ext == Extern::AsyncRootResult {
                 Take::Run
             } else {
                 Take::Task
@@ -3895,9 +3891,9 @@ pub(crate) fn current_cell(task: &Task) -> Result<CellRef, RunFault> {
         .ok_or(RunFault::Internal("an Async operation runs outside a task"))
 }
 
-/// `take_result` と `run_result` が受け取ったタスクの失敗を、今のタスクで起こし直す。`Panic` は `panic` の extern と
-/// 同じく `try_panic` に届け、なければ実行時エラーにする。IO の失敗は失敗した extern と同じく `failed` が届ける。
-/// 文言はセルが Rust の文字列で持っていたので、今の worker で新しい文字列を作る (docs/spec/vm.md の「`Async` のタスク」)。
+/// `take_result`と`root_result`が受け取ったタスクの失敗を、今のタスクで起こし直す。`Panic`は`panic`のexternと
+/// 同じく`try_panic`に届け、なければ実行時エラーにする。IOの失敗は失敗したexternと同じく`failed`が届ける。
+/// 文言はセルがRustの文字列で持っていたので、今のworkerで新しい文字列を作る (docs/spec/vm.mdの「`Async` のタスク」)。
 fn raise_again<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
