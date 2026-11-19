@@ -397,9 +397,9 @@ fn error_text(result: Result<Finished, RuntimeError>) -> String {
     result.map(|_| ()).unwrap_err().to_string()
 }
 
-/// 右の子の誤りは join に記録し、左の子が終わった後で報告する。左の子は最後まで走る。
+/// 右の子の誤りはrunを終わらせる。ここでは短い左の子が、右の子が走る前に出力を終える。
 #[test]
-fn a_right_depth_error_is_reported_after_the_left_finishes() {
+fn a_right_depth_error_ends_the_run() {
     let (out, result) = run_deep(
         "\
 fn main() -> unit {
@@ -433,27 +433,43 @@ fn main() -> unit {
     );
 }
 
-/// 両方の子が誤りで止まれば、左の誤りを報告する。
+/// 両方の子が1つのworkerで誤りで止まる。最初の誤りがrunを終わらせるので、2つ目は起きない。逐次の方針では左の子が
+/// 先に走る。seedの下では、スケジュールが先に失敗させた方の子である。
 #[test]
-fn the_left_error_wins_when_both_children_fail() {
-    let (out, result) = run_deep(
+fn one_of_two_failing_children_ends_the_run() {
+    let program = trusted(&with_prelude(&format!(
         "\
-fn main() -> unit {
+fn main() -> unit {{
   let t.0: obj = par (,) #0(&deep_left, &deep_right)
   tail call show_pair(t.0)
-}
-",
-    );
+}}
+{DEEP}"
+    )));
+    let (out, result) = run_in(&program, true, Sched::Sequential, 1000);
     assert_eq!(out, "");
     assert_eq!(
         error_text(result),
         "the call depth limit is exceeded in `deep_left`"
     );
+    for sched in [Sched::Seeded(1), Sched::Seeded(2026), Sched::Normal] {
+        let (out, result) = run_in(&program, true, sched, 1000);
+        assert_eq!(out, "", "{sched:?}");
+        let error = error_text(result);
+        assert!(
+            [
+                "the call depth limit is exceeded in `deep_left`",
+                "the call depth limit is exceeded in `deep_right`"
+            ]
+            .contains(&error.as_str()),
+            "{sched:?}: {error}"
+        );
+    }
 }
 
-/// 右の子の中の `par` の左の子の誤りは、右の子の誤りになる。右の子が作った右の子は走らせずに捨てる。
+/// 右の子の中の`par`の左の子の誤りは、右の子の誤りでrunを終わらせる。右の子が作った右の子は走らない。ここでは短い
+/// 左の子が、右の子が走る前に出力を終える。
 #[test]
-fn a_right_child_error_drops_its_own_children() {
+fn a_right_child_error_ends_the_run_with_its_own_child_unrun() {
     let (out, result) = run_deep(
         "\
 fn main() -> unit {
@@ -734,7 +750,7 @@ fn the_run_stats_do_not_depend_on_the_schedule() {
     }
 }
 
-/// 子の誤りの規則を、ソースから作った `fork$` と `reperform$` のコードで確かめる。上の手書きの LIR のテストは VM の
+/// 子の誤りの規則を、ソースから作ったコードで確かめる。上の手書きのLIRのテストはVMの
 /// 順序を、こちらは利用者の見る規則を確かめる (docs/implementation/testing.md の「重複させない」)。誤りは
 /// 小さい深さの上限で起こす。既定の上限の `DepthLimit` は UI テストで起こすには大きすぎるためである。
 mod source {
@@ -778,19 +794,6 @@ deep_right n = 1 + deep_right (n + 1)
         assert_eq!(
             error_text(result),
             "the call depth limit is exceeded in `deep_right`"
-        );
-    }
-
-    /// 両方の子が誤りで止まれば、左の誤りを報告する。
-    #[test]
-    fn the_left_error_wins() {
-        let (out, result) = run(
-            "  let (a, b) = Par.par (fn () -> deep_left 0) (fn () -> deep_right 0)\n  println (show (a + b))\n",
-        );
-        assert_eq!(out, "before\n");
-        assert_eq!(
-            error_text(result),
-            "the call depth limit is exceeded in `deep_left`"
         );
     }
 }

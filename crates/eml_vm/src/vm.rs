@@ -24,8 +24,7 @@ use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::park::{Guard, Park, Pending, PollSource, Progress};
 use crate::sched::{
-    ENTRY, JOB, JoinId, JoinNode, Memory, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId,
-    TaskState,
+    ENTRY, JOB, JoinId, JoinNode, Memory, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
 };
 use crate::workers::{Entry, EntryKind, Notice, Ready};
 use crate::{RunCounts, RuntimeError};
@@ -818,9 +817,7 @@ fn work_loop<R: Exec>(
     // 動くタスクのない `Task` は `ENTRY` の欄に退避し、その番号をどのタスクにも振らない
     if let Err(fault) = switch_away::<R>(code, ctx, task, sched, Some(TaskState::Ready)) {
         let pc = task.pc;
-        if let Err(error) = task_failed::<R>(code, ctx, task, sched, Failure { fault, pc }) {
-            return error;
-        }
+        return task_failed(code, task, sched, Failure { fault, pc });
     }
     match run_tasks::<R>(code, ctx, task, sched, counts) {
         Ok(()) => code.error(
@@ -1069,7 +1066,7 @@ fn drive<R: Exec>(
         Ok(()) => Ok(()),
         Err(fault) => {
             let pc = task.pc;
-            task_failed::<R>(code, ctx, task, sched, Failure { fault, pc })
+            Err(task_failed(code, task, sched, Failure { fault, pc }))
         }
     };
     if ran.is_ok() {
@@ -1105,7 +1102,7 @@ fn run_tasks<R: Exec>(
             Ok(false) => return Ok(()),
             Err(fault) => {
                 if let Err(fault) = step_failed::<R>(code, ctx, task, pc, fault) {
-                    task_failed::<R>(code, ctx, task, sched, Failure { fault, pc })?;
+                    return Err(task_failed(code, task, sched, Failure { fault, pc }));
                 }
             }
         }
@@ -1165,7 +1162,7 @@ fn step<R: Exec>(
         }
         Op::ChildDone => {
             let value = task.get(0);
-            child_done::<R>(code, ctx, task, sched, Outcome::Value(value))?;
+            child_done::<R>(code, ctx, task, sched, value)?;
         }
         Op::Par { dst, at } => par::<R>(code, ctx, task, sched, dst, at)?,
         Op::Async { dst, at } => async_op::<R>(code, ctx, task, sched, dst, at)?,
@@ -1803,7 +1800,7 @@ fn unwind<R: Exec>(
 // `par` の fork と join は呼び出しや戻りに比べてまれなので、`step` に展開しない。値が1つの呼び出しと戻りの速い道の
 // 命令の列を変えないためである (docs/spec/vm.md の「`par` の fork と join」)
 
-/// join が見つけた子の誤りを `Scheduler::failed` に置いたことを、実行の繰り返しに伝える印。外には出ない。
+/// `par`の位置を持つ誤りが`Scheduler::failed`で待っている印。実行の繰り返しに伝える。外には出ない。
 const CHILD_FAILED: RunFault = RunFault::Internal("a child failure is waiting in the scheduler");
 
 /// メインのworkerの走れるタスクがなくなったことを、実行の繰り返しに伝える印。`drive`が受け取り、外には出ない
@@ -1844,10 +1841,9 @@ fn par<R: Exec>(
         parent_evv,
         parent_limit,
         left: None,
-        right_outcome: None,
+        right_value: None,
         ret,
         dst,
-        orphan: false,
     });
     let mut right = Task::right_child(task.entry, child, task.depth(), sched.max_depth, j, g);
     // 空いている worker があれば右の子をその受け箱に置き、なければこの worker の列に入れる
@@ -1959,7 +1955,7 @@ fn child_done<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
-    outcome: Outcome,
+    value: Word,
 ) -> Result<(), RunFault> {
     // 子は親の handler に yield できないので、yield の途中で終わる子はない
     if ctx.yielding() != 0 {
@@ -1974,17 +1970,17 @@ fn child_done<R: Exec>(
     if task.boundaries.is_empty()
         && let Some(job) = task.job
     {
-        return job_done::<R>(code, ctx, task, sched, job, outcome);
+        return job_done::<R>(code, ctx, task, sched, job, value);
     }
     // 置いた右の子の join は親の worker にあるので、この worker の表を引かない
     if task.boundaries.is_empty()
         && let Some(placed) = task.placed
     {
-        return placed_done::<R>(code, ctx, task, sched, placed, j, outcome);
+        return placed_done::<R>(code, ctx, task, sched, placed, j, value);
     }
     if sched.current == sched.join(j).right {
         let join = sched.join(j);
-        join.right_outcome = Some(outcome);
+        join.right_value = Some(value);
         let right_worker = join.right_worker;
         // 子の残りの `evv` を、子の ID のまま手放す
         let rest =
@@ -1994,10 +1990,10 @@ fn child_done<R: Exec>(
         return switch_away::<R>(code, ctx, task, sched, None);
     }
     let join = sched.join(j);
-    join.left = Some(outcome);
+    join.left = Some(value);
     let parent_evv = std::mem::replace(&mut join.parent_evv, Word::UNIT);
     task.limit = join.parent_limit;
-    let right_done = join.right_outcome.is_some();
+    let right_done = join.right_value.is_some();
     // 境目のフレームを外す。組か起こし直しの結果は join が `par` の結果のスロットに書く
     task.pop_frame();
     let rest = unsafe { switch_to(ctx, parent_evv, task.worker, task.depth_offset, task.limit) };
@@ -2024,7 +2020,7 @@ fn placed_done<R: Exec>(
     sched: &mut Scheduler<R::P>,
     placed: Placed,
     j: JoinId,
-    outcome: Outcome,
+    value: Word,
 ) -> Result<(), RunFault> {
     let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
@@ -2033,7 +2029,7 @@ fn placed_done<R: Exec>(
     let control = std::sync::Arc::clone(&sched.watcher.control);
     sched
         .run
-        .send(&control, placed.home, Notice::Joined { join: j, outcome });
+        .send(&control, placed.home, Notice::Joined { join: j, value });
     switch_away::<R>(code, ctx, task, sched, None)
 }
 
@@ -2046,11 +2042,8 @@ fn job_done<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     job: JobRef,
-    outcome: Outcome,
+    end: Word,
 ) -> Result<(), RunFault> {
-    let Outcome::Value(end) = outcome else {
-        return Err(RunFault::Internal("a job ends with an error"));
-    };
     let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     // `()` を入れ替えるだけで、返る語も `()` である
@@ -2098,7 +2091,7 @@ fn switch_away<R: Exec>(
         // 置いた右の子の終わりは知らせで届く。待とうとする親はまだ表にいないので、集めた知らせが親の join に
         // 終わりを届けても起こされない。そのときは待たずにここで join を完了する (docs/spec/vm.md の「子の終わりと join」)
         if let Some(TaskState::Waiting(j)) = keep
-            && sched.join(j).right_outcome.is_some()
+            && sched.join(j).right_value.is_some()
         {
             sched.keep_running(task);
             let at = complete_join::<R>(code, ctx, task, sched, j)?;
@@ -2332,7 +2325,7 @@ fn complete_join<R: Exec>(
 ) -> Result<Pc, RunFault> {
     let join = sched.take_join(j);
     let at = join.ret - 1;
-    let result = join_outcomes::<R>(code, ctx, task, sched, join);
+    let result = join_outcomes::<R>(code, ctx, task, join);
     // join の後にも、ほかのスレッドから受けた解放が溜まっていれば取り込む (docs/spec/vm.md の「子の終わりと join」)
     ctx.reclaim_if_due();
     at_par(code, task, sched, at, result).map(|()| at)
@@ -2358,39 +2351,23 @@ fn at_par<M: Mode, P: Policy>(
     }
 }
 
-/// join の解決の順 (docs/spec/vm.md の「`par` の fork と join」)。誤りは左、右の順に報告し、中断でも値でも救わない。
-/// 右の側の語はすべて親の局所に戻してから右の子の ID を退かせ、その後で捨てる語を手放す。ヒープの誤りはそこで実行を
-/// 止めるので、退かせも手放しもしない。
+/// joinの解決 (docs/spec/vm.mdの「`par`のforkとjoin」)。右の側の語は親の局所に戻してから右の子のIDを退かせる。
+/// ヒープの誤りはそこで実行を止めるので、退かせはしない。
 fn join_outcomes<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
-    sched: &mut Scheduler<R::P>,
     join: JoinNode,
 ) -> Result<(), RunFault> {
-    let (Some(left), Some(right)) = (join.left, join.right_outcome) else {
+    let (Some(l), Some(r)) = (join.left, join.right_value) else {
         return Err(RunFault::Internal(
             "a join completes before both children end",
         ));
     };
-    let (left, right) = match (left, right) {
-        (Outcome::Error(error), _) | (_, Outcome::Error(error)) => {
-            sched.failed = Some(error);
-            return Err(CHILD_FAILED);
-        }
-        outcomes => outcomes,
-    };
-    // 右の側の語は右の子が残した参照で、親だけが持つ
+    // 右の値は右の子が残した参照で、持つのは親だけである
     let heap = unsafe { ctx.heap_mut() };
-    if let Some(w) = right.word() {
-        unsafe { heap.transfer_back(w, join.right_worker) }?;
-    }
+    unsafe { heap.transfer_back(r, join.right_worker) }?;
     heap.retire_worker(join.right_worker)?;
-    let (Outcome::Value(l), Outcome::Value(r)) = (left, right) else {
-        return Err(RunFault::Internal(
-            "a join raises an error after reporting it",
-        ));
-    };
     let Op::Par { at, .. } = code.tables.code[join.ret as usize - 1] else {
         return Err(RunFault::Internal(
             "a join returns after something other than a par",
@@ -2408,123 +2385,26 @@ fn join_outcomes<R: Exec>(
     Ok(())
 }
 
-/// 実行時エラーの後。すぐに実行を止める誤りと、エントリのタスクの誤り (左の子の誤りを含む) と、`compute` の仕事の誤りは
-/// 実行の誤りにする。右の子の
-/// 誤りは join に記録し、右のタスクはスタックを巻き戻さずに捨てて、ほかのタスクに切り替える。止めたスタックは
-/// 巻き戻しの表のない位置で止まっていて解放できない。記録した誤りは join が必ず報告するので、実行は誤りで終わる
-/// (docs/spec/vm.md の「`par` の fork と join」)。
+/// 実行時エラーの後。どのタスクの誤りもrunの誤りで、子に誤りの終わりはないので、joinは誤りを見ない
+/// (docs/spec/vm.mdの「子の誤り」)。止まったスタックは巻き戻さずに捨てる。
 #[cold]
 #[inline(never)]
-fn task_failed<R: Exec>(
-    code: &CodeBase<R::M>,
-    ctx: &mut Ctx<R::M>,
-    task: &mut Task,
-    sched: &mut Scheduler<R::P>,
-    mut failure: Failure,
-) -> Result<(), RuntimeError> {
-    loop {
-        if failure.fault == HOST_IDLE {
-            return Err(RuntimeError::Fault {
-                fault: HOST_IDLE,
-                function: String::new(),
-                at: None,
-            });
-        }
-        let error = match sched.failed.take() {
-            Some(error) => error,
-            None => code.error(failure, task),
+fn task_failed<M: Mode, P: Policy>(
+    code: &CodeBase<M>,
+    task: &Task,
+    sched: &mut Scheduler<P>,
+    failure: Failure,
+) -> RuntimeError {
+    if failure.fault == HOST_IDLE {
+        return RuntimeError::Fault {
+            fault: HOST_IDLE,
+            function: String::new(),
+            at: None,
         };
-        // `Async` のタスクの失敗は底の `try_all` が捕まえるので、ここに来るのは捕まえられない誤りで、run を止める
-        // (docs/spec/vm.md の「`Async` のタスク」)。仕事のセルは誤りを持たないので、仕事の誤りもその場で run を止める
-        // (docs/spec/vm.md の「`compute` の仕事」)
-        if sched.current == ENTRY
-            || task.cell.is_some()
-            || task.job.is_some()
-            || stops_the_run(&error)
-        {
-            return Err(error);
-        }
-        let boundaries = std::mem::take(&mut task.boundaries);
-        // 右の子が開いていた入れ子の `par` の子は、結果を受ける親がもういないので、走らせずに捨てる
-        for &inner in &boundaries[1..] {
-            cancel(sched, inner);
-        }
-        let j = boundaries[0];
-        match task.placed {
-            // 置いた右の子の join は親の worker にあるので、誤りを知らせで送る
-            Some(placed) => {
-                let control = std::sync::Arc::clone(&sched.watcher.control);
-                let joined = Notice::Joined {
-                    join: j,
-                    outcome: Outcome::Error(error),
-                };
-                sched.run.send(&control, placed.home, joined);
-            }
-            None => {
-                sched.join(j).right_outcome = Some(Outcome::Error(error));
-                sched.wake_parent(j);
-            }
-        }
-        match switch_away::<R>(code, ctx, task, sched, None) {
-            Ok(()) => return Ok(()),
-            Err(fault) => failure = Failure { fault, pc: task.pc },
-        }
     }
-}
-
-/// 子の誤りのうち、評価だけでなく実行そのものを止めるもの (docs/spec/vm.md の「`par` の fork と join」)。
-fn stops_the_run(error: &RuntimeError) -> bool {
-    matches!(
-        error,
-        RuntimeError::Fault {
-            fault: RunFault::Stopped(
-                Stop::Interrupted | Stop::Terminated | Stop::MemoryLimit | Stop::Ended
-            ) | RunFault::Extern(eml_rt::Fault::Heap(_))
-                | RunFault::Internal(_),
-            ..
-        } | RuntimeError::Leak(_)
-            | RuntimeError::Deadlock
-            | RuntimeError::Unrecovered { .. }
-    )
-}
-
-/// 親が誤りで止まった join の右の子を、その子孫ごと表と列から外す。持つ語は触れずに捨てる。子孫は作業の列でたどり、
-/// Rust の再帰を使わない (docs/spec/vm.md の「並列化への備え」)。
-fn cancel<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
-    let mut pending = vec![j];
-    while let Some(j) = pending.pop() {
-        let node = sched.join(j);
-        // 置いた右の子はほかの worker で走り続け、終わりの知らせが必ず届く。届くまで番号を取っておく
-        if node.right == PLACED && node.right_outcome.is_none() {
-            node.orphan = true;
-            continue;
-        }
-        let join = sched.take_join(j);
-        if join.right_outcome.is_some() {
-            continue;
-        }
-        let right = join.right;
-        sched.run.retain_ready(
-            sched.index,
-            |item| !matches!(item, Ready::Task(id) if *id == right),
-        );
-        if let Some(task) = sched.tasks[right].take() {
-            sched.free_task(right);
-            pending.extend_from_slice(&task.boundaries[1..]);
-            if let TaskState::Waiting(waited) = task.state {
-                pending.push(waited);
-            }
-        }
-    }
-}
-
-impl Outcome {
-    /// 子が残した語。
-    fn word(&self) -> Option<Word> {
-        match *self {
-            Outcome::Value(w) => Some(w),
-            Outcome::Error(_) => None,
-        }
+    match sched.failed.take() {
+        Some(error) => error,
+        None => code.error(failure, task),
     }
 }
 
@@ -4453,7 +4333,7 @@ fn leaks(a.0: obj) -> unit {
 
     /// タスクの外で深さの上限を超えたら、run を止める。
     #[test]
-    fn a_depth_hit_outside_a_task_stops_the_run() {
+    fn a_depth_hit_outside_a_task_ends_the_run() {
         let (code, mut ctx, mut sched) = limit_fixture(CALL);
         let mut task = Task::new(&code, function(&code, "main"), DEPTH);
         task.pc = code.functions[function(&code, "f") as usize].start;
@@ -4571,7 +4451,7 @@ fn \"prompt$\"(p.0: unit) -> unit {
     /// 補助の関数のエントリでも、深さが本当の限度と猶予の和を超えていれば run を止める。起こすのを延ばしても限度は
     /// なくならない。起こすエントリ (`main`) でも、起こさずに run を止める (docs/spec/vm.md の「タスクの上限」)。
     #[test]
-    fn a_helper_entry_beyond_the_headroom_stops_the_run() {
+    fn a_helper_entry_beyond_the_headroom_ends_the_run() {
         let (code, mut ctx, mut sched) = limit_fixture(HELPERS);
         for name in ["compose$", "main"] {
             for limit in [Limit::Task, Limit::Pending] {
@@ -4624,7 +4504,7 @@ fn \"prompt$\"(p.0: unit) -> unit {
 
     /// 猶予の間に深さの上限を超えたら、安全点が run を止める。
     #[test]
-    fn a_depth_hit_while_aborting_stops_the_run() {
+    fn a_depth_hit_while_aborting_ends_the_run() {
         let (code, mut ctx, mut sched) = limit_fixture(CALL);
         let mut task = Task::new(&code, function(&code, "main"), DEPTH);
         task.worker = ctx.heap().worker();
@@ -5016,10 +4896,9 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             parent_evv: Word::UNIT,
             parent_limit: Limit::Task,
             left: None,
-            right_outcome: None,
+            right_value: None,
             ret: task.pc,
             dst: 0,
-            orphan: false,
         });
         sched.run.push_ready(0, Ready::Task(right));
         let base = task.push_frame(task.pc, 0, BOUNDARY_SIZE);
@@ -5029,14 +4908,7 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
         sched.publish(&task);
         let held = ctx.fresh_string(&"x".repeat(200 << 10));
         assert!(control.pressure().is_some());
-        child_done::<Checked>(
-            &code,
-            &mut ctx,
-            &mut task,
-            &mut sched,
-            Outcome::Value(Word::imm(1)),
-        )
-        .unwrap();
+        child_done::<Checked>(&code, &mut ctx, &mut task, &mut sched, Word::imm(1)).unwrap();
         assert!(
             task.cell.is_none(),
             "the switch does not reach the right child"
@@ -5071,10 +4943,9 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             parent_evv: Word::UNIT,
             parent_limit: Limit::Task,
             left: None,
-            right_outcome: None,
+            right_value: None,
             ret: task.pc,
             dst: 0,
-            orphan: false,
         });
         sched.run.push_ready(0, Ready::Task(right));
         let base = task.push_frame(task.pc, 0, BOUNDARY_SIZE);
@@ -5085,14 +4956,7 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
         assert_eq!(task.limit, Limit::Stops);
         assert_eq!(ctx.depth_limit(), DEPTH);
         assert_eq!(sched.join(j).parent_limit, Limit::Pending);
-        child_done::<Checked>(
-            &code,
-            &mut ctx,
-            &mut task,
-            &mut sched,
-            Outcome::Value(Word::imm(1)),
-        )
-        .unwrap();
+        child_done::<Checked>(&code, &mut ctx, &mut task, &mut sched, Word::imm(1)).unwrap();
         let waiting = sched.tasks[parent].as_ref().unwrap();
         assert_eq!(waiting.cell, Some(cell));
         assert_eq!(waiting.limit, Limit::Pending);
@@ -5116,10 +4980,9 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             parent_evv: Word::UNIT,
             parent_limit,
             left: None,
-            right_outcome: None,
+            right_value: None,
             ret: 0,
             dst: 0,
-            orphan: false,
         };
         let outer = sched.add_join(node(Limit::Task));
         let inner = sched.add_join(node(Limit::Stops));
@@ -5151,10 +5014,9 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             parent_evv: Word::UNIT,
             parent_limit: Limit::Task,
             left: None,
-            right_outcome: None,
+            right_value: None,
             ret: 0,
             dst: 0,
-            orphan: false,
         });
         waiting.boundaries.push(j);
         let waiting = sched.add_task(waiting);

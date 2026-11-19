@@ -19,19 +19,18 @@ use crate::counters::Counters;
 use crate::doorbell::Doorbell;
 use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, MadeDriver, RunClock, ceil_ms, floor_ms};
 use crate::park::Park;
-use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
+use crate::sched::{JoinId, JoinNode, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
 use crate::{HeapWork, RunCounts, RuntimeError, WORKER_STACK};
 use eml_sched::config::Seat;
 use eml_sched::error::RunFault;
 
-// 6つの型はどれも、スレッドをまたいで渡すか共有する (docs/spec/vm.md の「タスクとスケジュール」)
+// 5つの型はどれも、スレッドをまたいで渡すか共有する (docs/spec/vm.mdの「タスクとスケジュール」)
 const _: () = {
     const fn sync<T: Sync>() {}
     const fn send<T: Send>() {}
     sync::<Run>();
     send::<JoinNode>();
-    send::<Outcome>();
     send::<Notice>();
     send::<Ready>();
     send::<Entry>();
@@ -66,12 +65,16 @@ pub(crate) enum EntryKind {
 /// ほかの worker から受け箱に届く知らせ (docs/spec/vm.md の「`par` の fork と join」「タスクとスケジュール」)。
 /// 語を運ぶのは `Child`、`Joined`、`Place` だけで、ほかの `Async` のタスクの知らせはセルの番号しか持たない。driver の
 /// 操作は記録が持ち、知らせは運ばない (docs/spec/vm.md の「操作の記録」)。
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a notice moves once into an inbox; a box would add an allocation per placed child"
+)]
 pub(crate) enum Notice {
     /// fork がこの worker に置いた右の子か、`fork_job` が置いた `compute` の仕事。受けた worker が自分のタスクの番号を
     /// 振り、走れるタスクの列の後ろに入れる。
     Child(Task),
-    /// この worker が置いた右の子の終わり。`join` はこの worker の join の番号で、`outcome` の語は子が残した参照である。
-    Joined { join: JoinId, outcome: Outcome },
+    /// このworkerが置いた右の子の終わり。`join`はこのworkerのjoinの番号で、`value`は子が残した参照である。
+    Joined { join: JoinId, value: Word },
     /// `start` がこの worker を持ち主にしたタスク。`closure` はタスクの論理的な ID `worker` に印を付けた閉包で、
     /// 知らせが参照を1つ持つ。受けた worker が始める仕事にする。
     Place {
@@ -278,7 +281,7 @@ pub(crate) struct Run {
     /// `holds`を偽から真にした回数と、真から偽にした回数 (docs/spec/vm.mdの「GUIのPark」)。
     pub(crate) holds_raised: AtomicU64,
     pub(crate) holds_lowered: AtomicU64,
-    /// 送った子の知らせのうち、終わりの知らせをまだ受け取っていないものの数。親を失った節点の分も数える。
+    /// 送った子の知らせのうち、終わりの知らせをまだ受け取っていないものの数。
     pub(crate) in_flight: AtomicUsize,
     /// ほかの worker に置いた右の子の数。どの worker の fork も足す。
     pub(crate) placed: AtomicU64,
@@ -298,7 +301,7 @@ pub(crate) struct Run {
     /// 監視のスレッドの自己パイプ。眠っていた worker が動き始めて `running` が 0 から 1 になったら鳴らし、刻まずに
     /// 眠っていた監視のスレッドを起こす。
     pub(crate) bell: Option<Arc<Doorbell>>,
-    /// worker 1..N-1 の致命的な誤り。最初に書いたものだけを残し、worker 0 の結果より優先する。
+    /// runを終わらせる誤り。どのworkerが書いたものでも、最初の1つだけを残す (`set_fatal`)。
     fatal: Mutex<Option<RuntimeError>>,
     /// `Std.Atomic.Counter` の表。`Machine` が持ち、run が終わっても残る。lock を取らずに読み書きする。
     pub(crate) counters: Arc<Counters>,
@@ -805,9 +808,22 @@ impl Run {
         self.leave_idle(k);
     }
 
-    /// worker 1..N-1 の致命的な誤りを書く。先に書かれていれば捨てる。
+    /// runを終わらせる誤りを書く。欄は、どのworkerが書いても最初に書かれた誤りを残し、何も置き換えない
+    /// (docs/spec/vm.mdの「子の誤り」)。
     fn set_fatal(&self, error: RuntimeError) {
         lock(&self.fatal).get_or_insert(error);
+    }
+
+    /// worker 0の結果。静かでない誤りは、worker 0が失敗した時点でほかのworkerと同じ規則で欄に書くので、欄はrunの
+    /// 最初の誤りを持つ。そのとき返す`Ok`は成功ではなく穴埋めで、呼び出し側が`settle`に渡すと`settle`が欄の誤りを返す。
+    pub(crate) fn record(&self, result: Result<(), RuntimeError>) -> Result<(), RuntimeError> {
+        match result {
+            Err(error) if !quiet(&error) => {
+                self.set_fatal(error);
+                Ok(())
+            }
+            result => result,
+        }
     }
 
     /// 書かれた致命的な誤りを取り出す。worker を join した後に呼ぶ。
@@ -835,15 +851,17 @@ impl Drop for Shutdown {
     }
 }
 
-/// run の結果を決める。worker 1..N-1 の致命的な誤りがあれば、worker 0 の結果 (`exit` の `Stopped(Ended)` も含む)
-/// より優先する。どのヒープも信用できないためである (docs/spec/vm.md の「タスクとスケジュール」)。
+/// runの結果を決める。worker 0の結果がすでに持つ静かでない誤り (先の`settle`が選んだ誤り、`record`より前に返ったworker 0の
+/// 誤り、たとえば`Body::failed`のdriverを作れなかった誤り) を残し、なければ致命的な誤りの欄の誤り、なければworker 0の結果の
+/// 順である。欄はworker 0の成功や静かな結果にも、`exit`の`Stopped(Ended)`にも勝つ (docs/spec/vm.mdの「子の誤り」)。
 pub(crate) fn settle(
     result: Result<(), RuntimeError>,
     fatal: Option<RuntimeError>,
 ) -> Result<(), RuntimeError> {
-    match fatal {
-        Some(error) => Err(error),
-        None => result,
+    match (result, fatal) {
+        (Err(chosen), Some(_)) if !quiet(&chosen) => Err(chosen),
+        (_, Some(error)) => Err(error),
+        (result, None) => result,
     }
 }
 
@@ -1141,7 +1159,8 @@ pub(crate) fn end_check(kept_pending: bool, left: bool) -> Result<(), RunFault> 
     Ok(())
 }
 
-/// worker 1..N-1 が何も書かずに抜ける誤り。止めるビットと `END` で、どれも worker 0 が自分の語で読む。
+/// 致命的な誤りの欄に書かない誤り。worker 1..N-1は何も書かずに抜け、worker 0の`record`も書かない。止めるビットと`END`で、
+/// どれもworker 0が自分の語で読む。
 fn quiet(error: &RuntimeError) -> bool {
     matches!(
         error,
@@ -1501,8 +1520,8 @@ mod tests {
         }
     }
 
-    /// ほかの worker の致命的な誤りは、worker 0 のどの結果にも勝つ。`exit` の `Stopped(Ended)` にも勝つので、run は
-    /// 捨てたことにならず誤りで終わる。誤りがなければ worker 0 の結果のままである。
+    /// ほかのworkerの致命的な誤りは、worker 0のどの成功や静かな結果にも勝つ。`exit`の`Stopped(Ended)`にも勝つので、
+    /// runは捨てたことにならず誤りで終わる。誤りがなければworker 0の結果のままである。
     #[test]
     fn a_fatal_wins_over_any_result_of_worker_0() {
         let heap = || {
@@ -1520,10 +1539,65 @@ mod tests {
             2 => Err(fault(RunFault::Stopped(Stop::Interrupted))),
             _ => Err(RuntimeError::Deadlock),
         };
-        for i in 0..4 {
+        for i in 0..3 {
             assert_eq!(settle(result(i), Some(heap())), Err(heap()));
+        }
+        // 先のsettleが選んだ誤りは残る
+        assert_eq!(settle(result(3), Some(heap())), result(3));
+        for i in 0..4 {
             assert_eq!(settle(result(i), None), result(i));
         }
+    }
+
+    /// 致命的な誤りの欄は最初に書かれた誤りを残し、worker 0もほかと同じ規則で書く。worker 0の静かな結果は書かない。
+    /// 後から来るヒープの誤りは最初の誤りを置き換えず、報告された誤りが回復を決める。分けたrunの2回目の`settle`は
+    /// 最初の選びを残す。
+    #[test]
+    fn the_first_error_written_is_the_one_reported() {
+        let named = |function: &str| RuntimeError::Fault {
+            fault: RunFault::Stopped(Stop::DepthLimit),
+            function: function.to_string(),
+            at: None,
+        };
+        let heap = || {
+            fault(RunFault::Extern(eml_rt::Fault::Heap(
+                HeapError::WrongOwner {
+                    owner: 1,
+                    worker: 2,
+                },
+            )))
+        };
+        let run = || {
+            Run::new(
+                2,
+                Seat::Merged,
+                None,
+                RunClock::Virtual(Arc::default()),
+                Arc::default(),
+            )
+        };
+        let r = run();
+        let result = r.record(Err(named("left")));
+        r.set_fatal(named("right"));
+        assert_eq!(settle(result, r.take_fatal()), Err(named("left")));
+        let r = run();
+        r.set_fatal(named("right"));
+        let result = r.record(Err(named("left")));
+        assert_eq!(settle(result, r.take_fatal()), Err(named("right")));
+        let r = run();
+        let result = r.record(Err(fault(RunFault::Stopped(Stop::Ended))));
+        assert_eq!(r.take_fatal(), None);
+        assert_eq!(result, Err(fault(RunFault::Stopped(Stop::Ended))));
+        let r = run();
+        let result = r.record(Err(named("left")));
+        r.set_fatal(heap());
+        let reported = settle(result, r.take_fatal()).unwrap_err();
+        assert_eq!(reported, named("left"));
+        assert!(!reported.is_broken());
+        assert_eq!(
+            settle(Err(named("left")), Some(named("main"))),
+            Err(named("left"))
+        );
     }
 
     /// 眠っている worker を起こすと `running` に数え、もう一度起こしても数は増えない。

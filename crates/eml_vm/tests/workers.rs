@@ -369,9 +369,9 @@ fn twice(p.0: unit) -> tobj {{
     );
 }
 
-/// 置いた右の子の深さの上限は子の誤りで、親の join が報告する。文言は worker が1つの run と同じである。
+/// 置いた右の子の深さの上限は、致命的な誤りの欄を通ってrunを終わらせる。文言はworkerが1つのrunと同じである。
 #[test]
-fn a_depth_error_in_a_placed_child_is_reported_at_join() {
+fn a_depth_error_in_a_placed_child_ends_the_run() {
     let src = "\
 import Std.Par
 deep : Int -> <Panic> Int
@@ -536,8 +536,9 @@ main () =
     assert_eq!(finished.placed_jobs, 1);
 }
 
-/// 置いた右の子の誤りの後、`Machine` は2つのヒープを回復して続ける。worker 1 のヒープは回復の後に落ちる。同じ
-/// `Machine` の次の run も worker を作り、閉じるときのリークの確かめも通る。
+/// 右の子の`Panic`は子の中で捕まえられ、worker 0でstdが上げ直してrunを終わらせる。その後`Machine`は2つの
+/// ヒープを回復して続ける。worker 1のヒープは回復の後に落ちる。同じ`Machine`の次のrunもworkerを作り、閉じるときの
+/// リークの確かめも通る。
 #[test]
 fn recovery_after_an_error_drops_n_heaps() {
     let failing = eml_test_support::lir(
@@ -560,6 +561,212 @@ main () =
     }
     machine.close().unwrap();
     assert_eq!(out.contents(), "start\nstart\n");
+}
+
+/// 置いた右の子がworker 1で深さの上限により失敗し、誤りは致命的な誤りの欄を通る。`Machine`は回復し、次のrunも同じ
+/// 誤りで終わる。
+#[test]
+fn recovery_after_a_child_error_on_another_worker() {
+    let failing = eml_test_support::lir(
+        "\
+import Std.Par
+deep : Int -> <Panic> Int
+deep n = if n == 0 then 0 else 1 + deep (n - 1)
+main : Unit -> <IO, Panic> Unit
+main () =
+  println \"start\"
+  let (a, b) = Par.par (fn () -> 1) (fn () -> deep 100000)
+  println (show (a + b))
+",
+    );
+    let (host, out) = eml_vm::capture_host(Default::default());
+    let control = Arc::new(Control::new(Limits {
+        workers: 2,
+        max_depth: 4096,
+        ..Limits::default()
+    }));
+    let mut machine = Machine::<Checked>::new(control, host);
+    let entry = machine.load(&failing, &eml_vm::Linked::default()).unwrap();
+    for _ in 0..2 {
+        let error = machine.run(entry).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the call depth limit is exceeded in `deep`"
+        );
+        assert!(!error.is_broken());
+    }
+    machine.close().unwrap();
+    assert_eq!(out.contents(), "start\nstart\n");
+}
+
+/// 一方の子の実行時エラーは、もう一方の子が走り続けていてもrunを終わらせる。右の子はworker 1で走る。戻らなければ
+/// 止まらないので、見張りが2秒後に割り込む。
+#[test]
+fn a_child_error_ends_the_run_while_the_other_child_runs() {
+    for (left, right) in [("spin 0", "deep 100000"), ("deep 100000", "spin 0")] {
+        let src = format!(
+            "import Std.Par\n{SPIN}\
+deep : Int -> <Panic> Int
+deep n = if n == 0 then 0 else 1 + deep (n - 1)
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (a, b) = Par.par (fn () -> {left}) (fn () -> {right})
+  println (show (a + b))
+"
+        );
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            max_depth: 4096,
+            ..Limits::default()
+        }));
+        let (done, wait) = std::sync::mpsc::channel::<()>();
+        let watched = Arc::clone(&control);
+        let watchdog = std::thread::spawn(move || {
+            if wait.recv_timeout(Duration::from_secs(2)).is_err() {
+                watched.interrupt();
+            }
+        });
+        let (out, result) = run_program(&eml_test_support::lir(&src), control);
+        done.send(()).unwrap();
+        watchdog.join().unwrap();
+        assert_eq!(out, "", "{left}, {right}");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "the call depth limit is exceeded in `deep`",
+            "{left}, {right}"
+        );
+    }
+}
+
+/// 両方の子が失敗する。左はworker 0で、右はworker 1で。runは2つの誤りのうち最初に書かれた方で終わる。止まらず、
+/// 中断も報告しない。
+#[test]
+fn two_failing_children_on_two_workers_report_the_first_error() {
+    let src = "\
+import Std.Par
+deep_left : Int -> <Panic> Int
+deep_left n = if n == 0 then 0 else 1 + deep_left (n - 1)
+deep_right : Int -> <Panic> Int
+deep_right n = if n == 0 then 0 else 1 + deep_right (n - 1)
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (a, b) = Par.par (fn () -> deep_left 100000) (fn () -> deep_right 100000)
+  println (show (a + b))
+";
+    let program = eml_test_support::lir(src);
+    for round in 0..20 {
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            max_depth: 4096,
+            ..Limits::default()
+        }));
+        let (done, wait) = std::sync::mpsc::channel::<()>();
+        let watched = Arc::clone(&control);
+        let watchdog = std::thread::spawn(move || {
+            if wait.recv_timeout(Duration::from_secs(2)).is_err() {
+                watched.interrupt();
+            }
+        });
+        let (out, result) = run_program(&program, control);
+        done.send(()).unwrap();
+        watchdog.join().unwrap();
+        assert_eq!(out, "", "round {round}");
+        let error = result.unwrap_err().to_string();
+        assert!(
+            [
+                "the call depth limit is exceeded in `deep_left`",
+                "the call depth limit is exceeded in `deep_right`"
+            ]
+            .contains(&error.as_str()),
+            "round {round}: {error}"
+        );
+    }
+}
+
+/// worker `worker`の止める語に`END`が立つまで、つまりどれかのworkerが失敗してrunが止まりつつあるときまで、行
+/// `gate`を持つhost。10秒は止まりの見張りである。
+struct EndGate {
+    inner: eml_vm::CaptureHost,
+    control: Arc<Control>,
+    worker: usize,
+}
+
+impl eml_rt::Host for EndGate {
+    fn write_line(&self, stream: eml_rt::Stream, line: &str) -> std::io::Result<()> {
+        if line == "gate" {
+            let word = self.control.word(self.worker);
+            let start = Instant::now();
+            while word.load(std::sync::atomic::Ordering::Relaxed) & Control::END == 0
+                && start.elapsed() < Duration::from_secs(10)
+            {
+                std::thread::sleep(Duration::from_micros(200));
+            }
+        }
+        self.inner.write_line(stream, line)
+    }
+    fn write(&self, stream: eml_rt::Stream, bytes: &[u8]) -> std::io::Result<()> {
+        self.inner.write(stream, bytes)
+    }
+    fn flush(&self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+    fn open(&self, path: &str) -> std::io::Result<eml_rt::Opened> {
+        self.inner.open(path)
+    }
+}
+
+/// 一方の子は深さですぐに失敗し、もう一方はrunが止まりつつあるときまでgateで待ち、その後で割り算で失敗する。間に
+/// 安全点はない。最初に書かれた誤りが報告され、どのworkerが書いたかによらない。左の子が早い方ならworker 0の誤り、右の
+/// 子が早い方ならworker 1の誤りである。
+#[test]
+fn the_first_error_written_wins_on_either_worker() {
+    for (left, right, gated) in [("deep", "late", 1), ("late", "deep", 0)] {
+        let text = format!(
+            "{HEAD}\
+fn main() -> unit {{
+  let t.0: obj = par (,) #0(&{left}, &{right})
+  decref t.0
+  return ()
+}}
+fn deep(p.0: unit) -> tobj {{
+  let t.1: tobj = call deep(())
+  return t.1
+}}
+fn late(p.0: unit) -> tobj {{
+  let s.1: obj = const \"gate\"
+  let u.2: unit = extern Prelude.println(s.1)
+  let n.3: int = extern \"Prelude.Div Int.%\"(1, 0)
+  let m.4: tobj = box n.3
+  return m.4
+}}
+"
+        );
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            max_depth: 1000,
+            ..Limits::default()
+        }));
+        let host = Arc::new(EndGate {
+            inner: eml_vm::CaptureHost::new(Default::default()),
+            control: Arc::clone(&control),
+            worker: gated,
+        });
+        let config = RunConfig::default()
+            .with_debug_heap(true)
+            .with_control(control);
+        let error = eml_vm::execute(
+            &trusted(&text),
+            &eml_vm::Linked::default(),
+            &config,
+            eml_rt::HostRef::new(host as Arc<dyn eml_rt::Host>),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the call depth limit is exceeded in `deep`",
+            "{left}, {right}"
+        );
+    }
 }
 
 /// worker 1..N-1のタスクのタイマーと右の子。仮想の時計は、どのworkerも動かないときだけ進むので、子が終わるまで
