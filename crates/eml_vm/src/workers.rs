@@ -92,10 +92,6 @@ pub(crate) enum Notice {
     CancelIo(CellRef),
     /// この worker が持ち主の記録に、host が結果を置いた。受けた worker が当てて段階を進める。
     Completion(CellRef),
-    /// このworkerが持ち主の、動いているタスク`cell`への上限の旗。受けたworkerが登録表のlockの下で旗がまだ立っているかを
-    /// 確かめ、立っていればそのVMの`Task`に旗を付ける。語を持たず、`in_flight`に数えない。runの終わりでは仕事に数えず、
-    /// 捨てる (docs/spec/vm.mdの「タスクとスケジュール」「タスクの上限」)。
-    Limit(CellRef),
 }
 
 /// 登録表の lock の下から、ほかの worker の受け箱に `Async` のタスクの知らせを積む道 (docs/spec/vm.md の
@@ -142,10 +138,6 @@ impl Post for Mailer<'_> {
     fn completion(&self, k: u32, op: CellRef) {
         self.run
             .send(self.control, k as usize, Notice::Completion(op));
-    }
-
-    fn limit(&self, k: u32, cell: CellRef) {
-        self.run.send(self.control, k as usize, Notice::Limit(cell));
     }
 }
 
@@ -224,20 +216,6 @@ pub(crate) struct Slot {
     pub(crate) bin: OnceLock<Arc<HostBin>>,
     /// 走れるタスクの列。受け箱とは別の lock で、持つ間はほかの lock を取らない。触れるのは `Run` の列の操作だけである。
     ready: Mutex<VecDeque<Ready>>,
-    /// `current`、`bytes`、`mark` の版の数。持ち主が3つを書く前に奇数に、書いた後に偶数に進める。読み手は前後で同じ
-    /// 偶数を読めたときだけ3つを組として使う。同じセルを数え直して公開し直すことがあるので、`current` を2回比べる
-    /// 形では古い組を受け入れてしまう (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) seq: AtomicU64,
-    /// 動いている `Async` のタスクのセルの符号 (`cell_word`)。なければ `NO_CELL`。持ち主の worker が切り替えの地点で
-    /// 書き、監視のスレッドが lock なしで読む。
-    pub(crate) current: AtomicU64,
-    /// `current` のタスクの今の区間より前の数と、区間の始めの `Control::taken`。動いているタスクの数は
-    /// `bytes + taken(k) - mark` である。
-    pub(crate) bytes: AtomicUsize,
-    pub(crate) mark: AtomicUsize,
-    /// このworkerの実行待ちのうち、数のいちばん大きいタスクのセルの符号とその数。なければ`NO_CELL`。持ち主だけが書く。
-    pub(crate) top: AtomicU64,
-    pub(crate) top_bytes: AtomicUsize,
 }
 
 impl Slot {
@@ -253,17 +231,9 @@ impl Slot {
     }
 }
 
-/// `Slot::current` と `Slot::top` の、タスクのないことを表す値。
-pub(crate) const NO_CELL: u64 = u64::MAX;
-
 /// メインのworkerのdriverに保留の操作があり、OSの源 (`Pending::io`) がないときに、`Park`の待ちに渡す長さの上限
 /// (docs/spec/vm.mdの「メインのworkerの待ち」)。
 const MAIN_POLL_CAP: Duration = Duration::from_millis(10);
-
-/// `Slot::current` と `Slot::top` に置くセルの符号。
-pub(crate) fn cell_word(cell: CellRef) -> u64 {
-    cell.encode() as u64
-}
 
 /// 1回の run で worker が共有する表。run ごとに作り、run の終わりに捨てる。
 pub(crate) struct Run {
@@ -298,8 +268,7 @@ pub(crate) struct Run {
     idle: Mutex<Vec<usize>>,
     /// run の時間の基準。VM が時刻を読む道はこれだけである (docs/spec/vm.md の「時計と driver」)。
     clock: RunClock,
-    /// 監視のスレッドの自己パイプ。眠っていた worker が動き始めて `running` が 0 から 1 になったら鳴らし、刻まずに
-    /// 眠っていた監視のスレッドを起こす。
+    /// 監視のスレッドの自己パイプ。監視のスレッドはこれで眠り、シグナルのハンドラ、GUIの閉じる要求、監視を止める側が鳴らす。
     pub(crate) bell: Option<Arc<Doorbell>>,
     /// runを終わらせる誤り。どのworkerが書いたものでも、最初の1つだけを残す (`set_fatal`)。
     fatal: Mutex<Option<RuntimeError>>,
@@ -312,8 +281,8 @@ pub(crate) struct Run {
     job_deadline: OnceLock<Duration>,
 }
 
-/// worker `k` の語に止めるビットか `END` が立っている。眠る直前に読み、立っていれば眠らずに戻る。監視のスレッドは
-/// 動く worker のない間は眠りうるので、自分で立てたビット (確保量の上限など) に眠った後で気づく道がないためである。
+/// worker `k`の語に止めるビットか`END`が立っている。眠る直前に読み、立っていれば眠らずに戻る。自己パイプのある
+/// 監視のスレッドは鳴るまで眠るので、自分で立てたビット (確保量の上限など) に眠った後で気づく道がないためである。
 pub(crate) fn stopping(control: &Control, k: usize) -> bool {
     control.worker_bits(k)
         & (Control::INTERRUPT | Control::TERMINATE | Control::MEMORY | Control::END)
@@ -350,12 +319,6 @@ impl Run {
                 park_waker: OnceLock::new(),
                 bin: OnceLock::new(),
                 ready: Mutex::new(VecDeque::new()),
-                seq: AtomicU64::new(0),
-                current: AtomicU64::new(NO_CELL),
-                bytes: AtomicUsize::new(0),
-                mark: AtomicUsize::new(0),
-                top: AtomicU64::new(NO_CELL),
-                top_bytes: AtomicUsize::new(0),
             })
             .collect();
         Run {
@@ -482,15 +445,11 @@ impl Run {
         self.clock.now(driver).map(ceil_ms)
     }
 
-    /// 欄 `k` の lock の下で、眠っていれば起きた形にして `running` に数える。0 から 1 になったら監視のスレッドを起こす。
+    /// 欄`k`のlockの下で、眠っていれば起きた形にして`running`に数える。
     fn unpark_locked(&self, state: &mut SlotState) {
         if state.parked {
             state.parked = false;
-            if self.running.fetch_add(1, Ordering::AcqRel) == 0
-                && let Some(bell) = &self.bell
-            {
-                bell.ring();
-            }
+            self.running.fetch_add(1, Ordering::AcqRel);
         }
     }
 
@@ -564,34 +523,6 @@ impl Run {
     /// 見るほかに何もしない。
     pub(crate) fn retain_ready(&self, k: usize, keep: impl FnMut(&Ready) -> bool) {
         lock(&self.slots[k].ready).retain(keep);
-    }
-
-    /// worker `k`の実行待ちのタスク`cell` (数`count`) を、今の`top`より大きいか同じなら`top`にする。
-    /// 同じセルなら数を書き直す。`top`と`top_bytes`は組として読めないので、読み手は古いセルと新しい数の組を見うる。
-    /// 旗はそれでも生きたセルへ行き、数は選び方を変えるだけなので害はない (docs/spec/vm.mdの「タスクとスケジュール」)。
-    pub(crate) fn offer_top(&self, k: usize, cell: CellRef, count: usize) {
-        let slot = &self.slots[k];
-        let word = cell_word(cell);
-        let top = slot.top.load(Ordering::Relaxed);
-        if top == NO_CELL || top == word || count >= slot.top_bytes.load(Ordering::Relaxed) {
-            slot.top_bytes.store(count, Ordering::Relaxed);
-            slot.top.store(word, Ordering::Release);
-        }
-    }
-
-    /// worker `k` の `top` が `cell` なら消す。ほかのセルに替わっていれば残す。
-    pub(crate) fn clear_top(&self, k: usize, cell: CellRef) {
-        let _ = self.slots[k].top.compare_exchange(
-            cell_word(cell),
-            NO_CELL,
-            Ordering::Release,
-            Ordering::Relaxed,
-        );
-    }
-
-    /// worker `k` の `top` を消す。実行待ちが空になったときに持ち主が呼ぶ。
-    pub(crate) fn drop_top(&self, k: usize) {
-        self.slots[k].top.store(NO_CELL, Ordering::Release);
     }
 
     pub(crate) fn ready_is_empty(&self, k: usize) -> bool {
@@ -1058,12 +989,6 @@ fn work<M: Mode, P: Policy>(
     );
     let mut counts = RunCounts::default();
     let (error, peak_stack) = crate::vm::work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts);
-    // `Finish`の後にはいつも集める地点が続き、その最初の区間が`added`を空にする (docs/spec/vm.mdの
-    // 「タスクとスケジュール」)
-    debug_assert!(
-        sched.added.is_empty(),
-        "an entry is left unsettled when a worker exits"
-    );
     // 止めるビットと `END` は安全点か空きの待ちでだけ見るので、ここに来た worker は集める地点の途中で抜けておらず、
     // lock の外で行う破棄も終えている。その後に受け箱に届いた知らせを最後に1回だけ見て、走らせるはずの仕事が残って
     // いれば数える (docs/spec/vm.md の「誤り、止めること、終わり」)
@@ -1432,7 +1357,7 @@ impl<P: Policy> Scheduler<P> {
 
     /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、このworkerが走らせるはずの仕事があるかを
     /// 返す。実行待ちの列に残った`Entry`、右の子と仕事 (`Child`)、`Place`、
-    /// 継続を取り出せる`Wake`を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`、`Limit`と、
+    /// 継続を取り出せる`Wake`を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`と、
     /// もう待っていないセルへの起こしは数えない。登録表は書き換えず、列の項と知らせの語は手放さない。
     /// 数えたらrunは誤りで終わり、回復がヒープを捨てるからである (docs/spec/vm.mdの「誤り、止めること、終わり」)。
     pub(crate) fn left_notices(&mut self) -> bool {
@@ -1455,8 +1380,7 @@ impl<P: Policy> Scheduler<P> {
                 | Notice::Cancel(_)
                 | Notice::Submit(_)
                 | Notice::CancelIo(_)
-                | Notice::Completion(_)
-                | Notice::Limit(_) => false,
+                | Notice::Completion(_) => false,
             };
         }
         left
@@ -1926,9 +1850,9 @@ fn one(p.0: unit) -> tobj {
         let run = separate(2, RunClock::Virtual(Arc::default()));
         let rings = Arc::new(Count(Default::default()));
         assert!(run.slots[2].park_waker.set(rings.clone()).is_ok());
-        run.send(&control, 2, Notice::Limit(CellRef::decode(0)));
+        run.send(&control, 2, Notice::Cancel(CellRef::decode(0)));
         assert_eq!(rings.0.load(Ordering::SeqCst), 1);
-        run.send(&control, 2, Notice::Limit(CellRef::decode(0)));
+        run.send(&control, 2, Notice::Cancel(CellRef::decode(0)));
         assert_eq!(rings.0.load(Ordering::SeqCst), 1);
         assert_eq!(run.take_notices(2).len(), 2);
         assert!(run.park_main(&control, 2));

@@ -395,6 +395,7 @@ docs/spec/stdlib.md (TL-2):
 - L-1 「`try_io`」, anchor `とメモリの柔らかい上限は` → 「は」.
 - L-2 「タスクの上限」: the bullet anchored ``- 確保量が柔らかい上限`soft_bytes`の閾値を越えると`` → EN "Going over the memory limit `max_bytes` is a runtime error that ends the run, also inside a task; no `try_io` catches it ([VM](vm.md) 「上限と割り込み」)."; anchor `そのタスクの数に入る` → EN "runs inside the root task"; the bullet anchored ``- 上限の印を受けたときに `IO` の失敗を起こせない所`` goes.
 - L-3 「実行時エラー」, anchor ``メモリの柔らかい上限も同じ種類のIOの失敗`the memory soft limit is exceeded`である``: the clause goes and the sentence is rejoined.
+- L-4 「`shield`」 (found in TL-2; SC-4 hit `上限の印`), anchor `取り消しの失敗の巻き戻しの途中に来た上限の印は、着地の後の次の呼び出しで起きる`: the sentence goes (no limit notice is left to arrive during an unwinding); `取り消されたタスクが上限の印も受けると` → 「取り消されたタスクが深さの上限も超えると」.
 - Done: `git grep -nE "$D" -- docs/spec/stdlib.md` → empty.
 
 docs/implementation/testing.md:

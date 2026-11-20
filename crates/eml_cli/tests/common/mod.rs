@@ -127,8 +127,8 @@ pub struct Marks {
     pub signals: Vec<VirtualSignal>,
     /// 深さの上限 (VM のスタックの語の数)。無ければ既定の上限を使う。
     pub max_depth: Option<usize>,
-    /// 確保量の上限 (hard, soft)。無ければ既定の上限を使う。
-    pub max_bytes: Option<(usize, usize)>,
+    /// 確保量の上限。無ければ既定の上限を使う。
+    pub max_bytes: Option<usize>,
     /// GUIのstubの`Park`を置いて流す。筋書きは`<名前>.gui`に書く (docs/implementation/testing.mdの「UI テスト」)。
     pub gui_stub: bool,
     /// ネイティブで流さない。理由は`docs/spec/native.md`の「VMとの違い」の項目を名指す (docs/implementation/testing.mdの「ネイティブで流す」)。
@@ -311,26 +311,15 @@ pub fn max_depth_mark(line: &str, leader: &str) -> Result<usize, String> {
         .ok_or_else(|| format!("the max-depth mark is `{leader} max-depth: <words>`, not `{line}`"))
 }
 
-/// `<leader> max-bytes: <bytes> soft <bytes>` の印を読む。2つの数は正の10進の数字だけで、空白は1つずつ、soft は
-/// hard より小さい。綴りを誤った印が黙って既定の上限に戻らないよう、`<leader> max-bytes:` で始まる行は正しい形でなければ誤りにする。
-pub fn max_bytes_mark(line: &str, leader: &str) -> Result<(usize, usize), String> {
-    let number = |text: &str| {
-        text.bytes()
-            .all(|b| b.is_ascii_digit())
-            .then(|| text.parse::<usize>().ok())
-            .flatten()
-            .filter(|&n| n > 0)
-    };
+/// `<leader> max-bytes: <bytes>` の印を読む。`bytes` は正の10進の数字だけで、空白は1つである。
+/// 綴りを誤った印が黙って既定の上限に戻らないよう、`<leader> max-bytes:` で始まる行は正しい形でなければ誤りにする。
+pub fn max_bytes_mark(line: &str, leader: &str) -> Result<usize, String> {
     line.strip_prefix(leader)
         .and_then(|rest| rest.strip_prefix(" max-bytes: "))
-        .and_then(|rest| rest.split_once(" soft "))
-        .and_then(|(hard, soft)| Some((number(hard)?, number(soft)?)))
-        .filter(|(hard, soft)| soft < hard)
-        .ok_or_else(|| {
-            format!(
-                "the max-bytes mark is `{leader} max-bytes: <bytes> soft <bytes>`, not `{line}`"
-            )
-        })
+        .filter(|bytes| bytes.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|bytes| bytes.parse().ok())
+        .filter(|&bytes| bytes > 0)
+        .ok_or_else(|| format!("the max-bytes mark is `{leader} max-bytes: <bytes>`, not `{line}`"))
 }
 
 /// 失敗したファイルをすべて挙げるため、ファイルごとの panic を捕まえて最後まで流し、終わりに1回だけ panic する。

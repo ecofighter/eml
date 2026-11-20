@@ -3,17 +3,17 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{Ordering, fence};
+use std::sync::atomic::Ordering;
 
 use eml_rows::gui::GateHost;
 use eml_rt::{Completion, Control, Ctx, IoDriver, Mode, Stop};
 
 use crate::cells::{self, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken};
 use crate::driver::DriverKind;
-use crate::monitor::{self, Monitor};
+use crate::monitor::Monitor;
 use crate::park::{Guard, PollSource};
 use crate::vm::Task;
-use crate::workers::{Mailer, NO_CELL, Notice, Ready, Run, Workers, cell_word};
+use crate::workers::{Mailer, Notice, Ready, Run, Workers};
 pub(crate) use eml_sched::driver::NO_DRIVER;
 use eml_sched::error::RunFault;
 
@@ -34,13 +34,12 @@ fn unheard_fault(control: &Control, bits: u32) -> RunFault {
 }
 
 /// 受け箱から取った`Async`のタスクとdriverの操作の知らせを、登録表の1回の区間で届いた順に処理する。走らせる仕事を
-/// `out`に、lockを放してからdriverに出す操作と取り消しを`work`に積む。`Place`、`Wake`、`Cancel`、`Limit`は、どれも
+/// `out`に、lockを放してからdriverに出す操作と取り消しを`work`に積む。`Place`、`Wake`、`Cancel`は、どれも
 /// 自分が持ち主のタスクか、tokenの起こしなら自分の上で待つ`Task`を名指す。送る側はタスクの持ち主か待つ`Task`の
 /// workerに送り、持ち主は`start`の後に変わらないためである。`Completion`は
 /// 記録の持ち主の自分が当てる。hostの知らせ (`Submit`、`CancelIo`) は自分のdriverの分で、結果を置いた後に届いた
 /// `CancelIo`だけは何もしない。もう待っていないセルへの起こしと、結果のない記録への`Completion`は内部の誤りである
-/// (docs/spec/vm.mdの「タスクとスケジュール」「操作の記録」)。`Limit`は旗がまだ立っていてタスクが動いていれば、
-/// そのセルを`limited`に積む (docs/spec/vm.mdの「タスクの上限」)。
+/// (docs/spec/vm.mdの「タスクとスケジュール」「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
 fn take_async<M: Mode>(
     cells: &mut Registry,
@@ -50,7 +49,6 @@ fn take_async<M: Mode>(
     depth_offset: usize,
     out: &mut Vec<Runnable>,
     work: &mut IoWork,
-    limited: &mut Vec<CellRef>,
 ) -> Result<(), RunFault> {
     let mut woken = Vec::new();
     for notice in notices {
@@ -85,7 +83,6 @@ fn take_async<M: Mode>(
                 // ときは空である
                 woken.extend(unsafe { cells.take_completion(ctx, depth_offset, op, here, work) }?);
             }
-            Notice::Limit(cell) => limited.extend(cells.limit_forwarded(cell, here.me)),
             Notice::Child(_) | Notice::Joined { .. } => {
                 return Err(RunFault::Internal("a par notice is left for the registry"));
             }
@@ -95,22 +92,11 @@ fn take_async<M: Mode>(
     Ok(())
 }
 
-/// 誰がメモリの柔らかい上限を見て、タスクに上限の旗を立てるか (docs/spec/vm.md の「タスクとスケジュール」)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Memory {
-    /// 監視のスレッドが刻みごとに見る。
-    Watched,
-    /// 各 worker が集める地点の始めに見る。壁時計の監視のスレッドに頼らず、旗の地点をスケジュールで決めるためである。
-    Gathered,
-}
-
 /// スケジューラの中のタスクの番号。
 pub type TaskId = usize;
 
 /// スケジュールの方針。安全点で切り替えるか、次にどのタスクを動かし、起こしたタスクを列のどこに入れるかを決める。
 pub trait Policy: Send {
-    /// メモリの柔らかい上限を見る者。
-    const MEMORY: Memory;
     /// 安全点ごとに1回呼ぶ。真を返したら、切り替えを試みる。
     fn tick(&mut self) -> bool;
     /// 切り替えを試みた後に、次の切り替えまでの予算を詰め直す。
@@ -131,8 +117,6 @@ pub trait Policy: Send {
 pub struct Normal;
 
 impl Policy for Normal {
-    const MEMORY: Memory = Memory::Watched;
-
     // 定数の偽に畳まれ、安全点に分岐を残さない
     #[inline(always)]
     fn tick(&mut self) -> bool {
@@ -159,8 +143,6 @@ impl Policy for Normal {
 pub struct Sequential;
 
 impl Policy for Sequential {
-    const MEMORY: Memory = Memory::Gathered;
-
     // 定数の偽に畳まれ、安全点に分岐を残さない
     #[inline(always)]
     fn tick(&mut self) -> bool {
@@ -221,8 +203,6 @@ fn splitmix64(state: u64) -> u64 {
 }
 
 impl Policy for Seeded {
-    const MEMORY: Memory = Memory::Gathered;
-
     // 予算が0になってもyieldの途中なら切り替えないので、詰め直すのは切り替えを試みたときだけにする
     fn tick(&mut self) -> bool {
         self.budget = self.budget.saturating_sub(1);
@@ -263,8 +243,8 @@ pub(crate) const PLACED: TaskId = usize::MAX;
 /// 持たず、終わりを仕事のセルに置く (docs/spec/vm.md の「`compute` の仕事」)。
 pub(crate) const JOB: JoinId = usize::MAX;
 
-/// 監視のスレッドのない run で、空きのループが1回の `wait` に渡す期限の上限 (ミリ秒)。Ctrl-C と確保量の上限が眠る
-/// worker を止めるまでの遅れの上限になる (docs/spec/vm.md の「時計と driver」)。
+/// 監視のスレッドのないrunで、空きのループが1回の`wait`に渡す期限の上限 (ミリ秒)。Ctrl-Cが眠る
+/// workerを止めるまでの遅れの上限になる (docs/spec/vm.mdの「時計とdriver」)。
 const WAIT_CAP_MS: u64 = 10;
 
 /// worker の driver。仮想の時計の run では worker 0 だけが持ち、本物の時計の run の worker `k` (`k` ≥ 1) は最初に
@@ -310,7 +290,7 @@ pub(crate) struct JoinNode {
     pub(crate) right_worker: u32,
     /// fork のときの親の `evv`。左の子が終わったら `Ctx` に戻す。
     pub(crate) parent_evv: eml_rt::Word,
-    /// forkのときの親の上限の状態。joinが戻し、子の間に届いた旗はここに付く (docs/spec/vm.mdの「深さ」)。
+    /// forkのときの親の上限の状態。joinが戻す (docs/spec/vm.mdの「深さ」)。
     pub(crate) parent_limit: crate::vm::Limit,
     pub(crate) left: Option<eml_rt::Word>,
     /// 終わった子の値。節点が数えた参照を1つ持つ。
@@ -383,20 +363,6 @@ pub struct Scheduler<P: Policy> {
     pub(crate) since_poll: u32,
     /// 集める地点が再開する仕事を積む列。毎回の確保を避けるために使い回し、集める地点の外ではいつも空である。
     pub(crate) runnables: Vec<Runnable>,
-    /// 集める地点が受けた上限の旗のうち、旗を付ける VM の `Task` がこの worker にあるタスクのセル。実行系が集める地点の
-    /// 後で `Task` に旗を付けて空にする (docs/spec/vm.md の「タスクの上限」)。
-    pub(crate) limited: Vec<CellRef>,
-    /// 待ちに入って`Finish`したエントリの`Task`のセルと、そのエントリが数えた分。次の集める地点の最初の区間で、
-    /// 登録表の`add_bytes`に渡して空にする (docs/spec/vm.mdの「タスクとスケジュール」「セルと登録表」)。
-    pub(crate) added: Vec<(CellRef, usize)>,
-    /// 今の区間の始めに読んだ、この worker のヒープの `Control::taken`。区間は切り替えの地点と、エントリの `Task` が
-    /// 動き始める地点と、旗で `ResourceLimit` を起こした地点で区切る (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) mark: usize,
-    /// 今のタスクが自分の再開を実行待ちに積んだ (`yield_now`、`sleep 0`、速い道の譲り)。そのタスクは待ちに入っても
-    /// `top` に残す。切り替えで下ろす。
-    pub(crate) yielded: bool,
-    /// 欄に最後に書いた `(current, bytes, mark)` の写し。変わらない書き込みを飛ばす。
-    published: (u64, usize, usize),
     /// channel の予約から確定までに要るもの。予約と確定の間には安全点も切り替えもないので、安全点ではいつも空である
     /// (docs/spec/vm.md の「channel」)。
     pub(crate) hold: Option<Hold>,
@@ -489,11 +455,6 @@ impl<P: Policy> Scheduler<P> {
             driver_kind,
             since_poll: 0,
             runnables: Vec::new(),
-            limited: Vec::new(),
-            added: Vec::new(),
-            mark: 0,
-            yielded: false,
-            published: (NO_CELL, 0, 0),
             hold: None,
             woken: Vec::new(),
             watcher: Watcher {
@@ -591,8 +552,8 @@ impl<P: Policy> Scheduler<P> {
         Ok(Some(deadline.map_or(cap, |d| d.min(cap))))
     }
 
-    /// 監視のスレッドを1回だけ始める。`begin_run`のほかに、メモリを見張る方針で最初の`Async`のタスクを列に積むときに
-    /// 呼ぶ。どれにも当たらないrunはスレッドを作らない (docs/spec/vm.mdの「タスクとスケジュール」)。
+    /// 監視のスレッドを1回だけ始める。`begin_run`が呼ぶ。始めないrunはスレッドを作らない
+    /// (docs/spec/vm.mdの「タスクとスケジュール」)。
     pub(crate) fn start_monitor(&mut self) {
         let watcher = &mut self.watcher;
         if std::mem::replace(&mut watcher.tried, true) {
@@ -602,7 +563,6 @@ impl<P: Policy> Scheduler<P> {
             Arc::clone(&watcher.control),
             Arc::clone(&self.cells),
             Arc::clone(&self.run),
-            P::MEMORY == Memory::Watched,
         );
     }
 
@@ -630,12 +590,6 @@ impl<P: Policy> Scheduler<P> {
         let k = self.index;
         // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
         self.watcher.control.take_notice(k);
-        // 決定的な方針では監視のスレッドの代わりにここで柔らかい上限を見る。積んだ旗の項は、この集める地点の mail の
-        // 処理が取る。候補がなければ閾値を進める。刻みで探し直す者がいないためである (docs/spec/vm.md の
-        // 「タスクとスケジュール」「上限と割り込み」)
-        if P::MEMORY == Memory::Gathered {
-            monitor::pressure_tick(&self.watcher.control, &self.cells, &self.run, true);
-        }
         // ほかの worker からの知らせは、ないときは1回の読みで済ませる (docs/spec/vm.md の「タスクとスケジュール」)
         let mut notices = Vec::new();
         if self.run.slots[k].has_notices.load(Ordering::Acquire) {
@@ -650,8 +604,6 @@ impl<P: Policy> Scheduler<P> {
             runnables,
             since_poll,
             own_deadline,
-            limited,
-            added,
             ..
         } = self;
         let control = &*watcher.control;
@@ -672,7 +624,6 @@ impl<P: Policy> Scheduler<P> {
         let mut work = IoWork::default();
         let (in_flight, deadline, mut unheard) = {
             let mut cells = shared.lock();
-            cells.add_bytes(added)?;
             if !notices.is_empty() {
                 take_async(
                     &mut cells,
@@ -682,7 +633,6 @@ impl<P: Policy> Scheduler<P> {
                     depth_offset,
                     &mut out,
                     &mut work,
-                    limited,
                 )?;
             }
             cells.watch(control);
@@ -723,7 +673,6 @@ impl<P: Policy> Scheduler<P> {
                 driver.as_deref_mut(),
                 depth_offset,
                 &mut out,
-                limited,
             )
         }?;
         // binに印のあるハンドルは、driverがbinを空にするまで閉じない。完了がなくてもdriverに完了を問わせて空に
@@ -798,8 +747,7 @@ impl<P: Policy> Scheduler<P> {
                 | Notice::Cancel(_)
                 | Notice::Submit(_)
                 | Notice::CancelIo(_)
-                | Notice::Completion(_)
-                | Notice::Limit(_)) => rest.push(notice),
+                | Notice::Completion(_)) => rest.push(notice),
             }
         }
     }
@@ -840,7 +788,6 @@ impl<P: Policy> Scheduler<P> {
             post: &post,
         };
         let mut work = IoWork::default();
-        // 終わりでは動くタスクがないので、旗を付ける `Task` もない
         take_async(
             &mut shared.lock(),
             notices,
@@ -849,7 +796,6 @@ impl<P: Policy> Scheduler<P> {
             depth_offset,
             out,
             &mut work,
-            &mut Vec::new(),
         )?;
         // SAFETY: `eml_sched::cells`の「呼ぶ側の約束」を守る。`ctx`はこのworkerの`Ctx`で、
         // 登録表とdriverはこのrunのものであり、登録表の語はどれも命令が渡したものである。呼ぶのは`finish`だけで、
@@ -945,100 +891,6 @@ impl<P: Policy> Scheduler<P> {
         self.preemptions
     }
 
-    /// 区間を閉じる。`Async` のタスクの区間なら、区間の始めからこの worker のヒープが取ったページのバイト数を、
-    /// そのタスクの数 (`counted`) とこのエントリの分 (`added`) に足す。`par` の右の子、`compute` の仕事、`main` は
-    /// セルを持たないので、どのタスクにも数えない (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) fn end_slice(&mut self, task: &mut Task) {
-        let now = self.watcher.control.taken(self.index);
-        if task.cell.is_some() {
-            let slice = now.saturating_sub(self.mark);
-            task.counted = task.counted.saturating_add(slice);
-            task.added = task.added.saturating_add(slice);
-        }
-        self.mark = now;
-    }
-
-    /// 動いているタスク `task` を欄に公開する。動き始めた `Async` のタスクならそのセルと数を、そうでなければ
-    /// `NO_CELL` を書く (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) fn publish(&mut self, task: &Task) {
-        match task.cell {
-            Some(cell) if !matches!(task.state, TaskState::Entry { .. }) => {
-                self.write_published((cell_word(cell), task.counted, self.mark));
-            }
-            _ => self.unpublish(),
-        }
-    }
-
-    /// 動いているタスクがないことを欄に公開する。待ちに入るか終わったエントリの `Task` も、切り替えの前の集める地点で
-    /// 選ばれないようにここで外す (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) fn unpublish(&mut self) {
-        let (current, bytes, mark) = self.published;
-        if current != NO_CELL {
-            // `current` が `NO_CELL` の間の `bytes` と `mark` は読まれないので、前の値のままにする
-            self.write_published((NO_CELL, bytes, mark));
-        }
-    }
-
-    /// 欄の `current`、`bytes`、`mark` を版の数 `seq` で囲んで書く。書き手は持ち主だけなので、`seq` は読んで書けば
-    /// よい。手元の写しと同じ値は書かない。
-    fn write_published(&mut self, want: (u64, usize, usize)) {
-        if self.published == want {
-            return;
-        }
-        let slot = &self.run.slots[self.index];
-        let seq = slot.seq.load(Ordering::Relaxed);
-        slot.seq.store(seq.wrapping_add(1), Ordering::Relaxed);
-        // 奇数の版を3つの書き込みより前に見せる。読み手の Acquire の fence と組になる
-        fence(Ordering::Release);
-        slot.current.store(want.0, Ordering::Relaxed);
-        slot.bytes.store(want.1, Ordering::Relaxed);
-        slot.mark.store(want.2, Ordering::Relaxed);
-        slot.seq.store(seq.wrapping_add(2), Ordering::Release);
-        self.published = want;
-    }
-
-    /// 今のタスクが切り替えずに動き続ける。区間を閉じてから公開し直す。走れるタスクがなく眠った後で、`par` の join や
-    /// 根のスコープの終わりがそのまま届いたときに使う。眠る前に `current` を消したためである
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) fn keep_running(&mut self, task: &mut Task) {
-        self.end_slice(task);
-        self.publish(task);
-    }
-
-    /// 公開した今のタスクのセルが `cell` なら、その今の数。
-    pub(crate) fn published_count(&self, cell: CellRef) -> Option<usize> {
-        let (current, bytes, mark) = self.published;
-        (current == cell_word(cell)).then(|| {
-            let now = self.watcher.control.taken(self.index);
-            bytes.saturating_add(now.saturating_sub(mark))
-        })
-    }
-
-    pub(crate) fn offer_top(&self, cell: CellRef, count: usize) {
-        self.run.offer_top(self.index, cell, count);
-    }
-
-    pub(crate) fn clear_top(&self, cell: CellRef) {
-        self.run.clear_top(self.index, cell);
-    }
-
-    /// 待ちに入ったエントリの`Task`が`Finish`した。持ち主の次の集める地点が、このエントリの数`added`をセルに足す。
-    /// 自分の再開を積んだタスクは実行待ちにいるので`top`に残し、本当に待つタスクは消す (docs/spec/vm.mdの
-    /// 「タスクとスケジュール」)。
-    pub(crate) fn left_entry(&mut self, cell: CellRef, added: usize) {
-        self.added.push((cell, added));
-        if !self.yielded {
-            self.clear_top(cell);
-        }
-    }
-
-    /// 走れるタスクがなく眠る。動いているタスクも実行待ちもないので、どちらも消す (docs/spec/vm.md の
-    /// 「タスクとスケジュール」)。
-    pub(crate) fn publish_idle(&mut self) {
-        self.unpublish();
-        self.run.drop_top(self.index);
-    }
-
     /// 動くのをやめるタスクが使った語の数を覚える。スタックの長さは縮めないので、タスクの長さがそのままそのタスクの
     /// 最大である。
     pub(crate) fn note_depth(&mut self, task: &Task) {
@@ -1091,14 +943,6 @@ mod tests {
     use crate::driver::RunClock;
     use eml_rt::Word;
     use eml_sched::config::Seat;
-
-    /// 監視のスレッドでメモリを見るのは `Normal` だけで、決定的な方針は集める地点で見る。
-    #[test]
-    fn only_normal_watches_memory() {
-        assert_eq!(Normal::MEMORY, Memory::Watched);
-        assert_eq!(Sequential::MEMORY, Memory::Gathered);
-        assert_eq!(Seeded::MEMORY, Memory::Gathered);
-    }
 
     /// 出どころを `kind` にした、テストの driver の `Scheduler`。テストの driver の時計は run の外では進まない。
     fn scheduler(kind: DriverKind, doorbell: bool, workers: usize) -> Scheduler<Sequential> {
