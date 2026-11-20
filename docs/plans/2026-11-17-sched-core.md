@@ -3,7 +3,7 @@
 - Created: 2026-11-17 (design-level plan).
 - Base: the `Close native-checked` commit. Facts and line numbers in 01 describe main @ 4a2954c1; the refresh re-checks them.
 - Status: design-level. `Start sched-core` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md` (deleted at its Close; read it with `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`). The `cells.rs` list of D-SC-3 is part of that plan and is approved with it (01 §22 U-1).
-- Appendices: `docs/plans/2026-11-17-runtime/`; 00 wins; the design is 01 §10 (D-SC-1..D-SC-10), with 01 §2 (the model, types, loop, publishing and the verdict, `fork_join`), §13.3 (the crate change), §14.1 P-1..P-4a, P-6, §14.3 ST-1..ST-3, §15.2 H-2, H-6, §16 S-1..S-8, S-12, S-23, S-25, §18 G-8, G-9, G-11, G-12, G-22 (H-2, H-6), G-23, G-24 (D-SC-3a). 00 §D D-6 moves `Finished.claims` / `join_waits` to `jit-tasks`.
+- Appendices: `docs/plans/2026-11-17-runtime/`; 00 wins; the design is 01 §10 (D-SC-1..D-SC-10), with 01 §2 (the model, types, loop, publishing and the verdict, `fork_join`), §13.3 (the crate change), §14.1 P-1..P-4a, P-6, §14.3 ST-1..ST-3, §15.2 H-2, H-6, §16 S-1..S-8, S-12, S-23, S-25, §18 G-8, G-9, G-11, G-12, G-22 (H-2, H-6), G-23, G-24 (D-SC-3a). 00 §D D-6 moves `Finished.claims` / `join_waits` to `jit-tasks`. 00 §D D-15 fixes the shape of `counters.rs` and the budget list's atomic rows.
 
 ## 1. Goal and completion conditions
 
@@ -17,6 +17,7 @@
   - G-24: `cargo nextest run -p eml_cli --test integration -E 'test(/^surface::/)'` passes at every commit; new public items follow docs/implementation/architecture.md 「公開の面と`unsafe`」 (D-SC-3a): `fork`, `join`, `drive` are `unsafe fn`, `Exec`'s methods `unsafe`, `Marked` unforgeable, `Script` safe; a new safe function or `pub` field that names a `surface.rs` token (whole identifiers, including the driver's `Op`) (`take_own`, `wait_join`, `WorkerCore::schedule`, ...) gets its `SAFE` entry in the unit that adds it; the `cells.rs` items the new files call are the `unsafe fn` of `engine-trust`'s ET-R1, so D-SC-3's "additions only" holds.
   - G-23: a placement test pins the readers of `listed` and that a scan reads a list only under its slot lock.
   - D-SC-6's tests pass; Miri `drive::` in both borrow models; TSan `claims::`, `par::`, `workers::`, `counters::`; the explorer (D-SC-7) passes as an `#[ignore = "exhaustive"]` test with its CI line in release.
+  - D-15: `grep -n 'unsafe' crates/eml_sched/src/counters.rs` → empty; `surface::` needs no entry for the module.
   - `nix/crate-graph.sh --check` passes with the new crate and the edge `eml_sched -> eml_steps` in its tables.
 
 ## 2. Scope
@@ -33,16 +34,16 @@
 ## 4. Decisions (01 §10, §2)
 
 - D-SC-1: `eml_steps`: `open.rs`, `plan.rs`, `limit.rs`, `idle.rs`, `verdict.rs`, `sleepers.rs`; vstd only; no `unsafe`, no trust item.
-- D-SC-2: `eml_sched` gains `job.rs`, `run.rs` (`Run`, `Slot`, `WorkerCore`, inbox, `Notice`; implements `cells::Post`), `fork.rs`, `drive.rs`, `exec.rs` (`Exec`, `Script`), `policy.rs`, `io.rs`, `clock.rs`, `signals.rs`, `limits.rs`, `monitor.rs`, `pool.rs`, `main_loop.rs`, `threads.rs`, `recover.rs`, `counters.rs`; the VM's files with the same logic are read, not moved.
+- D-SC-2: `eml_sched` gains `job.rs`, `run.rs` (`Run`, `Slot`, `WorkerCore`, inbox, `Notice`; implements `cells::Post`), `fork.rs`, `drive.rs`, `exec.rs` (`Exec`, `Script`), `policy.rs`, `io.rs`, `clock.rs`, `signals.rs`, `limits.rs`, `monitor.rs`, `pool.rs`, `main_loop.rs`, `threads.rs`, `recover.rs`, `counters.rs`; the VM's files with the same logic are read, not moved. `counters.rs` is written to 00 §D D-15, not read from the VM's file: a private `Table` (`const fn new`, `push(&self, n) -> Result<&AtomicI64, RunFault>`, `find(&self, word) -> Option<&AtomicI64>`), one `static TABLE: Table`, and the public `Counter`, `new`, `find` over it. No engine uses the module before `jit-tasks` JT-6; until then its tests are its only callers.
 - D-SC-3: the `cells.rs` list (additions only, `pub(crate)` where not public; `Discards::run`'s `depth_offset` is passed 0; an item that must change shape gets a thin adapter in `eml_vm`, listed).
 - D-SC-4: across `enter`, `drive` holds no reference or pointer derived from `this` other than `this`; `Exec::with` makes a borrow unable to leave an item boundary; the rule for engines (a shim calls `eml_fatal` only after every guard it holds is dropped) is written in native.md.
 - D-SC-5: `Policy::at(Point)` is the one hook mechanism; `eml_sched`'s feature `testing` gets no new item.
-- D-SC-6: the tests listed in 01 §10 (`claims::`, `par::`, `jobs::`, `workers::`, `pinned::`, `io::`, `clock::`, `signals::`, `counters::`), Miri `drive::`, TSan lines.
+- D-SC-6: the tests listed in 01 §10 (`claims::`, `par::`, `jobs::`, `workers::`, `pinned::`, `io::`, `clock::`, `signals::`, `counters::`), Miri `drive::`, TSan lines. `counters::` is, on a `Table` local to each test (so no other test's `new` interferes): `push_hands_out_distinct_slots`; `find_accepts_only_handed_out_words` (accepts each pushed slot's word; rejects 0, -1, `i64::MAX`, a slot's word + 1 and + 4, the word of the slot at index `len` in an initialised bucket, the address of a local `AtomicI64`); `add_wraps_around`; `a_slot_keeps_its_value_while_buckets_grow` (at most 300 pushes); `concurrent_pushes_and_adds_agree` (4 scoped threads). On the static: `the_static_table_hands_out_counters` (two `new`, distinct words, each reads back its own value, `find(word)` returns it); it asserts nothing about other slots. Also `policy::seeded_picks_an_entry_other_than_the_head`, `policy::a_short_budget_yields_before_128_operations`, `policy::the_same_seed_gives_the_same_order` (through `Script`), and the count of reorders in `WorkerCore` beside the claim and join-wait counts (00 §D D-15 (d)).
 - D-SC-7: the explorer over `idle::step`, `verdict::step` and the publish steps for 3 workers (worker 0 among them) and 3 publishes, and for "a worker stops for good while it has a listed job", with the three assertions of 01 §10.
 - D-SC-8: end-of-run checks in every build: every `open` empty, no `Joined` in an inbox.
 - D-SC-9: object-model.md gains the isolation invariant; runtime.md is created with 「workerのループ」「仕事の一覧」「眠りと起こし」「`par` の fork と join」「操作の予算」「信頼の一覧」; vm.md keeps describing the VM until `vm-retire`.
 - D-SC-10: no change under `crates/eml_vm` but the listed adapter; no UI output or snapshot change.
-- The model of 01 §2 is normative: the four rules, `running` and waking, the verdict's four steps as a loop, the lock order, `wait_join`'s predicate and wake sources, `Seeded`'s permutation and budgets.
+- The model of 01 §2 is normative: the four rules, `running` and waking, the verdict's four steps as a loop, the lock order, `wait_join`'s predicate and wake sources, `Seeded`'s permutation and budgets. §2.3's budget list is as 00 §D D-15 (d) states: the rows that read or write a registry cell or a channel spend; no `Std.Atomic` row does.
 
 ## 5. Units (in order)
 
@@ -58,7 +59,7 @@
 10. SC-10: `limits.rs`.
 11. SC-11: `monitor.rs`, `pool.rs`.
 12. SC-12: `main_loop.rs`, `threads.rs`, `recover.rs`.
-13. SC-13: `policy.rs` (`Seeded`, budget points), `counters.rs` with its Miri and TSan lines; the claim and join-wait counts in `WorkerCore` with their tests (not in `Finished`: 00 §D D-6).
+13. SC-13: `policy.rs` (`Seeded`, budget points), `counters.rs` (00 §D D-15) with its tests and its Miri and TSan lines; the claim and join-wait counts and the reorder count in `WorkerCore` with their tests (not in `Finished`: 00 §D D-6).
 14. SC-14: Miri and TSan lines for the rest; runtime.md; object-model.md.
 15. SC-15 `Close sched-core`.
 
@@ -69,7 +70,7 @@
 
 ## 7. docs/spec sections written
 
-docs/spec/runtime.md (new; D-SC-9's sections and 「信頼の一覧」 with ST-1..ST-3); object-model.md (the isolation invariant of 01 §2.1); native.md (the shim rule of D-SC-4, if not already stated); docs/implementation/architecture.md (`eml_steps` in 「crate の依存関係」 and its section); testing.md (the explorer line, the Miri / TSan lines, `eml_steps`' gate); CLAUDE.md (the crate table row of `eml_steps`; the `eml_sched` row, whose "depends only on eml_io and eml_rt" gains `eml_steps` and whose list of contents gains the scheduler; the runtime-closure list of the strata invariant gains `eml_steps`; the Verus, verusfmt and explorer command lines; pointer and rule changes, so they are allowed); crates/eml_rt/CLAUDE.md (a pointer to `eml_steps`' rule, A-35's second half).
+docs/spec/runtime.md (new; D-SC-9's sections and 「信頼の一覧」 with ST-1..ST-3); object-model.md (the isolation invariant of 01 §2.1); native.md (the shim rule of D-SC-4, if not already stated); docs/implementation/architecture.md (`eml_steps` in 「crate の依存関係」 and its section); testing.md (the explorer line, the Miri / TSan lines, `eml_steps`' gate); CLAUDE.md (the crate table row of `eml_steps`; the `eml_sched` row, whose "depends only on eml_io and eml_rt" gains `eml_steps` and whose list of contents gains the scheduler; the runtime-closure list of the strata invariant gains `eml_steps`; the Verus, verusfmt and explorer command lines; pointer and rule changes, so they are allowed); crates/eml_rt/CLAUDE.md (a pointer to `eml_steps`' rule, A-35's second half). runtime.md 「操作の予算」 follows 00 §D D-15 (d) and says that an atomic operation is not a switch point; runtime.md gets 「`Std.Atomic`の数の表」 (the process-wide table, buckets, the two parts of `find`).
 
 ## 8. Acceptance checks
 

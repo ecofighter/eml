@@ -36,7 +36,7 @@
 - D-NC-6: `entries!` emits every entry generic over `M: Mode` and two tables; the descriptor row gains `class`; no `checked` feature.
 - D-NC-7: `RunStats` natively: from `Ctx<Checked>`, `Heap` and the audits; `boxes` / `unboxes` by one count call `eml_rt_audit_count(ctx, which)` at the head of each `box` / `unbox` statement; `unwound_frames` inside `FnLower::cleanup`; two placements are NC-1's stated decision (defaults: `eml$apply$m`'s cleanup counts only when arguments remain; thunk frames do not count); a field that cannot equal the VM's by construction is listed and deleted at `vm-retire`; `peak_stack` is bytes natively and not compared.
 - D-NC-8: `--native --debug-heap` and `--native --stats`: owner checks, leak and invariant checks at the end, `TransferLeak`, census.
-- D-NC-9: rule for later stages: every inline access added to generated code is preceded by its audit through `lower/audit.rs`, with a twin CLIF pin.
+- D-NC-9: rule for later stages: every inline access added to generated code is preceded by its audit through `lower/audit.rs`, with a twin CLIF pin. A later stage may instead lower an operation in checked mode as a call that is the full checked operation (D-NC-2's form); then checked code has no inline access and the fast pin has no twin (00 §D D-15 does this for `Std.Atomic`).
 - D-NC-10: parity while the VM exists (G-7).
 - Criteria: G-6, G-7, P-5, S-24, H-4 (the descriptor `class`: `Alloc`, `Free`, `RcSlow`, `Share`, `Reuse`, `Audit`, `Row`, `Task`, `Service`).
 
