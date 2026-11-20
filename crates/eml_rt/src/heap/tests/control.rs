@@ -86,29 +86,12 @@ fn the_memory_limit_reaches_the_worker_word() {
         max_bytes: 10,
         ..Limits::default()
     });
-    control.charge(0, 10);
+    control.charge(10);
     assert_eq!(control.worker_bits(0), 0);
     assert_eq!(control.stop_bits(), 0);
-    control.charge(0, 1);
+    control.charge(1);
     assert_eq!(control.worker_bits(0), Control::MEMORY);
     assert_eq!(control.stop_bits(), Control::MEMORY);
-}
-
-#[test]
-fn taken_counts_each_worker_and_ignores_refunds() {
-    let control = Control::new(Limits {
-        workers: 3,
-        ..Limits::default()
-    });
-    control.charge(0, 10);
-    control.charge(2, 20);
-    control.charge(2, 5);
-    control.refund(25);
-    assert_eq!(control.taken(0), 10);
-    assert_eq!(control.taken(1), 0);
-    assert_eq!(control.taken(2), 25);
-    assert_eq!(control.taken(4), 0);
-    assert_eq!(control.bytes(), 10);
 }
 
 #[test]
@@ -291,9 +274,6 @@ fn control_keeps_a_word_for_the_main_worker() {
     control.end_run();
     assert_eq!(control.worker_bits(3), Control::END);
     assert_eq!(main.poll(0), Err(Stop::Ended));
-    let before = control.taken(3);
-    control.charge(3, 30);
-    assert_eq!(control.taken(3), before + 30);
     let past = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| control.word(4)));
     assert!(past.is_err());
 }
@@ -315,7 +295,7 @@ fn every_word_sees_interrupt() {
         assert_eq!(ctx.poll(0), Err(Stop::Terminated));
     }
     control.clear();
-    control.charge(0, 11 * PAGE_BYTES);
+    control.charge(11 * PAGE_BYTES);
     for (k, ctx) in ctxs.iter().enumerate() {
         assert_eq!(control.worker_bits(k), Control::MEMORY);
         assert_eq!(ctx.poll(0), Err(Stop::MemoryLimit));

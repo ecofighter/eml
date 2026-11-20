@@ -60,7 +60,6 @@ pub struct Control {
     end: AtomicU32,
     code: AtomicI64,
     bytes: AtomicUsize,
-    taken: Vec<AtomicUsize>,
     signals: AtomicU32,
     watched: AtomicU32,
     limits: Limits,
@@ -333,25 +332,6 @@ impl IdCounts {
     }
 }
 
-/// 0 の数を `n` 個作る。
-fn byte_counters(n: usize) -> (r: Vec<AtomicUsize>)
-    ensures
-        r.len() == n,
-{
-    let mut counters = Vec::new();
-    let mut i = 0;
-    while i < n
-        invariant
-            counters.len() == i,
-            i <= n,
-        decreases n - i,
-    {
-        counters.push(AtomicUsize::new(0));
-        i += 1;
-    }
-    counters
-}
-
 /// 0 の止める語を `n` 個作る。
 fn stop_words(n: usize) -> (r: Vec<Arc<AtomicU32>>)
     ensures
@@ -386,7 +366,6 @@ impl Control {
             end: AtomicU32::new(0),
             code: AtomicI64::new(0),
             bytes: AtomicUsize::new(0),
-            taken: byte_counters(limits.workers + 1),
             signals: AtomicU32::new(0),
             watched: AtomicU32::new(0),
             limits,
@@ -455,9 +434,8 @@ impl fmt::Display for Stop {
     }
 }
 
-// 止める語が伝えるのは「止めよ」のビットだけで、確保量の数 (worker ごとの `taken` を含む) が伝えるのも
-// その値だけである。シグナルの語と見張りの語もビットだけを伝える。どれにも、ほかのメモリへの書き込みを公開する役は
-// ない。そのため、どの読み書きも Relaxed で足りる
+// 止める語が伝えるのは「止めよ」のビットだけで、確保量の数が伝えるのもその値だけである。シグナルの語と見張りの語も
+// ビットだけを伝える。どれにも、ほかのメモリへの書き込みを公開する役はない。そのため、どの読み書きもRelaxedで足りる
 impl Control {
     pub const INTERRUPT: u32 = 1;
     pub const MEMORY: u32 = 2;
@@ -618,22 +596,16 @@ impl Control {
         self.bytes.load(Ordering::Relaxed)
     }
 
-    /// ページを取った分を worker `slot` の数と確保量に足す。確保量が上限を超えたら `MEMORY` を立てる
+    /// ページを取った分を確保量に足す。確保量が上限を超えたら`MEMORY`を立てる
     /// (docs/spec/object-model.md の「実行の制御」)。
-    pub(crate) fn charge(&self, slot: usize, bytes: usize) {
-        let old = self.bytes.fetch_add(bytes, Ordering::Relaxed);
-        let total = old.saturating_add(bytes);
-        if let Some(t) = self.taken.get(slot) {
-            t.fetch_add(bytes, Ordering::Relaxed);
-        }
+    pub(crate) fn charge(&self, bytes: usize) {
+        let total = self
+            .bytes
+            .fetch_add(bytes, Ordering::Relaxed)
+            .saturating_add(bytes);
         if total > self.limits.max_bytes {
             self.raise(Self::MEMORY);
         }
-    }
-
-    /// worker `k` のヒープが取ったページのバイト数の合計。単調に増え、払い戻しでは減らない。範囲の外の `k` は 0。
-    pub fn taken(&self, k: usize) -> usize {
-        self.taken.get(k).map_or(0, |t| t.load(Ordering::Relaxed))
     }
 
     /// 今の確保量に `bytes` を足すと上限を超えるか。確保より前に大きさが分かるとき、確保を試す前に止めるのに使う。
