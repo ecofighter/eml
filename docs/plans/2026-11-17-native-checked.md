@@ -65,7 +65,7 @@
 
 ## 7. docs/spec sections written
 
-native.md 「検査モード」 (new); object-model.md 「検査モード」「核の操作」 ("audit, then body"; P-5's statement); native.md 「エントリ」 (two tables, `class`); testing.md 「ネイティブで流す」 (the checked column, the parity rule); benchmarks.md 「ネイティブの数値」; CLAUDE.md: the Commands sentence on `--native` ("not with --debug-heap, --stats" goes), the Testing bullet on `ui::run_native` / `ui::run_fail_native` (the checked comparison), and, if the timing risk below fires, the "seven tests" sentence of the Testing section.
+native.md 「検査モード」 (new); object-model.md 「検査モード」「核の操作」 ("audit, then body"; P-5's statement); native.md 「エントリ」 (two tables, `class`); testing.md 「ネイティブで流す」 (the checked column, the parity rule); benchmarks.md 「ネイティブの数値」; CLAUDE.md: the Commands sentence on `--native` ("not with --debug-heap, --stats" goes), the Testing bullet on `ui::run_native` / `ui::run_fail_native` (the checked comparison), and, if the timing risk below fires, the "seven tests" sentence of the Testing section. docs/spec/native.md 「VMとの違い」 item 2 (its 「`--debug-heap`も`--stats`も」 clause); docs/future/native.md 「テスト」: the first bullet's skip mark for tests that need checked mode, the bullet that calls the end-of-run census the substitute for checked mode, and the bullet 「`RunStats` のスナップショットは VM だけのものである」 are rewritten to the checked native runs.
 
 ## 8. Acceptance checks
 
