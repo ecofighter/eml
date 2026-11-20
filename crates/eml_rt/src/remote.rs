@@ -1,6 +1,6 @@
-//! ほかのヒープのページに触れる関数 (docs/spec/object-model.md の「`unsafe` の核」の T14 と「別のスレッドからの解放」)。
+//! ほかのヒープのページに触れる関数 (docs/spec/object-model.mdの「`unsafe` の核」の T14 と「別のスレッドからの解放」)。
 //! ブロックがどのヒープのものかは、ページの頭の `sink` で見分ける。頭のその部分はページを公開した後に書かないので、
-//! どのスレッドが読んでも同じ値になる (docs/spec/object-model.md の「ページ」)。
+//! どのスレッドが読んでも同じ値になる (docs/spec/object-model.mdの「ページ」)。
 //!
 //! ほかのスレッドが書く語 (ページの遠隔の空きリストの語、空けたブロックの `meta` とペイロードの先頭の語、
 //! `RemoteSink` の欄) は、持ち主の権限の値には映らない。持ち主はその値を権限を通して読まず、ここの関数で atomic に
@@ -153,13 +153,14 @@ pub(crate) fn remote_large_push(
 
 /// 持ち主のページ `page` の遠隔の空きリストを空にし、積まれていたブロックのヘッダを `out` の後ろに足す (T14)。
 /// 呼ぶのは持ち主のスレッドだけである。`core` はこのヒープの今の状態で、`held` は呼ぶ側が持つ物体の番地である。
+/// 大きい物体のページでは何もせずに戻る。そのブロックは`remote_large_take`から届く。
 ///
 /// 約束: 足したブロックは互いに違い、`out` にもとからあったブロックとも違い、このヒープのブロックで、最後の参照で
 /// 空けたものである。足したブロックを含む集合 `r` で、次を満たすもの (`Core::freed_set`) がある。持ち主から見て空けた
 /// ブロックの集合で、生きているか空けた状態にあり、生きているものは rc が 0 でなく、`held` と重ならず、辺でそこへ
 /// 届くブロックはみな `r` にあり、残した語はそこを指さない。逐次の証明はこの集合を持ち主のモデルから外す。
 /// 持ち主の言う「生きている」が古いのは、そのブロックを持ち主が持たないからで、持たないことは、生きている物体を
-/// 1つのスレッドからだけ届かせる規則 (docs/spec/object-model.md の「`share`」) による。
+/// 1つのスレッドからだけ届かせる規則 (docs/spec/object-model.mdの「`share`」) による。
 #[verifier::external_body]
 pub(crate) fn remote_take(
     page: *mut PageHeader,
@@ -172,7 +173,12 @@ pub(crate) fn remote_take(
 {
     let remote = unsafe { AtomicPtr::from_ptr(remote_word(page).cast::<*mut Header>()) };
     if !remote.load(Ordering::Relaxed).is_null() {
-        // Acquire で、積んだスレッドの書き込みを受ける
+        // 大きい物体のページの遠隔の空きリストの語は空きリストではなく、持ち主の大きい物体の列でのそのページの
+        // つなぎである。その列は`remote_large_take`がたどる (docs/spec/object-model.mdの「別のスレッドからの解放」)。
+        // それ以外のページは、Acquireで取り替えて、積んだスレッドの書き込みを受ける。
+        if unsafe { (*page).class } == LARGE {
+            return;
+        }
         let mut next = remote.swap(std::ptr::null_mut(), Ordering::Acquire);
         while !next.is_null() {
             out.push(next);
@@ -336,6 +342,6 @@ pub(crate) open spec fn taken(
 } // verus!
 
 /// ページ `page` の遠隔の空きリストの語の位置。
-fn remote_word(page: *mut PageHeader) -> *mut usize {
+pub(crate) fn remote_word(page: *mut PageHeader) -> *mut usize {
     page.cast::<usize>().wrapping_byte_add(REMOTE_AT)
 }
