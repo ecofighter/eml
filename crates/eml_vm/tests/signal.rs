@@ -9,7 +9,8 @@ use eml_rt::Checked;
 use eml_sched::config::Sched;
 use eml_sched::doorbell::Doorbell;
 use eml_sched::driver::{Clock, Signal, VirtualSignal};
-use eml_sched::{Control, Limits};
+use eml_sched::error::RunFault;
+use eml_sched::{Control, Limits, Stop};
 use eml_vm::{Machine, RunConfig};
 
 /// 保留のシグナルは監視のスレッドが中継し、待つタスクがいなければ集める地点で run を止める。自己パイプがないので、
@@ -100,11 +101,23 @@ fn run_real_on(
     signals: Vec<VirtualSignal>,
     poke: fn(&Control, &Doorbell) -> bool,
 ) -> Real {
-    let program = eml_test_support::lir(src);
-    let control = Arc::new(Control::new(Limits {
+    let limits = Limits {
         workers,
         ..Limits::default()
-    }));
+    };
+    run_real_with(limits, src, sched, signals, poke)
+}
+
+/// `run_real` を、`limits` の `Control` で流す。
+fn run_real_with(
+    limits: Limits,
+    src: &str,
+    sched: Sched,
+    signals: Vec<VirtualSignal>,
+    poke: fn(&Control, &Doorbell) -> bool,
+) -> Real {
+    let program = eml_test_support::lir(src);
+    let control = Arc::new(Control::new(limits));
     let doorbell = Doorbell::new().unwrap();
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host)
@@ -438,4 +451,51 @@ main () =
     let run = run_real_on(2, src, Sched::Sequential, Vec::new(), poke);
     let error = run.result.unwrap_err();
     assert!(error.interrupted(), "{error:?}");
+}
+
+/// 1つのworkerが立てたメモリの上限は、長い期限で眠るworkerにも届く。自己パイプのある監視のスレッドは鳴るまで眠るので、
+/// 眠るworkerを起こすのは、立てたworkerが抜けるときの`wake_all`だけで、runは期限よりずっと前に終わる
+/// (docs/spec/vm.mdの「タスクとスケジュール」)。タスクはworker 1に置き、`main`はworker 0で眠る。
+#[test]
+fn the_memory_limit_wakes_a_worker_sleeping_on_a_long_deadline() {
+    let src = "\
+import Async
+
+build : Int -> List Int -> <Panic> List Int
+build n acc = if n == 0 then acc else build (n - 1) (n :: acc)
+
+grow : List Int -> <Panic> Int
+grow acc = grow (build 1000 acc)
+
+main : Unit -> <IO, Panic, Async.Async> Unit
+main () =
+  Async.scope (fn _ ->
+    Async.spawn (fn () -> println (show (grow [])))
+    Async.sleep_ms 5000)
+";
+    for sched in [Sched::Sequential, Sched::Normal] {
+        let limits = Limits {
+            workers: 2,
+            max_bytes: 0x10_0000,
+            ..Limits::default()
+        };
+        let run = run_real_with(limits, src, sched, Vec::new(), no_poke);
+        // 止めるビットを読んだworkerが自分の位置で誤りを作るので、関数の名前は確かめない
+        let error = run.result.unwrap_err();
+        assert!(
+            matches!(
+                error,
+                eml_vm::RuntimeError::Fault {
+                    fault: RunFault::Stopped(Stop::MemoryLimit),
+                    ..
+                }
+            ),
+            "{sched:?}: {error:?}"
+        );
+        assert!(
+            run.elapsed < Duration::from_secs(1),
+            "{sched:?}: {:?}",
+            run.elapsed
+        );
+    }
 }

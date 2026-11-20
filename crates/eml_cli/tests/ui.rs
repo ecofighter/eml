@@ -218,16 +218,12 @@ fn execute_in(
     let host = host_for(path, root);
     let (out, err, files) = (host.output(), host.errors(), host.written());
     let defaults = default_limits();
-    let (max_bytes, soft_bytes) = marks
-        .max_bytes
-        .unwrap_or((defaults.max_bytes, defaults.soft_bytes));
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(Limits {
             workers,
             max_depth: marks.max_depth.unwrap_or(defaults.max_depth),
-            max_bytes,
-            soft_bytes,
+            max_bytes: marks.max_bytes.unwrap_or(defaults.max_bytes),
             ..defaults
         })))
         .with_sched(sched)
@@ -1615,33 +1611,32 @@ fn a_repeated_max_depth_or_max_bytes_mark_panics() {
         leading_marks("-- max-depth: 4096\n-- max-depth: 8192\n", "--").unwrap_err(),
         "the max-depth mark is written twice, at `-- max-depth: 8192`"
     );
-    let twice = "-- max-bytes: 8 soft 4\n-- signal: interrupt at 5\n-- max-bytes: 16 soft 4\n";
+    let twice = "-- max-bytes: 8\n-- signal: interrupt at 5\n-- max-bytes: 16\n";
     assert_eq!(
         leading_marks(twice, "--").unwrap_err(),
-        "the max-bytes mark is written twice, at `-- max-bytes: 16 soft 4`"
+        "the max-bytes mark is written twice, at `-- max-bytes: 16`"
     );
 }
 
 #[test]
-fn the_max_bytes_mark_sets_both_limits() {
-    let marks =
-        leading_marks("-- max-bytes: 268435456 soft 4194304\nmain () = ()\n", "--").unwrap();
-    assert_eq!(marks.max_bytes, Some((268435456, 4194304)));
+fn the_max_bytes_mark_sets_the_limit() {
+    let marks = leading_marks("-- max-bytes: 268435456\nmain () = ()\n", "--").unwrap();
+    assert_eq!(marks.max_bytes, Some(268435456));
     assert_eq!(
         leading_marks("main () = ()\n", "--").unwrap().max_bytes,
         None
     );
     let mixed = leading_marks(
-        "#!/usr/bin/env eml\n-- max-depth: 4096\n-- max-bytes: 100 soft 50\n-- windows: skip (x)\n",
+        "#!/usr/bin/env eml\n-- max-depth: 4096\n-- max-bytes: 100\n-- windows: skip (x)\n",
         "--",
     )
     .unwrap();
     assert_eq!(
         (mixed.max_depth, mixed.max_bytes, mixed.windows_skip),
-        (Some(4096), Some((100, 50)), true)
+        (Some(4096), Some(100), true)
     );
 
-    // 1 MiB の柔らかい上限と 64 MiB の上限の下で、標準の上限なら通るプログラムを流す
+    // 8 MiB の上限の下で、標準の上限なら通るプログラムを流す
     let program = {
         let source = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (length (build 3000000 [])))\n\nbuild : Int -> List Int -> <Panic> List Int\nbuild n acc = if n == 0 then acc else build (n - 1) (n :: acc)\n\nlength : List Int -> <Panic> Int\nlength xs = count xs 0\n\ncount : List Int -> Int -> <Panic> Int\ncount xs n = match xs with\n  | [] -> n\n  | _ :: rest -> count rest (n + 1)\n";
         let session = Session::load("run/basics/big.em", source, &eml_cli::MemorySource(&[]));
@@ -1650,7 +1645,7 @@ fn the_max_bytes_mark_sets_both_limits() {
     let root = ui_root().join("run/basics");
     let path = root.join("big.em");
     let limited = Marks {
-        max_bytes: Some((8 << 20, 1 << 20)),
+        max_bytes: Some(8 << 20),
         ..Marks::default()
     };
     let ran = execute_in(
@@ -1680,22 +1675,20 @@ fn the_max_bytes_mark_sets_both_limits() {
 #[test]
 fn a_malformed_max_bytes_mark_panics() {
     for wrong in [
-        "-- max-bytes: 100",
-        "-- max-bytes: 100 soft",
-        "-- max-bytes: 100 soft ",
-        "-- max-bytes: 100 soft 100",
-        "-- max-bytes: 100 soft 200",
-        "-- max-bytes: 100 soft 0",
-        "-- max-bytes: 0 soft 0",
-        "-- max-bytes: 1k soft 5",
-        "-- max-bytes: 100 soft +5",
-        "-- max-bytes: 100  soft 5",
-        "-- max-bytes:100 soft 5",
+        "-- max-bytes:",
+        "-- max-bytes: ",
+        "-- max-bytes: 0",
+        "-- max-bytes: 1k",
+        "-- max-bytes: +5",
+        "-- max-bytes:  100",
+        "-- max-bytes: 100 ",
+        "-- max-bytes:100",
+        "-- max-bytes: 100 soft 50",
     ] {
         let message = leading_marks(wrong, "--").expect_err(wrong);
         assert_eq!(
             message,
-            format!("the max-bytes mark is `-- max-bytes: <bytes> soft <bytes>`, not `{wrong}`")
+            format!("the max-bytes mark is `-- max-bytes: <bytes>`, not `{wrong}`")
         );
     }
 }
@@ -1703,7 +1696,7 @@ fn a_malformed_max_bytes_mark_panics() {
 #[test]
 #[should_panic(expected = "x.repl: max-bytes marks are not supported here")]
 fn a_max_bytes_mark_in_a_transcript_panics() {
-    marks_of("x.repl", "# max-bytes: 100 soft 50\n> 1\n", "#", false);
+    marks_of("x.repl", "# max-bytes: 100\n> 1\n", "#", false);
 }
 
 /// `-- gui: stub (<理由>)`は、GUIのstubの`Park`を置いて流す印である (docs/implementation/testing.mdの「UI テスト」)。

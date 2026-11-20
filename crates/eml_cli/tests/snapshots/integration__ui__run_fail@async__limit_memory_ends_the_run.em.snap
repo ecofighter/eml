@@ -1,10 +1,10 @@
 ---
 source: crates/eml_cli/tests/ui.rs
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
-input_file: tests/ui/run-fail/async/limit_memory_uncaught.em
+input_file: tests/ui/run-fail/async/limit_memory_ends_the_run.em
 ---
 --- stdout ---
 before
 --- stderr ---
 --- runtime error ---
-the memory soft limit is exceeded in `main`
+the memory limit is exceeded in `build`

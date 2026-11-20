@@ -163,6 +163,12 @@ impl Env {
 }
 
 pub struct Heap<M: Mode> {
+    /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
+    // `work`のオフセットは16の倍数でなければならない。`release_children`がこれを16バイトのロードで入れ替えるためである。
+    // ほかのオフセットではarm64のロードがオフセットを取れず、呼び出しごとにレジスタ1つと保存するレジスタの組1つを余計に使う。
+    // Rustは欄の順を決めないので、オフセットは欄の置き場所に頼らず、このファイルの終わりのassertで確かめる
+    // (docs/implementation/benchmarks.mdの「`eml_rt`のインライン化」)
+    work: Vec<Word>,
     core: Core,
     /// 付けた凍結した塊。`core` の塊の権限の写しは、この `Arc` が生かす塊から写す。
     // `Heap` を落とすときは、後始末の後で `release_region` に渡して手放す。欄の後始末として `Arc` を手放す処理が展開
@@ -179,8 +185,6 @@ pub struct Heap<M: Mode> {
     // 検査モードの前置きの状態は構築中と生存を分けないので、`set_field` と `set_raw` が、構築中でない rc 0 以下の物体
     // (不死の物体と共有の物体) を断るのに使う (docs/spec/object-model.md の「核の操作」)
     building: usize,
-    /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
-    work: Vec<Word>,
     /// `share` のたどりの印付け、移し替え、所有者だけのスタック。使い回す。`transfer_back` は、印付けのスタックを
     /// 裏返しのスタックに、所有者だけのスタックをそのまま使う。
     mark_stack: Vec<*mut Header>,
@@ -686,33 +690,8 @@ impl<M: Mode> Heap<M> {
         Self::with_control(Control::unbounded())
     }
 
-    /// `with_control` と同じ空のヒープで、ページを worker `slot` の数にも足す。
-    pub fn for_worker(control: Arc<Control>, slot: usize) -> (r: Heap<M>)
-        ensures
-            r.wf(),
-            r.consistent(),
-            r.settled(),
-            r.region_spec() is None,
-            r.worker_spec() == 0,
-            r.unused(),
-    {
-        Self::with_slot(control, slot)
-    }
-
     /// `new` と同じ空のヒープで、ページをセッションの `control` に数える。
     pub fn with_control(control: Arc<Control>) -> (r: Heap<M>)
-        ensures
-            r.wf(),
-            r.consistent(),
-            r.settled(),
-            r.region_spec() is None,
-            r.worker_spec() == 0,
-            r.unused(),
-    {
-        Self::with_slot(control, 0)
-    }
-
-    fn with_slot(control: Arc<Control>, slot: usize) -> (r: Heap<M>)
         ensures
             r.wf(),
             r.consistent(),
@@ -727,7 +706,7 @@ impl<M: Mode> Heap<M> {
             IdCounts::detached()
         };
         let mut heap = Heap {
-            core: Self::empty_core(control, slot),
+            core: Self::empty_core(control),
             region: ManuallyDrop::new(None),
             worker: 0,
             owned,
@@ -757,7 +736,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// ブロックを持たない `Core`。
-    fn empty_core(control: Arc<Control>, slot: usize) -> (r: Core)
+    fn empty_core(control: Arc<Control>) -> (r: Core)
         ensures
             r.full(),
             r.safe_wf(),
@@ -775,7 +754,6 @@ impl<M: Mode> Heap<M> {
                     0
                 },
                 control,
-                slot,
             ),
             perms: Tracked(Map::tracked_empty()),
             model: Ghost(
@@ -896,7 +874,7 @@ impl<M: Mode> Heap<M> {
         if M::CHECKED {
             self.owned.reset_ids();
         }
-        let mut r = Heap::for_worker(self.control().clone(), self.core.pages.slot());
+        let mut r = Heap::with_control(self.control().clone());
         r.set_worker(self.worker);
         if let Some(a) = &*self.region {
             let c = a.clone();
@@ -1998,7 +1976,7 @@ impl<M: Mode> Heap<M> {
         }
         // `Heap` は `Drop` を持つので、中身を空の中身と入れ替えてから落とす。落とすときの後始末は、ダミーを持ち不変条件を
         // 満たすヒープを求める
-        let mut core = Self::empty_core(b.core.pages.control().clone(), b.core.pages.slot());
+        let mut core = Self::empty_core(b.core.pages.control().clone());
         mem::swap(&mut b.core, &mut core);
         // 作り手が付けていた塊は、新しい塊の親になる。凍結する物体は、その塊とその祖先の物体を指してよい
         let mut parent = ManuallyDrop::new(None);
@@ -4526,3 +4504,10 @@ impl<M: Mode> Heap<M> {
 }
 
 } // verus!
+
+// Rustは`Heap`の欄の順を決めないので、欄`work`のオフセットが16の倍数であることを、どちらのモードでもここで確かめる
+// (docs/implementation/benchmarks.mdの「`eml_rt`のインライン化」)
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(std::mem::offset_of!(Heap<crate::Fast>, work).is_multiple_of(16));
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(std::mem::offset_of!(Heap<crate::Checked>, work).is_multiple_of(16));

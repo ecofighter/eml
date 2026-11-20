@@ -919,7 +919,6 @@ mod tests {
     fn rows_that_do_not_fault_return_ok_on_an_exhausted_budget() {
         let limits = Limits {
             max_bytes: 0,
-            soft_bytes: 0,
             ..Limits::default()
         };
         let host = StdHost::new(

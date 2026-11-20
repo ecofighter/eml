@@ -1136,7 +1136,7 @@ impl<M: Mode> Ctx<M> {
     {
         let limits = control.limits();
         let word = control.word(k);
-        let heap = Heap::for_worker(control.clone(), k);
+        let heap = Heap::with_control(control.clone());
         let stop = stop_of(&word);
         let r = Ctx {
             native: Native {

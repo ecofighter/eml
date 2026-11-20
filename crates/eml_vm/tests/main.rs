@@ -15,7 +15,6 @@ mod ffi;
 mod ffi_abandon;
 mod io;
 mod machine;
-mod memory;
 mod miri;
 mod par;
 mod pinned;
