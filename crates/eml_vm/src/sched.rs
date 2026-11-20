@@ -575,7 +575,6 @@ impl<P: Policy> Scheduler<P> {
     /// 集める地点の、登録表とほかのworkerの知らせの側。どのworkerも同じ形で集める。受け箱の知らせを取り、
     /// hostとして受けた操作をdriverに出し、mailを処理し、driverの完了を記録に置き (持ち主が自分なら当て、
     /// ほかのworkerなら`Completion`を送る)、満ちたタイマーを外し、見張りの語を書いて、再開する仕事を`runnables`に積む。
-    /// 最初の登録表の区間では、始めに`added`の分をセルの数に足す (docs/spec/vm.mdの「タスクとスケジュール」)。
     /// `look`なら、先にdriverの`wait`に今を渡してOSを1回見る。driverの`completions`はOSを見ないためである。
     /// 登録表のlockは、何もない集める地点では1回だけ取り、mailの項、完了、満期では今の順を保つ短い区間に分ける。
     /// driverの呼び出しと語の破棄はどれもlockの外で行う (docs/spec/vm.mdの「セルと登録表」「時計とdriver」)。

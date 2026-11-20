@@ -164,9 +164,10 @@ impl Env {
 
 pub struct Heap<M: Mode> {
     /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
-    // `work`を先頭に置くのは、`release_children`がこれを16バイトのロードで入れ替えるためである。オフセットが16の倍数でないと
-    // arm64のロードはオフセットを取れず、呼び出しごとにレジスタ1つと保存するレジスタの組1つを余計に使う
-    // (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
+    // `work`のオフセットは16の倍数でなければならない。`release_children`がこれを16バイトのロードで入れ替えるためである。
+    // ほかのオフセットではarm64のロードがオフセットを取れず、呼び出しごとにレジスタ1つと保存するレジスタの組1つを余計に使う。
+    // Rustは欄の順を決めないので、オフセットは欄の置き場所に頼らず、このファイルの終わりのassertで確かめる
+    // (docs/implementation/benchmarks.mdの「`eml_rt`のインライン化」)
     work: Vec<Word>,
     core: Core,
     /// 付けた凍結した塊。`core` の塊の権限の写しは、この `Arc` が生かす塊から写す。
@@ -4504,7 +4505,9 @@ impl<M: Mode> Heap<M> {
 
 } // verus!
 
-// Rustは`Heap`の欄の順を決めないので、上のコメントが頼る`work`の位置はここで確かめる
-// (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
+// Rustは`Heap`の欄の順を決めないので、欄`work`のオフセットが16の倍数であることを、どちらのモードでもここで確かめる
+// (docs/implementation/benchmarks.mdの「`eml_rt`のインライン化」)
 #[cfg(target_arch = "aarch64")]
 const _: () = assert!(std::mem::offset_of!(Heap<crate::Fast>, work).is_multiple_of(16));
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(std::mem::offset_of!(Heap<crate::Checked>, work).is_multiple_of(16));

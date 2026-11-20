@@ -661,7 +661,7 @@ fn landed<M: Mode>(ctx: &mut Ctx<M>, task: &mut Task) {
 #[inline(never)]
 fn collect_notice<R: Exec>(
     ctx: &mut Ctx<R::M>,
-    task: &mut Task,
+    task: &Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), RunFault> {
     collect::<R>(ctx, task, sched, true)
@@ -2116,7 +2116,7 @@ fn resume<R: Exec>(
 /// (docs/spec/vm.mdの「タスクとスケジュール」)。
 fn collect<R: Exec>(
     ctx: &mut Ctx<R::M>,
-    task: &mut Task,
+    task: &Task,
     sched: &mut Scheduler<R::P>,
     look: bool,
 ) -> Result<(), RunFault> {
@@ -4057,25 +4057,11 @@ fn f(p.0: unit) -> unit {
         Ctx<eml_rt::Checked>,
         Scheduler<P>,
     ) {
-        let limits = eml_rt::Limits {
+        let program = crate::trusted(text);
+        let control = Arc::new(Control::new(eml_rt::Limits {
             max_depth: DEPTH,
             ..eml_rt::Limits::default()
-        };
-        fixture_with_limits(text, policy, limits)
-    }
-
-    /// `limit_fixture_with` の、上限を選べる形。
-    fn fixture_with_limits<P: Policy>(
-        text: &str,
-        policy: P,
-        limits: eml_rt::Limits,
-    ) -> (
-        CodeBase<eml_rt::Checked>,
-        Ctx<eml_rt::Checked>,
-        Scheduler<P>,
-    ) {
-        let program = crate::trusted(text);
-        let control = Arc::new(Control::new(limits));
+        }));
         let mut code = CodeBase::<eml_rt::Checked>::new(Arc::clone(&control));
         code.load(&program, &crate::Linked::default()).unwrap();
         let (host, _) = crate::capture_host(Default::default());

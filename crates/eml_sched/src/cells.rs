@@ -9229,10 +9229,10 @@ fn a_cancel_in_the_mail_waits_for_its_owner() {
     // worker 1 の集める地点は、worker 0 の取り消しを取らない
     let mut ctx = test_ctx();
     let mut out = Vec::new();
-    assert!(!unsafe { drain(&shared, &here(1), &mut ctx, None, 0, &mut out,) }.unwrap());
+    assert!(!unsafe { drain(&shared, &here(1), &mut ctx, None, 0, &mut out) }.unwrap());
     assert!(out.is_empty() && shared.mail.pending());
     // 持ち主の次の集める地点が、満期より先に待ちを外す
-    assert!(unsafe { drain(&shared, &here(0), &mut ctx, None, 0, &mut out,) }.unwrap());
+    assert!(unsafe { drain(&shared, &here(0), &mut ctx, None, 0, &mut out) }.unwrap());
     assert_eq!(resumed_cells(&out), [(cell, CANCELLED)]);
     assert!(!shared.mail.pending());
     out.clear();

@@ -850,7 +850,7 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
   - `into_token` と `drop_token` に付ける前後で、26の計測のどれも 0.5% より大きくは増えなかった (最大は `println-line` の +0.227%)。M4、e5f86d8 の前の未コミットの木。コミットからは再現できない
   - VM の繰り返しから「definition is unavailable」で展開されなかった `eml_rt` の20の関数は、どれも繰り返しの外か冷えた道にあった。M4、73e31d1
   - `work`の前にある8バイトの欄を消すと、`work`はオフセット0x3c0から0x3b8に動き、`map`が+1.1%、`map-reuse`が+1.5%になった (要素ごとに2命令と1命令の増え)。`work`を先頭に置くと、同じ木は消す前の木に比べて`map`が-1.1%、`map-reuse`が-3.0%になった。MシリーズのMac、2026-11-20
-- 根拠にしている所: `crates/eml_rt/src/heap/release.rs` の `release_children`、`heap/mod.rs` の `region` の欄と `work` の欄と `checked_unshared` と `set_field`、`alloc.rs` の `Pages` の `control` の欄、`control.rs` の `unbounded`、`host.rs` の `release_host`、`examples/rt_extern_bench.rs` の先頭のコメント。[オブジェクトモデル](../spec/object-model.md) の「核の操作」、「extern」の `Ctx` を取らない算術の項、「`unsafe` の核」の T4 の行。[VM](../spec/vm.md) の「置き場所」の `eml_rt` の項
+- 根拠にしている所: `crates/eml_rt/src/heap/release.rs`の`release_children`、`heap/mod.rs`の`region`の欄と`work`の欄と`checked_unshared`と`set_field`、`alloc.rs`の`Pages`の`control`の欄、`control.rs`の`unbounded`、`host.rs`の`release_host`、`examples/rt_extern_bench.rs`の先頭のコメント。[オブジェクトモデル](../spec/object-model.md)の「核の操作」、「extern」の`Ctx`を取らない算術の項、「`unsafe`の核」のT4の行。[VM](../spec/vm.md)の「置き場所」の`eml_rt`の項
 
 ### 出力のバッファと Host の呼び出し
 
