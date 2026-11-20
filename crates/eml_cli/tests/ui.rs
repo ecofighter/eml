@@ -197,9 +197,10 @@ fn stub_park(path: &Path) -> eml_sched::park::ParkFactory {
     )
 }
 
-/// `eml run` と同じ既定の上限で流す。止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい
-/// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。`marks` はファイルの
-/// 先頭の印で、シグナルの予定と深さと確保量の上限をどの run にも同じように当てる (docs/implementation/testing.md の「UI テスト」)。
+/// `eml run`と同じ既定の上限で流す。ただし確保量の上限は、印がなければ`HARNESS_MAX_BYTES`である。止める理由のビットは
+/// `Control::clear`でしか下りないので、実行ごとに新しい`Control`を持つ設定を作る。使い回すと、前の実行で立ったビットで
+/// 次の実行がすぐ止まる。`marks`はファイルの先頭の印で、シグナルの予定と深さと確保量の上限をどのrunにも同じように当てる
+/// (docs/implementation/testing.mdの「UI テスト」)。
 /// `engine`はVMかネイティブかを選ぶ。ネイティブの実行はどれも`eml_test_support::execute_native`を通り、成功した実行はcensusで終わる。
 #[expect(
     clippy::too_many_arguments,
@@ -223,7 +224,7 @@ fn execute_in(
         .with_control(Arc::new(Control::new(Limits {
             workers,
             max_depth: marks.max_depth.unwrap_or(defaults.max_depth),
-            max_bytes: marks.max_bytes.unwrap_or(defaults.max_bytes),
+            max_bytes: marks.max_bytes.unwrap_or(HARNESS_MAX_BYTES),
             ..defaults
         })))
         .with_sched(sched)
@@ -335,6 +336,10 @@ fn assert_fast_mode_agrees(
     );
     assert_agrees(suffix, "the fast mode", &fast, checked, Compare::Nothing);
 }
+
+/// `-- max-bytes:`の印のないrunにハーネスが当てる確保量の上限。ファイルは並列に流すので、際限なく確保するプログラムに
+/// `eml run`の既定 (物理メモリの80%) を許すと、機械のメモリを使い切る (docs/implementation/testing.mdの「UI テスト」)。
+pub(crate) const HARNESS_MAX_BYTES: usize = 1 << 30;
 
 /// seed の方針で流すテストの seed (docs/implementation/testing.md の「seed で流す」)。
 const SEEDS: [u64; 2] = [1, 2026];

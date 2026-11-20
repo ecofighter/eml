@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use eml_cli::lines::{Command, Lines, Step};
 use eml_cli::{
-    CaptureHost, Clock, Control, Evaluated, FsProvider, HostRef, InputStatus, Linker, Outcome,
-    Repl, RunConfig, RuntimeError, default_limits, input_status,
+    CaptureHost, Clock, Control, Evaluated, FsProvider, HostRef, InputStatus, Limits, Linker,
+    Outcome, Repl, RunConfig, RuntimeError, default_limits, input_status,
 };
 
 use crate::common::for_each_file;
@@ -301,8 +301,9 @@ impl Runner<'_> {
     }
 }
 
-/// `eml run` と同じ既定の上限で流す。止める理由のビットは `eval` が入力ごとに下ろすので、1つの `Control` を
-/// トランスクリプト全体で使う。`directory` は `<名前>/main.repl` の形のトランスクリプトかである。
+/// `eml run`と同じ既定の上限で流す。ただし確保量の上限は`crate::ui::HARNESS_MAX_BYTES`である。止める理由のビットは
+/// `eval`が入力ごとに下ろすので、1つの`Control`をトランスクリプト全体で使う。`directory`は`<名前>/main.repl`の形の
+/// トランスクリプトかである。
 fn run(inputs: &[Input], root: &Path, directory: bool, debug_heap: bool) -> Transcript {
     // REPL は標準入力から入力を読むので、プログラムには標準入力を渡さない (docs/spec/repl.md)
     let host = CaptureHost::new(root.to_path_buf()).without_stdin();
@@ -310,7 +311,10 @@ fn run(inputs: &[Input], root: &Path, directory: bool, debug_heap: bool) -> Tran
     let host = host.into_ref();
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
-        .with_control(Arc::new(Control::new(default_limits())));
+        .with_control(Arc::new(Control::new(Limits {
+            max_bytes: crate::ui::HARNESS_MAX_BYTES,
+            ..default_limits()
+        })));
     let repl =
         Repl::new(&config, Box::new(FsProvider::new(root)), host.clone()).with_linker(linker());
     let mut runner = Runner {
