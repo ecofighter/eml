@@ -32,7 +32,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | 14 | channel | `std/Chan` は容量付きの MPMC の1つの型で、閉じた channel への送りは値を送り手に返す。複数の channel の `select` は入れない |
 | 15 | 共有の状態 | 共有の状態は持ち主のタスクの後ろに `Chan` を置く形 (actor) で書く。利用者に見せる atomic な操作は `Atomic.Counter` だけである |
 | 16 | 受け手の決まらない `Lin` の値 | MPMC の `Chan` と `Task` の結果で送る `Lin` の値は、途中の持ち主の ID を付けて送る |
-| 17 | Rust の側が持つ語 | channel の buffer、タスクのセルの結果、スコープの失敗の欄、join の節点、プールの仕事の記録は、run の登録表に載せる |
+| 17 | Rustの側が持つ語 | channelのbuffer、タスクのセルの結果、スコープの失敗の欄、プールの仕事の記録は、runの登録表に載せる |
 | 18 | シグナル | シグナルの handler は `Control` のビットを立て、自己パイプで監視のスレッドを起こす。監視のスレッドは、シグナルを run の mail に積み、worker が次の安全点で集めるようにすべての worker の語に `NOTICE` を立てて、driver の waker を鳴らす。最初に集めた worker が `Signal.wait` で待つタスクに届ける。待つタスクがなければ、`INTERRUPT` は run を止めて 130 で終わり、`TERMINATE` は同じ止め方で 143 で終わる。`eml run` で、前の同じシグナルをまだ届けていない間か、それがもう run を止めている間に来たシグナルは、その場でプロセスを終わらせる。Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)` である |
 | 19 | `Net` のハンドル | `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、破棄処理がソケットを閉じる |
 | 20 | 決定性 | `Async` の UI テストはどの seed でも同じ出力を返す |
