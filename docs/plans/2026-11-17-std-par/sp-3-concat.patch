@@ -1,0 +1,424 @@
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run@arrays__concat.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run@arrays__concat.em.snap
+new file mode 100644
+index 00000000..d4c2a5bf
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run@arrays__concat.em.snap
+@@ -0,0 +1,11 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
++input_file: tests/ui/run/arrays/concat.em
++---
++--- stdout ---
++["a0", "a1", "a2", "c0", "c1", "a0", "a1", "a2"]
++(["x", "a1", "a2", "c0", "c1", "a0", "a1", "a2"], ["a0", "a1", "a2"], 4)
++0
++[0, 1, 7]
++--- stderr ---
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run@unboxed__concat.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run@unboxed__concat.em.snap
+new file mode 100644
+index 00000000..714ceed9
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run@unboxed__concat.em.snap
+@@ -0,0 +1,11 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
++input_file: tests/ui/run/unboxed/concat.em
++---
++--- stdout ---
++[0.0, 1.5, 3.0, 0.0, -1.0, 0.0, 1.5, 3.0]
++([9.0, 1.5, 3.0, 0.0, -1.0, 0.0, 1.5, 3.0], [0.0, 1.5, 3.0])
++[0, 1, 7]
++0
++--- stderr ---
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run_fail@arrays__concat_too_long.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@arrays__concat_too_long.em.snap
+new file mode 100644
+index 00000000..4dbd0b5f
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@arrays__concat_too_long.em.snap
+@@ -0,0 +1,10 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
++input_file: tests/ui/run-fail/arrays/concat_too_long.em
++---
++--- stdout ---
++--- stderr ---
++--- runtime error ---
++the memory limit is exceeded
++  at run-fail/arrays/concat_too_long.em:7:43
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run_fail@unboxed__concat_too_long.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@unboxed__concat_too_long.em.snap
+new file mode 100644
+index 00000000..959a7ef9
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@unboxed__concat_too_long.em.snap
+@@ -0,0 +1,10 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
++input_file: tests/ui/run-fail/unboxed/concat_too_long.em
++---
++--- stdout ---
++--- stderr ---
++--- runtime error ---
++the memory limit is exceeded
++  at run-fail/unboxed/concat_too_long.em:8:50
+diff --git a/crates/eml_extern/src/lib.rs b/crates/eml_extern/src/lib.rs
+index 346a752a..49dcb77c 100644
+--- a/crates/eml_extern/src/lib.rs
++++ b/crates/eml_extern/src/lib.rs
+@@ -1046,6 +1046,7 @@ table! {
+         ),
+         ArraySet => row("Std.Array.set", &[Obj, Int, TObj], Obj, Purity::Panics),
+         ArrayThaw => kinded("Std.Array.thaw", &[Obj], &[Unr], Obj, Lin, Purity::Pure),
++        ArrayConcat => row("Std.Array.concat", &[Obj], Obj, Purity::Panics),
+         MutArrayMake => kinded(
+             "Std.MutArray.make",
+             &[Int, TObj],
+@@ -1113,6 +1114,7 @@ table! {
+             kinded("Std.UnboxedArray.length", &[Obj], &[Unr], Int, Unr, Purity::Pure),
+         ),
+         UnboxedArrayThaw => kinded("Std.UnboxedArray.thaw", &[Obj], &[Unr], Obj, Lin, Purity::Pure),
++        UnboxedArrayConcat => row("Std.UnboxedArray.concat", &[Obj], Obj, Purity::Panics),
+         MutUnboxedArrayEmpty => kinded(
+             "Std.MutUnboxedArray.empty",
+             &[Unit],
+diff --git a/crates/eml_native/tests/rows.rs b/crates/eml_native/tests/rows.rs
+index 39b6c8ed..1fb1367c 100644
+--- a/crates/eml_native/tests/rows.rs
++++ b/crates/eml_native/tests/rows.rs
+@@ -61,11 +61,11 @@ fn the_rows_are_partitioned() {
+             "{symbol}"
+         );
+     }
+-    assert_eq!((inline, called, par, task), (45, 187, 1, 101));
++    assert_eq!((inline, called, par, task), (45, 189, 1, 101));
+     let rows = eml_nrt::entries()
+         .filter(|e| e.symbol.starts_with("eml_x_") && !e.symbol.starts_with("eml_x_c_"))
+         .count();
+-    assert_eq!(rows, 232);
++    assert_eq!(rows, 234);
+ }
+ 
+ #[test]
+diff --git a/crates/eml_rows/src/concat.rs b/crates/eml_rows/src/concat.rs
+new file mode 100644
+index 00000000..cab5e2a5
+--- /dev/null
++++ b/crates/eml_rows/src/concat.rs
+@@ -0,0 +1,164 @@
++//! `Std.Array.concat`と`Std.UnboxedArray.concat`の本体 (docs/spec/stdlib.mdの「`Std.Array`」)。`Ctx`の配列の操作だけで
++//! 書くので、検査モードの確かめはそれぞれの操作が持つ。
++
++use eml_rt::externs::Fault;
++use eml_rt::{Ctx, Mode, Word};
++
++/// `chunks`の要素の長さの和。和が`i64`に収まらなければ`i64::MAX`にし、その長さは`make`が確保量の上限として断る。
++///
++/// # Safety
++/// `chunks`は生きている配列で、その要素は`length`が受ける生きている配列である。
++unsafe fn total<M: Mode>(
++    ctx: &mut Ctx<M>,
++    chunks: Word,
++    length: unsafe fn(&mut Ctx<M>, Word) -> Result<i64, Fault>,
++) -> Result<i64, Fault> {
++    // SAFETY: 呼ぶ側の約束。`array_get`が返した参照は、長さを読んだ後で手放す
++    unsafe {
++        let mut sum = 0i64;
++        for c in 0..ctx.array_length(chunks)? {
++            let chunk = ctx.array_get(chunks, c)?;
++            let len = length(ctx, chunk);
++            ctx.heap_mut().decref(chunk).map_err(Fault::Heap)?;
++            sum = sum.saturating_add(len?);
++        }
++        Ok(sum)
++    }
++}
++
++/// 確保を断られたら、受け取った`chunks`を手放してから誤りを返す。
++///
++/// # Safety
++/// `chunks`は生きている物体で、呼ぶ側がその参照を1つ持つ。
++unsafe fn made<M: Mode>(
++    ctx: &mut Ctx<M>,
++    chunks: Word,
++    made: Result<Word, Fault>,
++) -> Result<Word, Fault> {
++    if made.is_err() {
++        // SAFETY: 呼ぶ側の約束
++        unsafe { ctx.heap_mut().decref(chunks) }.map_err(Fault::Heap)?;
++    }
++    made
++}
++
++/// `chunks`の要素を順につないだ新しい`Array`を返す。`chunks`の参照を受け取り、要素ごとに参照を1つ増やしてから
++/// `chunks`を手放す。
++///
++/// # Safety
++/// `heap_mut`の前提を守っている。`chunks`は`Array (Array a)`の生きている物体で、呼ぶ側がその参照を1つ持つ。
++pub(crate) unsafe fn array_concat<M: Mode>(ctx: &mut Ctx<M>, chunks: Word) -> Result<Word, Fault> {
++    // SAFETY: 呼ぶ側の約束。`out`はここで作った一意の配列なので、`array_set`はその場で書く。`()`は即値なので、
++    // 始めの要素にも、`array_set`が手放す前の要素にも参照の数がない
++    unsafe {
++        let n = total(ctx, chunks, Ctx::array_length)?;
++        let first = ctx.array_make(n, Word::UNIT, false);
++        let mut out = made(ctx, chunks, first)?;
++        let mut at = 0;
++        for c in 0..ctx.array_length(chunks)? {
++            let chunk = ctx.array_get(chunks, c)?;
++            for i in 0..ctx.array_length(chunk)? {
++                let x = ctx.array_get(chunk, i)?;
++                out = ctx.array_set(out, at, x)?;
++                at += 1;
++            }
++            ctx.heap_mut().decref(chunk).map_err(Fault::Heap)?;
++        }
++        ctx.heap_mut().decref(chunks).map_err(Fault::Heap)?;
++        Ok(out)
++    }
++}
++
++/// `array_concat`の生の要素の形。要素は語を写すだけで、参照を数えない。
++///
++/// # Safety
++/// `heap_mut`の前提を守っている。`chunks`は`Array (UnboxedArray a)`の生きている物体で、呼ぶ側がその参照を1つ持つ。
++pub(crate) unsafe fn unboxed_concat<M: Mode>(
++    ctx: &mut Ctx<M>,
++    chunks: Word,
++) -> Result<Word, Fault> {
++    // SAFETY: 呼ぶ側の約束。`out`はここで作った一意の配列なので、`unboxed_set`はその場で書く
++    unsafe {
++        let n = total(ctx, chunks, Ctx::unboxed_length)?;
++        let first = ctx.unboxed_make(n, 0, false);
++        let mut out = made(ctx, chunks, first)?;
++        let mut at = 0;
++        for c in 0..ctx.array_length(chunks)? {
++            let chunk = ctx.array_get(chunks, c)?;
++            for i in 0..ctx.unboxed_length(chunk)? {
++                let x = ctx.unboxed_get(chunk, i)?;
++                out = ctx.unboxed_set(out, at, x)?;
++                at += 1;
++            }
++            ctx.heap_mut().decref(chunk).map_err(Fault::Heap)?;
++        }
++        ctx.heap_mut().decref(chunks).map_err(Fault::Heap)?;
++        Ok(out)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use std::io;
++    use std::sync::Arc;
++
++    use eml_rt::{Buffering, Checked, Control, HostRef, Limits, StdHost, Stop};
++
++    use super::*;
++
++    fn ctx(max_bytes: usize) -> Ctx<Checked> {
++        let host = StdHost::new(
++            Box::new(io::sink()),
++            Box::new(io::sink()),
++            Default::default(),
++            Buffering::Line,
++        );
++        let limits = Limits {
++            max_bytes,
++            ..Limits::default()
++        };
++        Ctx::new(Arc::new(Control::new(limits)), HostRef::new(Arc::new(host)))
++    }
++
++    /// EN: A refused length gives the memory limit and leaves nothing behind: the row releases the argument it took.
++    #[test]
++    fn a_refused_length_releases_the_argument() {
++        let mut ctx = ctx(1 << 24);
++        // SAFETY: EN: the words are live arrays made here, and each reference is passed once
++        unsafe {
++            let chunk = ctx.array_make(1000, Word::UNIT, false).unwrap();
++            let chunks = ctx.array_make(100_000, chunk, false).unwrap();
++            assert_eq!(
++                array_concat(&mut ctx, chunks),
++                Err(Fault::Stopped(Stop::MemoryLimit))
++            );
++            let chunk = ctx.unboxed_make(1000, 0, false).unwrap();
++            let chunks = ctx.array_make(100_000, chunk, false).unwrap();
++            assert_eq!(
++                unboxed_concat(&mut ctx, chunks),
++                Err(Fault::Stopped(Stop::MemoryLimit))
++            );
++        }
++        assert_eq!(ctx.check_invariants(), Ok(()));
++        assert!(ctx.leaks().is_empty(), "{:?}", ctx.leaks());
++    }
++
++    /// EN: Each element gets one new reference and the outer array is released, so releasing the result frees everything.
++    #[test]
++    fn the_result_owns_one_reference_per_element() {
++        let mut ctx = ctx(usize::MAX);
++        // SAFETY: EN: the words are live objects made here, and each reference is passed once
++        unsafe {
++            let s = ctx.fresh_string("s");
++            let chunk = ctx.array_make(3, s, false).unwrap();
++            let chunks = ctx.array_make(2, chunk, false).unwrap();
++            let all = array_concat(&mut ctx, chunks).unwrap();
++            assert_eq!(ctx.array_length(all), Ok(6));
++            let x = ctx.array_get(all, 5).unwrap();
++            assert_eq!(ctx.copy_string(x, usize::MAX), Ok("s".to_string()));
++            ctx.heap_mut().decref(all).unwrap();
++        }
++        assert_eq!(ctx.check_invariants(), Ok(()));
++        assert!(ctx.leaks().is_empty(), "{:?}", ctx.leaks());
++    }
++}
+diff --git a/crates/eml_rows/src/lib.rs b/crates/eml_rows/src/lib.rs
+index 4f52a75f..cd9227c2 100644
+--- a/crates/eml_rows/src/lib.rs
++++ b/crates/eml_rows/src/lib.rs
+@@ -3,6 +3,7 @@
+ //! (`tls.rs`、`gui.rs`) を持つ。Cranelift、`eml_lir`、`eml_vm`、`eml_nrt`、`eml_native`には依存しない
+ //! (docs/implementation/architecture.mdの「crate の依存関係」)。
+ 
++mod concat;
+ pub mod constants;
+ pub mod ffi;
+ pub mod gui;
+diff --git a/crates/eml_rows/src/rows.rs b/crates/eml_rows/src/rows.rs
+index 6487bd39..7e206c26 100644
+--- a/crates/eml_rows/src/rows.rs
++++ b/crates/eml_rows/src/rows.rs
+@@ -8,6 +8,7 @@ use eml_rt::{Ctx, Form, Handle, Mode, ReadAmount, Stream, Word, Write, WriteMode
+ 
+ use eml_sched::error::RunFault;
+ 
++use crate::concat::{array_concat, unboxed_concat};
+ use crate::{gui, tls};
+ 
+ const fn repr_eq(a: Repr, b: Repr) -> bool {
+@@ -308,6 +309,7 @@ macro_rules! extern_rows {
+                 fn MutArrayMake(ctx, n: int, x: tobj) -> obj { Ok(ctx.array_make(n, x, true)?) }
+                 fn MutArrayEmpty(ctx, _u: unit) -> obj { Ok(ctx.array_empty(true)?) }
+                 fn ArrayThaw(ctx, a: obj) -> obj { Ok(ctx.array_thaw(a)?) }
++                fn ArrayConcat(ctx, chunks: obj) -> obj { Ok(array_concat(ctx, chunks)?) }
+                 fn MutArrayFreeze(ctx, m: obj) -> obj { Ok(ctx.array_freeze(m)?) }
+                 // Floatの行とIntの行は、スロットの生のビットで同じ`Ctx`の操作を呼ぶ
+                 // (docs/spec/vm.mdの「基本操作と extern」)
+@@ -331,6 +333,9 @@ macro_rules! extern_rows {
+                     Ok(ctx.unboxed_fill(a, x as u64)?)
+                 }
+                 fn UnboxedArrayThaw(ctx, a: obj) -> obj { Ok(ctx.unboxed_thaw(a)?) }
++                fn UnboxedArrayConcat(ctx, chunks: obj) -> obj {
++                    Ok(unboxed_concat(ctx, chunks)?)
++                }
+                 fn MutUnboxedArrayFreeze(ctx, m: obj) -> obj { Ok(ctx.unboxed_freeze(m)?) }
+                 fn ArrayLength | MutArrayLength(ctx, a: obj) -> int { Ok(ctx.array_length(a)?) }
+                 fn ArrayGet | MutArrayRead(ctx, a: obj, i: int) -> tobj { Ok(ctx.array_get(a, i)?) }
+@@ -839,7 +844,7 @@ mod tests {
+             .filter(|row| !matches!(row, Extern::Par | Extern::Exit | Extern::Panic))
+             .collect();
+         assert_eq!(distinct, expected);
+-        assert_eq!(SHARED.len(), 230);
++        assert_eq!(SHARED.len(), 232);
+     }
+ 
+     /// テストの引数。
+diff --git a/std/Array.em b/std/Array.em
+index 91894d86..ff0f9516 100644
+--- a/std/Array.em
++++ b/std/Array.em
+@@ -10,6 +10,8 @@ pub extern get : Array a -> Int -> <Panic> a
+ pub extern set : Array a -> Int -> a -> <Panic> Array a
+ -- 一意ならそのまま、共有されていれば写して `MutArray` にする
+ pub extern thaw : Array a -> MutArray a
++-- 要素の配列を順につないだ配列。要素ごとに参照を1つ増やす
++pub extern concat : Array (Array a) -> <Panic> Array a
+ 
+ -- `f` を添字の順に呼ぶ
+ pub tabulate : Int -> (Int -> <e> a) -> <Panic | e> Array a
+diff --git a/std/UnboxedArray.em b/std/UnboxedArray.em
+index 33dc810c..28752adb 100644
+--- a/std/UnboxedArray.em
++++ b/std/UnboxedArray.em
+@@ -23,6 +23,8 @@ instance Unboxed Int where
+ pub extern length : UnboxedArray a -> Int
+ -- 一意ならそのまま、共有されていれば写して `MutUnboxedArray` にする
+ pub extern thaw : UnboxedArray a -> MutUnboxedArray a
++-- 要素の配列を順につないだ配列
++pub extern concat : Array (UnboxedArray a) -> <Panic> UnboxedArray a
+ 
+ -- `f` を添字の順に呼ぶ
+ pub tabulate : Unboxed a => Int -> (Int -> <e> a) -> <Panic | e> UnboxedArray a
+diff --git a/tests/ui/run-fail/arrays/concat_too_long.em b/tests/ui/run-fail/arrays/concat_too_long.em
+new file mode 100644
+index 00000000..e04251c7
+--- /dev/null
++++ b/tests/ui/run-fail/arrays/concat_too_long.em
+@@ -0,0 +1,9 @@
++-- EN: A joined length the allocator cannot make ends the run with the memory limit error, as `Array.make` does; `try_panic` does not catch it (docs/spec/stdlib.md 「`Std.Array`」).
++import Array
++
++main : Unit -> <IO, Panic> Unit
++main () =
++  let chunk = Array.make 65536 0
++  match try_panic (fn () -> Array.length (Array.concat (Array.make 65536 chunk))) with
++    | Ok n -> println "unreachable \{show n}"
++    | Err m -> println "unreachable: \{m}"
+diff --git a/tests/ui/run-fail/unboxed/concat_too_long.em b/tests/ui/run-fail/unboxed/concat_too_long.em
+new file mode 100644
+index 00000000..40383f36
+--- /dev/null
++++ b/tests/ui/run-fail/unboxed/concat_too_long.em
+@@ -0,0 +1,10 @@
++-- EN: A joined length the allocator cannot make ends the run with the memory limit error, as `UnboxedArray.make` does; `try_panic` does not catch it (docs/spec/stdlib.md 「`Std.UnboxedArray`」).
++import Array
++import UnboxedArray
++
++main : Unit -> <IO, Panic> Unit
++main () =
++  let chunk = UnboxedArray.make 65536 0
++  match try_panic (fn () -> UnboxedArray.length (UnboxedArray.concat (Array.make 65536 chunk))) with
++    | Ok n -> println "unreachable \{show n}"
++    | Err m -> println "unreachable: \{m}"
+diff --git a/tests/ui/run/arrays/concat.em b/tests/ui/run/arrays/concat.em
+new file mode 100644
+index 00000000..7271d1ac
+--- /dev/null
++++ b/tests/ui/run/arrays/concat.em
+@@ -0,0 +1,14 @@
++-- EN: `Array.concat` joins the element arrays in order. An element array that appears twice is copied twice and an empty one adds nothing. The inputs stay usable, and the result is a new array (docs/spec/stdlib.md 「`Std.Array`」).
++import Array
++
++main : Unit -> <IO, Panic> Unit
++main () =
++  let a = Array.tabulate 3 (fn i -> "a\{show i}")
++  let b = Array.from_list ([] : List String)
++  let c = Array.tabulate 2 (fn i -> "c\{show i}")
++  let chunks = Array.from_list [a, b, c, a]
++  let all = Array.concat chunks
++  println (show (Array.to_list all))
++  println (show (Array.to_list (Array.set all 0 "x"), Array.to_list a, Array.length chunks))
++  println (show (Array.length (Array.concat (Array.from_list ([] : List (Array Int))))))
++  println (show (Array.to_list (Array.concat (Array.from_list [Array.tabulate 2 (fn i -> i), Array.make 1 7]))))
+diff --git a/tests/ui/run/unboxed/concat.em b/tests/ui/run/unboxed/concat.em
+new file mode 100644
+index 00000000..95aaf0db
+--- /dev/null
++++ b/tests/ui/run/unboxed/concat.em
+@@ -0,0 +1,16 @@
++-- EN: `UnboxedArray.concat` joins the element arrays in order, for `Float` and for `Int`. The inputs stay usable (docs/spec/stdlib.md 「`Std.UnboxedArray`」).
++import Array
++import Float
++import UnboxedArray
++
++main : Unit -> <IO, Panic> Unit
++main () =
++  let u = UnboxedArray.tabulate 3 (fn i -> 1.5 * Float.of_int i)
++  let v = UnboxedArray.from_list ([] : List Float)
++  let w = UnboxedArray.tabulate 2 (fn i -> 0.0 - Float.of_int i)
++  let all = UnboxedArray.concat (Array.from_list [u, v, w, u])
++  println (show (UnboxedArray.to_list all))
++  println (show (UnboxedArray.to_list (UnboxedArray.set all 0 9.0), UnboxedArray.to_list u))
++  let ints = UnboxedArray.concat (Array.from_list [UnboxedArray.tabulate 2 (fn i -> i), UnboxedArray.make 1 7])
++  println (show (UnboxedArray.to_list ints))
++  println (show (UnboxedArray.length (UnboxedArray.concat (Array.from_list ([] : List (UnboxedArray Int))))))

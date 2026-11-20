@@ -1,0 +1,150 @@
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run@par__range_panics.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run@par__range_panics.em.snap
+new file mode 100644
+index 00000000..b7a99786
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run@par__range_panics.em.snap
+@@ -0,0 +1,12 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
++input_file: tests/ui/run/par/range_panics.em
++---
++--- stdout ---
++Err "at 2500"
++Err "division by zero"
++Err "join 91 17"
++7
++12497500
++--- stderr ---
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run@par__spine_shape.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run@par__spine_shape.em.snap
+new file mode 100644
+index 00000000..3650963b
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run@par__spine_shape.em.snap
+@@ -0,0 +1,14 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
++input_file: tests/ui/run/par/spine_shape.em
++---
++--- stdout ---
++empty
++0
++(((0 1) (2 3)) ((4 5) 6))
++((((((10 11) (12 13)) (14 15)) (16 17)) ((((18 19) (20 21)) (22 23)) (24 25))) (((26 27) (28 29)) 30))
++(((0 1) 2) (3 4))
++(((0..1023 1024..2047) 2048..3071) (3072..4095 4096..4999))
++Err "Par: the grain is less than 1"
++--- stderr ---
+diff --git a/std/Par.em b/std/Par.em
+index 00200d9e..26ef82c0 100644
+--- a/std/Par.em
++++ b/std/Par.em
+@@ -20,3 +20,50 @@ both f g =
+   let a = f ()
+   let b = g ()
+   (a, b)
++
++-- EN: The number of indexes in a chunk for the functions without `_grain` (docs/spec/stdlib.md 「`Std.Par`」).
++grain : Int
++grain = 1024
++
++-- EN: The smallest `b` at or above the given one with `b * b >= n`.
++root : Int -> Int -> <Panic> Int
++root n b = if b * b >= n then b else root n (b + 1)
++
++-- EN: Splits the non-empty range from `lo` up to `hi` as a two-level spine. The range is cut into chunks of `size` indexes and the chunks into groups of `width` chunks, `width` being the square root of the number of chunks, rounded up. The top level gives `par` every earlier group and the last group; a group gives it every earlier chunk and its last chunk. `leaf` computes a chunk from its bounds and `join` combines two neighbours, the left one first, so the joins nest to the left at both levels. The shape depends only on the length and `size`, not on the workers or on which child another worker took.
++spine : Int -> Int -> Int -> (Int -> Int -> <Panic> a) -> (a -> a -> <Panic> a) -> <Panic> a
++spine size lo hi leaf join =
++  let chunks = if size < 1 then panic "Par: the grain is less than 1" else (hi - lo - 1) / size + 1
++  let width = root chunks 1
++  let chunk k = leaf (lo + k * size) (if k + 1 == chunks then hi else lo + (k + 1) * size)
++  let group first last =
++    if first == last then
++      chunk first
++    else
++      let (rest, tail) = par (fn () -> group first (last - 1)) (fn () -> chunk last)
++      join rest tail
++  let top g =
++    let first = g * width
++    let last = if first + width < chunks then first + width - 1 else chunks - 1
++    if g == 0 then
++      group first last
++    else
++      let (rest, tail) = par (fn () -> top (g - 1)) (fn () -> group first last)
++      join rest tail
++  top ((chunks - 1) / width)
++
++-- EN: Joins `f i` for the indexes from `lo` up to `hi` in the order of the spine: a chunk folds its indexes from the left, starting from its first one. An empty range gives `unit`, which is not used otherwise.
++pub reduce_range_grain : Int -> (a -> a -> <Panic> a) -> a -> Int -> Int -> (Int -> <Panic> a) -> <Panic> a
++reduce_range_grain size join unit lo hi f =
++  let fold i end acc = if i == end then acc else fold (i + 1) end (join acc (f i))
++  if lo < hi then spine size lo hi (fn a b -> fold (a + 1) b (f a)) join else unit
++
++pub reduce_range : (a -> a -> <Panic> a) -> a -> Int -> Int -> (Int -> <Panic> a) -> <Panic> a
++reduce_range join unit lo hi f = reduce_range_grain grain join unit lo hi f
++
++-- EN: Calls `body i` for the indexes from `lo` up to `hi`: in index order inside a chunk, in no fixed order between chunks.
++pub for_range_grain : Int -> Int -> Int -> (Int -> <Panic> Unit) -> <Panic> Unit
++for_range_grain size lo hi body =
++  if lo < hi then spine size lo hi (fn a b -> for a b body) (fn () () -> ()) else ()
++
++pub for_range : Int -> Int -> (Int -> <Panic> Unit) -> <Panic> Unit
++for_range lo hi body = for_range_grain grain lo hi body
+diff --git a/tests/ui/run/par/range_panics.em b/tests/ui/run/par/range_panics.em
+new file mode 100644
+index 00000000..7f0c97a1
+--- /dev/null
++++ b/tests/ui/run/par/range_panics.em
+@@ -0,0 +1,13 @@
++-- EN: Every chunk runs to its end or to its own `Panic`, and the `Panic` of the smallest index is raised again: `par` raises the left child's first, and the left child holds the smaller indexes at both levels of the split. An empty range calls nothing (docs/spec/stdlib.md 「`Std.Par`」).
++import Std.Par
++
++main : Unit -> <IO, Panic> Unit
++main () =
++  println (show (try_panic (fn () -> Par.for_range 0 5000 (fn i -> if i == 4000 || i == 2500 then panic "at \{show i}" else ()))))
++  println (show (try_panic (fn () -> Par.reduce_range (fn a b -> a + b) 0 0 5000 (fn i -> 10 / (i - 3000)))))
++  println (show (try_panic (fn () -> Par.reduce_range_grain 10 (fn a b -> if a + b > 100 then panic "join \{show a} \{show b}" else a + b) 0 0 40 (fn i -> i))))
++  Par.for_range 0 3000 (fn i -> if i < 0 then panic "negative" else ())
++  Par.for_range_grain 100 0 1000 (fn _ -> ())
++  Par.for_range 5 5 (fn _ -> panic "empty")
++  println (show (Par.reduce_range (fn a b -> a + b) 7 5 5 (fn i -> i)))
++  println (show (Par.reduce_range (fn a b -> a + b) 7 0 5000 (fn i -> i)))
+diff --git a/tests/ui/run/par/spine_shape.em b/tests/ui/run/par/spine_shape.em
+new file mode 100644
+index 00000000..7c331650
+--- /dev/null
++++ b/tests/ui/run/par/spine_shape.em
+@@ -0,0 +1,32 @@
++-- EN: The shape of the split depends only on the length and the grain: chunks of `grain` indexes, groups of `ceil(sqrt(chunks))` chunks, and a left-nested join at both levels. A join that writes parentheses shows the shape (docs/spec/stdlib.md 「`Std.Par`」).
++import Std.Par
++
++shape : Int -> Int -> Int -> <Panic> String
++shape grain lo hi = Par.reduce_range_grain grain (fn l r -> "(\{l} \{r})") "empty" lo hi (fn i -> show i)
++
++data Span =
++  | Run Int Int
++  | Fork Span Span
++
++-- EN: Joins inside a chunk extend a run; a join at a chunk boundary (an index that is a multiple of 1024) or of two joined parts makes a fork.
++join : Span -> Span -> <Panic> Span
++join l r =
++  match (l, r) with
++    | (Run a b, Run c d) -> if c == d && c % 1024 != 0 then Run a d else Fork l r
++    | _ -> Fork l r
++
++render : Span -> String
++render s =
++  match s with
++    | Run a b -> "\{show a}..\{show b}"
++    | Fork l r -> "(\{render l} \{render r})"
++
++main : Unit -> <IO, Panic> Unit
++main () =
++  println (shape 2 0 0)
++  println (shape 2 0 1)
++  println (shape 2 0 7)
++  println (shape 2 10 31)
++  println (shape 1 0 5)
++  println (render (Par.reduce_range join (Run 0 0) 0 5000 (fn i -> Run i i)))
++  println (show (try_panic (fn () -> shape 0 0 3)))
