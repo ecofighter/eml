@@ -1,13 +1,10 @@
 //! JITのホスト`NativeMachine`と、呼び出しのない関数の下ろしと、入口の安全点 (docs/spec/native.md の「関数の形」、
 //! docs/spec/native.md の「安全点」)。JITしたコードにエントリのstubを通して入るので、Miriでは流さない。
 #![cfg(not(miri))]
-use std::sync::Arc;
-
 use eml_cabi::Linked;
 use eml_native::{Arg, LoadError, NativeMachine};
 use eml_nrt::RunConfig;
 use eml_nrt::image::Options;
-use eml_rt::{Control, Limits};
 use eml_test_support::capture;
 
 use crate::common::native::{agree, agree_lowered, call, clif, machine, native_options, program};
@@ -353,40 +350,6 @@ fn run_with(
         .map_err(|error| error.to_string());
     machine.close();
     (out.contents(), finished)
-}
-
-#[test]
-fn a_notice_does_not_stop_the_run() {
-    // 柔らかい上限が1バイトなので、ヒープが最初にページを取ると、workerの語に知らせが立つ。次の入口の安全点は知らせを
-    // 受け取ってrunを続ける
-    let text = "\
-fn show(n.0: int) -> unit {
-  let s.1: obj = extern \"Prelude.Show Int.show\"(n.0)
-  let u.2: unit = extern Prelude.println(s.1)
-  return u.2
-}
-fn entry$main() -> unit {
-  let s.0: obj = extern \"Prelude.Show Int.show\"(1)
-  let u.1: unit = extern Prelude.println(s.0)
-  let v.2: unit = call show(2)
-  return v.2
-}
-";
-    let control = Arc::new(Control::new(Limits {
-        soft_bytes: 1,
-        ..Limits::default()
-    }));
-    let config = RunConfig::default().with_control(Arc::clone(&control));
-    assert_eq!(
-        run_with(text, &config, native_options()),
-        ("1\n2\n".to_string(), Ok(None))
-    );
-    assert!(control.taken(0) > 1, "the heap took pages during the run");
-    assert_eq!(
-        control.worker_bits(0) & Control::NOTICE,
-        0,
-        "a safepoint took the notice"
-    );
 }
 
 /// runを致命的な誤りで終えるテスト。`eml_fatal`のlongjmpが飛び越えたフレームにはAddressSanitizerのスタックの印が

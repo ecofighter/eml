@@ -310,7 +310,7 @@ git grep -nwiE soft -- crates std tests bench ':!crates/eml_gui/src/winui/bindin
 # SC-3 (TL-2 on): one limit file, one mark
 git grep -l 'max-bytes:' -- tests                                                                        # tests/ui/run-fail/async/limit_memory_ends_the_run.em
 # SC-4 (docs; TL-2: none in docs/spec/vm.md, stdlib.md; TL-3b: none in docs/spec; TL-4: only roadmap.md and the kept testing.md line; TL-5: only the kept line)
-D='柔らかい上限|soft_bytes|soft limit|上限の旗|上限の印|max-bytes: <bytes> soft|max-bytes: [0-9]+ soft|Limit::Pending|Limit::flagged|`Task`、`Pending`|`Task` と `Pending`|`Task`と`Pending`|\| `Pending` \||`Pending`の毒|`Pending` は 0|`Pending` では上限|`Pending`のまま|保留へ戻|Aborting \{|claim_pressure|pressure_tick|`pressure`|Control::pressure|圧力の役目|limit_task|limit_forwarded|clear_limit|add_bytes|TaskMarks|mark_pending|mark_limited|Control::taken|taken\(|top_bytes|NO_CELL|`top`|`counted`|`added`|`end_slice`|offer_top|clear_top|`yielded`|`choose`|Memory::|`Watched`|`Gathered`|定数`MEMORY`|知らせは9種類|`Limit\(cell\)`|`limits/`|charge\(slot|メモリの見張り|確保の多いタスク|確保の数がいちばん大きい|タスクの数`bytes`|memory\.rs|保留のタスク|0 は保留|上限を0にした|保留か、猶予|保留のまま'
+D='柔らかい上限|soft_bytes|soft limit|上限の旗|上限の印|max-bytes: <bytes> soft|max-bytes: [0-9]+ soft|Limit::Pending|Limit::flagged|`Task`、`Pending`|`Task` と `Pending`|`Task`と`Pending`|\| `Pending` \||`Pending`の毒|`Pending` は 0|`Pending` では上限|`Pending`のまま|保留へ戻|Aborting \{|claim_pressure|pressure_tick|`pressure`|Control::pressure|圧力の役目|limit_task|limit_forwarded|clear_limit|add_bytes|TaskMarks|mark_pending|mark_limited|Control::taken|taken\(|top_bytes|NO_CELL|`top`|`counted`|`added`|`end_slice`|offer_top|clear_top|`yielded`|`choose`|Memory::|`Watched`|`Gathered`|定数`MEMORY`|知らせは9種類|`Limit\(cell\)`|`limits/`|charge\(slot|メモリの見張り|確保の多いタスク|確保の数がいちばん大きい|タスクの数`bytes`|memory\.rs|保留のタスク|0 は保留|2つの上限を0にした|保留か、猶予|保留のまま'
 git grep -cE "$D" -- docs README.md CLAUDE.md crates/eml_rt/CLAUDE.md ':!docs/plans' ':!docs/reports'
 # SC-5 (always; TL-G1)
 git diff HEAD~1 -- 'crates/*/src' | grep '^+.*unsafe'                                                    # empty in every unit
@@ -320,7 +320,7 @@ git diff <TL-1> -- crates/eml_vm/tests/bench.rs                                 
 cargo nextest run -p eml_core_ir -E 'test(every_program_lowers_to_the_same_text)'                        # passes
 ```
 
-`P`'s last six alternatives are the renamed and replaced tests (7.4) and the comment phrases of section 6; at the base they hit only soft-limit items (`上限の旗`, `旗が立っていれば、保留`, `保留へ戻` in comments of `vm.rs`, `sched.rs`, `monitor.rs`, `workers.rs`, `cells.rs`; the six `vm.rs` test names). Unqualified `stays_pending` and `旗が立っていれば` would also hit `eml_io` tests and the scope flag in `cells.rs`, so the pattern qualifies them [V: grep at 3aba15e9]. `上限を0にした` in `D` targets testing.md's 「確保量の2つの上限を0にした」 (T-5) [V].
+`P`'s last six alternatives are the renamed and replaced tests (7.4) and the comment phrases of section 6; at the base they hit only soft-limit items (`上限の旗`, `旗が立っていれば、保留`, `保留へ戻` in comments of `vm.rs`, `sched.rs`, `monitor.rs`, `workers.rs`, `cells.rs`; the six `vm.rs` test names). Unqualified `stays_pending` and `旗が立っていれば` would also hit `eml_io` tests and the scope flag in `cells.rs`, so the pattern qualifies them [V: grep at 3aba15e9]. `2つの上限を0にした` in `D` targets testing.md's 「確保量の2つの上限を0にした」 (T-5) [V].
 
 #### 7.3.3 Checkpoint extras (before CP-A and CP-Z)
 
