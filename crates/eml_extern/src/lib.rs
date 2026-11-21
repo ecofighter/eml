@@ -1046,6 +1046,7 @@ table! {
         ),
         ArraySet => row("Std.Array.set", &[Obj, Int, TObj], Obj, Purity::Panics),
         ArrayThaw => kinded("Std.Array.thaw", &[Obj], &[Unr], Obj, Lin, Purity::Pure),
+        ArrayConcat => row("Std.Array.concat", &[Obj], Obj, Purity::Panics),
         MutArrayMake => kinded(
             "Std.MutArray.make",
             &[Int, TObj],
@@ -1113,6 +1114,7 @@ table! {
             kinded("Std.UnboxedArray.length", &[Obj], &[Unr], Int, Unr, Purity::Pure),
         ),
         UnboxedArrayThaw => kinded("Std.UnboxedArray.thaw", &[Obj], &[Unr], Obj, Lin, Purity::Pure),
+        UnboxedArrayConcat => row("Std.UnboxedArray.concat", &[Obj], Obj, Purity::Panics),
         MutUnboxedArrayEmpty => kinded(
             "Std.MutUnboxedArray.empty",
             &[Unit],

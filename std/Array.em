@@ -10,6 +10,8 @@ pub extern get : Array a -> Int -> <Panic> a
 pub extern set : Array a -> Int -> a -> <Panic> Array a
 -- 一意ならそのまま、共有されていれば写して `MutArray` にする
 pub extern thaw : Array a -> MutArray a
+-- 要素の配列を順につないだ配列。要素ごとに参照を1つ増やす
+pub extern concat : Array (Array a) -> <Panic> Array a
 
 -- `f` を添字の順に呼ぶ
 pub tabulate : Int -> (Int -> <e> a) -> <Panic | e> Array a

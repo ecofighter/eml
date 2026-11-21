@@ -249,7 +249,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 
 ## 行の下ろし方
 
-`eml_rows::rows`の一覧`extern_rows!`の組`rows`の変種は、どれもエントリ`eml_x_<Variant>`を持つ (「externの失敗」)。手で書く`eml_x_Exit`と`eml_x_Panic`と合わせて、エントリは232あり、タスクの行でも`Par`でもない行ごとに1つである。`Par`とタスクの行はエントリを持たず、行のエントリと、利用者のCの関数の呼び出しの補助`eml_x_c_narrow`、`eml_x_c_handle_ptr`、`eml_x_c_handle_new` (「externの失敗」) のほかに`eml_x_`で始まる記号はない。一覧は、ネイティブのコードが行をどう下ろすかの印を持たない。eml_nativeの`rows::lowering(ext)`が規則で決める。`rows::INLINE` (「断る形」) の45の行は`Inline`、タスクの行でも`Par`でもないほかの187の行は`Called`、タスクの行と`Par`は`None`である。`Inline`の行もエントリを持つが、生成したコードはそれを呼ばない。どのエントリも、記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、行の関数も一覧も再エクスポートしない。eml_nativeのテストは、dev-dependencyの`eml_rows`からこれらを読む。
+`eml_rows::rows`の一覧`extern_rows!`の組`rows`の変種は、どれもエントリ`eml_x_<Variant>`を持つ (「externの失敗」)。手で書く`eml_x_Exit`と`eml_x_Panic`と合わせて、エントリは234あり、タスクの行でも`Par`でもない行ごとに1つである。`Par`とタスクの行はエントリを持たず、行のエントリと、利用者のCの関数の呼び出しの補助`eml_x_c_narrow`、`eml_x_c_handle_ptr`、`eml_x_c_handle_new` (「externの失敗」) のほかに`eml_x_`で始まる記号はない。一覧は、ネイティブのコードが行をどう下ろすかの印を持たない。eml_nativeの`rows::lowering(ext)`が規則で決める。`rows::INLINE` (「断る形」) の45の行は`Inline`、タスクの行でも`Par`でもないほかの189の行は`Called`、タスクの行と`Par`は`None`である。`Inline`の行もエントリを持つが、生成したコードはそれを呼ばない。どのエントリも、記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、行の関数も一覧も再エクスポートしない。eml_nativeのテストは、dev-dependencyの`eml_rows`からこれらを読む。
 
 生成したコードは、`rows::INLINE`の行を、その文の位置でCLIFの命令に展開する。結果は、行の共有の関数 (`eml_rows::rows`の関数) の結果とビット単位で等しい。
 

@@ -1110,6 +1110,8 @@ verifierが確かめるReprが、どの基本操作でも`ev_shape`と`evv_wf`�
 | `Std.MutUnboxedArray.MutUnboxed Float.fill`、`MutUnboxed Int.fill` | `Ctx::unboxed_fill` |
 | `Std.UnboxedArray.thaw`、`Std.MutUnboxedArray.freeze` | `Ctx::unboxed_thaw`、`unboxed_freeze` |
 
+`Std.Array.concat`と`Std.UnboxedArray.concat`の2つの行は、この表にも`eml_rt`にもない。`eml_rows`が`Ctx`の`array_length`、`array_get`、`array_set`、`array_make` (生の要素は`unboxed_length`、`unboxed_get`、`unboxed_set`、`unboxed_make`) の上に書き、ほかの行と同じく`call`が呼ぶ。
+
 `unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.open`、`Std.Stdout.open`、`Std.Stderr.open`、`Std.Float.infinity_value`、`nan_value`、`Std.MutArray.empty`、`Std.MutUnboxedArray.empty`、`Std.Bytes.empty`) は、VM が引数を読まずに呼ぶ。
 
 ### 語の ABI

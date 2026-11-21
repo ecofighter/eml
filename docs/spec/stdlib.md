@@ -390,6 +390,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `get` | `Array a -> Int -> <Panic> a` | extern (配列を借りる) |
 | `set` | `Array a -> Int -> a -> <Panic> Array a` | extern |
 | `thaw` | `Array a -> MutArray a` | extern |
+| `concat` | `Array (Array a) -> <Panic> Array a` | extern |
 
 型 `Array a` と `MutArray a` は Prelude の extern の型で、関数は `Std.Array` と `Std.MutArray` に置く。`Std.Float` と同じく、モジュールで修飾して使う (`Array.length a`)。
 
@@ -400,6 +401,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `get a i` は `i` 番目の要素である。添字が範囲の外なら `Panic` を起こす
 - `set a i x` は、`i` 番目を `x` に替えた配列である。`a` が一意 (RC が 1) ならその場で書き換え、共有されていれば写す。写すときは、残す要素の参照を1つずつ増やす
 - `thaw a` は、一意な `a` をそのまま `MutArray` にし、共有されていれば写して `MutArray` にする
+- `concat xs`は、`xs`の配列の要素を順につないだ配列である。どの要素にも参照を1つ増やし、`xs`を手放す。つないだ長さを確保できないとき、または確保が上限を超えるときは、`make`と同じくメモリの上限の誤りで実行が終わり、`try_panic`は捕まえない ([オブジェクトモデル](object-model.md)の「配列」)。どの入力も`Panic`を起こさない。型に`Panic`があるのは、断りうる行は失敗する行だからで、断りは呼び出しの位置で知らせる ([LIR](lir.md)の「巻き戻しの地点」)
 - `from_list` と `to_list` は、添字が範囲の外にならないので `Panic` を起こさない。中で `MutArray` の関数と算術を使うので、型の上の `Panic` を `try_panic` で除いてある
 - `length` と `get` は配列を借りるので、読むたびに配列の参照を受け渡さない ([LIR](lir.md) の「extern の借用」)
 
@@ -431,6 +433,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `set` | `Unboxed a => UnboxedArray a -> Int -> a -> <Panic> UnboxedArray a` | `Unboxed` のメソッド (instance ごとの extern) |
 | `length` | `UnboxedArray a -> Int` | extern (配列を借りる) |
 | `thaw` | `UnboxedArray a -> MutUnboxedArray a` | extern |
+| `concat` | `Array (UnboxedArray a) -> <Panic> UnboxedArray a` | extern |
 | `tabulate` | `Unboxed a => Int -> (Int -> <e> a) -> <Panic \| e> UnboxedArray a` | eml (`MutUnboxedArray.freeze (MutUnboxedArray.tabulate n f)`) |
 | `from_list` | `Unboxed a => List a -> UnboxedArray a` | eml |
 | `to_list` | `Unboxed a => UnboxedArray a -> List a` | eml |
@@ -443,7 +446,8 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - 値の位置に要素の型が現れる関数は、クラス `MutUnboxed a => Unboxed a` のメソッドである。instance は `Float` と `Int` だけで、ほかの型の instance は意味を持たない。どちらの instance のメソッドも extern の行に結んであり、要素の Repr はそれぞれ `float` と `int` になる。2つの行は実行時の同じ操作を使う ([VM](vm.md) の「基本操作と extern」)。`MutUnboxed` は `Std.MutUnboxedArray` のクラスで、`Std.UnboxedArray` が import する
 - 型を `Float` 用と `Int` 用の4つに分けず、多相な2つの型にクラスを掛けて extern の行に結ぶのは、4つに分けると、配列を扱う std の関数がどれも型ごとに2つずつ要り、`Float` と `Int` のどちらにも使える関数を書けなくなるためである。instance ごとに行を持つので、`Float` と `Int` は実行時の同じ操作を使いながら、要素の Repr だけを分けられる。そのため、新しい Repr は要らない
 - クラスを Prelude に置かず、それぞれのモジュールに置くのは、`get`、`set`、`make`、`write` が修飾なしの名前としてどこからも見えるのを避けるためである
-- `length` と `thaw` は要素の値を扱わないので、ふつうの多相な extern である
+- `length`、`thaw`、`concat`は要素の値を扱わないので、ふつうの多相なexternである
+- `concat`は`Std.Array`の`concat`と同じに振る舞い、生の語を写す。参照は数えない
 - `make`、`tabulate`、`get`、`set`、`thaw`、`length` は、`Std.Array` の同じ名前の関数と同じに振る舞う。誤りの文言も同じである (下の「実行時エラー」)
 - `tabulate` は `Lin` の `MutUnboxedArray` の上に作ってあるので、`Std.Array.tabulate` と同じく、`e` に `multi` の操作が含まれると E3006 になる
 - `from_list`、`to_list`、`of_array`、`to_array` は、添字が範囲の外にならないので `Panic` を起こさない。`Std.Array` の `from_list` と同じく、型の上の `Panic` を `try_panic` で除いてある

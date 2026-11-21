@@ -61,11 +61,11 @@ fn the_rows_are_partitioned() {
             "{symbol}"
         );
     }
-    assert_eq!((inline, called, par, task), (45, 187, 1, 101));
+    assert_eq!((inline, called, par, task), (45, 189, 1, 101));
     let rows = eml_nrt::entries()
         .filter(|e| e.symbol.starts_with("eml_x_") && !e.symbol.starts_with("eml_x_c_"))
         .count();
-    assert_eq!(rows, 232);
+    assert_eq!(rows, 234);
 }
 
 #[test]
