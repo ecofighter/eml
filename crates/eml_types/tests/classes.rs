@@ -332,28 +332,37 @@ fn a_default_or_a_carried_value_can_need_more_than_the_class() {
     );
 }
 
-const HELPER: &str = "helper : (Unit -> <never e> Int) -> <e> Int\nhelper f = f ()\n\n";
-
+/// 受け取った関数の呼び出しをまたいでファイルを持つinstanceには`carry(Lin, <e>)`が要るが、メソッドのシグネチャには
+/// これを書けない。
 #[test]
-fn a_method_can_rely_on_a_bound_in_the_class_signature() {
-    let text = format!(
-        "{HELPER}class Runs a where\n  run : a -> (Unit -> <never e> Int) -> <Panic | e> Int\n\ninstance Runs Int where\n  run n f = helper f + n"
-    );
-    assert_eq!(lines(&text), Vec::<String>::new());
+fn an_instance_that_keeps_a_file_across_its_callback_needs_more_than_the_class() {
+    let text = "import FileIn\n\ndata Path =\n  | Path String\n\neach_line : FileIn.FileIn -> (String -> <e> Unit) -> <IO, Panic | e> FileIn.FileIn\neach_line file f =\n  match FileIn.read_line file with\n    | (None, file) -> file\n    | (Some line, file) ->\n      f line\n      each_line file f\n\nclass Source s where\n  each : s -> (String -> <e> Unit) -> <IO, Panic | e> Unit\n\ninstance Source Path where\n  each (Path p) f = FileIn.close (each_line (FileIn.open p) f)";
+    let checked = check(text);
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2011 18:3 `each` in the instance for `Path` needs more than the signature of `each` allows
+      18:3 this definition
+      note: the signature of a method leaves its own type variables free to be linear, and this definition copies, drops or keeps a value of such a type
+    ");
 }
 
+/// 持ち越しの制約は、再帰するグループの関数を通してもinstanceに届く。
 #[test]
-fn a_method_that_needs_a_bound_the_class_lacks() {
-    let text = format!(
-        "{HELPER}class Runs a where\n  run : a -> (Unit -> <e> Int) -> <Panic | e> Int\n\ninstance Runs Int where\n  run n f = helper f + n"
+fn an_instance_inherits_the_carry_of_a_recursive_group() {
+    let text = "import FileIn\n\nping : Int -> (Unit -> <e> Unit) -> <IO, Panic | e> Unit\nping n action =\n  if n == 0 then ()\n  else\n    let lock = FileIn.open \"lock\"\n    action ()\n    FileIn.close lock\n    pong (n - 1) action\n\npong : Int -> (Unit -> <e> Unit) -> <IO, Panic | e> Unit\npong n action = if n == 0 then () else ping (n - 1) action\n\nclass Runs a where\n  run : a -> (Unit -> <e> Unit) -> <IO, Panic | e> Unit\n\ninstance Runs Int where\n  run n action = pong n action";
+    assert_eq!(
+        lines(text),
+        [
+            "E2011 19:3 `run` in the instance for `Int` needs more than the signature of `run` allows"
+        ]
     );
-    let checked = check(&text);
-    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
-    E2011 8:3 `run` in the instance for `Int` needs more than the signature of `run` allows
-      8:3 this definition
-      note: the signature of a method allows any effects for its row variables, and this definition passes a row where only `never` operations are allowed
-      help: write `never` before the row variable in the signature of `run` in the class
-    ");
+}
+
+/// メソッドへの参照はクラスのスキームを取る。そのため、`once`の操作を含むrowで自分のメソッドを呼ぶinstanceの
+/// メソッドも、自分のrow変数に多重度の境界を持たない (docs/spec/types.md の「instance と既定のメソッドの検査」)。
+#[test]
+fn an_instance_method_may_call_its_method_with_a_handled_effect() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runs a where\n  run : a -> (Unit -> <e> Int) -> <Panic | e> Int\n\ninstance Runs Int where\n  run n f =\n    if n == 0 then f ()\n    else\n      handle run (n - 1) (fn () -> ask ()) with\n        | fn ask () -> 1";
+    assert_eq!(lines(text), Vec::<String>::new());
 }
 
 #[test]

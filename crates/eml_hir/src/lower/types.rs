@@ -277,7 +277,7 @@ impl TypeLowering<'_> {
         let mut valid = true;
         let tail = match row.tail() {
             Some(tail) => {
-                let id = self.row_var(&tail, row.bound().map(|bound| bound.text_range()));
+                let id = self.row_var(&tail, None);
                 valid &= id.is_some();
                 id
             }

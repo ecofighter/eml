@@ -1146,19 +1146,6 @@ impl FnType {
     }
 }
 
-impl EffectRow {
-    /// row 変数の前に書いた `never`。`<never Panic | e>` のように row 変数の直前にない `never` は、誤りとして読んだもので
-    /// どの変数の上限でもないので返さない (docs/spec/grammar.md の「文法上の補足」)。
-    pub fn bound(&self) -> Option<SyntaxToken> {
-        let never = support::token(&self.syntax, SyntaxKind::NEVER_KW)?;
-        let next = std::iter::successors(never.next_sibling_or_token(), |element| {
-            element.next_sibling_or_token()
-        })
-        .find(|element| !element.kind().is_trivia())?;
-        (next.kind() == SyntaxKind::LIDENT).then_some(never)
-    }
-}
-
 /// 型の適用の引数。row は `<…>` で書く。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeArg {
