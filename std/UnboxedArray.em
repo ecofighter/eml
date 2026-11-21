@@ -23,6 +23,8 @@ instance Unboxed Int where
 pub extern length : UnboxedArray a -> Int
 -- 一意ならそのまま、共有されていれば写して `MutUnboxedArray` にする
 pub extern thaw : UnboxedArray a -> MutUnboxedArray a
+-- 要素の配列を順につないだ配列
+pub extern concat : Array (UnboxedArray a) -> <Panic> UnboxedArray a
 
 -- `f` を添字の順に呼ぶ
 pub tabulate : Unboxed a => Int -> (Int -> <e> a) -> <Panic | e> UnboxedArray a

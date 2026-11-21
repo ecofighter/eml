@@ -1,8 +1,9 @@
 //! 組み込みの関数が実行時に何であるかを、VMとネイティブのコードのどちらにも与える層。externの行の一覧と本体 (`rows.rs`)、
-//! 組み込みが持つ値を作る関数 (`constants.rs`)、利用者のCの関数の呼び出しの部品 (`ffi.rs`)、`Std.Tls`と`Std.Gui`の腕
-//! (`tls.rs`、`gui.rs`) を持つ。Cranelift、`eml_lir`、`eml_vm`、`eml_nrt`、`eml_native`には依存しない
+//! 組み込みが持つ値を作る関数 (`constants.rs`)、`concat`の2つの行の本体 (`concat.rs`)、利用者のCの関数の呼び出しの部品
+//! (`ffi.rs`)、`Std.Tls`と`Std.Gui`の腕 (`tls.rs`、`gui.rs`) を持つ。Cranelift、`eml_lir`、`eml_vm`、`eml_nrt`、`eml_native`には依存しない
 //! (docs/implementation/architecture.mdの「crate の依存関係」)。
 
+mod concat;
 pub mod constants;
 pub mod ffi;
 pub mod gui;

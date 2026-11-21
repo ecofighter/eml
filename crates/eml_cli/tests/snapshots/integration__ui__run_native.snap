@@ -2,11 +2,11 @@
 source: crates/eml_cli/tests/ui.rs
 expression: counts
 ---
-accepted 491
+accepted 493
 skipped 5
-rejected 142
+rejected 148
   async row 123
-  par 19
+  par 25
 unlowered 27
   AsyncJobCell
   ChanToCell

@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/arrays/concat.em
+---
+--- stdout ---
+["a0", "a1", "a2", "c0", "c1", "a0", "a1", "a2"]
+(["x", "a1", "a2", "c0", "c1", "a0", "a1", "a2"], ["a0", "a1", "a2"], 4)
+0
+[0, 1, 7]
+--- stderr ---

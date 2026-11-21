@@ -8,6 +8,7 @@ use eml_rt::{Ctx, Form, Handle, Mode, ReadAmount, Stream, Word, Write, WriteMode
 
 use eml_sched::error::RunFault;
 
+use crate::concat::{array_concat, unboxed_concat};
 use crate::{gui, tls};
 
 const fn repr_eq(a: Repr, b: Repr) -> bool {
@@ -308,6 +309,7 @@ macro_rules! extern_rows {
                 fn MutArrayMake(ctx, n: int, x: tobj) -> obj { Ok(ctx.array_make(n, x, true)?) }
                 fn MutArrayEmpty(ctx, _u: unit) -> obj { Ok(ctx.array_empty(true)?) }
                 fn ArrayThaw(ctx, a: obj) -> obj { Ok(ctx.array_thaw(a)?) }
+                fn ArrayConcat(ctx, chunks: obj) -> obj { Ok(array_concat(ctx, chunks)?) }
                 fn MutArrayFreeze(ctx, m: obj) -> obj { Ok(ctx.array_freeze(m)?) }
                 // Floatの行とIntの行は、スロットの生のビットで同じ`Ctx`の操作を呼ぶ
                 // (docs/spec/vm.mdの「基本操作と extern」)
@@ -331,6 +333,9 @@ macro_rules! extern_rows {
                     Ok(ctx.unboxed_fill(a, x as u64)?)
                 }
                 fn UnboxedArrayThaw(ctx, a: obj) -> obj { Ok(ctx.unboxed_thaw(a)?) }
+                fn UnboxedArrayConcat(ctx, chunks: obj) -> obj {
+                    Ok(unboxed_concat(ctx, chunks)?)
+                }
                 fn MutUnboxedArrayFreeze(ctx, m: obj) -> obj { Ok(ctx.unboxed_freeze(m)?) }
                 fn ArrayLength | MutArrayLength(ctx, a: obj) -> int { Ok(ctx.array_length(a)?) }
                 fn ArrayGet | MutArrayRead(ctx, a: obj, i: int) -> tobj { Ok(ctx.array_get(a, i)?) }
@@ -839,7 +844,7 @@ mod tests {
             .filter(|row| !matches!(row, Extern::Par | Extern::Exit | Extern::Panic))
             .collect();
         assert_eq!(distinct, expected);
-        assert_eq!(SHARED.len(), 230);
+        assert_eq!(SHARED.len(), 232);
     }
 
     /// テストの引数。

@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/reduce_float_bits.em
+---
+--- stdout ---
+2.0764740274699154
+True
+2.0756735476357493
+2.0764740274699185
+--- stderr ---

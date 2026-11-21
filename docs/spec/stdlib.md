@@ -390,6 +390,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `get` | `Array a -> Int -> <Panic> a` | extern (配列を借りる) |
 | `set` | `Array a -> Int -> a -> <Panic> Array a` | extern |
 | `thaw` | `Array a -> MutArray a` | extern |
+| `concat` | `Array (Array a) -> <Panic> Array a` | extern |
 
 型 `Array a` と `MutArray a` は Prelude の extern の型で、関数は `Std.Array` と `Std.MutArray` に置く。`Std.Float` と同じく、モジュールで修飾して使う (`Array.length a`)。
 
@@ -400,6 +401,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `get a i` は `i` 番目の要素である。添字が範囲の外なら `Panic` を起こす
 - `set a i x` は、`i` 番目を `x` に替えた配列である。`a` が一意 (RC が 1) ならその場で書き換え、共有されていれば写す。写すときは、残す要素の参照を1つずつ増やす
 - `thaw a` は、一意な `a` をそのまま `MutArray` にし、共有されていれば写して `MutArray` にする
+- `concat xs`は、`xs`の配列の要素を順につないだ配列である。どの要素にも参照を1つ増やし、`xs`を手放す。つないだ長さを確保できないとき、または確保が上限を超えるときは、`make`と同じくメモリの上限の誤りで実行が終わり、`try_panic`は捕まえない ([オブジェクトモデル](object-model.md)の「配列」)。どの入力も`Panic`を起こさない。型に`Panic`があるのは、断りうる行は失敗する行だからで、断りは呼び出しの位置で知らせる ([LIR](lir.md)の「巻き戻しの地点」)
 - `from_list` と `to_list` は、添字が範囲の外にならないので `Panic` を起こさない。中で `MutArray` の関数と算術を使うので、型の上の `Panic` を `try_panic` で除いてある
 - `length` と `get` は配列を借りるので、読むたびに配列の参照を受け渡さない ([LIR](lir.md) の「extern の借用」)
 
@@ -431,6 +433,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `set` | `Unboxed a => UnboxedArray a -> Int -> a -> <Panic> UnboxedArray a` | `Unboxed` のメソッド (instance ごとの extern) |
 | `length` | `UnboxedArray a -> Int` | extern (配列を借りる) |
 | `thaw` | `UnboxedArray a -> MutUnboxedArray a` | extern |
+| `concat` | `Array (UnboxedArray a) -> <Panic> UnboxedArray a` | extern |
 | `tabulate` | `Unboxed a => Int -> (Int -> <e> a) -> <Panic \| e> UnboxedArray a` | eml (`MutUnboxedArray.freeze (MutUnboxedArray.tabulate n f)`) |
 | `from_list` | `Unboxed a => List a -> UnboxedArray a` | eml |
 | `to_list` | `Unboxed a => UnboxedArray a -> List a` | eml |
@@ -443,7 +446,8 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - 値の位置に要素の型が現れる関数は、クラス `MutUnboxed a => Unboxed a` のメソッドである。instance は `Float` と `Int` だけで、ほかの型の instance は意味を持たない。どちらの instance のメソッドも extern の行に結んであり、要素の Repr はそれぞれ `float` と `int` になる。2つの行は実行時の同じ操作を使う ([VM](vm.md) の「基本操作と extern」)。`MutUnboxed` は `Std.MutUnboxedArray` のクラスで、`Std.UnboxedArray` が import する
 - 型を `Float` 用と `Int` 用の4つに分けず、多相な2つの型にクラスを掛けて extern の行に結ぶのは、4つに分けると、配列を扱う std の関数がどれも型ごとに2つずつ要り、`Float` と `Int` のどちらにも使える関数を書けなくなるためである。instance ごとに行を持つので、`Float` と `Int` は実行時の同じ操作を使いながら、要素の Repr だけを分けられる。そのため、新しい Repr は要らない
 - クラスを Prelude に置かず、それぞれのモジュールに置くのは、`get`、`set`、`make`、`write` が修飾なしの名前としてどこからも見えるのを避けるためである
-- `length` と `thaw` は要素の値を扱わないので、ふつうの多相な extern である
+- `length`、`thaw`、`concat`は要素の値を扱わないので、ふつうの多相なexternである
+- `concat`は`Std.Array`の`concat`と同じに振る舞い、生の語を写す。参照は数えない
 - `make`、`tabulate`、`get`、`set`、`thaw`、`length` は、`Std.Array` の同じ名前の関数と同じに振る舞う。誤りの文言も同じである (下の「実行時エラー」)
 - `tabulate` は `Lin` の `MutUnboxedArray` の上に作ってあるので、`Std.Array.tabulate` と同じく、`e` に `multi` の操作が含まれると E3006 になる
 - `from_list`、`to_list`、`of_array`、`to_array` は、添字が範囲の外にならないので `Panic` を起こさない。`Std.Array` の `from_list` と同じく、型の上の `Panic` を `try_panic` で除いてある
@@ -973,6 +977,18 @@ main () =
 |---|---|---|
 | `par` | `(Unit -> <Panic> a) -> (Unit -> <Panic> b) -> <Panic> (a, b)` | eml |
 | `both` | `(Unit -> <e> a) -> (Unit -> <e> b) -> <e> (a, b)` | eml |
+| `for_range` | `Int -> Int -> (Int -> <Panic> Unit) -> <Panic> Unit` | eml |
+| `for_range_grain` | `Int -> Int -> Int -> (Int -> <Panic> Unit) -> <Panic> Unit` | eml |
+| `reduce_range` | `(a -> a -> <Panic> a) -> a -> Int -> Int -> (Int -> <Panic> a) -> <Panic> a` | eml |
+| `reduce_range_grain` | `Int -> (a -> a -> <Panic> a) -> a -> Int -> Int -> (Int -> <Panic> a) -> <Panic> a` | eml |
+| `tabulate` | `Int -> (Int -> <Panic> a) -> <Panic> Array a` | eml |
+| `tabulate_unboxed` | `Unboxed a => Int -> (Int -> <Panic> a) -> <Panic> UnboxedArray a` | eml |
+| `map` | `(a -> <Panic> b) -> Array a -> <Panic> Array b` | eml |
+| `mapi` | `(Int -> a -> <Panic> b) -> Array a -> <Panic> Array b` | eml |
+| `reduce` | `(a -> a -> <Panic> a) -> a -> Array a -> <Panic> a` | eml |
+| `try_map` | `(a -> <Panic> Result x b) -> Array a -> <Panic> Result x (Array b)` | eml |
+| `for_mut` | `(Int -> a -> <Panic> a) -> MutArray a -> <Panic> MutArray a` | eml |
+| `for_mut_unboxed` | `Unboxed a => (Int -> a -> <Panic> a) -> MutUnboxedArray a -> <Panic> MutUnboxedArray a` | eml |
 
 - `par f g` は、`f ()` と `g ()` を2つの子として動かし、両方が終わるのを待って結果の組を返す。VM は、空いている worker があれば右の子をその worker で動かし、なければ2つの子を同じ worker の上で切り替えて動かす ([VM](vm.md) の「`par` の fork と join」)。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」にある
 - 子のrowは`<Panic>`である。子が起こせるのは`Panic`だけで、`IO`、`Async`、`var`のエフェクト、ユーザーのエフェクトを子が起こしうる呼び出しは、呼び出しの所で型エラー (E2001かE2002) になる。子の中のhandlerは、子の中で起こした操作を捕まえる。エフェクトは`par`をまたげず、どの操作も`never`のエフェクトも同じである
@@ -984,6 +1000,20 @@ main () =
 - `par` は Prelude から出さない。`import Std.Par` と書いて `Par.par` で呼ぶか、`import Par (par, both)` で修飾せずに使う
 - `both f g` は、呼んだ側の文脈で `f ()`、`g ()` の順に呼び、結果の組を返す。row に上限がないので、`IO` を起こす計算も渡せる。`par` と同じ組を逐次に作る関数である
 - 引数をそろえた`fork_join`の呼び出しは`par`の命令になる ([Core IR](core-ir.md) の「`par`の呼び出し」)。`par`自身は普通の関数なので、`Par.par f`も値として使う`Par.par`も普通の部分適用である
+
+データ並列の関数は`par`の上に書いたemlのコードである。`fork_join`はモジュールのただ1つのexternで、範囲をまたいで分岐する実行時のエントリはなく、1つの物体を2つのスレッドが書くこともない。コールバックのrowは`<Panic>`で、どの関数のrowにも`Panic`がある。
+
+- 分割。`lo`から`hi`の手前までの空でない添字の範囲を、連続する`grain`個の添字ごとの塊に切る (最後の塊は短いことがある)。塊が`c`個あるとき、連続する`w`個ずつの塊を1つの群にまとめる。`w`は`w * w >= c`となる最小の整数である (最後の群は小さいことがある)。上の段は、それより前のすべての群を左に、最後の群を右にして`par`を呼ぶ。群は、それより前の塊を左に、最後の塊を右にして`par`を呼ぶ。塊は添字の順に逐次に動く。分割の形は`hi - lo`と`grain`だけで決まり、workerの数にも、別のworkerがどちらの子を取ったかにも依らない。`par`のネストは`2 * w`ほどの深さになる
+- `_grain`のない関数は`grain`に1024を使う。`_grain`の形は`grain`を最初の引数に取り、空でない範囲で`grain`が1より小さいと`Panic` (`Par: the grain is less than 1`)を起こす
+- `lo >= hi`の範囲は空で、`unit` (`for_range`では`()`)を返し、何も呼ばない。空でない範囲で長さ`hi - lo`が`Int`に収まらないときは、その引き算が算術の`Panic` (`integer overflow`)を起こす。塊の数が3037000499の2乗を超えるとき (`grain`がごく小さく、範囲が`Int`のほぼ全体に及ぶとき) は、群の幅の計算も同じ`Panic`を起こす。これらは`grain`の検査の後で、どの塊も動く前に起こる
+- `reduce_range join unit lo hi f`は、`f i`を分割の順に`join`で結ぶ。塊は最初の添字から始めて添字を左から畳み、群は塊を左に入れ子にして結び、全体は群を左に入れ子にして結ぶ。空の範囲は`unit`を返し、`unit`はほかでは使わない。結果は、workerの数とスケジュールによらず同じ値で、`Float`ならビットまで同じである。逐次の左畳み込みと等しくなるのは、`join`が結合的なときだけである
+- `for_range lo hi body`は、すべての添字について`body i`を呼ぶ。塊の中は添字の順で、塊の間の順は決まっていない。`body`にできるのは計算と`Panic`を起こすことだけである
+- コールバックの`Panic`は`par`に従う。どの塊も最後まで、または自分の`Panic`まで動き、`Panic`を起こした塊のうち最も左の塊のものが起こし直される
+- `tabulate n f`は、要素`i`が`f i`である配列である。要素が1024個までは`Array.tabulate n f`なので、負の長さは同じ`Panic`を起こす。それより長いときは、塊ごとに`Array.tabulate`で作り、塊を`Array.concat`で結ぶ。`tabulate_unboxed`は`UnboxedArray`について同じである
+- `map f xs`と`mapi f xs`は、`xs`の添字についての`tabulate`である。`reduce join unit xs`は、`xs`の添字についての`reduce_range`である
+- `try_map f xs`はすべての要素に`f`を呼んだ後で、最も左の`Err`を返す。`Err`がなければ値の配列を返す。どのコールバックの`Panic`も、先の要素が`Err`を返していても起こし直される。`Err`を選ぶ前にすべてのコールバックが動くためである
+- `for_mut f m`と`for_mut_unboxed f m`は、`m`を凍結し、凍結した入力から新しい配列を作って (`for_mut`は`mapi`で、`for_mut_unboxed`は`tabulate_unboxed`で)、それを解凍する。新しい配列は一意なので、`thaw`はコピーしない。子が共有する配列に書く関数はない
+- forkは、右の子の閉包から届く物に共有の印を付ける。入力は最初のforkで印が付き、以後のforkは付け直さない ([VM](vm.md)の「`par`のforkとjoin」)
 
 ## `Std.Async`
 

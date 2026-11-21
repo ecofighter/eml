@@ -1020,6 +1020,28 @@ main () = println (show (sum_all (start_all 16) 0))
     }
 }
 
+/// 速いモードで、大きな物体を作る子を4つの worker に置く。`Std.Par` の関数は子で配列を作るので、持ち主が、別の
+/// worker の空けた大きな物体のページを取り戻す (docs/spec/object-model.md の「別のスレッドからの解放」)。出力は検査
+/// モードの worker が1つの run と同じで、少なくとも1つの子をほかの worker に置く。
+#[test]
+fn the_fast_mode_runs_the_data_parallel_functions_on_four_workers() {
+    let collections = include_str!("../../../tests/ui/run/par/collections.em");
+    let boxed = include_str!("../../../tests/ui/run/par/map_boxed_input.em");
+    for src in [collections, boxed] {
+        let program = eml_test_support::lir(src);
+        let (alone, result) = run_program(&program, limits(1));
+        result.unwrap_or_else(|error| panic!("{error}"));
+        let (host, out) = eml_vm::capture_host(Default::default());
+        let config = RunConfig::default()
+            .with_sched(Sched::Normal)
+            .with_control(limits(4));
+        let finished = eml_vm::execute(&program, &eml_vm::Linked::default(), &config, host)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(out.contents(), alone);
+        assert!(finished.placed >= 1, "{finished:?}");
+    }
+}
+
 /// 行 "a" の書き込みを、別のスレッドが "b" を書くまで止める Host。lock は持たずに条件変数で待ち、10 秒で自分から抜ける。
 /// ほかは中の `CaptureHost` に任せる。
 struct BlockingHost {

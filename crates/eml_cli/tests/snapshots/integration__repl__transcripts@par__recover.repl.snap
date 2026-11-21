@@ -15,7 +15,7 @@ input_file: crates/eml_cli/tests/repl/par/recover.repl
 .
 > par (fn () -> total xs) (fn () -> 1 / 0)
 runtime error: panicked: division by zero
-  at <std>/Par.em:15:21
+  at <std>/Par.em:19:21
 > par (fn () -> total xs) (fn () -> total xs + 1)
 (5050, 5051)
 > try_panic (fn () -> par (fn () -> (panic "l" : Int)) (fn () -> total xs))

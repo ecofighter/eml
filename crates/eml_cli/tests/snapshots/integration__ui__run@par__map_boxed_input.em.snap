@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/map_boxed_input.em
+---
+--- stdout ---
+23978
+([2999, 1, 2, 3], [1, 2, 3])
+3021
+--- stderr ---

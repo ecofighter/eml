@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/try_map_leftmost_err.em
+---
+--- stdout ---
+bad 1499
+3
+(5000, 1, 5000)
+1000
+0
+Err "panic 3500"
+Err "panic 3500"
+--- stderr ---

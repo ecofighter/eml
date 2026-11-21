@@ -19,8 +19,7 @@
 
 詳細は [マルチコア対応の設計](multicore.md) にある。`Async` の API は [非同期の設計](async.md) にある。
 
-- 並列計算のライブラリ: `std/Par` は `par` と `both` と、`map` や `try_map` などの集まりの関数を持つ。スケジューラは実行系の側に置く ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。集まりの関数の型は [マルチコア対応の設計](multicore.md) の「データ並列での使い勝手」にある
-- `try_map`: 失敗を`Result`で返す。すべての要素を評価し、いちばん左の`Err`を返す
+- 並列計算のライブラリ: `std/Par` は `par` と `both` と、`map` や `try_map` などの集まりの関数を持つ。スケジューラは実行系の側に置く ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。集まりの関数は [標準ライブラリ](../spec/stdlib.md) の「`Std.Par`」にある
 - `both`: `par` と同じ形の逐次の関数。任意の row を許すので、デバッグするときだけ `par` を `both` に書き換えれば、子の中で `println` できる
 
   ```haskell
@@ -30,5 +29,5 @@
 - 並行処理のライブラリ: `Async` のタスクとスコープ、取り消し、時間、`std/Chan`、`Atomic.Counter`、I/O は [非同期の設計](async.md) にある
 - 並行処理用の共有の可変状態: 持ち主のタスクの後ろに `Chan` を置く形 (actor) で書く ([非同期の設計](async.md) の「チャネルと共有の状態」)。`Heap` では、並行タスクの間で共有する可変状態を書けないため
 - `freeze`: 一意性だけが理由の `Lin` な型 (後始末のない可変バッファなど) には、型ごとに `freeze` を用意する (例: `freeze : MutArray a -> Array a`)。後始末を持つ型には定義しない
-- 配列: `Array a`と`Bytes`は意味が不変の値で、RCが1ならその場で書き換える ([標準ライブラリ](../spec/stdlib.md)の「`Std.Array`」と「`Bytes`」)。写しが起きないことを型で保証する`Lin`の`MutArray`もある。`write : MutArray a -> Int -> a -> <Panic> MutArray a`のように値を線形に受け渡すAPIを持つ ([標準ライブラリ](../spec/stdlib.md)の「`Std.MutArray`」)。`MutArray`を`var`に入れて`a[i]`と`a[i] <- e`で読み書きできる ([式](../spec/expressions.md)の「`var`」)。範囲外の添字は、`Std.MutArray.read`と同じ文言の`Panic`になる。並列に書き換える`Par.for_mut`は、`freeze`、`mapi`、`thaw`で書く ([マルチコア対応の設計](multicore.md)の「データ並列での使い勝手」)
+- 配列: `Array a`と`Bytes`は意味が不変の値で、RCが1ならその場で書き換える ([標準ライブラリ](../spec/stdlib.md)の「`Std.Array`」と「`Bytes`」)。写しが起きないことを型で保証する`Lin`の`MutArray`もある。`write : MutArray a -> Int -> a -> <Panic> MutArray a`のように値を線形に受け渡すAPIを持つ ([標準ライブラリ](../spec/stdlib.md)の「`Std.MutArray`」)。`MutArray`を`var`に入れて`a[i]`と`a[i] <- e`で読み書きできる ([式](../spec/expressions.md)の「`var`」)。範囲外の添字は、`Std.MutArray.read`と同じ文言の`Panic`になる。並列に書き換える`Par.for_mut`は、`freeze`、`mapi`、`thaw`で書く ([標準ライブラリ](../spec/stdlib.md)の「`Std.Par`」)
 - `trace` は用意しない: row に現れないデバッグ出力の抜け道は作らない

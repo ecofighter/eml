@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/par/map_callback_performs_io.em
+---
+[E2002] Error: `println` performs `IO`, which this lambda does not allow
+   ╭─[ check-fail/par/map_callback_performs_io.em:9:5 ]
+   │
+ 9 │     println (show x)
+   │     ────────┬───────  
+   │             ╰───────── this call performs `IO`
+   │
+   ├─[ check-fail/par/map_callback_performs_io.em:9:5 ]
+   │
+ 8 │   let ys = Par.map (fn x ->
+   │            ───┬───  
+   │               ╰───── argument 1 of `map` does not allow it
+───╯

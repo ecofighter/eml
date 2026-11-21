@@ -6,7 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use vstd::prelude::Tracked;
+use vstd::prelude::{Ghost, Tracked};
 
 use super::ctx as ctx_tests;
 use super::host::{MemoryFile, MemoryHost, host};
@@ -1189,6 +1189,65 @@ fn a_remote_large_free_refunds_at_once<M: Mode>() {
         assert!(a.reclaim_if_due());
         assert_eq!(control.bytes(), base + large);
         unsafe { a.decref(second) }.unwrap();
+    }
+    assert_eq!(mortal(&mut a), 0);
+    drop(b);
+}
+
+// `remote_take`が大きい物体のページに触れないかを返す。ページの遠隔の空きリストの語には、つなぎがnullである
+// 代わりのブロックを置く。語を空きリストとして読むtakeなら、そのブロック1つを取って止まるので、どちらでも
+// 答えは有限で返る
+fn large_page_is_left_alone<M: Mode>() -> bool {
+    let mut heap = Heap::<M>::new();
+    let big = heap.alloc_data(0, 0, LARGE_BODY / 8, false);
+    let page = crate::alloc::page_of(heap.header_of(big));
+    let mut stand_in = [0usize; crate::layout::HEADER_WORDS + 1];
+    // SAFETY: ページは生きていて、その遠隔の空きリストの語に触れるのはこのスレッドだけである
+    let word = unsafe { AtomicUsize::from_ptr(crate::remote::remote_word(page)) };
+    word.store(stand_in.as_mut_ptr().addr(), Ordering::Relaxed);
+    let mut out = Vec::new();
+    crate::remote::remote_take(page, &mut out, Ghost::assume_new(), Ghost::assume_new());
+    let kept = word.load(Ordering::Relaxed) == stand_in.as_mut_ptr().addr();
+    word.store(0, Ordering::Relaxed);
+    unsafe { heap.decref(big) }.unwrap();
+    out.is_empty() && kept
+}
+
+// 大きい物体のページの遠隔の空きリストの語は、持ち主の大きい物体の列でのそのページのつなぎなので、
+// `remote_take`はそれを取り出さず、たどりもしない
+fn remote_take_leaves_a_large_page_alone<M: Mode>() {
+    assert!(large_page_is_left_alone::<M>());
+}
+
+// 別のスレッドが大きい物体を2つ空ける。2つ目に積んだページは、遠隔の空きリストの語で1つ目につながる。
+// 持ち主の取り込みはそのつなぎを大きい物体の列としてだけたどり、2つのページを取り戻す。最初のassertで
+// テストは有限で終わる。つなぎをたどるtakeは、持っていないメモリを歩くためである。
+// 取り戻したことは、検査モードでは`reclaimed`で、速いモードではOSから取ったページのバイト数で確かめる
+fn two_remote_large_frees_are_both_reclaimed<M: Mode>() {
+    assert!(large_page_is_left_alone::<M>());
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let base = a.bytes_in_use_pages();
+    let first = a.alloc_data(0, 0, LARGE_BODY / 8, false);
+    let second = a.alloc_data(0, 0, LARGE_BODY / 8, false);
+    unsafe {
+        a.share(first, 0).unwrap();
+        a.share(second, 0).unwrap();
+    }
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        unsafe {
+            b.decref(first).unwrap();
+            b.decref(second).unwrap();
+        }
+        b
+    })
+    .join()
+    .unwrap();
+    a.reclaim();
+    if M::CHECKED {
+        assert_eq!(a.stats().reclaimed, 2);
+    } else {
+        assert_eq!(a.bytes_in_use_pages(), base);
     }
     assert_eq!(mortal(&mut a), 0);
     drop(b);
@@ -2983,6 +3042,8 @@ both_modes!(
     a_counted_immortal_is_refused_while_its_owner_counts,
     a_foreign_value_freed_remotely_is_finalized_once,
     a_remote_large_free_refunds_at_once,
+    remote_take_leaves_a_large_page_alone,
+    two_remote_large_frees_are_both_reclaimed,
     two_threads_free_into_one_page,
     the_owner_carves_while_another_thread_reads_and_frees,
     the_receiver_rewrites_reuses_and_frees_a_moved_lin_object,
