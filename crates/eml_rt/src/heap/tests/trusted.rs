@@ -1253,9 +1253,9 @@ fn two_remote_large_frees_are_both_reclaimed<M: Mode>() {
     drop(b);
 }
 
-// 別のスレッドが、共有した短いリストと大きい物体を1つ解放する。持ち主の `reclaim_if_due` は大きい物体のページを
-// すぐに取り込み、受けた数が `REMOTE_RECLAIM` に満たない小さいブロックは遠隔の空きリストに残すので、解放はまだ残って
-// いる。`reclaim` はそれを取り込み、残るものはなくなる
+// 別のスレッドが、共有した短いリストと大きい物体を1つ解放する。持ち主の`reclaim_if_due`は大きい物体のページを
+// すぐに取り込み、受けた数が`REMOTE_RECLAIM`に満たない小さいブロックは遠隔の空きリストに残すので、解放はまだ残って
+// いる。`reclaim`はそれを取り込み、残るものはなくなる
 fn a_due_reclaim_leaves_few_small_blocks<M: Mode>() {
     const N: usize = 16;
     let (mut a, b) = two_heaps::<M>(Limits::default());

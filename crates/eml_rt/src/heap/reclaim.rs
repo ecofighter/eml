@@ -28,7 +28,7 @@ use crate::word::Word;
 
 verus! {
 
-/// 受けた小さいブロックの数がこれに届いたら、`reclaim_if_due` がページを歩く (docs/spec/object-model.md の
+/// 受けた小さいブロックの数がこれに届いたら、`reclaim_if_due`がページを歩く (docs/spec/object-model.md の
 /// 「別のスレッドからの解放」)。大きい物体のページは数えない。
 pub(crate) const REMOTE_RECLAIM: usize = 256;
 
@@ -173,7 +173,7 @@ impl<M: Mode> Heap<M> {
         self.reclaim_held(Ghost(Set::empty()), true);
     }
 
-    /// 大きい物体の列が空でなければそれを取り出し、受けた小さいブロックの数が `REMOTE_RECLAIM` に届いたときだけ
+    /// 大きい物体の列が空でなければそれを取り出し、受けた小さいブロックの数が`REMOTE_RECLAIM`に届いたときだけ
     /// ページを歩く。どちらかをしたら真を返す。待つ小さいブロックがそれより少ないときは、そのまま残す
     /// (docs/spec/object-model.md の「別のスレッドからの解放」)。
     pub fn reclaim_if_due(&mut self) -> (r: bool)
@@ -324,7 +324,7 @@ impl<M: Mode> Heap<M> {
     /// `reclaim` の本体。`held` は呼ぶ側 (`Ctx`) の持つ物体で、取り込みはそれを空けたことにしない。先にすべての
     /// ページの遠隔の空きリストと大きい物体の列を取り出し、その後で1つずつ返す。取り出す間はモデルを変えないので、
     /// 約束の集合はどれも呼んだときのモデルについて言える。
-    /// `pages` が偽なら、受けた数を戻さず、ページも歩かず、大きい物体の列だけを取り出す。
+    /// `pages`が偽なら、受けた数を戻さず、ページも歩かず、大きい物体の列だけを取り出す。
     pub(crate) fn reclaim_held(&mut self, Ghost(held): Ghost<Set<usize>>, pages: bool)
         requires
             old(self).wf(),

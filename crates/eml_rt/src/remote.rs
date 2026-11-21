@@ -228,7 +228,7 @@ pub(crate) fn sink_count(sink: *const RemoteSink) -> usize {
     sink.count.load(Ordering::Relaxed)
 }
 
-/// ページを歩く前に、受けた数を 0 に戻す (T14)。
+/// ページを歩く前に、受けた数を0に戻す (T14)。
 #[verifier::external_body]
 #[inline]
 pub(crate) fn sink_count_take(sink: *const RemoteSink) {

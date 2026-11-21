@@ -67,7 +67,7 @@ fn reclaim_if_due_waits_for_enough_frees<M: Mode>() {
 }
 
 // 別のヒープが解放した大きい物体のページは、ページを歩く数に入らない。小さいブロックが255個待つとき、大きい物体を
-// 1つ解放すると `reclaim_if_due` は大きい物体のページだけを取り込み、256個目の小さいブロックで歩く
+// 1つ解放すると`reclaim_if_due`は大きい物体のページだけを取り込み、256個目の小さいブロックで歩く
 fn large_frees_do_not_count_toward_the_walk<M: Mode>() {
     let (mut a, mut b) = pushed::<M>(255);
     let big = a.alloc_data(0, 0, 4096, false);
