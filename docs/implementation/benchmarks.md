@@ -51,11 +51,11 @@
 | `tree_map.em` | 8191 節の完全二分木の全節を、`incr` で20回作り直す | 書かないフィールドとその場の書き換え |
 | `par_tree.em` | 4095 節の完全二分木の全節に、上の深さ 4 までを `par` で分けて 1 を足し (15 回の fork)、逐次にもう一度足す | fork と join の仕事。右の子は共有の印の付いた木から新しく作り、左の子と join の後の親はその場で作り直す |
 | `pfib.em` | `pfib 2 20`: カットオフの2以上の呼び出しごとに`par`でforkするフィボナッチの再帰 (10945回のfork)。引数があれば大きさ30で動く | 子にほとんど仕事がないときの、forkとjoin 1回の費用 |
-| `par_map.em` | 10万要素の箱に入った `Array Int` に、軽い関数で `Par.map` を使う (98個の塊、97回の fork)。結果の先頭と末尾の要素と長さを足して出す | 塊を `Array.concat` で結ぶ費用。要素ごとに参照を1つ取り、`Int` が箱に入り、`boxes` が要素の数の2倍になる |
-| `par_map_unboxed.em` | 10万要素の `MutUnboxedArray Int` に、同じ軽い関数で `Par.for_mut_unboxed` を使う | `par_map.em` と組になる箱のない側。配列を `UnboxedArray.concat` で1回コピーする費用 (`boxes` は0) |
-| `par_reduce.em` | 10万個の添字について、`Float` の和を `Par.reduce_range` で求める (98個の塊、97回の fork) | 配列を作らない、分割とコールバックの費用 |
-| `par_tabulate_float.em` | 添字から計算した `Float` の要素 (既定は8192個) を `Par.tabulate_unboxed` で作る | 配列の `Float` の要素に箱を作らないこと |
-| `par_tabulate_int.em` | 添字から計算した `Int` の要素 (既定は8192個) を `Par.tabulate_unboxed` で作る | `par_tabulate_float.em` と比べる基準 |
+| `par_map.em` | 10万要素の箱に入った`Array Int`に、軽い関数で`Par.map`を使う(98個の塊、97回のfork)。結果の先頭と末尾の要素と長さを足して出す | 塊を`Array.concat`で結ぶ費用。要素が`Int`なので参照は取らず、タグの検査だけになる(ポインタの要素での比は測っていない)。`Int`が型変数の位置でboxとunboxを通るので、`boxes`が要素の数の2倍になるが、確保は伴わない |
+| `par_map_unboxed.em` | 10万要素の`MutUnboxedArray Int`に、同じ軽い関数で`Par.for_mut_unboxed`を使う | `par_map.em`と組になる箱のない側。走査ごとに配列を`UnboxedArray.concat`で1回コピーする費用(`boxes`は0) |
+| `par_reduce.em` | 10万個の添字について、`Float`の和を`Par.reduce_range`で求める(98個の塊、97回のfork) | 配列を作らない、分割とコールバックの費用 |
+| `par_tabulate_float.em` | 添字から計算した`Float`の要素(既定は8192個)を`Par.tabulate_unboxed`で作る | 配列の`Float`の要素に箱を作らないこと |
+| `par_tabulate_int.em` | 添字から計算した`Int`の要素(既定は8192個)を`Par.tabulate_unboxed`で作る | `par_tabulate_float.em`と比べる基準 |
 | `std_list.em` | 2万要素のリストに、std の `List.map` と `List.filter` を5回通す | std のリストの関数の reuse |
 | `std_map.em` | std の `Map.upsert` で 20000 個の文字列のキーを数え、`List.sort_by` で件数の降順に並べる (`upsert.em` と同じ入力) | 釣り合いを直す関数が受けた節の箱を使い回すことと、並べ替えが手放すセルを使い回すこと |
 | `sieve_var.em` | 引数 (既定は 20000) より小さい素数の数を、`var` で書いたふるいで数える | 入れ子の `var` の、状態を渡す形の特殊化 |
@@ -70,7 +70,7 @@
 
 `pfib.em`は大きさを受けない。引数があれば何であれ大きさ30で動き、これはforkの費用の記録として手で測るもので、行にはしない。
 
-`par_tabulate_float.em`と`par_tabulate_int.em`は、長さを省略できる引数で受ける (既定は8192)。
+`par_tabulate_float.em`と`par_tabulate_int.em`は、長さを省略できる引数で受ける(既定は8192)。大きさを読むための`Std.Env`と`String.to_int`のコードは、上の5つと同じく、この2つの実行の分に加わる。
 
 `_by_hand` のプログラムは、対応する自動に任せたプログラムと同じ出力を出す。特殊化の効果は、自動に任せたプログラムの `RunStats` が手書きのプログラムに近づくことで測る。
 
@@ -1116,6 +1116,5 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 ### `Std.Par`のロード
 
 - 主張: `Std.Par`をimportするプログラムは`Std.Array`、`Std.MutArray`、`Std.MutUnboxedArray`、`Std.UnboxedArray`も読み込むので、データ並列の関数を呼ぶかどうかによらずロードが増える。ロードの後の実行は変わらない
-- 数値: `bench/pfib.em`の`run --load-only`は9367万から1億5014万命令に、実行の分 (全体からロードを引いた値) は1億6924万から1億6878万命令になった (「今の数値」の機種。日付はstdの段の締めで測り直して書く)
+- 数値: `bench/pfib.em`の`run --load-only`は9367万から1億5014万命令に、実行の分 (全体からロードを引いた値) は1億6924万から1億6878万命令になった (Mac17,2 (Apple M5) で測った)
 - 根拠にしている所: [標準ライブラリ](../spec/stdlib.md)の「`Std.Par`」、[モジュールと名前解決](../spec/modules.md)の「標準ライブラリ」
-

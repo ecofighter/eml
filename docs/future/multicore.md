@@ -113,7 +113,7 @@ workerのループは、1回ごとに次の順に見る。
 - VMは消すまで今の配置を保つ ([VM](../spec/vm.md)の「`par`のforkとjoin」)。`Async`のタスクは、`start`のときにworker 1..N-1を順に回して置き、`Place`の知らせで運ぶ (下の「`Async`のタスク」)
 - `compute`の仕事はjoinするフレームを持たないforkの子で、workerが取るまで開いた仕事の一覧にあり、終わりで仕事のセルを終える ([VM](../spec/vm.md)の「`compute`の仕事」)
 - メインのworkerは、ほかのworkerの開いた仕事を取らない。自分のjoinでは、ほかのworkerと同じく自分の仕事を動かすか待つ
-- 分け方の木は長さと粒度だけで決まり、どの仕事が取られたかによらない (下の「データ並列での使い勝手」)
+- 分け方の木は長さと粒度だけで決まり、どの仕事が取られたかによらない ([標準ライブラリ](../spec/stdlib.md)の「`Std.Par`」)
 
 ### `Async` のタスク
 
@@ -370,18 +370,8 @@ both : (Unit -> <e> a) -> (Unit -> <e> b) -> <e> (a, b)        -- 逐次の関�
 
 ### データ並列での使い勝手
 
-```haskell
-pub map      : (a -> <Panic> b) -> Array a -> <Panic> Array b
-pub mapi     : (Int -> a -> <Panic> b) -> Array a -> <Panic> Array b
-pub tabulate : Int -> (Int -> <Panic> a) -> <Panic> Array a
-pub for_mut  : (Int -> a -> <Panic> a) -> MutArray a -> <Panic> MutArray a
-pub try_map  : (a -> <Panic> Result x b) -> Array a -> <Panic> Result x (Array b)
-```
+`std/Par`のデータ並列の関数と分け方の形は、[標準ライブラリ](../spec/stdlib.md)の「`Std.Par`」にある。この節は理由を残す。
 
-- `std/Par`の集まりの関数が主なAPIである。`for_range`、`reduce_range`とその`_grain`の形、`tabulate`、`map`、`mapi`、`reduce`、`for_mut`、`try_map`、`tabulate_unboxed`、`for_mut_unboxed`を持ち、どれも`par`の上にemlで書く。コールバックのrowは`<Panic>`で、どの関数もrowに`Panic`を持つ。範囲の上でforkする実行系のエントリはなく、2つのスレッドが書くブロックもない
-- 範囲は1024要素 (粒度)の塊に切り、塊はその数の平方根ほどずつの組にまとめる。いちばん上は残りと最後の組を、組は残りと自分の最後の塊を`par`でforkする。形は長さと粒度だけで決まり、Nにも、どの仕事が取られたかにもよらない。`reduce`はこの形の左に入れ子にした順で組み合わせるので、浮動小数の結果はどのNとスケジュールでも同じビットになる。forkの深さはO(sqrt(n / 粒度))である
-- 葉は自分の塊を逐次の`tabulate`で作り、塊は純粋な行`Array.concat`と`UnboxedArray.concat`でつなぐ。`for_mut f a`は`freeze`、`mapi`、`thaw`で、`for_mut_unboxed`は呼び出しごとに1度写す
-- `try_map`はすべての要素を評価し、いちばん左の`Err`を返す
 - 失敗の通知は`Panic`か`Result`のような値で書く。利用者のエフェクトは`par`をまたがない
 - 子タスクの中ではデバッグ出力 (`println`) ができない。デバッグするときだけ `par` を `both` に書き換えれば、子の中で `println` できる
 - row に現れない `trace` のような抜け道は用意しない
@@ -526,9 +516,8 @@ worker が1つの VM でも、`par` と `Async` は協調的なマルチタス�
 
 - 共有の経路 (今の `eml_rt`): `share`、負の RC の `dup` と `decref`、最後の参照での解放、共有した物体を reuse しないこと、所有者の検査、別のスレッドからの解放と取り込みを、`eml_rt` の単体テストで確かめる。`unsafe` の核を含む `eml_rt` 全体を Verus で証明し、証明は1つのヒープの逐次の実行を扱う。atomic の操作 (信頼の一覧の T2)、ほかのヒープのページに触れる関数 (T14)、run の表 (T15) は信頼する部分で、Miri が2つのスレッドのテストで、ThreadSanitizer が実際に走るスレッドの上で確かめる ([テスト戦略](../implementation/testing.md) の「`eml_rt` の検証」と「ThreadSanitizer」)
 - `par` の UI テスト: `run/par/` と `run-fail/par/` の UI テストを `Sequential` と2つの seed で走らせ、出力がバイト単位で一致することを確かめる。seed で走らせるのは `par/` と `async/` の分類だけである。`par` も `Async` のタスクもないプログラムはタスクを切り替えないためである。seed で走らせると、どちらのタスクが最後に `decref` するかと、タスクの中断、再開、join の待ちも確かめられる。失敗したテストは seed を表示し、その seed で再現できる。`RunStats` は `Sequential` で固定し、seed の run ではスケジュールによらない欄を比べる ([テスト戦略](../implementation/testing.md) の「seed で流す」)。`par/` は、検査モード、逐次の方針、仮想の時計のまま worker の数を N = 2 と 8 にしても流し、N = 1 と同じ出力とスケジュールによらない `RunStats` を返すことと、所有者の検査と漏れの検査を通ることを確かめる。N = 1 のスナップショットはそのまま保つ。負の試験 (multicoretests の負の試験に当たる) は常設のテストが受け持つ。fork の印付けを外すと `run/par/shared_capture.em` が `WrongOwner` に、join の移し戻しを外すと `run/par/fresh_result.em` が `TransferLeak` になる。ほかに、`poly` で作った `Lin` の物体が rc == -1 で届くこと (検査モード。`run/par/poly_lin_resend.em`) と、実行時エラーの優先の規則 (上の「`par` の意味」) を確かめる
-- データ並列の関数を足す段階 (ロードマップの`std-par`): 浮動小数の結果がN = 1、2、8と2つのseedで同じビットになること、`try_map`がいちばん左の`Err`を返すこと、箱にした入力に印が付くこと、3つの長さでの分け方の形を確かめる
 - `Async`: [非同期の設計](async.md)の「テストと決定性」に従う。`tests/ui/run/async/`はN = 1で逐次と2つのseedで流し、どのseedでも同じ出力を返す ([テスト戦略](../implementation/testing.md)の「seedで流す」)。N = 2と8の逐次でも、検査モードの漏れと所有者の検査を流す。すべてのworkerが待っているrunに試しの`SIGTERM`を送ると、`Signal.wait`で待つタスクに届き、待つタスクがなければ143で終わることも確かめる。CPUを使い続けるタスクがあっても、`Control`を読まないworkerが割り込みを1刻みのうちに見ること、漏れの検査が受け箱の語を見ることも確かめる
-- 複数の worker: `par/` の N = 2 と 8 の run は上の項にある。`async/` も N が 2 と 8 で流し、順に頼るファイルは印で外す ([テスト戦略](../implementation/testing.md) の「seed で流す」)。`std/Par` の集まりの関数では、浮動小数の `fold` も含めて N = 1 と比べる。`RunStats` は逐次でだけ固定する。ほかに次のものを使う
+- 複数の worker: `par/` の N = 2 と 8 の run は上の項にある。`async/` も N が 2 と 8 で流し、順に頼るファイルは印で外す ([テスト戦略](../implementation/testing.md) の「seed で流す」)。`RunStats` は逐次でだけ固定する。ほかに次のものを使う
   - 眠りと起こし: `eml_steps`のテストの探索器が、3つのworkerと3つの公開について、空きの一歩、判定の一歩、公開の一歩のあらゆる交互の並びを挙げ、3つのことを確かめる。取り手がみな眠っていて、届く途中の起こしもない間に、一覧に仕事が残る状態がないこと。一覧に仕事があるか、仕事が動いているか、joinの知らせが届いていないか、joinで待つworkerがある間に、worker 0が判定を終えないこと。動ける一歩のない状態はどれも判定の終わりで、報告したデッドロックのほかに行き詰まる状態がないこと。同じことを、どのworkerの数と公開の数でも成り立つ帰納的な不変条件としてVerusで証明するのは、[ロードマップ](roadmap.md)の「段の列」の段である
   - Verus: 今の逐次の証明 (信頼の一覧のT0とT14)を並行の証明に置き換え、ほかのヒープの物体を証明の模型に入れて、印付けと公開、両側からの`dup`と`decref` (共有の側の2つの境目の並行の議論を含む)、最後の解放、joinの手順を証明する。vstdのatomicはSeqCstだけを扱うので、RelaxedとAcqRelの順序の正しさはVerusでは確かめられない。順序は文書の議論とMiriに任せる ([テスト戦略](../implementation/testing.md)の「Verus」)。スケジューラが決めることは`eml_steps`のステップの関数としてVerusで証明し、`eml_sched`の残りはVerusの外にある。協調的な配置 (持ち主を`start`で一度だけ決めること、知らせを持ち主へ送ること)の証明は、並行の証明とともに残す。置き換える時期は[ロードマップ](roadmap.md)の「マルチコア対応」にある
   - Miri: `eml_rt`の`trusted`のmoduleと`eml_sched`の並行のテスト (strict provenance、many-seeds)。遠隔の空きリストへの返却と取り込み、開いた仕事の受け渡し、受け箱の受け渡し、rcの裏返しを確かめる。`par`を使う小さいUIテストをVMごと走らせる。右の子をworker 1に置くrunは、1つのテストのMiriの費用の上限を超えるので、今は置いていない ([ロードマップ](roadmap.md)の「処理系」)
