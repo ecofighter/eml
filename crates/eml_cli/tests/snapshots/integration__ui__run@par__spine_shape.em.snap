@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/spine_shape.em
+---
+--- stdout ---
+empty
+0
+(((0 1) (2 3)) ((4 5) 6))
+((((((10 11) (12 13)) (14 15)) (16 17)) ((((18 19) (20 21)) (22 23)) (24 25))) (((26 27) (28 29)) 30))
+(((0 1) 2) (3 4))
+(((0..1023 1024..2047) 2048..3071) (3072..4095 4096..4999))
+Err "Par: the grain is less than 1"
+--- stderr ---

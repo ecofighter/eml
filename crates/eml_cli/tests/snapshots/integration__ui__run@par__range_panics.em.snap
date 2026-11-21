@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/range_panics.em
+---
+--- stdout ---
+Err "at 2500"
+Err "division by zero"
+Err "join 91 17"
+7
+12497500
+Err "Par: the grain is less than 1"
+Err "at 100"
+Err "at 3100"
+Err "at 1500"
+Err "integer overflow"
+7
+--- stderr ---

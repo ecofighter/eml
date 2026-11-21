@@ -977,6 +977,10 @@ main () =
 |---|---|---|
 | `par` | `(Unit -> <Panic> a) -> (Unit -> <Panic> b) -> <Panic> (a, b)` | eml |
 | `both` | `(Unit -> <e> a) -> (Unit -> <e> b) -> <e> (a, b)` | eml |
+| `for_range` | `Int -> Int -> (Int -> <Panic> Unit) -> <Panic> Unit` | eml |
+| `for_range_grain` | `Int -> Int -> Int -> (Int -> <Panic> Unit) -> <Panic> Unit` | eml |
+| `reduce_range` | `(a -> a -> <Panic> a) -> a -> Int -> Int -> (Int -> <Panic> a) -> <Panic> a` | eml |
+| `reduce_range_grain` | `Int -> (a -> a -> <Panic> a) -> a -> Int -> Int -> (Int -> <Panic> a) -> <Panic> a` | eml |
 
 - `par f g` は、`f ()` と `g ()` を2つの子として動かし、両方が終わるのを待って結果の組を返す。VM は、空いている worker があれば右の子をその worker で動かし、なければ2つの子を同じ worker の上で切り替えて動かす ([VM](vm.md) の「`par` の fork と join」)。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」にある
 - 子のrowは`<Panic>`である。子が起こせるのは`Panic`だけで、`IO`、`Async`、`var`のエフェクト、ユーザーのエフェクトを子が起こしうる呼び出しは、呼び出しの所で型エラー (E2001かE2002) になる。子の中のhandlerは、子の中で起こした操作を捕まえる。エフェクトは`par`をまたげず、どの操作も`never`のエフェクトも同じである
@@ -988,6 +992,15 @@ main () =
 - `par` は Prelude から出さない。`import Std.Par` と書いて `Par.par` で呼ぶか、`import Par (par, both)` で修飾せずに使う
 - `both f g` は、呼んだ側の文脈で `f ()`、`g ()` の順に呼び、結果の組を返す。row に上限がないので、`IO` を起こす計算も渡せる。`par` と同じ組を逐次に作る関数である
 - 引数をそろえた`fork_join`の呼び出しは`par`の命令になる ([Core IR](core-ir.md) の「`par`の呼び出し」)。`par`自身は普通の関数なので、`Par.par f`も値として使う`Par.par`も普通の部分適用である
+
+データ並列の関数は`par`の上に書いたemlのコードである。`fork_join`はモジュールのただ1つのexternで、範囲をまたいで分岐する実行時のエントリはなく、1つの物体を2つのスレッドが書くこともない。コールバックのrowは`<Panic>`で、どの関数のrowにも`Panic`がある。
+
+- 分割。`lo`から`hi`の手前までの空でない添字の範囲を、連続する`grain`個の添字ごとの塊に切る (最後の塊は短いことがある)。塊が`c`個あるとき、連続する`w`個ずつの塊を1つの群にまとめる。`w`は`w * w >= c`となる最小の整数である (最後の群は小さいことがある)。上の段は、それより前のすべての群を左に、最後の群を右にして`par`を呼ぶ。群は、それより前の塊を左に、最後の塊を右にして`par`を呼ぶ。塊は添字の順に逐次に動く。分割の形は`hi - lo`と`grain`だけで決まり、workerの数にも、別のworkerがどちらの子を取ったかにも依らない。`par`のネストは`2 * w`ほどの深さになる
+- `_grain`のない関数は`grain`に1024を使う。`_grain`の形は`grain`を最初の引数に取り、空でない範囲で`grain`が1より小さいと`Panic` (`Par: the grain is less than 1`)を起こす
+- `lo >= hi`の範囲は空で、`unit` (`for_range`では`()`)を返し、何も呼ばない。空でない範囲で長さ`hi - lo`が`Int`に収まらないときは、その引き算が算術の`Panic` (`integer overflow`)を起こす。これは`grain`の検査の後で、どの塊も動く前に起こる
+- `reduce_range join unit lo hi f`は、`f i`を分割の順に`join`で結ぶ。塊は最初の添字から始めて添字を左から畳み、群は塊を左に入れ子にして結び、全体は群を左に入れ子にして結ぶ。空の範囲は`unit`を返し、`unit`はほかでは使わない。結果は、workerの数とスケジュールによらず同じ値で、`Float`ならビットまで同じである。逐次の左畳み込みと等しくなるのは、`join`が結合的なときだけである
+- `for_range lo hi body`は、すべての添字について`body i`を呼ぶ。塊の中は添字の順で、塊の間の順は決まっていない。`body`にできるのは計算と`Panic`を起こすことだけである
+- コールバックの`Panic`は`par`に従う。どの塊も最後まで、または自分の`Panic`まで動き、`Panic`を起こした塊のうち最も左の塊のものが起こし直される
 
 ## `Std.Async`
 
