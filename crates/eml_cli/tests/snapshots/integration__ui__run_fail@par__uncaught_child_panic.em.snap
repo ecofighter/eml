@@ -8,4 +8,4 @@ before
 --- stderr ---
 --- runtime error ---
 panicked: division by zero
-  at <std>/Par.em:14:21
+  at <std>/Par.em:18:21

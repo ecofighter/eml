@@ -981,6 +981,14 @@ main () =
 | `for_range_grain` | `Int -> Int -> Int -> (Int -> <Panic> Unit) -> <Panic> Unit` | eml |
 | `reduce_range` | `(a -> a -> <Panic> a) -> a -> Int -> Int -> (Int -> <Panic> a) -> <Panic> a` | eml |
 | `reduce_range_grain` | `Int -> (a -> a -> <Panic> a) -> a -> Int -> Int -> (Int -> <Panic> a) -> <Panic> a` | eml |
+| `tabulate` | `Int -> (Int -> <Panic> a) -> <Panic> Array a` | eml |
+| `tabulate_unboxed` | `Unboxed a => Int -> (Int -> <Panic> a) -> <Panic> UnboxedArray a` | eml |
+| `map` | `(a -> <Panic> b) -> Array a -> <Panic> Array b` | eml |
+| `mapi` | `(Int -> a -> <Panic> b) -> Array a -> <Panic> Array b` | eml |
+| `reduce` | `(a -> a -> <Panic> a) -> a -> Array a -> <Panic> a` | eml |
+| `try_map` | `(a -> <Panic> Result x b) -> Array a -> <Panic> Result x (Array b)` | eml |
+| `for_mut` | `(Int -> a -> <Panic> a) -> MutArray a -> <Panic> MutArray a` | eml |
+| `for_mut_unboxed` | `Unboxed a => (Int -> a -> <Panic> a) -> MutUnboxedArray a -> <Panic> MutUnboxedArray a` | eml |
 
 - `par f g` は、`f ()` と `g ()` を2つの子として動かし、両方が終わるのを待って結果の組を返す。VM は、空いている worker があれば右の子をその worker で動かし、なければ2つの子を同じ worker の上で切り替えて動かす ([VM](vm.md) の「`par` の fork と join」)。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」にある
 - 子のrowは`<Panic>`である。子が起こせるのは`Panic`だけで、`IO`、`Async`、`var`のエフェクト、ユーザーのエフェクトを子が起こしうる呼び出しは、呼び出しの所で型エラー (E2001かE2002) になる。子の中のhandlerは、子の中で起こした操作を捕まえる。エフェクトは`par`をまたげず、どの操作も`never`のエフェクトも同じである
@@ -1001,6 +1009,11 @@ main () =
 - `reduce_range join unit lo hi f`は、`f i`を分割の順に`join`で結ぶ。塊は最初の添字から始めて添字を左から畳み、群は塊を左に入れ子にして結び、全体は群を左に入れ子にして結ぶ。空の範囲は`unit`を返し、`unit`はほかでは使わない。結果は、workerの数とスケジュールによらず同じ値で、`Float`ならビットまで同じである。逐次の左畳み込みと等しくなるのは、`join`が結合的なときだけである
 - `for_range lo hi body`は、すべての添字について`body i`を呼ぶ。塊の中は添字の順で、塊の間の順は決まっていない。`body`にできるのは計算と`Panic`を起こすことだけである
 - コールバックの`Panic`は`par`に従う。どの塊も最後まで、または自分の`Panic`まで動き、`Panic`を起こした塊のうち最も左の塊のものが起こし直される
+- `tabulate n f`は、要素`i`が`f i`である配列である。要素が1024個までは`Array.tabulate n f`なので、負の長さは同じ`Panic`を起こす。それより長いときは、塊ごとに`Array.tabulate`で作り、塊を`Array.concat`で結ぶ。`tabulate_unboxed`は`UnboxedArray`について同じである
+- `map f xs`と`mapi f xs`は、`xs`の添字についての`tabulate`である。`reduce join unit xs`は、`xs`の添字についての`reduce_range`である
+- `try_map f xs`はすべての要素に`f`を呼んだ後で、最も左の`Err`を返す。`Err`がなければ値の配列を返す
+- `for_mut f m`と`for_mut_unboxed f m`は、`m`を凍結し、凍結した入力から新しい配列を作って (`for_mut`は`mapi`で、`for_mut_unboxed`は`tabulate_unboxed`で)、それを解凍する。新しい配列は一意なので、`thaw`はコピーしない。子が共有する配列に書く関数はない
+- forkは、右の子の閉包から届く物に共有の印を付ける。入力は最初のforkで印が付き、以後のforkは付け直さない ([VM](vm.md)の「`par`のforkとjoin」)
 
 ## `Std.Async`
 

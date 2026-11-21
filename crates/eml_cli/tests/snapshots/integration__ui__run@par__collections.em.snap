@@ -1,0 +1,17 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/collections.em
+---
+--- stdout ---
+[True, True, True, True, True, True, True, True]
+[True, True, True, True, True]
+(4998, 2048)
+(0.5, 2499.5)
+Err "array length -1 is negative"
+42
+Err "array length -1 is negative"
+Err "at 1100"
+(0, 3069, 3072, 4497)
+(1, 351, 700)
+--- stderr ---

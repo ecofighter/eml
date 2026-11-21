@@ -1881,16 +1881,16 @@ fn a_saturated_fork_join_is_a_par_call() {
     fn "Std.Par.par@[Float, Int]"(f.0: tobj poly, g.1: tobj poly) -> (,){float, int} {
       let c.2: tobj poly = closure "Std.Par.par@[Float, Int]$lambda0"(f.0)
       let c.3: tobj poly = closure "Std.Par.par@[Float, Int]$lambda1"(g.1)
-      let t.4: (,){obj, obj} = par (,) #0(c.2, c.3) @"<std>/Par.em":12:9
+      let t.4: (,){obj, obj} = par (,) #0(c.2, c.3) @"<std>/Par.em":16:9
       unpack t.4 (,) #0(l.5: obj, r.6: obj)
       switch l.5 Prelude.Result { #0(m.7: obj) -> b1, #1(a.8: float) -> b2 }
     b1:
-      let t.12: (,){float, int} = extern Prelude.panic(m.7) @"<std>/Par.em":14:21
+      let t.12: (,){float, int} = extern Prelude.panic(m.7) @"<std>/Par.em":18:21
       return t.12
     b2:
       switch r.6 Prelude.Result { #0(m.9: obj) -> b3, #1(b.10: int) -> b4 }
     b3:
-      let t.13: (,){float, int} = extern Prelude.panic(m.9) @"<std>/Par.em":15:21
+      let t.13: (,){float, int} = extern Prelude.panic(m.9) @"<std>/Par.em":19:21
       return t.13
     b4:
       let d.11: (,){float, int} = con (,) #0(a.8, b.10)
