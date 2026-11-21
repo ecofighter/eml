@@ -398,7 +398,7 @@ impl BodyCheck<'_, '_> {
                 }
             }
             AmbientSource::Input => {
-                // `Std.Async`を読み込んでいれば、入力は`Async`も行える (docs/spec/types.mdの「REPLの入力」)
+                // `Std.Async`を読み込んでいれば、入力は`Async`も行える (docs/spec/types.mdの「REPL の入力」)
                 let allowed = if self.program.async_effect().is_some() {
                     "`IO`, `Panic` and `Async`"
                 } else {
@@ -463,7 +463,7 @@ impl BodyCheck<'_, '_> {
 
     /// helpとfixで足すラベルと、fixで足すエフェクト。足りないラベルから、すでに`Async`を持つ`main`か入力のrowに
     /// 足りない`Async`を除く。`main`のrowに`Async`は高々1回しか書けず、入力のrowはすでに`Async`を1つ許すので、
-    /// 2つ目を足しても誤りは直らない (docs/spec/types.mdの「推論」と「REPLの入力」)。
+    /// 2つ目を足しても誤りは直らない (docs/spec/types.mdの「推論」と「REPL の入力」)。
     fn labels_to_add(
         &self,
         missing: &[String],

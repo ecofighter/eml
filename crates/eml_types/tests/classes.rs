@@ -358,7 +358,7 @@ fn an_instance_inherits_the_carry_of_a_recursive_group() {
 }
 
 /// メソッドへの参照はクラスのスキームを取る。そのため、`once`の操作を含むrowで自分のメソッドを呼ぶinstanceの
-/// メソッドも、自分のrow変数に多重度の境界を持たない (docs/spec/types.md の「instance と既定のメソッドの検査」)。
+/// メソッドも、自分のrow変数に多重度の境界を持たない (docs/spec/types.mdの「instance と既定のメソッドの検査」)。
 #[test]
 fn an_instance_method_may_call_its_method_with_a_handled_effect() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runs a where\n  run : a -> (Unit -> <e> Int) -> <Panic | e> Int\n\ninstance Runs Int where\n  run n f =\n    if n == 0 then f ()\n    else\n      handle run (n - 1) (fn () -> ask ()) with\n        | fn ask () -> 1";

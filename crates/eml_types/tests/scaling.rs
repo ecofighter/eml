@@ -92,6 +92,20 @@ fn ring_with_local_lambdas(n: usize) -> String {
     text
 }
 
+/// 引数を複製する`dup`を各メンバーが呼ぶ関数の輪。`dup`のスキームは型変数に`Unr`の上限を付けるので、すべての
+/// メンバーの`μ_a`を含む成分から、上限を持つ参照の成分へメンバーの数だけ辺が出る。その辺を宣言ごとにたどると2乗の
+/// 時間になるので、`kind/solve.rs`の`Shortcut`が先にまとめる。
+fn ring_calling_a_copying_function(n: usize) -> String {
+    let mut text = String::from("dup : a -> (a, a)\ndup x = (x, x)\n\n");
+    for i in 0..n {
+        let j = (i + 1) % n;
+        text.push_str(&format!(
+            "f{i} : a -> Bool -> (a, a)\nf{i} x b = if b then dup x else f{j} x b\n\n"
+        ));
+    }
+    text
+}
+
 /// 宣言自身の変数を持たない多くのメンバーが、長い矢印の鎖の上を参照する SCC。`wrap` のスキームは引数の矢印を
 /// 戻り値の矢印の下に置くので、`q` の本体の `q{i}` の矢印は `q0 ≤ … ≤ q{n}` の鎖になり、`q` の戻り値の矢印はその上に
 /// ある。`q` が `f0` を呼び、`f{i}` が `q` を呼ぶので、`wrap` のほかは1つの SCC になる。`f{i}` は宣言自身の変数を
@@ -251,6 +265,12 @@ fn a_ring_of_higher_order_functions() {
 #[ignore = "release ビルドで時間を測る"]
 fn a_ring_of_functions_with_local_lambdas() {
     assert_linear(ring_with_local_lambdas);
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn a_ring_of_functions_calling_a_copying_function() {
+    assert_linear(ring_calling_a_copying_function);
 }
 
 #[test]

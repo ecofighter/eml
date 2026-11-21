@@ -986,7 +986,7 @@ fn check_method_kinds(
         debug_assert!(solution.violated.is_empty());
         let class_side = solution.schemes.into_iter().next().unwrap_or_default();
         // instanceのメソッドと既定のメソッドの関数を参照するものはないので、その関数自身の多重度の変数には
-        // 境界が付かない (docs/spec/types.mdの「instanceと既定のメソッドの検査」)。
+        // 境界が付かない (docs/spec/types.mdの「instance と既定のメソッドの検査」)。
         debug_assert!(scheme.mult.is_empty());
         let missing = unentailed(&class_side, scheme);
         if missing.is_empty() {

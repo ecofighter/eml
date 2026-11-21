@@ -36,7 +36,7 @@ pub(crate) fn solve_scc(
 ) -> Solution {
     let merged = merge(members, schemes);
     let (lin, lin_violated, lin_causes) = solve_with_causes(&merged.lin);
-    let (mult, mult_violated, _) = solve_with_causes(&merged.mult);
+    let (mult, mult_violated) = solve(&merged.mult);
     // 多重度の制約には定数の上限がないので、多重度の束だけでは破れる制約がない。多重度を読むのは持ち越しの制約だけである
     // (docs/spec/types.mdの「推論」)。
     debug_assert!(mult_violated.is_empty());
@@ -294,7 +294,6 @@ fn shift<T>(bound: Bound<T>, offset: usize) -> Bound<T> {
 
 /// 最小解と、満たせなかった制約 (定数の上限を超えたもの) の番号。上がった変数をワークリストに入れ、上向きの辺に沿って
 /// 伝える。束の高さが小さいので、各変数が上がる回数は高々その高さで、時間は制約の数に比例する。
-#[cfg(test)]
 pub(crate) fn solve<T: Level>(bounds: &Bounds<T>) -> (Vec<T>, Vec<usize>) {
     let (values, violated, _) = solve_with_causes(bounds);
     (values, violated)
