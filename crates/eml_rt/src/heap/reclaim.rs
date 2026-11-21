@@ -28,7 +28,8 @@ use crate::word::Word;
 
 verus! {
 
-/// 受けた解放の数がこれに届いたら、`reclaim_if_due` が取り込む (docs/spec/object-model.md の「別のスレッドからの解放」)。
+/// 受けた小さいブロックの数がこれに届いたら、`reclaim_if_due` がページを歩く (docs/spec/object-model.md の
+/// 「別のスレッドからの解放」)。大きい物体のページは数えない。
 pub(crate) const REMOTE_RECLAIM: usize = 256;
 
 impl Core {
@@ -169,11 +170,12 @@ impl<M: Mode> Heap<M> {
             final(self).wf(),
             final(self).reclaimed(*old(self), Set::empty()),
     {
-        self.reclaim_held(Ghost(Set::empty()));
+        self.reclaim_held(Ghost(Set::empty()), true);
     }
 
-    /// 受けた解放が `REMOTE_RECLAIM` 個に届いたか、大きい物体のページが返ってきていれば取り込み、真を返す。そうで
-    /// なければ何もせずに偽を返す。
+    /// 大きい物体の列が空でなければそれを取り出し、受けた小さいブロックの数が `REMOTE_RECLAIM` に届いたときだけ
+    /// ページを歩く。どちらかをしたら真を返す。待つ小さいブロックがそれより少ないときは、そのまま残す
+    /// (docs/spec/object-model.md の「別のスレッドからの解放」)。
     pub fn reclaim_if_due(&mut self) -> (r: bool)
         requires
             old(self).wf(),
@@ -192,8 +194,9 @@ impl<M: Mode> Heap<M> {
             final(self).reclaimed(*old(self), held),
     {
         let sink = self.core.pages.sink();
-        if sink_large_pending(sink) || sink_count(sink) >= REMOTE_RECLAIM {
-            self.reclaim_held(Ghost(held));
+        let pages = sink_count(sink) >= REMOTE_RECLAIM;
+        if pages || sink_large_pending(sink) {
+            self.reclaim_held(Ghost(held), pages);
             true
         } else {
             proof {
@@ -321,7 +324,8 @@ impl<M: Mode> Heap<M> {
     /// `reclaim` の本体。`held` は呼ぶ側 (`Ctx`) の持つ物体で、取り込みはそれを空けたことにしない。先にすべての
     /// ページの遠隔の空きリストと大きい物体の列を取り出し、その後で1つずつ返す。取り出す間はモデルを変えないので、
     /// 約束の集合はどれも呼んだときのモデルについて言える。
-    pub(crate) fn reclaim_held(&mut self, Ghost(held): Ghost<Set<usize>>)
+    /// `pages` が偽なら、受けた数を戻さず、ページも歩かず、大きい物体の列だけを取り出す。
+    pub(crate) fn reclaim_held(&mut self, Ghost(held): Ghost<Set<usize>>, pages: bool)
         requires
             old(self).wf(),
         ensures
@@ -331,18 +335,24 @@ impl<M: Mode> Heap<M> {
         let ghost s0 = *self;
         let ghost c0 = self.core;
         let sink = self.core.pages.sink();
-        sink_count_take(sink);
+        if pages {
+            sink_count_take(sink);
+        }
         let mut out: Vec<*mut Header> = Vec::new();
         let ghost mut acc: Set<usize> = Set::empty();
         proof {
             assert(c0.freed_set(acc, held));
         }
-        let n = self.core.pages.pages_len();
+        let n = if pages {
+            self.core.pages.pages_len()
+        } else {
+            0
+        };
         let mut i: usize = 0;
         while i < n
             invariant
                 *self == s0,
-                n == self.core.pages.page_count(),
+                n <= self.core.pages.page_count(),
                 i <= n,
                 c0.freed_set(acc, held),
                 Self::out_ok(out@, c0, acc),

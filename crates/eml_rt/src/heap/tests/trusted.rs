@@ -1253,6 +1253,47 @@ fn two_remote_large_frees_are_both_reclaimed<M: Mode>() {
     drop(b);
 }
 
+// 別のスレッドが、共有した短いリストと大きい物体を1つ解放する。持ち主の `reclaim_if_due` は大きい物体のページを
+// すぐに取り込み、受けた数が `REMOTE_RECLAIM` に満たない小さいブロックは遠隔の空きリストに残すので、解放はまだ残って
+// いる。`reclaim` はそれを取り込み、残るものはなくなる
+fn a_due_reclaim_leaves_few_small_blocks<M: Mode>() {
+    const N: usize = 16;
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let base = a.bytes_in_use_pages();
+    let xs = shared_list(&mut a, N);
+    let small = a.bytes_in_use_pages();
+    let big = a.alloc_data(0, 0, LARGE_BODY / 8, false);
+    unsafe { a.share(big, 0) }.unwrap();
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        unsafe {
+            b.decref(xs).unwrap();
+            b.decref(big).unwrap();
+        }
+        b
+    })
+    .join()
+    .unwrap();
+    assert!(a.reclaim_if_due());
+    assert!(a.remote_pending());
+    if M::CHECKED {
+        assert_eq!(a.stats().reclaimed, 1);
+    } else {
+        assert_eq!(a.bytes_in_use_pages(), small);
+    }
+    assert!(!a.reclaim_if_due());
+    assert!(a.remote_pending());
+    a.reclaim();
+    assert!(!a.remote_pending());
+    if M::CHECKED {
+        assert_eq!(a.stats().reclaimed, N as u64 + 1);
+    } else {
+        assert!(a.bytes_in_use_pages() > base);
+    }
+    assert_eq!(mortal(&mut a), 0);
+    drop(b);
+}
+
 // 2つのスレッドが1つのページに積む。その間、持ち主のヒープも別のスレッドへ動かす
 fn two_threads_free_into_one_page<M: Mode>() {
     const N: usize = 16;
@@ -3044,6 +3085,7 @@ both_modes!(
     a_remote_large_free_refunds_at_once,
     remote_take_leaves_a_large_page_alone,
     two_remote_large_frees_are_both_reclaimed,
+    a_due_reclaim_leaves_few_small_blocks,
     two_threads_free_into_one_page,
     the_owner_carves_while_another_thread_reads_and_frees,
     the_receiver_rewrites_reuses_and_frees_a_moved_lin_object,

@@ -1337,9 +1337,7 @@ impl<M: Mode> Ctx<M> {
         self.reclaim_when(false);
     }
 
-    /// 受けた解放が溜まっていれば取り込み、真を返す (`Heap::reclaim_if_due`)。VM は待つ前、タスクを切り替えるとき、
-    /// join の後、run の終わりの検査の前に呼ぶ (docs/spec/vm.md の「タスクとスケジュール」「子の終わりと join」
-    /// 「時計と driver」「誤り、止めること、終わり」)。
+    /// `Heap::reclaim_if_due`を呼ぶ。エンジンはdocs/spec/object-model.mdの「別のスレッドからの解放」が挙げる地点で呼ぶ。
     pub fn reclaim_if_due(&mut self) -> (r: bool)
         requires
             old(self).wf(),
@@ -1393,7 +1391,7 @@ impl<M: Mode> Ctx<M> {
         let r = if due {
             self.heap.reclaim_if_due_held(Ghost(held))
         } else {
-            self.heap.reclaim_held(Ghost(held));
+            self.heap.reclaim_held(Ghost(held), true);
             true
         };
         proof {
