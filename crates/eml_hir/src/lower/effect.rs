@@ -107,7 +107,7 @@ impl ItemLowering<'_> {
             types: &mut types,
             generics: &mut generics,
             items: self.resolver,
-            vars: Vars::Operation,
+            vars: Vars::Define,
             public_item: public.then_some(item.name.as_str()),
             c_widths: None,
             diagnostics: &mut *self.diagnostics,

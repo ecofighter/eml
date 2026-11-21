@@ -133,7 +133,6 @@ pub mod codes {
     pub const NEGATIVE_BYTE_LITERAL: ErrorCode = ErrorCode(1054);
     pub const SPREAD_NOT_AN_ARGUMENT: ErrorCode = ErrorCode(1055);
     pub const COMMAND_WITHOUT_PROGRAM: ErrorCode = ErrorCode(1056);
-    pub const ROW_BOUND_NOT_DECLARED: ErrorCode = ErrorCode(1057);
     pub const ABSTRACT_MEMBER: ErrorCode = ErrorCode(1058);
     pub const INVALID_EXTERN_C: ErrorCode = ErrorCode(1059);
     pub const INVALID_LINK: ErrorCode = ErrorCode(1060);

@@ -93,7 +93,7 @@ extern のエフェクトは、型検査では普通のエフェクトと次の�
 - `Panic` が表すのは、値と入力で決まる誤りである。整数の桁あふれとゼロ除算、文字列の範囲外の位置と文字の境界でない切り出し、範囲外のスクリプトの引数、利用者の `panic` がこれに当たる。これらを起こしうる関数は、最後の矢印の row に `Panic` を持つ。`Num` と `Div` のメソッド (`+`、`-`、`*`、`/`、`%`、前置の `-` が呼ぶ `negate`) と、extern の関数 `String.byte_at` がこれに当たる。一覧は [標準ライブラリ](stdlib.md) の「`try_panic`」の表にある。`Env.arg` の row は `<IO, Panic>` である
 - ヒープの誤り、内部の誤り、割り込み、深さと確保量の上限、標準出力への書き出しの失敗は、型に出さない。どの呼び出しでも起きうるか、起きた位置が決まらないためである
 - `panic` は、`exit` と同じく戻らない extern の関数である。結果の型は量化した型変数なので、手前で `Lin` の値を手放さなくてよい ([線形性](linearity.md) の「暗黙の後始末」)
-- 型検査では、重なったラベルを1つにまとめ、`mask`に入れない点が`IO`と同じである。多重度は`Never`で、`never`の操作だけを含むrow (`Row<Never>`) に入れられる。`par`と`compute`に渡す関数のrowは`<Panic>`で、子は`Panic`を起こせる ([標準ライブラリ](stdlib.md) の「`Std.Par`」)。操作は`never`の`panicked`だけなので、`Panic`はyieldしうるラベルでない ([型とKind](types.md) の「rowの具体化の記録」)。rowに`Panic`を足しても、yieldの確かめは増えない
+- 型検査では、重なったラベルを1つにまとめ、`mask`に入れない点が`IO`と同じである。多重度は`Never`である。`par`と`compute`に渡す関数のrowは`<Panic>`で、子は`Panic`を起こせる ([標準ライブラリ](stdlib.md)の「`Std.Par`」)。操作は`never`の`panicked`だけなので、`Panic`はyieldしうるラベルでない ([型とKind](types.md)の「rowの具体化の記録」)。rowに`Panic`を足しても、yieldの確かめは増えない
 - トップレベルの値の本体と、`Eq`、`Ord`、`Show`のメソッドのrowは空なので、そこでは`Panic`を起こせない ([宣言](declarations.md)の「シグネチャと等式」)。`main`のrowとREPLの入力のrowは`Panic`を許す。プログラムが`Std.Async`を読み込んでいれば、`main`のrowは`Async`も許す ([モジュールと名前解決](modules.md)の「モジュール」、[型と Kind](types.md)の「REPL の入力」)
 
 ## 抽象エフェクト
