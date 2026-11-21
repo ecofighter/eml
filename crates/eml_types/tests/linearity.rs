@@ -1177,3 +1177,72 @@ fn a_diverging_call_with_a_multi_row_drops_before_carrying() {
     let text = "import FileIn\neffect Choose where\n  multi choose : Unit -> Bool\n\ndie2 : String -> <Choose, IO> a\ndie2 message =\n  eprintln message\n  exit 2\n\nrun : Unit -> <Choose, IO> Unit\nrun () =\n  let f = FileIn.open \"a\"\n  die2 \"no\"";
     insta::assert_snapshot!(implicit_drops(text), @"13:3 [f]");
 }
+
+/// コールバックの最後の結果はexternが受け取る値で、`par`は組に1回だけ入れるか、落とす。そのため、結果に
+/// `Lin`の値を返す子も受け付ける (docs/spec/declarations.mdの「`extern`」)。
+#[test]
+fn a_par_child_may_return_a_lin_value() {
+    let text = "import Std.Par\nimport Std.MutArray\nimport Std.Array\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (m, n) = Par.par (fn () -> MutArray.make 3 4) (fn () -> 3)\n  let (x, m) = MutArray.read m 0\n  println (show (x + n + Array.length (MutArray.freeze m)))";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+/// 受け取った関数の呼び出しをまたいでファイルを持つ関数。推論が持ち越しの制約をスキームに残すので、`once`の
+/// エフェクト (`IO`、`var`) だけのコールバックは通り、`multi`の操作を含むコールバックは通らない
+/// (docs/spec/types.mdの「推論」)。
+const EACH_LINE: &str = "import FileIn\n\neffect Choice where\n  multi choose : Unit -> Bool\n\neach_line : FileIn.FileIn -> (String -> <e> Unit) -> <IO, Panic | e> FileIn.FileIn\neach_line file f =\n  match FileIn.read_line file with\n    | (None, file) -> file\n    | (Some line, file) ->\n      f line\n      each_line file f\n\n";
+
+#[test]
+fn a_function_that_keeps_a_file_across_its_callback_takes_once_effects() {
+    let text = format!(
+        "{EACH_LINE}main : Unit -> <IO, Panic> Unit\nmain () =\n  var count = 0\n  FileIn.close (each_line (FileIn.open \"a.txt\") (fn line ->\n    count <- count + 1\n    println line))"
+    );
+    assert_eq!(check_short(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_function_that_keeps_a_file_across_its_callback_refuses_a_multi_callback() {
+    let text = format!(
+        "{EACH_LINE}main : Unit -> <IO, Panic> Unit\nmain () =\n  handle FileIn.close (each_line (FileIn.open \"a.txt\") (fn line -> if choose () then println line else ())) with\n    | ctl choose () k ->\n      k True\n      k False"
+    );
+    insta::assert_snapshot!(check_full(&text), @"
+    E3006 16:24 `each_line` keeps a linear value alive across a call that may resume more than once
+      16:24 `each_line` is used here
+      11:7 `file` is kept alive across this call
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+    ");
+}
+
+/// コールバックをまたいでファイルを持つ関数は、操作を1回だけ再開するハンドラの下で動かせる。
+#[test]
+fn a_function_that_keeps_a_file_across_its_callback_runs_under_a_once_handler() {
+    let text = "import State (State(..))\nimport FileIn\n\nlocked : (Unit -> <e> a) -> <IO | e> a\nlocked action =\n  let lock = FileIn.open \"lock\"\n  let r = action ()\n  FileIn.close lock\n  r\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (n, s) = State.run 0 (fn () -> locked (fn () ->\n    put (get () + 1)\n    get ()))\n  println (show (n + s))";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+/// 受け取った関数の呼び出しをまたいでファイルを持つ関数を値として使っても、呼び出しと同じく持ち越しの制約が伝わる。
+/// `each_line`を`multi`のコールバックと一緒に`apply`に渡すと、`each_line`の参照を指してE3006になる。
+#[test]
+fn a_value_use_of_a_function_that_keeps_a_file_refuses_a_multi_callback() {
+    let text = format!(
+        "{EACH_LINE}apply : (FileIn.FileIn -> (String -> <e> Unit) -> <IO, Panic | e> FileIn.FileIn) -> FileIn.FileIn -> (String -> <e> Unit) -> <IO, Panic | e> FileIn.FileIn\napply p file f = p file f\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  handle FileIn.close (apply each_line (FileIn.open \"a.txt\") (fn line -> if choose () then println line else ())) with\n    | ctl choose () k ->\n      k True\n      k False"
+    );
+    insta::assert_snapshot!(check_full(&text), @"
+    E3006 19:30 `each_line` keeps a linear value alive across a call that may resume more than once
+      19:30 `each_line` is used here
+      11:7 `file` is kept alive across this call
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+    ");
+}
+
+/// 再帰する組の持ち越しの制約を受け継ぐだけの関数。`pong`自身は何も持たないが、`action`の呼び出しをまたいでファイルを
+/// 持つ`ping`を呼ぶ。組の外から`multi`の操作を含むrowを渡して呼ぶとE3006になり、報告は`ping`の中の`lock`を指す。
+#[test]
+fn a_call_of_a_member_that_inherits_the_carry_of_its_group_refuses_a_multi_callback() {
+    let text = "import FileIn\n\neffect Choice where\n  multi choose : Unit -> Bool\n\nping : Int -> (Unit -> <e> Unit) -> <IO, Panic | e> Unit\nping n action =\n  if n == 0 then ()\n  else\n    let lock = FileIn.open \"lock\"\n    action ()\n    FileIn.close lock\n    pong (n - 1) action\n\npong : Int -> (Unit -> <e> Unit) -> <IO, Panic | e> Unit\npong n action = if n == 0 then () else ping (n - 1) action\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  handle pong 2 (fn () -> if choose () then () else ()) with\n    | ctl choose () k ->\n      k True\n      k False";
+    insta::assert_snapshot!(check_full(text), @"
+    E3006 20:10 `pong` keeps a linear value alive across a call that may resume more than once
+      20:10 `pong` is used here
+      11:5 `lock` is kept alive across this call
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+    ");
+}

@@ -3,7 +3,6 @@ use rustc_hash::FxHashSet;
 use super::unify::Unified;
 use super::*;
 use crate::data::Variance;
-use crate::kind::{KindOrigin, KindReason};
 
 impl Table<'_> {
     /// 束縛済みの row 変数を展開し、ラベルを1つの並びにまとめる。
@@ -300,20 +299,10 @@ impl Table<'_> {
             return Err(UnifyError::Occurs);
         }
         let sigma = self.row_vars[var.0 as usize].multiplicity;
-        // 上限を超えたとき、E2020 がどのエフェクトの row かを指せるよう、ラベルごとの下限にエフェクトを記録する
-        let origin = self.kind_origin();
         for label in &row.labels {
-            let labelled = match &origin {
-                Provenance::At(at) => Provenance::at(KindOrigin {
-                    span: at.span,
-                    reason: KindReason::Performs(label.effect),
-                }),
-                other => other.clone(),
-            };
-            self.multiplicity.require(
+            self.require_mult(
                 Bound::Const(self.effect_multiplicity(label.effect)),
                 Bound::Var(sigma),
-                labelled,
             );
         }
         if let Tail::Var(tail) = row.tail {

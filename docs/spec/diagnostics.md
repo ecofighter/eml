@@ -124,7 +124,6 @@ struct Fix {
 | E1054 | `NEGATIVE_BYTE_LITERAL` | `Byte` のリテラルの直前に `-` がある。式でもパターンでも同じ ([式](expressions.md) の「演算子の列と単項マイナス」) |
 | E1055 | `SPREAD_NOT_AN_ARGUMENT` | コマンドリテラルの `\{..}` の穴が、プログラムの後の引数の全体でない ([式](expressions.md) の「コマンドリテラル」) |
 | E1056 | `COMMAND_WITHOUT_PROGRAM` | コマンドリテラルに引数が1つもなく、プログラムがない ([式](expressions.md) の「コマンドリテラル」) |
-| E1057 | `ROW_BOUND_NOT_DECLARED` | row 変数の上限 `never` を、シグネチャが付けていない変数の本体の型の明示か `data` のフィールドに書いた、または操作のシグネチャに書いた ([型と Kind](types.md) の「row 変数の多重度の上限」) |
 | E1058 | `ABSTRACT_MEMBER` | 抽象型 (`pub abstract data`) のコンストラクタか、抽象エフェクト (`pub abstract effect`) の操作を、宣言したモジュールの外で作る式、パターン、perform、handler の節、import の並び (`T(..)`、`E(..)`、操作の名前) に書いた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
 | E1059 | `INVALID_EXTERN_C` | `extern "C"` の宣言の誤り。`"C"` でない ABI の文字列、`as` の後の知らない C の整数の型の名前、空の `symbol` か `drop` の文字列、C の関数のシグネチャに続く等式 ([宣言](declarations.md) の「`extern "C"`」) |
 | E1060 | `INVALID_LINK` | `link` の item の誤り。知らない OS の名前、`macos` でない OS の `framework`、空のライブラリの名前 ([宣言](declarations.md) の「`extern "C"`」) |
@@ -136,7 +135,7 @@ struct Fix {
 | E2006 | `NO_INSTANCE` | 制約 `C T` を満たす instance がない。上位クラスの instance がないこと、導出した instance のフィールドの型が instance を持たないことを含む ([型と Kind](types.md) の「制約の解決」) |
 | E2009 | `AMBIGUOUS_CONSTRAINT` | 制約の型が最後まで決まらない。`:type` の問い合わせでは、型に現れない型変数を `Unit` とみなして解けないとき |
 | E2010 | `LINEAR_INSTANCE_HEAD` | `Unr` のクラスの instance の頭が `Unr` でない ([型と Kind](types.md) の「`Unr` のクラス」) |
-| E2011 | `METHOD_KIND_MISMATCH` | instance のメソッドか既定のメソッドが、クラスのシグネチャから導けない Kind の制約 (線形性と多重度の境界、持ち越しの制約) を持つ ([型と Kind](types.md) の「instance と既定のメソッドの検査」) |
+| E2011 | `METHOD_KIND_MISMATCH` | instanceのメソッドか既定のメソッドが、クラスのシグネチャから導けないKindの制約 (線形性の境界と持ち越しの制約) を持つ ([型と Kind](types.md)の「instance と既定のメソッドの検査」) |
 | E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 一様な位置の型変数が制約を持つ ([Core IR](core-ir.md) の「一様な位置と制約付きの多相再帰」) |
 | E2013 | `FIELD_NEEDS_KNOWN_TYPE` | 射影か更新の時点で、値の型が決まっていない ([型と Kind](types.md) の「フィールドの解決」) |
 | E2014 | `NO_SUCH_FIELD` | 射影か更新のフィールドが、その型にない。コンストラクタが2つ以上の型への射影と更新、タプルの更新を含む |
@@ -145,7 +144,6 @@ struct Fix {
 | E2017 | `BINDING_AMBIGUOUS` | REPL の `let` の束縛の型に、決まらない型変数が残った |
 | E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |
 | E2019 | `VAR_ESCAPES` | `var` の変数を使う関数が範囲の外へ出うる。ノードの値の型、ノードの場所の row、範囲の外の束縛の型のどれかに、変数のエフェクトが現れる ([型と Kind](types.md) の「範囲の外へ出る閉包」) |
-| E2020 | `ROW_BOUND_EXCEEDED` | 呼び出しが多重度の上限を持つ row 変数に、上限を超える row を入れた。上限はシグネチャに書いたものと、推論で付いたものの両方を含む ([型と Kind](types.md) の「row 変数の多重度の上限」)。同じ SCC の中では、上限を持つ宣言を呼ぶ別の呼び出しに出て、上限を超える row を入れた呼び出しには出ないことがある ([型と Kind](types.md) の「推論」) |
 | E2021 | `PRIVATE_FIELD` | 抽象型のフィールドを、宣言したモジュールの外で射影か更新した ([モジュールと名前解決](modules.md) の「公開の範囲」) |
 | E2022 | `FFI_UNSUPPORTED_TYPE` | `extern "C"` の関数のシグネチャの型が、C の型に対応しない。表にない型、引数の `Int` と結果 `R` の `Int` のほかに書いた `as`、借りた引数を返さない結果の組 ([宣言](declarations.md) の「型の対応」) |
 | E2023 | `FFI_EFFECTS` | `extern "C"` の関数の行が、`pure`、狭める引数、ハンドルの結果、`blocking` から決まる行と違う。内側の矢印の行を含む ([宣言](declarations.md) の「型の対応」) |
@@ -163,7 +161,7 @@ struct Fix {
 | E4004 | `UNREACHABLE_ARM` | 到達しない枝 (Warning) |
 | E4005 | `UNREACHABLE_EQUATION` | 到達しない等式 (Warning) |
 
-E2007 と E2008 は欠番で、ほかの診断に使わない。
+E1057、E2007、E2008、E2020は欠番で、ほかの診断に使わない。
 
 E2006 が `==` の位置に出る場合も、演算子でなくクラスの言葉で言う。
 

@@ -728,12 +728,7 @@ impl Printer<'_> {
             RowRef::Omitted => return None,
             RowRef::Closed { effects, .. } => format!("<{}>", effect_names(effects).join(", ")),
             RowRef::Open { effects, tail, .. } => {
-                let var = &self.generics.row_vars[*tail];
-                let tail = if var.never.is_some() {
-                    format!("never {}", var.name)
-                } else {
-                    var.name.clone()
-                };
+                let tail = &self.generics.row_vars[*tail].name;
                 if effects.is_empty() {
                     format!("<{tail}>")
                 } else {

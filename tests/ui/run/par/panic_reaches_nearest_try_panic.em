@@ -5,7 +5,7 @@ import Std.Par
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
 
-foo : (Unit -> <never e> Int) -> <Panic | e> Int
+foo : (Unit -> <e> Int) -> <Panic | e> Int
 foo h = h ()
 
 main : Unit -> <IO, Panic> Unit

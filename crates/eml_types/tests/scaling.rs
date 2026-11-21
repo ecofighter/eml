@@ -92,15 +92,15 @@ fn ring_with_local_lambdas(n: usize) -> String {
     text
 }
 
-/// `never` の上限を持つ `helper` を各メンバーが呼ぶ関数の輪。どのメンバーの `g` の row にも、`helper` の参照から
-/// 上限が推論で付く。すべてのメンバーの row は1つの成分に入り、その成分から各参照の上限の成分へメンバーの数だけ辺が
-/// 出る。メンバーごとに残す制約と上限の出どころを求めるとき、その辺を毎回たどると2乗の時間になる。
-fn ring_with_inferred_bounds(n: usize) -> String {
-    let mut text = String::from("helper : (Unit -> <never e> Int) -> <e> Int\nhelper f = f ()\n\n");
+/// 引数を複製する`dup`を各メンバーが呼ぶ関数の輪。`dup`のスキームは型変数に`Unr`の上限を付けるので、すべての
+/// メンバーの`μ_a`を含む成分から、上限を持つ参照の成分へメンバーの数だけ辺が出る。その辺を宣言ごとにたどると2乗の
+/// 時間になるので、`kind/solve.rs`の`Shortcut`が先にまとめる。
+fn ring_calling_a_copying_function(n: usize) -> String {
+    let mut text = String::from("dup : a -> (a, a)\ndup x = (x, x)\n\n");
     for i in 0..n {
         let j = (i + 1) % n;
         text.push_str(&format!(
-            "f{i} : (Unit -> <e> Int) -> Bool -> <e> Int\nf{i} g b = if b then helper g else f{j} g b\n\n"
+            "f{i} : a -> Bool -> (a, a)\nf{i} x b = if b then dup x else f{j} x b\n\n"
         ));
     }
     text
@@ -269,8 +269,8 @@ fn a_ring_of_functions_with_local_lambdas() {
 
 #[test]
 #[ignore = "release ビルドで時間を測る"]
-fn a_ring_of_functions_with_inferred_bounds() {
-    assert_linear(ring_with_inferred_bounds);
+fn a_ring_of_functions_calling_a_copying_function() {
+    assert_linear(ring_calling_a_copying_function);
 }
 
 #[test]

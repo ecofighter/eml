@@ -66,7 +66,6 @@ pub mod codes {
     pub const BINDING_AMBIGUOUS: ErrorCode = ErrorCode(2017);
     pub const INPUT_CHANGES_UNIFORM: ErrorCode = ErrorCode(2018);
     pub const VAR_ESCAPES: ErrorCode = ErrorCode(2019);
-    pub const ROW_BOUND_EXCEEDED: ErrorCode = ErrorCode(2020);
     pub const PRIVATE_FIELD: ErrorCode = ErrorCode(2021);
     pub const FFI_UNSUPPORTED_TYPE: ErrorCode = ErrorCode(2022);
     pub const FFI_EFFECTS: ErrorCode = ErrorCode(2023);

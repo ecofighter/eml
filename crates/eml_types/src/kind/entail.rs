@@ -14,23 +14,16 @@ use crate::ty::{Linearity, Multiplicity};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Unentailed {
     Linearity(Bound<Linearity>, Bound<Linearity>),
-    Multiplicity(Bound<Multiplicity>, Bound<Multiplicity>),
     Carry(Bound<Linearity>, Bound<Multiplicity>),
 }
 
 /// `scheme` の制約のうち、`assumed` から導けないもの。
 pub(crate) fn unentailed(assumed: &KindScheme, scheme: &KindScheme) -> Vec<Unentailed> {
     let lin = Lattice::new(&assumed.lin);
-    let mult = Lattice::new(&assumed.mult);
     let mut out = Vec::new();
     for &(lower, upper) in &scheme.lin {
         if !lin.entails(lower, upper) {
             out.push(Unentailed::Linearity(lower, upper));
-        }
-    }
-    for &(lower, upper) in &scheme.mult {
-        if !mult.entails(lower, upper) {
-            out.push(Unentailed::Multiplicity(lower, upper));
         }
     }
     let assumed_carries: FxHashSet<(Bound<Linearity>, Bound<Multiplicity>)> = assumed
@@ -39,9 +32,8 @@ pub(crate) fn unentailed(assumed: &KindScheme, scheme: &KindScheme) -> Vec<Unent
         .map(|carry| (carry.lin, carry.mult))
         .collect();
     for carry in &scheme.carries {
-        // 値の側が必ず `Unr` か、row の側が必ず `Once` 以下なら、持ち越しの制約は破れない
+        // 値の側が必ず`Unr`なら、持ち越しの制約は破れない
         let entailed = lin.upper(carry.lin) == Linearity::Unr
-            || mult.upper(carry.mult) <= Multiplicity::Once
             || assumed_carries.contains(&(carry.lin, carry.mult));
         if !entailed {
             out.push(Unentailed::Carry(carry.lin, carry.mult));
@@ -152,7 +144,6 @@ mod tests {
 
     const UNR: Bound<Linearity> = Bound::Const(Linearity::Unr);
     const LIN: Bound<Linearity> = Bound::Const(Linearity::Lin);
-    const ONCE: Bound<Multiplicity> = Bound::Const(Multiplicity::Once);
 
     fn lin(constraints: Vec<(Bound<Linearity>, Bound<Linearity>)>) -> KindScheme {
         KindScheme {
@@ -205,17 +196,15 @@ mod tests {
     }
 
     #[test]
-    fn a_carry_is_entailed_by_an_unrestricted_value_a_bounded_row_or_the_same_pair() {
+    fn a_carry_is_entailed_by_an_unrestricted_value_or_the_same_pair() {
         let assumed = KindScheme {
             lin: vec![(var(0), UNR)],
-            mult: vec![(var(0), ONCE)],
             carries: vec![carry(var(2), var(1))],
-            bound_sources: Vec::new(),
+            ..KindScheme::default()
         };
         let scheme = KindScheme {
             carries: vec![
                 carry(var(0), var(1)),
-                carry(var(1), var(0)),
                 carry(var(2), var(1)),
                 carry(var(1), var(1)),
             ],

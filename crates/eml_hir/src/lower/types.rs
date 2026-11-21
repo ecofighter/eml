@@ -22,9 +22,6 @@ pub(super) enum Vars {
     /// `data` の宣言のフィールド。宣言の型引数だけを使える。row の末尾には宣言の row の型引数だけを書ける
     /// (docs/spec/types.md の「row の型引数」)。
     Data,
-    /// 操作のシグネチャ。名前の取り方は `Define` と同じだが、row 変数に上限は書けない
-    /// (docs/spec/types.md の「row 変数の多重度の上限」)。
-    Operation,
 }
 
 pub(super) struct TypeLowering<'a> {
@@ -277,7 +274,7 @@ impl TypeLowering<'_> {
         let mut valid = true;
         let tail = match row.tail() {
             Some(tail) => {
-                let id = self.row_var(&tail, row.bound().map(|bound| bound.text_range()));
+                let id = self.row_var(&tail);
                 valid &= id.is_some();
                 id
             }
@@ -348,7 +345,7 @@ impl TypeLowering<'_> {
         {
             return TypeRefKind::Var(id);
         }
-        if matches!(self.vars, Vars::Define | Vars::Operation) {
+        if self.vars == Vars::Define {
             let id = self.generics.type_vars.alloc(TypeVarDecl {
                 name: text.to_string(),
             });
@@ -362,7 +359,7 @@ impl TypeLowering<'_> {
         TypeRefKind::Error
     }
 
-    fn row_var(&mut self, name: &SyntaxToken, bound: Option<TextRange>) -> Option<RowVarId> {
+    fn row_var(&mut self, name: &SyntaxToken) -> Option<RowVarId> {
         let text = name.text();
         let range = name.text_range();
         let found = self
@@ -371,7 +368,7 @@ impl TypeLowering<'_> {
             .iter()
             .find(|(_, var)| var.name == text)
             .map(|(id, _)| id);
-        let define = matches!(self.vars, Vars::Define | Vars::Operation);
+        let define = self.vars == Vars::Define;
         if found.is_none() && !define {
             self.diagnostics.push(Diagnostic::error(
                 codes::UNDEFINED_TYPE,
@@ -380,57 +377,18 @@ impl TypeLowering<'_> {
             ));
             return None;
         }
-        let id = found.unwrap_or_else(|| {
+        Some(found.unwrap_or_else(|| {
             self.generics.row_vars.alloc(RowVarDecl {
                 name: text.to_string(),
-                never: None,
             })
-        });
-        if let Some(at) = bound {
-            let declared = &mut self.generics.row_vars[id].never;
-            match self.vars {
-                Vars::Define => {
-                    declared.get_or_insert(at);
-                }
-                Vars::Signature | Vars::Data if declared.is_some() => {}
-                Vars::Signature | Vars::Data | Vars::Operation => {
-                    self.bound_not_declared(text, at);
-                }
-            }
-        }
-        Some(id)
-    }
-
-    fn bound_not_declared(&mut self, name: &str, at: TextRange) {
-        let (label, help) = match self.vars {
-            Vars::Signature => (
-                format!("the signature does not bound `{name}` with `never`"),
-                format!("write `never {name}` in the signature, or remove `never` here"),
-            ),
-            Vars::Data => (
-                "a row parameter of `data` has no bound".to_string(),
-                "remove `never`".to_string(),
-            ),
-            Vars::Operation | Vars::Define => (
-                "the row variables of an operation cannot be bounded".to_string(),
-                "remove `never`".to_string(),
-            ),
-        };
-        self.diagnostics.push(
-            Diagnostic::error(
-                codes::ROW_BOUND_NOT_DECLARED,
-                format!("`never` cannot bound `{name}` here"),
-                Label::new(self.file, at, label),
-            )
-            .with_help(help),
-        );
+        }))
     }
 
     /// 表にない変数の名前を書いたときのラベル。
     fn undeclared(&self) -> &'static str {
         match self.vars {
             Vars::Data => "not a parameter of this `data` declaration",
-            Vars::Define | Vars::Operation | Vars::Signature => "not found in the signature",
+            Vars::Define | Vars::Signature => "not found in the signature",
         }
     }
 
