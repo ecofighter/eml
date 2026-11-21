@@ -8,7 +8,7 @@ use eml_test_support::{capture, lir, run_stats, run_stats_on, schedule_independe
 use eml_vm::RunConfig;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 43] = [
+const PROGRAMS: [&str; 48] = [
     "apply_float",
     "apply_int",
     "byte_loop",
@@ -29,6 +29,11 @@ const PROGRAMS: [&str; 43] = [
     "nbody",
     "orders",
     "orders_by_hand",
+    "par_map",
+    "par_map_unboxed",
+    "par_reduce",
+    "par_tabulate_float",
+    "par_tabulate_int",
     "par_tree",
     "pfib",
     "push_fold",
@@ -1499,6 +1504,183 @@ fn par_tree() {
     ");
 }
 
+/// 箱に入った配列に軽い関数で`Par.map`を使う。forkと塊と、それを結ぶ`Array.concat`の回数を確かめる。
+#[test]
+fn par_map() {
+    insta::assert_debug_snapshot!(stats("par_map", "200001\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 6,
+        rc_increments: 1073,
+        rc_decrements: 4392,
+        boxes: 200000,
+        unboxes: 100002,
+        allocations: 3320,
+        reuses: 0,
+        peak_objects: 428,
+        peak_stack: 507,
+        tasks: 0,
+        parks: 0,
+        dropped_failures: 0,
+        cancels: 0,
+        timers: 0,
+        shared_objects: 195,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
+        completions: 0,
+    }
+    ");
+}
+
+/// `par_map`の箱のない側。`Par.for_mut_unboxed`は配列を1回コピーする。
+#[test]
+fn par_map_unboxed() {
+    insta::assert_debug_snapshot!(stats("par_map_unboxed", "200001\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 6,
+        rc_increments: 1073,
+        rc_decrements: 4392,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 3320,
+        reuses: 0,
+        peak_objects: 428,
+        peak_stack: 505,
+        tasks: 0,
+        parks: 0,
+        dropped_failures: 0,
+        cancels: 0,
+        timers: 0,
+        shared_objects: 195,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
+        completions: 0,
+    }
+    ");
+}
+
+/// `Par.reduce_range`は配列を作らない。forkとコールバックの回数だけを確かめる。
+#[test]
+fn par_reduce() {
+    insta::assert_debug_snapshot!(stats("par_reduce", "12.090146130\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 12,
+        rc_increments: 194,
+        rc_decrements: 1748,
+        boxes: 542,
+        unboxes: 542,
+        allocations: 1555,
+        reuses: 0,
+        peak_objects: 408,
+        peak_stack: 541,
+        tasks: 0,
+        parks: 0,
+        dropped_failures: 0,
+        cancels: 0,
+        timers: 0,
+        shared_objects: 97,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
+        completions: 0,
+    }
+    ");
+}
+
+#[test]
+fn par_tabulate_float() {
+    insta::assert_debug_snapshot!(stats("par_tabulate_float", "4095.5\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 6,
+        rc_increments: 38,
+        rc_decrements: 168,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 131,
+        reuses: 0,
+        peak_objects: 39,
+        peak_stack: 130,
+        tasks: 0,
+        parks: 0,
+        dropped_failures: 0,
+        cancels: 0,
+        timers: 0,
+        shared_objects: 7,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
+        completions: 0,
+    }
+    ");
+}
+
+#[test]
+fn par_tabulate_int() {
+    insta::assert_debug_snapshot!(stats("par_tabulate_int", "24573\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 5,
+        rc_increments: 38,
+        rc_decrements: 168,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 131,
+        reuses: 0,
+        peak_objects: 39,
+        peak_stack: 130,
+        tasks: 0,
+        parks: 0,
+        dropped_failures: 0,
+        cancels: 0,
+        timers: 0,
+        shared_objects: 7,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
+        completions: 0,
+    }
+    ");
+}
+
+/// `Par.tabulate_unboxed`は`Float`の要素ごとに箱を作らない。長さを2倍にして増える確保の数は`Int`の要素と同じで、
+/// 箱の数も等しい (docs/implementation/benchmarks.mdの「回数のテスト」)。
+#[test]
+fn par_tabulate_unboxed_does_not_box_floats() {
+    let float = stats_with_args("par_tabulate_float", &["8192"], "4095.5\n");
+    let float_twice = stats_with_args("par_tabulate_float", &["16384"], "8191.5\n");
+    let int = stats_with_args("par_tabulate_int", &["8192"], "24573\n");
+    let int_twice = stats_with_args("par_tabulate_int", &["16384"], "49149\n");
+    assert_eq!(
+        float_twice.allocations - float.allocations,
+        int_twice.allocations - int.allocations,
+        "{float:?}\n{float_twice:?}\n{int:?}\n{int_twice:?}"
+    );
+    assert_eq!(
+        (float.boxes, float_twice.boxes),
+        (int.boxes, int_twice.boxes)
+    );
+}
+
 /// forkごとの仕事がほとんどない`par`の再帰。forkとjoinの回数を確かめる。
 #[test]
 fn pfib() {
@@ -1674,6 +1856,11 @@ fn unwind_points() {
     nbody: 93
     orders: 13
     orders_by_hand: 13
+    par_map: 163
+    par_map_unboxed: 163
+    par_reduce: 73
+    par_tabulate_float: 105
+    par_tabulate_int: 109
     par_tree: 43
     pfib: 29
     push_fold: 4
@@ -1760,6 +1947,11 @@ fn owned_variants() {
     nbody:
     orders:
     orders_by_hand:
+    par_map:
+    par_map_unboxed:
+    par_reduce:
+    par_tabulate_float:
+    par_tabulate_int:
     par_tree:
     pfib:
     push_fold:

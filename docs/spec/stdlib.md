@@ -1011,7 +1011,7 @@ main () =
 - コールバックの`Panic`は`par`に従う。どの塊も最後まで、または自分の`Panic`まで動き、`Panic`を起こした塊のうち最も左の塊のものが起こし直される
 - `tabulate n f`は、要素`i`が`f i`である配列である。要素が1024個までは`Array.tabulate n f`なので、負の長さは同じ`Panic`を起こす。それより長いときは、塊ごとに`Array.tabulate`で作り、塊を`Array.concat`で結ぶ。`tabulate_unboxed`は`UnboxedArray`について同じである
 - `map f xs`と`mapi f xs`は、`xs`の添字についての`tabulate`である。`reduce join unit xs`は、`xs`の添字についての`reduce_range`である
-- `try_map f xs`はすべての要素に`f`を呼んだ後で、最も左の`Err`を返す。`Err`がなければ値の配列を返す
+- `try_map f xs`はすべての要素に`f`を呼んだ後で、最も左の`Err`を返す。`Err`がなければ値の配列を返す。どのコールバックの`Panic`も、先の要素が`Err`を返していても起こし直される。`Err`を選ぶ前にすべてのコールバックが動くためである
 - `for_mut f m`と`for_mut_unboxed f m`は、`m`を凍結し、凍結した入力から新しい配列を作って (`for_mut`は`mapi`で、`for_mut_unboxed`は`tabulate_unboxed`で)、それを解凍する。新しい配列は一意なので、`thaw`はコピーしない。子が共有する配列に書く関数はない
 - forkは、右の子の閉包から届く物に共有の印を付ける。入力は最初のforkで印が付き、以後のforkは付け直さない ([VM](vm.md)の「`par`のforkとjoin」)
 
