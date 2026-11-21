@@ -1020,6 +1020,111 @@ main () = println (show (sum_all (start_all 16) 0))
     }
 }
 
+/// 速いモードで`src`を2つのworkerで走らせ、runの後にworker 0のヒープが持つページのバイト数を返す。ほかのworkerの
+/// ヒープはrunが成功したあとで捨てられ、小さい物体のページは返されないので、この値はworker 0が持った最大のページ量である
+/// (docs/spec/object-model.mdの「確保と解放」)。
+fn pages_of_worker_0(src: &str, stdout: &str) -> usize {
+    let program = eml_test_support::lir(src);
+    let control = limits(2);
+    let (host, out) = eml_vm::capture_host(Default::default());
+    let mut machine = Machine::<eml_rt::Fast>::new(Arc::clone(&control), host);
+    let entry = machine.load(&program, &eml_vm::Linked::default()).unwrap();
+    machine.run(entry).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), stdout);
+    let bytes = control.bytes();
+    drop(machine);
+    bytes
+}
+
+/// `Chan.try_send`で要素を渡すタスクは切り替わらない。もう一方のworkerの受け手は要素を捨ててから数え、送り手は次の要素の前に
+/// その数を待つので、次の受け渡しの時点でどの解放も届いている。送り手は次の要素に印を付ける前にそれらを取り込むので、ページは
+/// 要素の数に応じて増えない (docs/spec/object-model.mdの「別のスレッドからの解放」)。
+#[test]
+fn a_try_send_loop_takes_in_the_frees_of_its_receiver() {
+    let src = "\
+import Async (Async)
+import Async
+import Chan
+import Atomic
+import Array
+consume : Chan.Chan (Array Int) -> Atomic.Counter -> <IO, Panic, Async> Unit
+consume c k =
+  match Chan.recv c with
+    | Some a ->
+      drop a
+      let _ = Atomic.add 1 k
+      consume c k
+    | None -> ()
+push : Array Int -> Chan.Chan (Array Int) -> <IO, Panic> Unit
+push a c =
+  match Chan.try_send a c with
+    | Chan.Accepted -> ()
+    | Chan.Full a -> push a c
+    | Chan.Refused a -> ()
+wait : Int -> Atomic.Counter -> <IO> Unit
+wait i k = if Atomic.load k >= i then () else wait i k
+produce : Int -> Int -> Chan.Chan (Array Int) -> Atomic.Counter -> <IO, Panic> Unit
+produce i n c k =
+  if i == n then ()
+  else
+    push (Array.make 100 i) c
+    wait (i + 1) k
+    produce (i + 1) n c k
+main : Unit -> <IO, Panic, Async> Unit
+main () =
+  let c = Chan.new 4
+  let k = Atomic.new 0
+  let t = Async.start (fn () -> consume c k)
+  produce 0 20000 c k
+  Chan.close c
+  Async.await t
+  println (show (Atomic.load k))
+";
+    let bytes = pages_of_worker_0(src, "20000\n");
+    assert!(bytes < 4 << 20, "{bytes}");
+    // 同じループを短くして検査モードで走らせると、きれいに終わる。runの終わりの検査は、受け渡しのたびに取り込んだ後のヒープを見る。
+    let (out, result) = run(&src.replace("20000", "600"), 2);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "600\n");
+}
+
+/// `Async.spawn`でも同じである。各タスクは、クロージャが持つ配列を捨ててから数える。
+#[test]
+fn a_spawn_loop_takes_in_the_frees_of_its_tasks() {
+    let src = "\
+import Async (Async)
+import Async
+import Atomic
+import Array
+wait : Int -> Atomic.Counter -> <IO> Unit
+wait i k = if Atomic.load k >= i then () else wait i k
+work : Array Int -> Atomic.Counter -> <IO> Unit
+work a k =
+  drop a
+  let _ = Atomic.add 1 k
+  ()
+produce : Int -> Int -> Atomic.Counter -> <IO, Panic, Async> Unit
+produce i n k =
+  if i == n then ()
+  else
+    let a = Array.make 100 i
+    Async.spawn (fn () -> work a k)
+    wait (i + 1) k
+    produce (i + 1) n k
+main : Unit -> <IO, Panic, Async> Unit
+main () =
+  let k = Atomic.new 0
+  produce 0 20000 k
+  println (show (Atomic.load k))
+";
+    let bytes = pages_of_worker_0(src, "20000\n");
+    assert!(bytes < 4 << 20, "{bytes}");
+    // 同じループを短くして検査モードで走らせると、きれいに終わる。runの終わりの検査は、受け渡しのたびに取り込んだ後のヒープを見る。
+    let (out, result) = run(&src.replace("20000", "600"), 2);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "600\n");
+}
+
 /// 速いモードで、大きな物体を作る子を4つの worker に置く。`Std.Par` の関数は子で配列を作るので、持ち主が、別の
 /// worker の空けた大きな物体のページを取り戻す (docs/spec/object-model.md の「別のスレッドからの解放」)。出力は検査
 /// モードの worker が1つの run と同じで、少なくとも1つの子をほかの worker に置く。

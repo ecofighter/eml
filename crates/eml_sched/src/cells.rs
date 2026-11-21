@@ -5910,6 +5910,9 @@ impl Depot {
         ctx: &mut Ctx<M>,
         w: Word,
     ) -> Result<Word, CellFault> {
+        // ほかのworkerのために値に印を付ける前に、ほかのスレッドから受けた解放を取り込む (docs/spec/object-model.mdの
+        // 「別のスレッドからの解放」)
+        ctx.reclaim_if_due();
         unsafe { ctx.heap_mut().share(w, self.worker) }?;
         Ok(w)
     }
