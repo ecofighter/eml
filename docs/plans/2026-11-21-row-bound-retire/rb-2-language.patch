@@ -1,0 +1,1004 @@
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@names__row_bound_in_operation.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__check_fail@names__row_bound_in_operation.em.snap
+deleted file mode 100644
+index f8c6104e..00000000
+--- a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@names__row_bound_in_operation.em.snap
++++ /dev/null
+@@ -1,14 +0,0 @@
+----
+-source: crates/eml_cli/tests/ui.rs
+-expression: rendered
+-input_file: tests/ui/check-fail/names/row_bound_in_operation.em
+----
+-[E1057] Error: `never` cannot bound `e` here
+-   ╭─[ check-fail/names/row_bound_in_operation.em:3:19 ]
+-   │
+- 3 │   run : (Unit -> <never e> Int) -> Int
+-   │                   ──┬──  
+-   │                     ╰──── the row variables of an operation cannot be bounded
+-   │ 
+-   │ Help: remove `never`
+-───╯
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@names__row_bound_not_declared.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__check_fail@names__row_bound_not_declared.em.snap
+deleted file mode 100644
+index 26119578..00000000
+--- a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@names__row_bound_not_declared.em.snap
++++ /dev/null
+@@ -1,23 +0,0 @@
+----
+-source: crates/eml_cli/tests/ui.rs
+-expression: rendered
+-input_file: tests/ui/check-fail/names/row_bound_not_declared.em
+----
+-[E1057] Error: `never` cannot bound `e` here
+-   ╭─[ check-fail/names/row_bound_not_declared.em:3:19 ]
+-   │
+- 3 │   | Box (Unit -> <never e> Int)
+-   │                   ──┬──  
+-   │                     ╰──── a row parameter of `data` has no bound
+-   │ 
+-   │ Help: remove `never`
+-───╯
+-[E1057] Error: `never` cannot bound `e` here
+-   ╭─[ check-fail/names/row_bound_not_declared.em:6:25 ]
+-   │
+- 6 │ plain f = (f : Unit -> <never e> Int) ()
+-   │                         ──┬──  
+-   │                           ╰──── the signature does not bound `e` with `never`
+-   │ 
+-   │ Help: write `never e` in the signature, or remove `never` here
+-───╯
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@syntax__row_bound_syntax.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__check_fail@syntax__row_bound_syntax.em.snap
+deleted file mode 100644
+index 5f33c13b..00000000
+--- a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@syntax__row_bound_syntax.em.snap
++++ /dev/null
+@@ -1,19 +0,0 @@
+----
+-source: crates/eml_cli/tests/ui.rs
+-expression: rendered
+-input_file: tests/ui/check-fail/syntax/row_bound_syntax.em
+----
+-[E0011] Error: only `never` can bound a row variable
+-   ╭─[ check-fail/syntax/row_bound_syntax.em:2:24 ]
+-   │
+- 2 │ once_bound : (Unit -> <once e> Int) -> <e> Int
+-   │                        ──┬─  
+-   │                          ╰─── found `once`
+-───╯
+-[E0011] Error: expected a row variable
+-   ╭─[ check-fail/syntax/row_bound_syntax.em:5:31 ]
+-   │
+- 5 │ bound_label : (Unit -> <never Panic | e> Int) -> <Panic | e> Int
+-   │                               ──┬──  
+-   │                                 ╰──── found `Panic`
+-───╯
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@types__row_bound_exceeded.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__check_fail@types__row_bound_exceeded.em.snap
+deleted file mode 100644
+index 6bce6e72..00000000
+--- a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@types__row_bound_exceeded.em.snap
++++ /dev/null
+@@ -1,22 +0,0 @@
+----
+-source: crates/eml_cli/tests/ui.rs
+-expression: rendered
+-input_file: tests/ui/check-fail/types/row_bound_exceeded.em
+----
+-[E2020] Error: the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations
+-    ╭─[ check-fail/types/row_bound_exceeded.em:11:26 ]
+-    │
+- 11 │ main () = println (show (helper noisy))
+-    │                          ───┬── ──┬──  
+-    │                             ╰────────── `helper` is used here
+-    │                                   │    
+-    │                                   ╰──── `IO` is performed here
+-    │
+-    ├─[ check-fail/types/row_bound_exceeded.em:11:26 ]
+-    │
+-  2 │ helper : (Unit -> <never e> Int) -> <e> Int
+-    │                    ──┬──  
+-    │                      ╰──── `helper` bounds this row variable by `never`
+-    │ 
+-    │ Note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-────╯
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run@kinds__never_row_bound.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run@kinds__never_row_bound.em.snap
+deleted file mode 100644
+index fa18e803..00000000
+--- a/crates/eml_cli/tests/snapshots/integration__ui__run@kinds__never_row_bound.em.snap
++++ /dev/null
+@@ -1,9 +0,0 @@
+----
+-source: crates/eml_cli/tests/ui.rs
+-expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+-input_file: tests/ui/run/kinds/never_row_bound.em
+----
+---- stdout ---
+-Err "division by zero"
+-Err "no"
+---- stderr ---
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run_native.snap b/crates/eml_cli/tests/snapshots/integration__ui__run_native.snap
+index 4fecdbcd..4d1c2c5e 100644
+--- a/crates/eml_cli/tests/snapshots/integration__ui__run_native.snap
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run_native.snap
+@@ -2,7 +2,7 @@
+ source: crates/eml_cli/tests/ui.rs
+ expression: counts
+ ---
+-accepted 493
++accepted 492
+ skipped 5
+ rejected 148
+   async row 123
+diff --git a/crates/eml_hir/src/lower/types.rs b/crates/eml_hir/src/lower/types.rs
+index f19e854d..203d24bf 100644
+--- a/crates/eml_hir/src/lower/types.rs
++++ b/crates/eml_hir/src/lower/types.rs
+@@ -277,7 +277,7 @@ impl TypeLowering<'_> {
+         let mut valid = true;
+         let tail = match row.tail() {
+             Some(tail) => {
+-                let id = self.row_var(&tail, row.bound().map(|bound| bound.text_range()));
++                let id = self.row_var(&tail, None);
+                 valid &= id.is_some();
+                 id
+             }
+diff --git a/crates/eml_hir/tests/lower.rs b/crates/eml_hir/tests/lower.rs
+index 44ce5a07..7b384878 100644
+--- a/crates/eml_hir/tests/lower.rs
++++ b/crates/eml_hir/tests/lower.rs
+@@ -1022,63 +1022,6 @@ fn local_groups_record_recursion() {
+     );
+ }
+ 
+-#[test]
+-fn a_bound_belongs_to_the_row_variable() {
+-    insta::assert_snapshot!(lower_text("f : (Unit -> <e> Int) -> <never e> Int\nf g = g ()"), @"
+-    f : (Unit -> <never e> Int) -> <never e> Int
+-    f g#0 = (g#0 ())
+-    ");
+-}
+-
+-#[test]
+-fn a_misplaced_never_bounds_no_row_variable() {
+-    insta::assert_snapshot!(lower_text("f : (Unit -> <never Panic | e> Int) -> <Panic | e> Int\nf g = g ()"), @"
+-    f : (Unit -> <Panic | e> Int) -> <Panic | e> Int
+-    f g#0 = (g#0 ())
+-    ---
+-    E0011 1:21 expected a row variable
+-    ");
+-}
+-
+-#[test]
+-fn an_annotation_may_repeat_a_declared_bound() {
+-    let text = "helper2 : (Unit -> <never e> Int) -> <e> Int\nhelper2 f =\n  let g : Unit -> <never e> Int = f\n  g ()";
+-    assert_eq!(diagnostics(text), Vec::<String>::new());
+-}
+-
+-#[test]
+-fn a_bound_must_be_declared_in_the_signature() {
+-    let text = "helper3 : (Unit -> <e> Int) -> <e> Int\nhelper3 f =\n  let g : Unit -> <never e> Int = f\n  g ()";
+-    assert_eq!(
+-        diagnostics(text),
+-        ["E1057 3:20 `never` cannot bound `e` here"]
+-    );
+-}
+-
+-#[test]
+-fn a_data_field_cannot_bound_a_row_variable() {
+-    assert_eq!(
+-        diagnostics("data T <e> =\n  | T (Unit -> <never e> Int)"),
+-        ["E1057 2:17 `never` cannot bound `e` here"]
+-    );
+-}
+-
+-#[test]
+-fn an_operation_cannot_bound_a_row_variable() {
+-    assert_eq!(
+-        diagnostics("effect E where\n  op : (Unit -> <never e> Int) -> Int"),
+-        ["E1057 2:18 `never` cannot bound `e` here"]
+-    );
+-}
+-
+-#[test]
+-fn a_bounded_row_parameter_stays_a_parameter() {
+-    assert_eq!(
+-        diagnostics("data T <never e> =\n  | T (Unit -> <e> Int)"),
+-        ["E0011 1:9 a row parameter of `data` cannot have a bound"]
+-    );
+-}
+-
+ const ABSTRACT_LIB: &str = "pub abstract data Handle a = | Handle Int\n\npub make : Int -> Handle a\nmake n = Handle n\n\npub get : Handle a -> Int\nget (Handle n) = n";
+ 
+ #[test]
+diff --git a/crates/eml_syntax/src/ast.rs b/crates/eml_syntax/src/ast.rs
+index 6a391c99..1c0f5830 100644
+--- a/crates/eml_syntax/src/ast.rs
++++ b/crates/eml_syntax/src/ast.rs
+@@ -1146,19 +1146,6 @@ impl FnType {
+     }
+ }
+ 
+-impl EffectRow {
+-    /// row 変数の前に書いた `never`。`<never Panic | e>` のように row 変数の直前にない `never` は、誤りとして読んだもので
+-    /// どの変数の上限でもないので返さない (docs/spec/grammar.md の「文法上の補足」)。
+-    pub fn bound(&self) -> Option<SyntaxToken> {
+-        let never = support::token(&self.syntax, SyntaxKind::NEVER_KW)?;
+-        let next = std::iter::successors(never.next_sibling_or_token(), |element| {
+-            element.next_sibling_or_token()
+-        })
+-        .find(|element| !element.kind().is_trivia())?;
+-        (next.kind() == SyntaxKind::LIDENT).then_some(never)
+-    }
+-}
+-
+ /// 型の適用の引数。row は `<…>` で書く。
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum TypeArg {
+diff --git a/crates/eml_syntax/src/grammar/types.rs b/crates/eml_syntax/src/grammar/types.rs
+index dd14edd9..a201a8be 100644
+--- a/crates/eml_syntax/src/grammar/types.rs
++++ b/crates/eml_syntax/src/grammar/types.rs
+@@ -160,22 +160,15 @@ pub(super) fn type_atom(p: &mut Parser) -> bool {
+ fn effect_row(p: &mut Parser) {
+     let m = p.start();
+     eat_angle(p, '<', L_ANGLE);
+-    if !at_angle(p, '>') {
+-        let bounded = row_bound(p);
+-        if p.at(LIDENT) {
+-            p.bump(LIDENT);
+-        } else {
+-            if bounded {
+-                expected(p, "a row variable");
+-            }
++    if p.at(LIDENT) {
++        p.bump(LIDENT);
++    } else if !at_angle(p, '>') {
++        effect(p);
++        while p.eat(COMMA) {
+             effect(p);
+-            while p.eat(COMMA) {
+-                effect(p);
+-            }
+-            if p.eat(PIPE) {
+-                row_bound(p);
+-                expect(p, LIDENT);
+-            }
++        }
++        if p.eat(PIPE) {
++            expect(p, LIDENT);
+         }
+     }
+     if !eat_angle(p, '>', R_ANGLE) {
+@@ -184,36 +177,10 @@ fn effect_row(p: &mut Parser) {
+     m.complete(p, EFFECT_ROW);
+ }
+ 
+-/// row 変数の前の多重度の上限を読む。書けるのは `never` だけで、ほかの多重度は読み飛ばして回復する
+-/// (docs/spec/grammar.md の「文法上の補足」)。
+-fn row_bound(p: &mut Parser) -> bool {
+-    match p.current() {
+-        NEVER_KW => p.bump_any(),
+-        ONCE_KW | MULTI_KW => {
+-            p.error(
+-                codes::SYNTAX_ERROR,
+-                "only `never` can bound a row variable",
+-                format!("found {}", describe(p)),
+-            );
+-            p.bump_any();
+-        }
+-        _ => return false,
+-    }
+-    true
+-}
+-
+ /// `data` の row の型引数 `<e>`。row 変数は名前1つだけで、効果や `|` は書けない。
+ pub(super) fn row_param(p: &mut Parser) {
+     let m = p.start();
+     eat_angle(p, '<', L_ANGLE);
+-    if p.at_ts(TokenSet::new(&[NEVER_KW, ONCE_KW, MULTI_KW])) {
+-        p.error(
+-            codes::SYNTAX_ERROR,
+-            "a row parameter of `data` cannot have a bound",
+-            format!("found {}", describe(p)),
+-        );
+-        p.bump_any();
+-    }
+     let mut well_formed = p.at(LIDENT);
+     if well_formed {
+         name(p);
+diff --git a/crates/eml_syntax/tests/types.rs b/crates/eml_syntax/tests/types.rs
+index 41669496..7309ec31 100644
+--- a/crates/eml_syntax/tests/types.rs
++++ b/crates/eml_syntax/tests/types.rs
+@@ -454,75 +454,6 @@ fn rows_can_be_type_arguments() {
+     }
+ }
+ 
+-#[test]
+-fn a_row_variable_can_be_bounded_by_never() {
+-    insta::assert_snapshot!(shape("h : Unit -> <never e> Unit"), @r#"
+-    SOURCE_FILE
+-      SIGNATURE
+-        NAME
+-          LIDENT "h"
+-        COLON ":"
+-        FN_TYPE
+-          PATH_TYPE
+-            PATH
+-              NAME_REF
+-                UIDENT "Unit"
+-          THIN_ARROW "->"
+-          EFFECT_ROW
+-            L_ANGLE "<"
+-            NEVER_KW "never"
+-            LIDENT "e"
+-            R_ANGLE ">"
+-          PATH_TYPE
+-            PATH
+-              NAME_REF
+-                UIDENT "Unit"
+-    "#);
+-}
+-
+-#[test]
+-fn bounded_row_variables_in_every_row_position() {
+-    for text in [
+-        "x : Iter <never e> a",
+-        "f : a -> <Panic | never e> b",
+-        "f : a -> <IO, Panic | never e> b",
+-        "f : (Unit -> <never e> a) -> <e> a",
+-    ] {
+-        assert_eq!(diagnostics(text), Vec::<String>::new(), "{text}");
+-    }
+-}
+-
+-#[test]
+-fn only_never_can_bound_a_row_variable() {
+-    for text in ["f : Unit -> <once e> Unit", "f : Unit -> <multi e> Unit"] {
+-        assert_eq!(
+-            diagnostics(text),
+-            ["E0011 1:14 only `never` can bound a row variable"],
+-            "{text}"
+-        );
+-    }
+-}
+-
+-#[test]
+-fn never_must_be_followed_by_a_row_variable() {
+-    assert_eq!(
+-        diagnostics("f : Unit -> <never Panic | e> Unit"),
+-        ["E0011 1:20 expected a row variable"]
+-    );
+-    assert_eq!(
+-        diagnostics("f : Unit -> <never> Unit"),
+-        ["E0011 1:19 expected a row variable"]
+-    );
+-}
+-
+-#[test]
+-fn a_row_parameter_cannot_be_bounded() {
+-    assert_eq!(
+-        diagnostics("data T <never e> =\n  | T (Unit -> <e> Int)"),
+-        ["E0011 1:9 a row parameter of `data` cannot have a bound"]
+-    );
+-}
+-
+ #[test]
+ fn as_binds_before_the_row_and_the_tuple() {
+     let text = lines(&[
+diff --git a/crates/eml_types/tests/classes.rs b/crates/eml_types/tests/classes.rs
+index fa439eab..4a09d897 100644
+--- a/crates/eml_types/tests/classes.rs
++++ b/crates/eml_types/tests/classes.rs
+@@ -332,28 +332,35 @@ fn a_default_or_a_carried_value_can_need_more_than_the_class() {
+     );
+ }
+ 
+-const HELPER: &str = "helper : (Unit -> <never e> Int) -> <e> Int\nhelper f = f ()\n\n";
++// EN: An instance that keeps a file across the call of a function it received needs `carry(Lin, <e>)`, which the signature of a method cannot state.
++#[test]
++fn an_instance_that_keeps_a_file_across_its_callback_needs_more_than_the_class() {
++    let text = "import FileIn\n\ndata Path =\n  | Path String\n\neach_line : FileIn.FileIn -> (String -> <e> Unit) -> <IO, Panic | e> FileIn.FileIn\neach_line file f =\n  match FileIn.read_line file with\n    | (None, file) -> file\n    | (Some line, file) ->\n      f line\n      each_line file f\n\nclass Source s where\n  each : s -> (String -> <e> Unit) -> <IO, Panic | e> Unit\n\ninstance Source Path where\n  each (Path p) f = FileIn.close (each_line (FileIn.open p) f)";
++    let checked = check(text);
++    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
++    E2011 18:3 `each` in the instance for `Path` needs more than the signature of `each` allows
++      18:3 this definition
++      note: the signature of a method leaves its own type variables free to be linear, and this definition copies, drops or keeps a value of such a type
++    ");
++}
+ 
++// EN: The carry constraint reaches the instance through a function of a recursive group as well.
+ #[test]
+-fn a_method_can_rely_on_a_bound_in_the_class_signature() {
+-    let text = format!(
+-        "{HELPER}class Runs a where\n  run : a -> (Unit -> <never e> Int) -> <Panic | e> Int\n\ninstance Runs Int where\n  run n f = helper f + n"
++fn an_instance_inherits_the_carry_of_a_recursive_group() {
++    let text = "import FileIn\n\nping : Int -> (Unit -> <e> Unit) -> <IO, Panic | e> Unit\nping n action =\n  if n == 0 then ()\n  else\n    let lock = FileIn.open \"lock\"\n    action ()\n    FileIn.close lock\n    pong (n - 1) action\n\npong : Int -> (Unit -> <e> Unit) -> <IO, Panic | e> Unit\npong n action = if n == 0 then () else ping (n - 1) action\n\nclass Runs a where\n  run : a -> (Unit -> <e> Unit) -> <IO, Panic | e> Unit\n\ninstance Runs Int where\n  run n action = pong n action";
++    assert_eq!(
++        lines(text),
++        [
++            "E2011 19:3 `run` in the instance for `Int` needs more than the signature of `run` allows"
++        ]
+     );
+-    assert_eq!(lines(&text), Vec::<String>::new());
+ }
+ 
++// EN: A reference to a method takes the scheme of the class, so an instance method that calls its own method with a row of `once` operations gets no multiplicity bound on its own row variable (docs/spec/types.md の「instance と既定のメソッドの検査」).
+ #[test]
+-fn a_method_that_needs_a_bound_the_class_lacks() {
+-    let text = format!(
+-        "{HELPER}class Runs a where\n  run : a -> (Unit -> <e> Int) -> <Panic | e> Int\n\ninstance Runs Int where\n  run n f = helper f + n"
+-    );
+-    let checked = check(&text);
+-    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+-    E2011 8:3 `run` in the instance for `Int` needs more than the signature of `run` allows
+-      8:3 this definition
+-      note: the signature of a method allows any effects for its row variables, and this definition passes a row where only `never` operations are allowed
+-      help: write `never` before the row variable in the signature of `run` in the class
+-    ");
++fn an_instance_method_may_call_its_method_with_a_handled_effect() {
++    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runs a where\n  run : a -> (Unit -> <e> Int) -> <Panic | e> Int\n\ninstance Runs Int where\n  run n f =\n    if n == 0 then f ()\n    else\n      handle run (n - 1) (fn () -> ask ()) with\n        | fn ask () -> 1";
++    assert_eq!(lines(text), Vec::<String>::new());
+ }
+ 
+ #[test]
+diff --git a/crates/eml_types/tests/linearity.rs b/crates/eml_types/tests/linearity.rs
+index 104c7083..73d00229 100644
+--- a/crates/eml_types/tests/linearity.rs
++++ b/crates/eml_types/tests/linearity.rs
+@@ -1177,3 +1177,42 @@ fn a_diverging_call_with_a_multi_row_drops_before_carrying() {
+     let text = "import FileIn\neffect Choose where\n  multi choose : Unit -> Bool\n\ndie2 : String -> <Choose, IO> a\ndie2 message =\n  eprintln message\n  exit 2\n\nrun : Unit -> <Choose, IO> Unit\nrun () =\n  let f = FileIn.open \"a\"\n  die2 \"no\"";
+     insta::assert_snapshot!(implicit_drops(text), @"13:3 [f]");
+ }
++
++/// コールバックの最後の結果は extern が受け取る値で、`par` は組に1回だけ入れるか、落とす。そのため、結果に
++/// `Lin` の値を返す子も受け付ける (docs/spec/declarations.md の「`extern`」)。
++#[test]
++fn a_par_child_may_return_a_lin_value() {
++    let text = "import Std.Par\nimport Std.MutArray\nimport Std.Array\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (m, n) = Par.par (fn () -> MutArray.make 3 4) (fn () -> 3)\n  let (x, m) = MutArray.read m 0\n  println (show (x + n + Array.length (MutArray.freeze m)))";
++    assert_eq!(check_short(text), Vec::<String>::new());
++}
++
++// EN: A function that keeps a file across the call of a function it received. Inference leaves the carry constraint in its scheme, so a callback with `once` effects (`IO`, a `var`) passes and a callback with a `multi` operation does not (docs/spec/types.md の「推論」).
++const EACH_LINE: &str = "import FileIn\n\neffect Choice where\n  multi choose : Unit -> Bool\n\neach_line : FileIn.FileIn -> (String -> <e> Unit) -> <IO, Panic | e> FileIn.FileIn\neach_line file f =\n  match FileIn.read_line file with\n    | (None, file) -> file\n    | (Some line, file) ->\n      f line\n      each_line file f\n\n";
++
++#[test]
++fn a_function_that_keeps_a_file_across_its_callback_takes_once_effects() {
++    let text = format!(
++        "{EACH_LINE}main : Unit -> <IO, Panic> Unit\nmain () =\n  var count = 0\n  FileIn.close (each_line (FileIn.open \"a.txt\") (fn line ->\n    count <- count + 1\n    println line))"
++    );
++    assert_eq!(check_short(&text), Vec::<String>::new());
++}
++
++#[test]
++fn a_function_that_keeps_a_file_across_its_callback_refuses_a_multi_callback() {
++    let text = format!(
++        "{EACH_LINE}main : Unit -> <IO, Panic> Unit\nmain () =\n  handle FileIn.close (each_line (FileIn.open \"a.txt\") (fn line -> if choose () then println line else ())) with\n    | ctl choose () k ->\n      k True\n      k False"
++    );
++    insta::assert_snapshot!(check_full(&text), @"
++    E3006 16:24 `each_line` keeps a linear value alive across a call that may resume more than once
++      16:24 `each_line` is used here
++      11:7 `file` is kept alive across this call
++      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
++    ");
++}
++
++// EN: A function that keeps a file across its callback can run under a handler whose operations resume once.
++#[test]
++fn a_function_that_keeps_a_file_across_its_callback_runs_under_a_once_handler() {
++    let text = "import State (State(..))\nimport FileIn\n\nlocked : (Unit -> <e> a) -> <IO | e> a\nlocked action =\n  let lock = FileIn.open \"lock\"\n  let r = action ()\n  FileIn.close lock\n  r\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (n, s) = State.run 0 (fn () -> locked (fn () ->\n    put (get () + 1)\n    get ()))\n  println (show (n + s))";
++    assert_eq!(check_short(text), Vec::<String>::new());
++}
+diff --git a/crates/eml_types/tests/main.rs b/crates/eml_types/tests/main.rs
+index 8fc91809..0c6399a7 100644
+--- a/crates/eml_types/tests/main.rs
++++ b/crates/eml_types/tests/main.rs
+@@ -17,7 +17,6 @@ mod lists;
+ mod masks;
+ mod modules;
+ mod records;
+-mod row_bounds;
+ mod rows;
+ mod scaling;
+ mod strings;
+diff --git a/crates/eml_types/tests/row_bounds.rs b/crates/eml_types/tests/row_bounds.rs
+deleted file mode 100644
+index 3fd02391..00000000
+--- a/crates/eml_types/tests/row_bounds.rs
++++ /dev/null
+@@ -1,368 +0,0 @@
+-//! row 変数の多重度の上限 `never` (docs/spec/types.md の「row 変数の多重度の上限」)。
+-
+-use crate::common::{check_full, check_short, kinds};
+-
+-/// どのテストも頭に置く宣言。`helper` は上限を書いた関数で、`noisy` は `IO` を起こす関数である。8 行で、9 行目から
+-/// テストの関数を書く。
+-const HEAD: &str = "helper : (Unit -> <never e> Int) -> <e> Int\nhelper f = f ()\n\nnoisy : Unit -> <IO> Int\nnoisy () =\n  println \"x\"\n  1\n\n";
+-
+-fn with_head(rest: &str) -> String {
+-    format!("{HEAD}{rest}")
+-}
+-
+-const NEVER: &str = "  kinds: <e> <= Never";
+-
+-#[test]
+-fn a_written_bound_stays_in_the_scheme() {
+-    assert_eq!(kinds(&with_head(""), "helper"), NEVER);
+-}
+-
+-#[test]
+-fn a_call_infers_the_bound() {
+-    let text = with_head("wrap : (Unit -> <e> Int) -> <e> Int\nwrap f = helper f");
+-    assert_eq!(kinds(&text, "wrap"), NEVER);
+-}
+-
+-#[test]
+-fn a_recursive_group_shares_an_inferred_bound() {
+-    let text = with_head(
+-        "w1 : (Unit -> <e> Int) -> Bool -> <e> Int\nw1 f b = if b then helper f else w2 f True\n\nw2 : (Unit -> <e> Int) -> Bool -> <e> Int\nw2 f b = w1 f b",
+-    );
+-    assert_eq!(kinds(&text, "w1"), NEVER);
+-    assert_eq!(kinds(&text, "w2"), NEVER);
+-}
+-
+-#[test]
+-fn an_unused_row_variable_has_no_bound() {
+-    let text = with_head("free : (Unit -> <e> Int) -> <e> Int\nfree f = f ()");
+-    assert_eq!(kinds(&text, "free"), "");
+-}
+-
+-#[test]
+-fn panic_fits_a_never_bound() {
+-    let text = with_head(
+-        "main : Unit -> <IO, Panic> Unit\nmain () = println (show (helper (fn () -> 1 / 0)))",
+-    );
+-    assert_eq!(check_short(&text), Vec::<String>::new());
+-}
+-
+-#[test]
+-fn an_effect_of_never_operations_fits_a_never_bound() {
+-    let text = format!(
+-        "import Fail (Fail(..))\n\n{}",
+-        with_head("run : Unit -> <Fail String> Int\nrun () = helper (fn () -> fail \"no\")")
+-    );
+-    assert_eq!(check_short(&text), Vec::<String>::new());
+-}
+-
+-#[test]
+-fn labels_beside_a_bounded_variable_are_not_bounded() {
+-    let text = with_head(
+-        "big : (Unit -> <never e> Int) -> <IO | never e> Int\nbig f =\n  println \"x\"\n  f ()\n\ntab : Int -> (Int -> <never e> Int) -> <Panic | e> List Int\ntab n f = [f n, f (n + 1)]",
+-    );
+-    assert_eq!(check_short(&text), Vec::<String>::new());
+-}
+-
+-#[test]
+-fn a_call_that_exceeds_a_written_bound() {
+-    let text = with_head("main : Unit -> <IO> Unit\nmain () = println (show (helper noisy))");
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 10:26 the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations
+-      10:26 `helper` is used here
+-      10:33 `IO` is performed here
+-      1:20 `helper` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn a_multi_operation_exceeds_a_never_bound() {
+-    let text = with_head(
+-        "effect Choose where\n  multi choose : Unit -> Bool\n\npick : Unit -> <Choose> Int\npick () = helper (fn () -> if choose () then 1 else 2)",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 13:11 the row passed to `helper` may perform `Choose`, but `helper` allows only `never` operations
+-      13:11 `helper` is used here
+-      13:31 `Choose` is performed here
+-      1:20 `helper` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-/// 操作の引数の row は節の中で `Multi` 以上なので、来た所はエフェクトでなく多重度で示す。`helper` の結果の row の
+-/// その row 変数は `main` の row に含まれないので、E2002 も出る (docs/implementation/diagnostics.md の E2020)。
+-#[test]
+-fn an_operation_argument_row_exceeds_a_never_bound() {
+-    let text = with_head(
+-        "effect Ask where\n  ask : (Unit -> <e> Int) -> Int\n\ngo : Unit -> <Ask> Int\ngo () = ask (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle go () with\n    | fn ask g -> helper g\n  println (show r)",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2002 18:19 `helper` performs `e`, which the signature of `main` does not allow
+-      18:19 this call performs `e`
+-      15:8 the row of this signature does not include it
+-      help: add `e` to the row of the signature of `main`, as in `-> <e> ...`
+-    E2020 18:19 the row passed to `helper` may perform `multi` operations, but `helper` allows only `never` operations
+-      18:19 `helper` is used here
+-      18:5 `multi` operations may be performed here
+-      1:20 `helper` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn unwritten_occurrences_carry_the_bound() {
+-    let text = with_head(
+-        "pair : (Unit -> <never e> Int) -> (Unit -> <e> Int) -> <e> Int\npair f g = if f () == 0 then g () else 0\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (pair (fn () -> 1) noisy))",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 13:26 the row passed to `pair` may perform `IO`, but `pair` allows only `never` operations
+-      13:26 `pair` is used here
+-      13:44 `IO` is performed here
+-      9:18 `pair` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn a_self_call_exceeds_its_own_bound() {
+-    let text = with_head("h : (Unit -> <never e> Int) -> <IO | e> Int\nh f = h noisy");
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 10:7 the row passed to `h` may perform `IO`, but `h` allows only `never` operations
+-      10:7 `h` is used here
+-      10:9 `IO` is performed here
+-      9:15 `h` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn a_mutual_call_exceeds_the_bound() {
+-    let text = with_head(
+-        "m1 : (Unit -> <never e> Int) -> Bool -> <IO | e> Int\nm1 f b = if b then f () else m2 b\n\nm2 : Bool -> <IO> Int\nm2 b = m1 noisy b",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 13:8 the row passed to `m1` may perform `IO`, but `m1` allows only `never` operations
+-      13:8 `m1` is used here
+-      13:11 `IO` is performed here
+-      9:16 `m1` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn a_call_from_a_local_function_exceeds_the_bound() {
+-    let text = with_head(
+-        "h : (Unit -> <never e> Int) -> <IO | e> Int\nh f =\n  let go x = h noisy\n  go 1",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 11:14 the row passed to `h` may perform `IO`, but `h` allows only `never` operations
+-      11:14 `h` is used here
+-      11:16 `IO` is performed here
+-      9:15 `h` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn a_method_call_exceeds_the_class_bound() {
+-    let text = with_head(
+-        "class Runs a where\n  run : a -> (Unit -> <never e> Int) -> <e> Int\n\ngo : Runs a => a -> <IO> Int\ngo x = run x noisy",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 13:8 the row passed to `run` may perform `IO`, but `run` allows only `never` operations
+-      13:8 `run` is used here
+-      13:14 `IO` is performed here
+-      10:24 `run` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn one_call_reports_once_for_two_bounds() {
+-    let text = with_head(
+-        "two : (Unit -> <never e1> Int) -> (Unit -> <never e2> Int) -> <IO | e1> Int\ntwo f g = 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (two noisy noisy))",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 13:26 the row passed to `two` may perform `IO`, but `two` allows only `never` operations
+-      13:26 `two` is used here
+-      13:30 `IO` is performed here
+-      9:17 `two` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn an_inferred_bound_names_the_inner_call() {
+-    let text = with_head(
+-        "wrap : (Unit -> <e> Int) -> <e> Int\nwrap f = helper f\n\nmain : Unit -> <IO> Unit\nmain () = println (show (wrap noisy))",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 13:26 the row passed to `wrap` may perform `IO`, but `wrap` allows only `never` operations
+-      13:26 `wrap` is used here
+-      13:31 `IO` is performed here
+-      10:10 the row is passed to `helper` here
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn a_chain_names_only_the_nearest_call() {
+-    let text = with_head(
+-        "b : (Unit -> <e> Int) -> <e> Int\nb f = helper f\n\na : (Unit -> <e> Int) -> <e> Int\na f = b f\n\nmain : Unit -> <IO> Unit\nmain () = println (show (a noisy))",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 16:26 the row passed to `a` may perform `IO`, but `a` allows only `never` operations
+-      16:26 `a` is used here
+-      16:28 `IO` is performed here
+-      13:7 the row is passed to `b` here
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn a_recursive_group_names_the_call_in_the_group() {
+-    let text = with_head(
+-        "w1 : (Unit -> <e> Int) -> Bool -> <e> Int\nw1 f b = if b then helper f else w2 f True\n\nw2 : (Unit -> <e> Int) -> Bool -> <e> Int\nw2 f b = w1 f b\n\nmain : Unit -> <IO> Unit\nmain () = println (show (w2 noisy True))",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 16:26 the row passed to `w2` may perform `IO`, but `w2` allows only `never` operations
+-      16:26 `w2` is used here
+-      16:29 `IO` is performed here
+-      10:20 the row is passed to `helper` here
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-/// 輪の中で `noisy` を渡す `f2 noisy b` には E2020 が出ず、輪の中の `helper` の呼び出しのそれぞれに出て、`noisy` は
+-/// 来た所の secondary にだけ現れる (docs/spec/types.md の「推論」)。
+-#[test]
+-fn a_ring_reports_its_calls_to_the_bounded_function() {
+-    let text = with_head(
+-        "f0 : (Unit -> <e> Int) -> Bool -> <IO | e> Int\nf0 g b = if b then helper g else f1 g b\n\nf1 : (Unit -> <e> Int) -> Bool -> <IO | e> Int\nf1 g b = if b then f2 noisy b else f2 g b\n\nf2 : (Unit -> <e> Int) -> Bool -> <IO | e> Int\nf2 g b = if b then helper g else f0 g b",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 10:20 the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations
+-      10:20 `helper` is used here
+-      13:23 `IO` is performed here
+-      1:20 `helper` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    E2020 16:20 the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations
+-      16:20 `helper` is used here
+-      13:23 `IO` is performed here
+-      1:20 `helper` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn an_inferred_bound_broken_inside_its_group() {
+-    let text = with_head(
+-        "w1 : (Unit -> <e> Int) -> Bool -> <IO | e> Int\nw1 f b = if b then w2 b else helper f\n\nw2 : Bool -> <IO> Int\nw2 b = w1 noisy b",
+-    );
+-    insta::assert_snapshot!(check_full(&text), @"
+-    E2020 10:30 the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations
+-      10:30 `helper` is used here
+-      13:11 `IO` is performed here
+-      1:20 `helper` bounds this row variable by `never`
+-      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+-    ");
+-}
+-
+-#[test]
+-fn a_bound_drops_the_carry_it_entails() {
+-    let text = format!(
+-        "import FileIn\n\n{}",
+-        with_head(
+-            "effect Choice where\n  multi choose : Unit -> Bool\n\nhold : (Unit -> <never e> Unit) -> <IO | e> Unit\nhold action =\n  let f = FileIn.open \"input.txt\"\n  action ()\n  FileIn.close f\n\npick : Unit -> <Choice> Unit\npick () = if choose () then () else ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle hold pick with\n    | ctl choose () k -> k True",
+-        )
+-    );
+-    assert_eq!(
+-        check_short(&text),
+-        [
+-            "E2020 25:10 the row passed to `hold` may perform `Choice`, but `hold` allows only `never` operations"
+-        ]
+-    );
+-    assert_eq!(kinds(&text, "hold"), NEVER);
+-}
+-
+-#[test]
+-fn a_bound_drops_the_carry_inside_its_group() {
+-    let text = format!(
+-        "import FileIn\n\n{}",
+-        with_head(
+-            "effect Choice where\n  multi choose : Unit -> Bool\n\nhold : Bool -> (Unit -> <never e> Unit) -> <IO | e> Unit\nhold b action =\n  let f = FileIn.open \"input.txt\"\n  action ()\n  FileIn.close f\n  if b then again () else ()\n\nagain : Unit -> <IO> Unit\nagain () =\n  handle hold False pick with\n    | ctl choose () k -> k True\n\npick : Unit -> <Choice> Unit\npick () = if choose () then () else ()",
+-        )
+-    );
+-    assert_eq!(
+-        check_short(&text),
+-        [
+-            "E2020 23:10 the row passed to `hold` may perform `Choice`, but `hold` allows only `never` operations"
+-        ]
+-    );
+-}
+-
+-/// 上限はエフェクトの多重度と比べるので、`once`の操作を持つエフェクトは、渡した関数が`never`の操作だけを起こしても
+-/// 上限を超える (docs/spec/types.mdの「row変数の多重度の上限」)。
+-#[test]
+-fn an_effect_with_a_once_operation_exceeds_a_never_bound_even_through_its_never_operation() {
+-    let text = with_head(
+-        "effect Mixed where\n  never stop : Unit -> a\n  get : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let c = handle helper (fn () -> stop ()) with\n    | ctl stop () -> 0\n    | fn get () -> 1\n  println (show c)",
+-    );
+-    assert_eq!(
+-        check_short(&text),
+-        [
+-            "E2020 15:18 the row passed to `helper` may perform `Mixed`, but `helper` allows only `never` operations"
+-        ]
+-    );
+-}
+-
+-/// 値として渡した上限つきの関数の型も上限を持つので、受け取った関数を通した呼び出しで上限を超える。
+-#[test]
+-fn a_value_use_of_a_bounded_function_keeps_the_bound() {
+-    let text = with_head(
+-        "apply1 : ((Unit -> <e> Int) -> <e> Int) -> (Unit -> <e> Int) -> <e> Int\napply1 p f = p f\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (apply1 helper noisy))",
+-    );
+-    assert_eq!(
+-        check_short(&text),
+-        [
+-            "E2020 13:33 the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations"
+-        ]
+-    );
+-}
+-
+-/// `var`の読み書きは`var`のエフェクトの操作なので、`var`を使う関数を渡しても上限を超える
+-/// (docs/spec/types.md の「`var` の変数」)。
+-#[test]
+-fn a_function_that_uses_a_var_exceeds_the_bound() {
+-    let text = with_head(
+-        "main : Unit -> <IO, Panic> Unit\nmain () =\n  var x = 1\n  println (show (helper (fn () -> x)))",
+-    );
+-    assert_eq!(
+-        check_short(&text),
+-        [
+-            "E2020 12:18 the row passed to `helper` may perform `var x`, but `helper` allows only `never` operations"
+-        ]
+-    );
+-}
+-
+-/// 操作が `once` だけのエフェクトも上限を超える。
+-#[test]
+-fn a_once_operation_exceeds_a_never_bound() {
+-    let text = with_head(
+-        "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let a = handle helper (fn () -> ask ()) with\n    | fn ask () -> 1\n  println (show a)",
+-    );
+-    assert_eq!(
+-        check_short(&text),
+-        [
+-            "E2020 14:18 the row passed to `helper` may perform `Ask`, but `helper` allows only `never` operations"
+-        ]
+-    );
+-}
+-
+-/// コールバックの最後の結果は extern が受け取る値で、`par` は組に1回だけ入れるか、落とす。そのため、結果に
+-/// `Lin` の値を返す子も受け付ける (docs/spec/declarations.md の「`extern`」)。
+-#[test]
+-fn a_par_child_may_return_a_lin_value() {
+-    let text = "import Std.Par\nimport Std.MutArray\nimport Std.Array\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (m, n) = Par.par (fn () -> MutArray.make 3 4) (fn () -> 3)\n  let (x, m) = MutArray.read m 0\n  println (show (x + n + Array.length (MutArray.freeze m)))";
+-    assert_eq!(check_short(text), Vec::<String>::new());
+-}
+diff --git a/crates/eml_types/tests/scaling.rs b/crates/eml_types/tests/scaling.rs
+index ca1546fc..aa76e512 100644
+--- a/crates/eml_types/tests/scaling.rs
++++ b/crates/eml_types/tests/scaling.rs
+@@ -92,20 +92,6 @@ fn ring_with_local_lambdas(n: usize) -> String {
+     text
+ }
+ 
+-/// `never` の上限を持つ `helper` を各メンバーが呼ぶ関数の輪。どのメンバーの `g` の row にも、`helper` の参照から
+-/// 上限が推論で付く。すべてのメンバーの row は1つの成分に入り、その成分から各参照の上限の成分へメンバーの数だけ辺が
+-/// 出る。メンバーごとに残す制約と上限の出どころを求めるとき、その辺を毎回たどると2乗の時間になる。
+-fn ring_with_inferred_bounds(n: usize) -> String {
+-    let mut text = String::from("helper : (Unit -> <never e> Int) -> <e> Int\nhelper f = f ()\n\n");
+-    for i in 0..n {
+-        let j = (i + 1) % n;
+-        text.push_str(&format!(
+-            "f{i} : (Unit -> <e> Int) -> Bool -> <e> Int\nf{i} g b = if b then helper g else f{j} g b\n\n"
+-        ));
+-    }
+-    text
+-}
+-
+ /// 宣言自身の変数を持たない多くのメンバーが、長い矢印の鎖の上を参照する SCC。`wrap` のスキームは引数の矢印を
+ /// 戻り値の矢印の下に置くので、`q` の本体の `q{i}` の矢印は `q0 ≤ … ≤ q{n}` の鎖になり、`q` の戻り値の矢印はその上に
+ /// ある。`q` が `f0` を呼び、`f{i}` が `q` を呼ぶので、`wrap` のほかは1つの SCC になる。`f{i}` は宣言自身の変数を
+@@ -267,12 +253,6 @@ fn a_ring_of_functions_with_local_lambdas() {
+     assert_linear(ring_with_local_lambdas);
+ }
+ 
+-#[test]
+-#[ignore = "release ビルドで時間を測る"]
+-fn a_ring_of_functions_with_inferred_bounds() {
+-    assert_linear(ring_with_inferred_bounds);
+-}
+-
+ #[test]
+ #[ignore = "release ビルドで時間を測る"]
+ fn many_functions_over_a_long_arrow_chain() {
+diff --git a/tests/ui/check-fail/names/row_bound_in_operation.em b/tests/ui/check-fail/names/row_bound_in_operation.em
+deleted file mode 100644
+index 58735d21..00000000
+--- a/tests/ui/check-fail/names/row_bound_in_operation.em
++++ /dev/null
+@@ -1,6 +0,0 @@
+--- E1057: 操作のシグネチャの row 変数には `never` を書けない。
+-effect Run where
+-  run : (Unit -> <never e> Int) -> Int
+-
+-main : Unit -> <IO> Unit
+-main () = println "unreachable"
+diff --git a/tests/ui/check-fail/names/row_bound_not_declared.em b/tests/ui/check-fail/names/row_bound_not_declared.em
+deleted file mode 100644
+index 7c7eab7a..00000000
+--- a/tests/ui/check-fail/names/row_bound_not_declared.em
++++ /dev/null
+@@ -1,9 +0,0 @@
+--- E1057: シグネチャが上限を付けていない row 変数と、`data` の row の型引数には `never` を書けない。
+-data Box <e> =
+-  | Box (Unit -> <never e> Int)
+-
+-plain : (Unit -> <e> Int) -> <e> Int
+-plain f = (f : Unit -> <never e> Int) ()
+-
+-main : Unit -> <IO> Unit
+-main () = println "unreachable"
+diff --git a/tests/ui/check-fail/syntax/row_bound_syntax.em b/tests/ui/check-fail/syntax/row_bound_syntax.em
+deleted file mode 100644
+index ded6461b..00000000
+--- a/tests/ui/check-fail/syntax/row_bound_syntax.em
++++ /dev/null
+@@ -1,9 +0,0 @@
+--- E0011: 上限に書けるのは `never` だけで、`never` は row 変数の前にしか置けない。
+-once_bound : (Unit -> <once e> Int) -> <e> Int
+-once_bound f = f ()
+-
+-bound_label : (Unit -> <never Panic | e> Int) -> <Panic | e> Int
+-bound_label f = f ()
+-
+-main : Unit -> <IO> Unit
+-main () = println "unreachable"
+diff --git a/tests/ui/check-fail/types/row_bound_exceeded.em b/tests/ui/check-fail/types/row_bound_exceeded.em
+deleted file mode 100644
+index 422a6e67..00000000
+--- a/tests/ui/check-fail/types/row_bound_exceeded.em
++++ /dev/null
+@@ -1,11 +0,0 @@
+--- E2020: 上限 `never` を書いた引数に `IO` を起こす関数を渡している。
+-helper : (Unit -> <never e> Int) -> <e> Int
+-helper f = f ()
+-
+-noisy : Unit -> <IO> Int
+-noisy () =
+-  println "x"
+-  1
+-
+-main : Unit -> <IO> Unit
+-main () = println (show (helper noisy))
+diff --git a/tests/ui/run/kinds/never_row_bound.em b/tests/ui/run/kinds/never_row_bound.em
+deleted file mode 100644
+index 27f5382d..00000000
+--- a/tests/ui/run/kinds/never_row_bound.em
++++ /dev/null
+@@ -1,12 +0,0 @@
+--- `<never e>` の上限は、`Panic` と `never` の操作だけのエフェクト (`Fail`) を受け付ける (docs/spec/types.md の「row 変数の多重度の上限」)。
+-import Fail (Fail(..))
+-
+-helper : (Unit -> <never e> Int) -> <e> Int
+-helper f = f ()
+-
+-main : Unit -> <IO, Panic> Unit
+-main () =
+-  let caught = try_panic (fn () -> helper (fn () -> 1 / 0))
+-  println (show caught)
+-  let failed = Fail.to_result (fn () -> helper (fn () -> Fail.fail "no"))
+-  println (show failed)
+diff --git a/tests/ui/run/par/panic_reaches_nearest_try_panic.em b/tests/ui/run/par/panic_reaches_nearest_try_panic.em
+index f0e76a23..072d7f3b 100644
+--- a/tests/ui/run/par/panic_reaches_nearest_try_panic.em
++++ b/tests/ui/run/par/panic_reaches_nearest_try_panic.em
+@@ -5,7 +5,7 @@ import Std.Par
+ spin : Int -> <Panic> Int
+ spin n = if n == 0 then 0 else spin (n - 1)
+ 
+-foo : (Unit -> <never e> Int) -> <Panic | e> Int
++foo : (Unit -> <e> Int) -> <Panic | e> Int
+ foo h = h ()
+ 
+ main : Unit -> <IO, Panic> Unit

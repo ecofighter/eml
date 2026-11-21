@@ -1,0 +1,1571 @@
+diff --git a/crates/eml_hir/src/hir.rs b/crates/eml_hir/src/hir.rs
+index b3958a31..c2a44198 100644
+--- a/crates/eml_hir/src/hir.rs
++++ b/crates/eml_hir/src/hir.rs
+@@ -414,8 +414,6 @@ pub struct TypeVarDecl {
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct RowVarDecl {
+     pub name: String,
+-    /// そのシグネチャでこの変数に最初に書いた `never` (docs/spec/types.md の「row 変数の多重度の上限」)。
+-    pub never: Option<TextRange>,
+ }
+ 
+ #[derive(Debug, Clone)]
+diff --git a/crates/eml_hir/src/lib.rs b/crates/eml_hir/src/lib.rs
+index 4ef5bc13..1d3135a9 100644
+--- a/crates/eml_hir/src/lib.rs
++++ b/crates/eml_hir/src/lib.rs
+@@ -133,7 +133,6 @@ pub mod codes {
+     pub const NEGATIVE_BYTE_LITERAL: ErrorCode = ErrorCode(1054);
+     pub const SPREAD_NOT_AN_ARGUMENT: ErrorCode = ErrorCode(1055);
+     pub const COMMAND_WITHOUT_PROGRAM: ErrorCode = ErrorCode(1056);
+-    pub const ROW_BOUND_NOT_DECLARED: ErrorCode = ErrorCode(1057);
+     pub const ABSTRACT_MEMBER: ErrorCode = ErrorCode(1058);
+     pub const INVALID_EXTERN_C: ErrorCode = ErrorCode(1059);
+     pub const INVALID_LINK: ErrorCode = ErrorCode(1060);
+diff --git a/crates/eml_hir/src/lower/data.rs b/crates/eml_hir/src/lower/data.rs
+index bcfd179f..b8d86f7a 100644
+--- a/crates/eml_hir/src/lower/data.rs
++++ b/crates/eml_hir/src/lower/data.rs
+@@ -28,7 +28,7 @@ impl ItemLowering<'_> {
+                         generics.type_vars.alloc(TypeVarDecl { name });
+                     }
+                     ParamSort::Row => {
+-                        generics.row_vars.alloc(RowVarDecl { name, never: None });
++                        generics.row_vars.alloc(RowVarDecl { name });
+                     }
+                 }
+             }
+diff --git a/crates/eml_hir/src/lower/effect.rs b/crates/eml_hir/src/lower/effect.rs
+index f0e22c28..0d6fa84d 100644
+--- a/crates/eml_hir/src/lower/effect.rs
++++ b/crates/eml_hir/src/lower/effect.rs
+@@ -107,7 +107,7 @@ impl ItemLowering<'_> {
+             types: &mut types,
+             generics: &mut generics,
+             items: self.resolver,
+-            vars: Vars::Operation,
++            vars: Vars::Define,
+             public_item: public.then_some(item.name.as_str()),
+             c_widths: None,
+             diagnostics: &mut *self.diagnostics,
+diff --git a/crates/eml_hir/src/lower/types.rs b/crates/eml_hir/src/lower/types.rs
+index 203d24bf..3fb5cc2c 100644
+--- a/crates/eml_hir/src/lower/types.rs
++++ b/crates/eml_hir/src/lower/types.rs
+@@ -22,9 +22,6 @@ pub(super) enum Vars {
+     /// `data` の宣言のフィールド。宣言の型引数だけを使える。row の末尾には宣言の row の型引数だけを書ける
+     /// (docs/spec/types.md の「row の型引数」)。
+     Data,
+-    /// 操作のシグネチャ。名前の取り方は `Define` と同じだが、row 変数に上限は書けない
+-    /// (docs/spec/types.md の「row 変数の多重度の上限」)。
+-    Operation,
+ }
+ 
+ pub(super) struct TypeLowering<'a> {
+@@ -277,7 +274,7 @@ impl TypeLowering<'_> {
+         let mut valid = true;
+         let tail = match row.tail() {
+             Some(tail) => {
+-                let id = self.row_var(&tail, None);
++                let id = self.row_var(&tail);
+                 valid &= id.is_some();
+                 id
+             }
+@@ -348,7 +345,7 @@ impl TypeLowering<'_> {
+         {
+             return TypeRefKind::Var(id);
+         }
+-        if matches!(self.vars, Vars::Define | Vars::Operation) {
++        if self.vars == Vars::Define {
+             let id = self.generics.type_vars.alloc(TypeVarDecl {
+                 name: text.to_string(),
+             });
+@@ -362,7 +359,7 @@ impl TypeLowering<'_> {
+         TypeRefKind::Error
+     }
+ 
+-    fn row_var(&mut self, name: &SyntaxToken, bound: Option<TextRange>) -> Option<RowVarId> {
++    fn row_var(&mut self, name: &SyntaxToken) -> Option<RowVarId> {
+         let text = name.text();
+         let range = name.text_range();
+         let found = self
+@@ -371,7 +368,7 @@ impl TypeLowering<'_> {
+             .iter()
+             .find(|(_, var)| var.name == text)
+             .map(|(id, _)| id);
+-        let define = matches!(self.vars, Vars::Define | Vars::Operation);
++        let define = self.vars == Vars::Define;
+         if found.is_none() && !define {
+             self.diagnostics.push(Diagnostic::error(
+                 codes::UNDEFINED_TYPE,
+@@ -380,57 +377,18 @@ impl TypeLowering<'_> {
+             ));
+             return None;
+         }
+-        let id = found.unwrap_or_else(|| {
++        Some(found.unwrap_or_else(|| {
+             self.generics.row_vars.alloc(RowVarDecl {
+                 name: text.to_string(),
+-                never: None,
+             })
+-        });
+-        if let Some(at) = bound {
+-            let declared = &mut self.generics.row_vars[id].never;
+-            match self.vars {
+-                Vars::Define => {
+-                    declared.get_or_insert(at);
+-                }
+-                Vars::Signature | Vars::Data if declared.is_some() => {}
+-                Vars::Signature | Vars::Data | Vars::Operation => {
+-                    self.bound_not_declared(text, at);
+-                }
+-            }
+-        }
+-        Some(id)
+-    }
+-
+-    fn bound_not_declared(&mut self, name: &str, at: TextRange) {
+-        let (label, help) = match self.vars {
+-            Vars::Signature => (
+-                format!("the signature does not bound `{name}` with `never`"),
+-                format!("write `never {name}` in the signature, or remove `never` here"),
+-            ),
+-            Vars::Data => (
+-                "a row parameter of `data` has no bound".to_string(),
+-                "remove `never`".to_string(),
+-            ),
+-            Vars::Operation | Vars::Define => (
+-                "the row variables of an operation cannot be bounded".to_string(),
+-                "remove `never`".to_string(),
+-            ),
+-        };
+-        self.diagnostics.push(
+-            Diagnostic::error(
+-                codes::ROW_BOUND_NOT_DECLARED,
+-                format!("`never` cannot bound `{name}` here"),
+-                Label::new(self.file, at, label),
+-            )
+-            .with_help(help),
+-        );
++        }))
+     }
+ 
+     /// 表にない変数の名前を書いたときのラベル。
+     fn undeclared(&self) -> &'static str {
+         match self.vars {
+             Vars::Data => "not a parameter of this `data` declaration",
+-            Vars::Define | Vars::Operation | Vars::Signature => "not found in the signature",
++            Vars::Define | Vars::Signature => "not found in the signature",
+         }
+     }
+ 
+diff --git a/crates/eml_hir/src/pretty.rs b/crates/eml_hir/src/pretty.rs
+index ba9080ab..40a7a13e 100644
+--- a/crates/eml_hir/src/pretty.rs
++++ b/crates/eml_hir/src/pretty.rs
+@@ -728,12 +728,7 @@ impl Printer<'_> {
+             RowRef::Omitted => return None,
+             RowRef::Closed { effects, .. } => format!("<{}>", effect_names(effects).join(", ")),
+             RowRef::Open { effects, tail, .. } => {
+-                let var = &self.generics.row_vars[*tail];
+-                let tail = if var.never.is_some() {
+-                    format!("never {}", var.name)
+-                } else {
+-                    var.name.clone()
+-                };
++                let tail = &self.generics.row_vars[*tail].name;
+                 if effects.is_empty() {
+                     format!("<{tail}>")
+                 } else {
+diff --git a/crates/eml_types/src/check/mod.rs b/crates/eml_types/src/check/mod.rs
+index 0ef6c268..dbaf8914 100644
+--- a/crates/eml_types/src/check/mod.rs
++++ b/crates/eml_types/src/check/mod.rs
+@@ -1,4 +1,4 @@
+-use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles};
++use eml_diagnostics::{Diagnostic, Label, SourceFiles};
+ use eml_hir::{
+     Binding, ClassId, Constructor, ExprId, Function, FunctionId, FunctionKind, Generics,
+     InstanceId, InstanceOrigin, ItemMap, LocalId, Method, Operation, Program, RowRef, Signature,
+@@ -8,7 +8,7 @@ use la_arena::Arena;
+ use rustc_hash::{FxHashMap, FxHashSet};
+ 
+ use crate::context::Context;
+-use crate::kind::entail::{Unentailed, unentailed};
++use crate::kind::entail::unentailed;
+ use crate::kind::eval::scheme_facts;
+ use crate::kind::problem::{Instance, KindProblem, KindScheme};
+ use crate::kind::solve::{Solution, solve_scc};
+@@ -379,11 +379,8 @@ fn check_derived_fields(
+     for &constructor in constructors {
+         let fields = program[constructor].fields.len();
+         let mut table = Table::new(context);
+-        let own = constructor_shape(context, def, &program[constructor]).instantiate_rigid(
+-            &mut table,
+-            &def.generics,
+-            program.file(instance.head.module),
+-        );
++        let own = constructor_shape(context, def, &program[constructor])
++            .instantiate_rigid(&mut table, &def.generics);
+         let givens: Vec<(ClassId, RigidVar)> = instance
+             .context
+             .iter()
+@@ -529,7 +526,7 @@ pub(crate) fn check_body<'c>(
+         return None;
+     };
+     let mut table = Table::new(context);
+-    let own = shape.instantiate_rigid(&mut table, &signature.generics, signature_file(program, id));
++    let own = shape.instantiate_rigid(&mut table, &signature.generics);
+     // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
+     table.closure_kinds(own.ty, body.params.len(), &[]);
+     let previous = table.set_kind_origin(Provenance::Given);
+@@ -753,20 +750,6 @@ fn unrestricted_vars(
+     vars
+ }
+ 
+-/// 関数のシグネチャの generics を書いたファイル。instance のメソッドと既定のメソッドの generics はクラスのメソッドから
+-/// 写したものなので、`never` の位置はクラスのファイルにある。`MethodId` のモジュールはクラスのモジュールである。
+-fn signature_file(program: &Program, id: FunctionId) -> FileId {
+-    match program[id].kind {
+-        FunctionKind::InstanceMethod(_, method) | FunctionKind::DefaultMethod(method) => {
+-            program.file(method.module)
+-        }
+-        FunctionKind::Defined
+-        | FunctionKind::Extern(_)
+-        | FunctionKind::C(_)
+-        | FunctionKind::Input(_) => program.file(id.module),
+-    }
+-}
+-
+ /// 本体のない宣言の Kind のスキーム。宣言から出る制約だけを持つ問題を、1つの宣言だけの SCC として解く。
+ fn declaration_schemes(
+     program: &Program,
+@@ -784,25 +767,23 @@ fn declaration_schemes(
+             continue;
+         };
+         let arity = signature.arity();
+-        let file = signature_file(program, id);
+-        let problem =
+-            declaration_problem(context, shape, &signature.generics, file, |table, own| {
+-                table.closure_kinds(own.ty, arity, &[]);
+-                // 引数に現れる型変数は `Unr` である。本体がないので、extern が引数をどう使うかを Kind に推論できない。
+-                // 結果だけに現れる型変数 (`exit`、`MutArray.empty`) と、関数型の引数の最後の結果にだけ現れる型変数は縛らない
+-                // (docs/spec/declarations.md の「`extern`」)
+-                let held = match function.kind {
+-                    FunctionKind::Extern(Some(e)) => e.row().held,
+-                    _ => &[],
+-                };
+-                let handle = |def: eml_hir::TypeDefId| {
+-                    matches!(program[def].kind, TypeDefKind::Extern(Some(ty))
++        let problem = declaration_problem(context, shape, &signature.generics, |table, own| {
++            table.closure_kinds(own.ty, arity, &[]);
++            // 引数に現れる型変数は `Unr` である。本体がないので、extern が引数をどう使うかを Kind に推論できない。
++            // 結果だけに現れる型変数 (`exit`、`MutArray.empty`) と、関数型の引数の最後の結果にだけ現れる型変数は縛らない
++            // (docs/spec/declarations.md の「`extern`」)
++            let held = match function.kind {
++                FunctionKind::Extern(Some(e)) => e.row().held,
++                _ => &[],
++            };
++            let handle = |def: eml_hir::TypeDefId| {
++                matches!(program[def].kind, TypeDefKind::Extern(Some(ty))
+                         if ty.row().params > 0 && !ty.row().kind_follows_params)
+-                };
+-                for var in param_type_vars(signature, arity, held, &handle) {
+-                    table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
+-                }
+-            });
++            };
++            for var in param_type_vars(signature, arity, held, &handle) {
++                table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
++            }
++        });
+         problems.push((ValueItem::Function(id), problem));
+     }
+     // メソッドも本体を持たないので、extern の関数と同じく宣言だけから作る
+@@ -811,8 +792,7 @@ fn declaration_schemes(
+         let shape = &signatures.methods[id];
+         let generics = &method.signature.generics;
+         let arity = method.signature.arity();
+-        let file = program.file(id.module);
+-        let problem = declaration_problem(context, shape, generics, file, |table, own| {
++        let problem = declaration_problem(context, shape, generics, |table, own| {
+             table.closure_kinds(own.ty, arity, &[]);
+             // クラスの型変数 (番号 0) とメソッド自身の制約の型変数は、制約 `C a` があるので `Unr` である
+             let class_var = generics.type_vars.iter().map(|(var, _)| var).take(1);
+@@ -826,8 +806,7 @@ fn declaration_schemes(
+     for (id, operation) in program.operations() {
+         let shape = &signatures.operations[id];
+         let generics = &operation.signature.generics;
+-        let file = program.file(id.module);
+-        let problem = declaration_problem(context, shape, generics, file, |table, own| {
++        let problem = declaration_problem(context, shape, generics, |table, own| {
+             table.closure_kinds(own.ty, operation.arity, &[]);
+             // エフェクトの型引数は handle ごとに具体的な型で節を検査するので、`Unr` に固定しない
+             let effect_kinds: Vec<KindVar> = own
+@@ -856,8 +835,7 @@ fn declaration_schemes(
+     for (id, constructor) in program.constructors() {
+         let shape = &signatures.constructors[id];
+         let generics = &program[constructor.ty].generics;
+-        let file = program.file(id.module);
+-        let problem = declaration_problem(context, shape, generics, file, |table, own| {
++        let problem = declaration_problem(context, shape, generics, |table, own| {
+             table.closure_kinds(own.ty, constructor.fields.len(), &[]);
+         });
+         problems.push((ValueItem::Constructor(id), problem));
+@@ -946,17 +924,15 @@ fn visit_outside_handles(
+     }
+ }
+ 
+-/// 宣言の形を使い捨ての表に置き、宣言から出る制約だけを足した Kind の問題。`file` は `generics` を書いたファイルで、
+-/// シグネチャに書いた row 変数の上限の位置に使う。
++/// 宣言の形を使い捨ての表に置き、宣言から出る制約だけを足した Kind の問題。
+ fn declaration_problem(
+     context: &Context,
+     shape: &Shape,
+     generics: &Generics,
+-    file: FileId,
+     constrain: impl FnOnce(&mut Table<'_>, &Own),
+ ) -> KindProblem {
+     let mut table = Table::new(context);
+-    let own = shape.instantiate_rigid(&mut table, generics, file);
++    let own = shape.instantiate_rigid(&mut table, generics);
+     constrain(&mut table, &own);
+     table.into_problem(Vec::new(), own.vars)
+ }
+@@ -1000,17 +976,17 @@ fn check_method_kinds(
+         };
+         let arity = program[method].signature.arity();
+         let unrestricted = unrestricted_vars(program, function, signature);
+-        let file = signature_file(program, id);
+-        let problem =
+-            declaration_problem(context, shape, &signature.generics, file, |table, own| {
+-                table.closure_kinds(own.ty, arity, &[]);
+-                for &var in &unrestricted {
+-                    table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
+-                }
+-            });
++        let problem = declaration_problem(context, shape, &signature.generics, |table, own| {
++            table.closure_kinds(own.ty, arity, &[]);
++            for &var in &unrestricted {
++                table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
++            }
++        });
+         let solution = solve_scc(&[(decl, &problem)], schemes);
+         debug_assert!(solution.violated.is_empty());
+         let class_side = solution.schemes.into_iter().next().unwrap_or_default();
++        // EN: Nothing references the function of an instance method or a default method, so none of its own multiplicity variables gets a bound (docs/spec/types.md の「instance と既定のメソッドの検査」).
++        debug_assert!(scheme.mult.is_empty());
+         let missing = unentailed(&class_side, scheme);
+         if missing.is_empty() {
+             continue;
+@@ -1033,25 +1009,10 @@ fn check_method_kinds(
+                 function.name_range,
+                 "this definition",
+             ),
++        )
++        .with_note(
++            "the signature of a method leaves its own type variables free to be linear, and this definition copies, drops or keeps a value of such a type",
+         );
+-        // 導けないのが多重度だけなら、定義が row 変数に上限を求めている。上限はクラスのシグネチャに書けば前提にできる
+-        // (docs/spec/types.md の「instance と既定のメソッドの検査」)
+-        let diagnostic = if missing
+-            .iter()
+-            .all(|missing| matches!(missing, Unentailed::Multiplicity(..)))
+-        {
+-            diagnostic
+-                .with_note(
+-                    "the signature of a method allows any effects for its row variables, and this definition passes a row where only `never` operations are allowed",
+-                )
+-                .with_help(format!(
+-                    "write `never` before the row variable in the signature of `{name}` in the class"
+-                ))
+-        } else {
+-            diagnostic.with_note(
+-                "the signature of a method leaves its own type variables free to be linear, and this definition copies, drops or keeps a value of such a type",
+-            )
+-        };
+         diagnostics.push(diagnostic);
+     }
+     diagnostics
+@@ -1075,16 +1036,8 @@ fn report_violations(
+     });
+     origins.dedup();
+     let mut carried = FxHashSet::default();
+-    let mut bounded = FxHashSet::default();
+     let mut out = Vec::new();
+     for origin in origins {
+-        // 1つの呼び出しが上限を持つ row 変数を2つ以上破っても、E2020 は1件だけにする。並びの最初の由来の原因と出どころを
+-        // 示す (docs/implementation/diagnostics.md の E2020)
+-        if let KindReason::RowBound { name, .. } = &origin.reason
+-            && !bounded.insert((origin.span.file, origin.span.range, name.clone()))
+-        {
+-            continue;
+-        }
+         // 値の範囲は由来と同じファイルにある。別のファイルの値は、範囲が同じでも別の値である
+         if let KindReason::CarriedAcross { value, .. } = &origin.reason
+             && !carried.insert((origin.span.file, value.key()))
+diff --git a/crates/eml_types/src/check/report.rs b/crates/eml_types/src/check/report.rs
+index 0760ff9a..40fe9121 100644
+--- a/crates/eml_types/src/check/report.rs
++++ b/crates/eml_types/src/check/report.rs
+@@ -9,12 +9,11 @@ use rustc_hash::FxHashSet;
+ 
+ use crate::codes;
+ use crate::kind::{
+-    BoundCause, BoundSource, CallKind, CarriedInner, CarriedValue, DiscardSite, Exceeding,
+-    InnerLabel, KindOrigin, KindReason, OperationSide, Span, UntakenPath, UnusedPath, VarMisuse,
++    CallKind, CarriedInner, CarriedValue, DiscardSite, InnerLabel, KindOrigin, KindReason,
++    OperationSide, Span, UntakenPath, UnusedPath, VarMisuse,
+ };
+ use crate::store::TypeStore;
+ use crate::table::{Exporter, Label as RowLabel, Row, Ty, UnifyError};
+-use crate::ty::Multiplicity;
+ use eml_extern::ExternType;
+ 
+ use super::body::BodyCheck;
+@@ -798,14 +797,6 @@ pub(super) fn linear_misuse(
+         KindReason::CarriedThrough { name, inner } => {
+             carried_through(origin.span, name, inner.as_ref())
+         }
+-        KindReason::RowBound {
+-            name,
+-            source,
+-            cause,
+-        } => row_bound_exceeded(program, origin.span, name, source, cause.as_ref()),
+-        KindReason::Performs(_) => {
+-            unreachable!("a lower bound by an effect is never violated")
+-        }
+         KindReason::UsedMoreThanOnce {
+             name,
+             first,
+@@ -1242,74 +1233,6 @@ fn carried_through(span: Span, name: &str, inner: Option<&CarriedInner>) -> Diag
+     diagnostic.with_note(CARRY_NOTE)
+ }
+ 
+-const ROW_BOUND_NOTE: &str = "a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them";
+-
+-/// E2020。参照が渡した row が、参照した宣言の row 変数の上限を超えた (docs/implementation/diagnostics.md の E2020)。
+-fn row_bound_exceeded(
+-    program: &Program,
+-    span: Span,
+-    name: &str,
+-    source: &BoundSource,
+-    cause: Option<&BoundCause>,
+-) -> Diagnostic {
+-    let performed = match cause.map(|cause| cause.what) {
+-        Some(Exceeding::Effect(effect)) => format!("`{}`", program.names.effect(effect)),
+-        Some(Exceeding::Multiplicity(multiplicity)) => {
+-            format!("`{}` operations", multiplicity_word(multiplicity))
+-        }
+-        // 今の検査器では来ない形である。多重度の下限の制約はどれも本体の中の位置を由来に持つ。それでも、来た所を
+-        // 指せない場合 (別のファイルの由来など) の見出しを、`with_bound_cause` が足さなかったときのために持つ
+-        None => "operations other than `never` ones".to_string(),
+-    };
+-    let mut diagnostic = Diagnostic::error(
+-        codes::ROW_BOUND_EXCEEDED,
+-        format!(
+-            "the row passed to `{name}` may perform {performed}, but `{name}` allows only `never` operations"
+-        ),
+-        Label::new(span.file, span.range, format!("`{name}` is used here")),
+-    );
+-    if let Some(cause) = cause {
+-        let label = match cause.what {
+-            Exceeding::Effect(effect) => {
+-                format!("`{}` is performed here", program.names.effect(effect))
+-            }
+-            Exceeding::Multiplicity(multiplicity) => format!(
+-                "`{}` operations may be performed here",
+-                multiplicity_word(multiplicity)
+-            ),
+-        };
+-        diagnostic =
+-            diagnostic.with_secondary(Label::new(cause.span.file, cause.span.range, label));
+-    }
+-    match source {
+-        BoundSource::Written(written) => {
+-            diagnostic = diagnostic.with_secondary(Label::new(
+-                written.file,
+-                written.range,
+-                format!("`{name}` bounds this row variable by `never`"),
+-            ));
+-        }
+-        BoundSource::Through { name: inner, span } => {
+-            diagnostic = diagnostic.with_secondary(Label::new(
+-                span.file,
+-                span.range,
+-                format!("the row is passed to `{inner}` here"),
+-            ));
+-        }
+-        BoundSource::Unknown => {}
+-    }
+-    diagnostic.with_note(ROW_BOUND_NOTE)
+-}
+-
+-/// 多重度の、操作の宣言に書く語。
+-fn multiplicity_word(multiplicity: Multiplicity) -> &'static str {
+-    match multiplicity {
+-        Multiplicity::Never => "never",
+-        Multiplicity::Once => "once",
+-        Multiplicity::Multi => "multi",
+-    }
+-}
+-
+ /// 本体の引数の数 `params` より後ろの矢印のうち、row が `missing` をすべて許す最初の矢印の番号 (0 から数える)。
+ /// 開いた row は、row 変数を通してどのエフェクトも許すとみなす。
+ fn allowing_arrow(
+diff --git a/crates/eml_types/src/dump.rs b/crates/eml_types/src/dump.rs
+index 416574fe..8abda5aa 100644
+--- a/crates/eml_types/src/dump.rs
++++ b/crates/eml_types/src/dump.rs
+@@ -132,9 +132,7 @@ fn write_kinds(out: &mut String, types: &mut TypeStore, names: &DisplayNames, de
+     }
+ }
+ 
+-/// スキームに残った制約のうち、定数を片側に持つものを表示用にする。多重度の制約からは、名前のある row 変数の定数の
+-/// 上限だけを出す。変数どうしの制約は出さない。テストで確かめたいのは `Unr` の上限と row 変数の上限 (`<e> <= Never`)
+-/// が付いたかどうかで、変数どうしの制約は部分適用のたびに増えて読みにくくなるため。
++/// EN: Makes the constraints left in the scheme that have a constant on one side ready for display. It shows no multiplicity bound and no constraint between variables. What tests want to see is whether an upper bound `Unr` was attached, and constraints between variables grow with every partial application and become hard to read.
+ fn kind_constraints(
+     types: &mut TypeStore,
+     shape: &Shape,
+@@ -165,16 +163,6 @@ fn kind_constraints(
+             })
+         })
+         .collect();
+-    for &(lower, upper) in &scheme.mult {
+-        if let (Bound::Var(var), Bound::Const(upper)) = (lower, upper)
+-            && let Some(row) = rows.get(&var)
+-        {
+-            constraints.push(KindConstraint::RowUpper {
+-                row: row.clone(),
+-                upper,
+-            });
+-        }
+-    }
+     for carry in &scheme.carries {
+         let (Some(value), Some(row)) = (term(carry.lin), row_term(carry.mult)) else {
+             continue;
+diff --git a/crates/eml_types/src/kind/entail.rs b/crates/eml_types/src/kind/entail.rs
+index f4c47022..e08ba3f6 100644
+--- a/crates/eml_types/src/kind/entail.rs
++++ b/crates/eml_types/src/kind/entail.rs
+@@ -14,34 +14,26 @@ use crate::ty::{Linearity, Multiplicity};
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(crate) enum Unentailed {
+     Linearity(Bound<Linearity>, Bound<Linearity>),
+-    Multiplicity(Bound<Multiplicity>, Bound<Multiplicity>),
+     Carry(Bound<Linearity>, Bound<Multiplicity>),
+ }
+ 
+ /// `scheme` の制約のうち、`assumed` から導けないもの。
+ pub(crate) fn unentailed(assumed: &KindScheme, scheme: &KindScheme) -> Vec<Unentailed> {
+     let lin = Lattice::new(&assumed.lin);
+-    let mult = Lattice::new(&assumed.mult);
+     let mut out = Vec::new();
+     for &(lower, upper) in &scheme.lin {
+         if !lin.entails(lower, upper) {
+             out.push(Unentailed::Linearity(lower, upper));
+         }
+     }
+-    for &(lower, upper) in &scheme.mult {
+-        if !mult.entails(lower, upper) {
+-            out.push(Unentailed::Multiplicity(lower, upper));
+-        }
+-    }
+     let assumed_carries: FxHashSet<(Bound<Linearity>, Bound<Multiplicity>)> = assumed
+         .carries
+         .iter()
+         .map(|carry| (carry.lin, carry.mult))
+         .collect();
+     for carry in &scheme.carries {
+-        // 値の側が必ず `Unr` か、row の側が必ず `Once` 以下なら、持ち越しの制約は破れない
++        // EN: A carry constraint cannot be violated when the value side is always `Unr`
+         let entailed = lin.upper(carry.lin) == Linearity::Unr
+-            || mult.upper(carry.mult) <= Multiplicity::Once
+             || assumed_carries.contains(&(carry.lin, carry.mult));
+         if !entailed {
+             out.push(Unentailed::Carry(carry.lin, carry.mult));
+@@ -152,7 +144,6 @@ mod tests {
+ 
+     const UNR: Bound<Linearity> = Bound::Const(Linearity::Unr);
+     const LIN: Bound<Linearity> = Bound::Const(Linearity::Lin);
+-    const ONCE: Bound<Multiplicity> = Bound::Const(Multiplicity::Once);
+ 
+     fn lin(constraints: Vec<(Bound<Linearity>, Bound<Linearity>)>) -> KindScheme {
+         KindScheme {
+@@ -205,17 +196,15 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn a_carry_is_entailed_by_an_unrestricted_value_a_bounded_row_or_the_same_pair() {
++    fn a_carry_is_entailed_by_an_unrestricted_value_or_the_same_pair() {
+         let assumed = KindScheme {
+             lin: vec![(var(0), UNR)],
+-            mult: vec![(var(0), ONCE)],
+             carries: vec![carry(var(2), var(1))],
+-            bound_sources: Vec::new(),
++            ..KindScheme::default()
+         };
+         let scheme = KindScheme {
+             carries: vec![
+                 carry(var(0), var(1)),
+-                carry(var(1), var(0)),
+                 carry(var(2), var(1)),
+                 carry(var(1), var(1)),
+             ],
+diff --git a/crates/eml_types/src/kind/mod.rs b/crates/eml_types/src/kind/mod.rs
+index a359b52f..918b2fc6 100644
+--- a/crates/eml_types/src/kind/mod.rs
++++ b/crates/eml_types/src/kind/mod.rs
+@@ -6,7 +6,7 @@
+ use std::sync::Arc;
+ 
+ use eml_diagnostics::{FileId, TextRange, TextSize};
+-use eml_hir::{DisplayNames, EffectId, OperationId, VarId};
++use eml_hir::{DisplayNames, OperationId, VarId};
+ 
+ use crate::store::{TypeId, TypeStore};
+ use crate::table::Row;
+@@ -65,9 +65,7 @@ pub(crate) struct Span {
+ /// Kind の制約の由来。制約が破れたときに E3001〜E3005 が指す場所と理由である
+ /// (docs/implementation/diagnostics.md の「線形性の診断」)。
+ /// `reason` の中の位置は、どれも由来を作った本体の中にあり、`span` と同じファイルである。ただし、自分の `Span` を持つ
+-/// 次の位置は例外である。`CarriedThrough` の `inner` は、呼ばれた関数のファイルを指しうる。`RowBound` の `source` は、
+-/// 参照した宣言のシグネチャか本体、または同じ SCC の別のメンバーの本体を指し、別のファイルでもありうる。`RowBound` の
+-/// `cause` は `span` と同じファイルだが、同じ SCC の別のメンバーの本体を指しうる。
++/// 次の位置は例外である。`CarriedThrough` の `inner` は、呼ばれた関数のファイルを指しうる。
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub(crate) struct KindOrigin {
+     pub span: Span,
+@@ -92,9 +90,6 @@ pub(crate) enum Provenance {
+     Given,
+     /// 本体の検査の表の既定値で、由来を付け忘れた制約である。値は検査している関数の名前の位置。
+     Unattributed(Span),
+-    /// シグネチャに書いた row 変数の上限。値はその `never` の位置である。破れるのは同じ SCC の参照を通したときだけで、
+-    /// その参照に複写した制約が報告する (docs/spec/types.md の「row 変数の多重度の上限」)。
+-    Bound(Span),
+ }
+ 
+ impl Provenance {
+@@ -108,8 +103,7 @@ impl Provenance {
+             Provenance::Suppressed
+             | Provenance::Declaration
+             | Provenance::Given
+-            | Provenance::Unattributed(_)
+-            | Provenance::Bound(_) => None,
++            | Provenance::Unattributed(_) => None,
+         }
+     }
+ }
+@@ -213,83 +207,6 @@ pub(crate) enum KindReason {
+         decl: TextRange,
+         misuse: VarMisuse,
+     },
+-    /// 参照した宣言 `name` の row 変数の上限 (E2020)。由来の範囲は参照の位置である。`source` は上限の出どころで、
+-    /// `cause` は上限を超えた row がどこから来たかを表す。`cause` は段2が解いた後に入れる
+-    /// (docs/implementation/diagnostics.md の E2020)。
+-    RowBound {
+-        name: String,
+-        source: BoundSource,
+-        cause: Option<BoundCause>,
+-    },
+-    /// row 変数に入れたラベルのエフェクト。由来の範囲はその row を入れた式である。下限の制約にだけ付くので破れず、
+-    /// E2020 の原因として読まれる。
+-    Performs(EffectId),
+-}
+-
+-/// 宣言のスキームに残した row 変数の上限の出どころ。E2020 の secondary が指す。
+-#[derive(Debug, Clone, PartialEq, Eq)]
+-pub(crate) enum BoundSource {
+-    /// シグネチャに書いた `never`。
+-    Written(Span),
+-    /// 推論した上限で、`name` に row を渡した参照から来た。その参照は、上限を残した宣言 (参照された側) の本体か、同じ
+-    /// SCC の別のメンバーの本体にある。報告する参照を含む本体にはない。
+-    Through { name: String, span: Span },
+-    /// 出どころを決めなかった。
+-    Unknown,
+-}
+-
+-/// 上限を超えた row が来た所。
+-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+-pub(crate) struct BoundCause {
+-    pub span: Span,
+-    pub what: Exceeding,
+-}
+-
+-/// 上限を超えたもの。
+-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+-pub(crate) enum Exceeding {
+-    /// そこで起こすラベルのエフェクト。
+-    Effect(EffectId),
+-    /// エフェクトの分からない row の多重度。
+-    Multiplicity(Multiplicity),
+-}
+-
+-impl BoundSource {
+-    fn order_key(&self) -> Vec<KeyPart> {
+-        match self {
+-            BoundSource::Written(written) => [
+-                vec![number(0), KeyPart::File(written.file)],
+-                span(written.range),
+-            ]
+-            .concat(),
+-            BoundSource::Through { name, span: at } => [
+-                vec![number(1), KeyPart::File(at.file)],
+-                span(at.range),
+-                vec![text(name)],
+-            ]
+-            .concat(),
+-            BoundSource::Unknown => vec![number(2)],
+-        }
+-    }
+-}
+-
+-impl BoundCause {
+-    fn order_key(&self) -> Vec<KeyPart> {
+-        let what = match self.what {
+-            Exceeding::Effect(effect) => vec![
+-                number(0),
+-                number(effect.module.into_raw().into_u32()),
+-                number(effect.local.into_raw().into_u32()),
+-            ],
+-            Exceeding::Multiplicity(m) => vec![number(1), number(m as u32)],
+-        };
+-        [
+-            vec![KeyPart::File(self.span.file)],
+-            span(self.span.range),
+-            what,
+-        ]
+-        .concat()
+-    }
+ }
+ 
+ /// 配列の変数を取り出さなかった経路。E3003 の secondary が指す。
+@@ -437,24 +354,6 @@ impl KindReason {
+                 16,
+                 [vec![text(name)], span(*decl), vec![number(*misuse as u32)]].concat(),
+             ),
+-            KindReason::RowBound {
+-                name,
+-                source,
+-                cause,
+-            } => {
+-                let cause = match cause {
+-                    None => vec![number(0)],
+-                    Some(cause) => [vec![number(1)], cause.order_key()].concat(),
+-                };
+-                (17, [vec![text(name)], source.order_key(), cause].concat())
+-            }
+-            KindReason::Performs(effect) => (
+-                18,
+-                vec![
+-                    number(effect.module.into_raw().into_u32()),
+-                    number(effect.local.into_raw().into_u32()),
+-                ],
+-            ),
+             KindReason::OperationType { name, side, lambda } => {
+                 let lambda = match lambda {
+                     None => vec![number(0)],
+@@ -739,21 +638,6 @@ mod tests {
+         let mut files = eml_diagnostics::SourceFiles::new();
+         let a = files.add("a.em", "");
+         let b = files.add("b.em", "");
+-        let at = |file, start| Span {
+-            file,
+-            range: range(start, start + 1),
+-        };
+-        let effect = |index: u32| {
+-            EffectId::new(
+-                ModuleId::from_raw(RawIdx::from(0)),
+-                Idx::from_raw(RawIdx::from(index)),
+-            )
+-        };
+-        let row_bound = |name: &str, source, cause| KindReason::RowBound {
+-            name: name.to_string(),
+-            source,
+-            cause,
+-        };
+         let inner = |file, start, label| CarriedInner {
+             span: Span {
+                 file,
+@@ -888,44 +772,6 @@ mod tests {
+                 decl: range(1, 2),
+                 misuse: VarMisuse::Assigned,
+             },
+-            row_bound("helper", BoundSource::Unknown, None),
+-            row_bound("other", BoundSource::Unknown, None),
+-            row_bound("helper", BoundSource::Written(at(a, 1)), None),
+-            row_bound("helper", BoundSource::Written(at(b, 1)), None),
+-            row_bound(
+-                "helper",
+-                BoundSource::Through {
+-                    name: "wrap".to_string(),
+-                    span: at(a, 1),
+-                },
+-                None,
+-            ),
+-            row_bound(
+-                "helper",
+-                BoundSource::Unknown,
+-                Some(BoundCause {
+-                    span: at(a, 3),
+-                    what: Exceeding::Effect(effect(0)),
+-                }),
+-            ),
+-            row_bound(
+-                "helper",
+-                BoundSource::Unknown,
+-                Some(BoundCause {
+-                    span: at(a, 3),
+-                    what: Exceeding::Effect(effect(1)),
+-                }),
+-            ),
+-            row_bound(
+-                "helper",
+-                BoundSource::Unknown,
+-                Some(BoundCause {
+-                    span: at(a, 3),
+-                    what: Exceeding::Multiplicity(Multiplicity::Multi),
+-                }),
+-            ),
+-            KindReason::Performs(effect(0)),
+-            KindReason::Performs(effect(1)),
+         ]
+     }
+ }
+diff --git a/crates/eml_types/src/kind/problem.rs b/crates/eml_types/src/kind/problem.rs
+index 6a9695eb..5b8c6228 100644
+--- a/crates/eml_types/src/kind/problem.rs
++++ b/crates/eml_types/src/kind/problem.rs
+@@ -3,7 +3,7 @@
+ 
+ use eml_hir::ValueItem;
+ 
+-use super::{Bound, BoundSource, Carry, KindVar, Provenance};
++use super::{Bound, Carry, KindVar, Provenance};
+ use crate::ty::{Linearity, Multiplicity};
+ 
+ /// 1つの束の上の制約 `下限 ≤ 上限` の集まり。変数は 0 から `vars` 未満の番号を持つ。
+@@ -75,7 +75,4 @@ pub(crate) struct KindScheme {
+     pub lin: Vec<(Bound<Linearity>, Bound<Linearity>)>,
+     pub mult: Vec<(Bound<Multiplicity>, Bound<Multiplicity>)>,
+     pub carries: Vec<Carry>,
+-    /// `mult` に残した定数の上限 `(Var(k), Const(_))` ごとの出どころ。変数の順に並ぶ。参照に複写した上限が破れたとき、
+-    /// E2020 がこの出どころを指す。
+-    pub bound_sources: Vec<(KindVar, BoundSource)>,
+ }
+diff --git a/crates/eml_types/src/kind/solve.rs b/crates/eml_types/src/kind/solve.rs
+index 6ddf4d2f..1a9c8519 100644
+--- a/crates/eml_types/src/kind/solve.rs
++++ b/crates/eml_types/src/kind/solve.rs
+@@ -5,10 +5,7 @@ use eml_hir::ValueItem;
+ use rustc_hash::{FxHashMap, FxHashSet};
+ 
+ use super::problem::{Bounds, KindProblem, KindScheme, OwnVars};
+-use super::{
+-    Bound, BoundCause, BoundSource, CarriedInner, Carry, Exceeding, KindOrigin, KindReason,
+-    KindVar, Level, Provenance, Span,
+-};
++use super::{Bound, CarriedInner, Carry, KindOrigin, KindReason, KindVar, Level, Provenance, Span};
+ use crate::ty::{Linearity, Multiplicity};
+ 
+ /// 1つの SCC を解いた結果。`schemes` は `members` と同じ順に並ぶ。
+@@ -39,7 +36,9 @@ pub(crate) fn solve_scc(
+ ) -> Solution {
+     let merged = merge(members, schemes);
+     let (lin, lin_violated, lin_causes) = solve_with_causes(&merged.lin);
+-    let (mult, mult_violated, mult_causes) = solve_with_causes(&merged.mult);
++    let (mult, mult_violated, _) = solve_with_causes(&merged.mult);
++    // EN: A multiplicity constraint has no constant upper bound, so the multiplicity lattice alone has no violation; only a carry constraint reads it (docs/spec/types.md の「推論」).
++    debug_assert!(mult_violated.is_empty());
+     let lin_graph = Graph::new(
+         &merged.lin,
+         merged.own.iter().map(|own| own.lin.clone()).collect(),
+@@ -48,48 +47,23 @@ pub(crate) fn solve_scc(
+         &merged.mult,
+         merged.own.iter().map(|own| own.mult.clone()).collect(),
+     );
+-    let broken = broken_bounds(&merged.mult, &mult_violated, &mult_graph);
+-    let carry_violated: Vec<usize> = violated_carries(&merged.carries, &lin, &mult)
+-        .into_iter()
+-        .filter(|&index| match merged.carries[index].mult {
+-            Bound::Var(v) => !broken[mult_graph.component[v.index()]],
+-            Bound::Const(_) => true,
+-        })
+-        .collect();
++    let carry_violated = violated_carries(&merged.carries, &lin, &mult);
+     let lin_reported = lin_violated.iter().filter_map(|&index| {
+         let origin = reportable(&merged.lin.origins[index])?;
+         Some(with_cause(origin, &merged.lin, index, &lin_causes))
+     });
+-    let mult_reported = mult_violated.iter().filter_map(|&index| {
+-        let origin = reportable(&merged.mult.origins[index])?;
+-        Some(with_bound_cause(
+-            origin,
+-            &merged.mult,
+-            index,
+-            &mult_causes,
+-            &mult,
+-        ))
+-    });
+     let violated = lin_reported
+-        .chain(mult_reported)
+         .chain(
+             carry_violated
+                 .iter()
+                 .filter_map(|&index| reportable(&merged.carries[index].origin)),
+         )
+         .collect();
+-    let sources = SourceIndex::new(&merged.mult, &mult_graph);
+     let schemes = (0..merged.own.len())
+-        .map(|member| {
+-            let mult = residual(&mult_graph, member);
+-            let bound_sources =
+-                bound_sources(&mult, &merged.own[member].mult, &sources, &mult_graph);
+-            KindScheme {
+-                lin: residual(&lin_graph, member),
+-                mult,
+-                carries: carry_residual(&merged.carries, &lin_graph, &mult_graph, member),
+-                bound_sources,
+-            }
++        .map(|member| KindScheme {
++            lin: residual(&lin_graph, member),
++            mult: residual(&mult_graph, member),
++            carries: carry_residual(&merged.carries, &lin_graph, &mult_graph, member),
+         })
+         .collect();
+     Solution {
+@@ -103,34 +77,12 @@ pub(crate) fn solve_scc(
+     }
+ }
+ 
+-/// 成分ごとの、上向きの辺をたどって、報告する違反になった `Once` 以下の上限に届くか。届く成分の変数を row の側に
+-/// 持つ持ち越しの制約は、破れても報告しない。上限を超えた row はすでに E2020 になっていて、上限の違反を直せば
+-/// 持ち越しの制約も満たされる。上限から導ける持ち越しの制約をスキームに残さないのと同じく、1つの呼び出しを E2020 と
+-/// E3006 の両方にしないためである (docs/spec/types.md の「推論」)。届く先を報告する違反に限るのは、報告しない由来の
+-/// 上限 (シグネチャに書いたものなど) だけを根拠にして、持ち越しの誤りまで消さないためである。
+-fn broken_bounds(
+-    bounds: &Bounds<Multiplicity>,
+-    violated: &[usize],
+-    graph: &Graph<Multiplicity>,
+-) -> Vec<bool> {
+-    let mut seed = vec![false; graph.upper.len()];
+-    for &index in violated {
+-        if let (Bound::Var(v), Bound::Const(c)) = bounds.constraints[index]
+-            && c <= Multiplicity::Once
+-            && reportable(&bounds.origins[index]).is_some()
+-        {
+-            seed[graph.component[v.index()]] = true;
+-        }
+-    }
+-    upward_closure(&graph.upward, seed, |a, b| a || b)
+-}
+-
+ /// 違反した制約のうち報告するものの由来。由来を付け忘れた制約の違反は処理系の誤りである。debug ビルドでは止め、release
+ /// ビルドでは、違反のあるプログラムを通さないよう関数を指す E3001 にする。
+ fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
+     match provenance {
+         Provenance::At(origin) => Some(KindOrigin::clone(origin)),
+-        Provenance::Suppressed | Provenance::Given | Provenance::Bound(_) => None,
++        Provenance::Suppressed | Provenance::Given => None,
+         Provenance::Declaration => {
+             unreachable!("a constraint from a declaration alone is never violated")
+         }
+@@ -165,170 +117,6 @@ fn with_cause<T: Level>(
+     origin
+ }
+ 
+-/// row 変数の上限の違反に、上限を超えた row がどこから来たかを足す。破れた制約の下側の変数の値を決めた下限の制約の
+-/// 由来を読む。その由来が別のファイルを指すとき (呼んだ関数の中など) は、この本体の中の位置として示せないので足さない
+-/// (docs/implementation/diagnostics.md の E2020)。
+-fn with_bound_cause(
+-    mut origin: KindOrigin,
+-    bounds: &Bounds<Multiplicity>,
+-    violated: usize,
+-    causes: &[Option<usize>],
+-    values: &[Multiplicity],
+-) -> KindOrigin {
+-    let KindReason::RowBound { cause, .. } = &mut origin.reason else {
+-        return origin;
+-    };
+-    let (Bound::Var(lower), _) = bounds.constraints[violated] else {
+-        return origin;
+-    };
+-    let Some(Provenance::At(found)) = causes[lower.index()].map(|index| &bounds.origins[index])
+-    else {
+-        return origin;
+-    };
+-    if found.span.file != origin.span.file {
+-        return origin;
+-    }
+-    let what = match found.reason {
+-        KindReason::Performs(effect) => Exceeding::Effect(effect),
+-        _ => Exceeding::Multiplicity(values[lower.index()]),
+-    };
+-    *cause = Some(BoundCause {
+-        span: found.span,
+-        what,
+-    });
+-    origin
+-}
+-
+-/// 参照に複写する上限の由来。参照の由来 (`Passed`) を、上限の出どころを持つ `RowBound` にする。ほかの由来はそのまま
+-/// 使う。
+-fn bound_origin(origin: &Provenance, source: BoundSource) -> Provenance {
+-    match origin {
+-        Provenance::At(at) if let KindReason::Passed(name) = &at.reason => {
+-            Provenance::at(KindOrigin {
+-                span: at.span,
+-                reason: KindReason::RowBound {
+-                    name: name.clone(),
+-                    source,
+-                    cause: None,
+-                },
+-            })
+-        }
+-        other => other.clone(),
+-    }
+-}
+-
+-/// 推論した上限の出どころを引くための、SCC の多重度の制約の索引。番号はまとめた後のものである。
+-struct SourceIndex {
+-    /// 変数ごとの、シグネチャに書いた上限 (`Provenance::Bound`) の位置。
+-    written: FxHashMap<usize, Span>,
+-    /// 参照に複写した上限 (由来が `RowBound`) の、参照の位置と参照した宣言の名前の組。位置と名前の小さい順に並べる。
+-    candidates: Vec<(Span, String)>,
+-    /// 上限の値ごとの、成分から上向きにたどって届く成分 (自分を含む) にある候補の最小の番号。
+-    first: Vec<(Multiplicity, Vec<Option<usize>>)>,
+-}
+-
+-impl SourceIndex {
+-    fn new(bounds: &Bounds<Multiplicity>, graph: &Graph<Multiplicity>) -> Self {
+-        let mut written = FxHashMap::default();
+-        let mut copied = Vec::new();
+-        for (&constraint, origin) in bounds.constraints.iter().zip(&bounds.origins) {
+-            match (constraint, origin) {
+-                ((Bound::Var(var), Bound::Const(_)), Provenance::Bound(span)) => {
+-                    written.entry(var.index()).or_insert(*span);
+-                }
+-                ((Bound::Var(var), Bound::Const(upper)), Provenance::At(at))
+-                    if let KindReason::RowBound { name, .. } = &at.reason =>
+-                {
+-                    copied.push((var.index(), upper, at.span, name.clone()))
+-                }
+-                _ => {}
+-            }
+-        }
+-        // 候補が複数あれば位置と名前のいちばん小さいものを選び、結果を制約の並びに依らないようにする。並べた順の
+-        // 番号の最小がその候補になる
+-        copied.sort_by(|(_, _, a, a_name), (_, _, b, b_name)| {
+-            (a.file, a.range.start(), a.range.end(), a_name).cmp(&(
+-                b.file,
+-                b.range.start(),
+-                b.range.end(),
+-                b_name,
+-            ))
+-        });
+-        let mut first: Vec<(Multiplicity, Vec<Option<usize>>)> = Vec::new();
+-        for (rank, &(var, upper, _, _)) in copied.iter().enumerate() {
+-            let at = match first.iter().position(|(level, _)| *level == upper) {
+-                Some(at) => at,
+-                None => {
+-                    first.push((upper, vec![None; graph.upper.len()]));
+-                    first.len() - 1
+-                }
+-            };
+-            first[at].1[graph.component[var]].get_or_insert(rank);
+-        }
+-        // メンバーごとにたどると、`equate` の両向きの辺で SCC 全体に届くので、時間がメンバーの数の2乗になる。成分の
+-        // DAG の上で一度に求めれば SCC の大きさに比例する (docs/implementation/architecture.md の「`eml_types` の内部」)
+-        for (_, seed) in &mut first {
+-            *seed = upward_closure(&graph.upward, std::mem::take(seed), |a, b| match (a, b) {
+-                (Some(a), Some(b)) => Some(a.min(b)),
+-                (a, b) => a.or(b),
+-            });
+-        }
+-        SourceIndex {
+-            written,
+-            candidates: copied
+-                .into_iter()
+-                .map(|(_, _, span, name)| (span, name))
+-                .collect(),
+-            first,
+-        }
+-    }
+-
+-    /// 推論した上限 `σ_var ≤ upper` の出どころ。`var` から上向きにたどって届く変数に、参照から複写した同じ上限が
+-    /// あれば、そのうち位置のいちばん前の参照を返す。たどるのは1段だけで、呼び出し先の中の出どころは追わない
+-    /// (docs/implementation/diagnostics.md の E2020)。ほかの変数の `Provenance::Bound` は見ない。ほかのメンバーの
+-    /// 書いた上限は `equate` を通してだけ届き、そこで複写した `RowBound` が候補になるからである。
+-    fn through(&self, graph: &Graph<Multiplicity>, var: usize, upper: Multiplicity) -> BoundSource {
+-        let found = self
+-            .first
+-            .iter()
+-            .find(|(level, _)| *level == upper)
+-            .and_then(|(_, first)| first[graph.component[var]]);
+-        match found {
+-            Some(rank) => {
+-                let (span, name) = &self.candidates[rank];
+-                BoundSource::Through {
+-                    name: name.clone(),
+-                    span: *span,
+-                }
+-            }
+-            None => BoundSource::Unknown,
+-        }
+-    }
+-}
+-
+-/// 残した多重度の制約のうち定数の上限ごとの出どころ。`own` は宣言の自分の変数 (まとめた後の番号) である。
+-fn bound_sources(
+-    residual: &[(Bound<Multiplicity>, Bound<Multiplicity>)],
+-    own: &[KindVar],
+-    sources: &SourceIndex,
+-    graph: &Graph<Multiplicity>,
+-) -> Vec<(KindVar, BoundSource)> {
+-    residual
+-        .iter()
+-        .filter_map(|&constraint| match constraint {
+-            (Bound::Var(k), Bound::Const(upper)) => {
+-                let var = own[k.index()].index();
+-                let source = match sources.written.get(&var) {
+-                    Some(&span) => BoundSource::Written(span),
+-                    None => sources.through(graph, var, upper),
+-                };
+-                Some((k, source))
+-            }
+-            _ => None,
+-        })
+-        .collect()
+-}
+-
+ /// 由来を付け忘れた違反を、release ビルドで報告するときの由来。
+ fn unattributed_origin(span: Span) -> KindOrigin {
+     KindOrigin {
+@@ -338,12 +126,6 @@ fn unattributed_origin(span: Span) -> KindOrigin {
+ }
+ 
+ /// SCC の問題を1つの番号の空間に並べ、Kind の具体化の記録を展開したもの。
+-///
+-/// `never` を書いたシグネチャの宣言を指す参照はどれも、参照を由来とする `σ_参照 ≤ Never` を1つ持つ。SCC の外の参照は
+-/// 残した制約の複写 (`copy_scheme`) で持ち、SCC の中の参照 (自分自身、相互再帰、ローカル関数の中からの参照を含む)
+-/// は `equate` の複写で持つ。`Provenance::Bound` の制約そのものは報告しない。SCC の中では参照の変数と宣言の変数が
+-/// 等しいので、参照が上限を破れば宣言の制約も破れるが、それを報告すると参照の位置を指せないためである
+-/// (docs/implementation/architecture.md の「`eml_types` の内部」)。
+ struct Merged {
+     lin: Bounds<Linearity>,
+     mult: Bounds<Multiplicity>,
+@@ -352,8 +134,6 @@ struct Merged {
+     own: Vec<OwnVars>,
+     /// 各宣言の線形性の変数の番号のずれ。
+     lin_offsets: Vec<usize>,
+-    /// 各宣言のシグネチャに書いた上限。`Shape` の多重度の変数の番号、上限、`never` の位置の組である。
+-    own_bounds: Vec<Vec<(usize, Multiplicity, Span)>>,
+ }
+ 
+ fn merge(
+@@ -392,10 +172,6 @@ fn merge(
+         carries: Vec::new(),
+         own,
+         lin_offsets: offsets.iter().map(|&(l, _)| l).collect(),
+-        own_bounds: members
+-            .iter()
+-            .map(|(_, problem)| own_bounds(problem))
+-            .collect(),
+     };
+     for ((_, problem), &(l, m)) in members.iter().zip(&offsets) {
+         merged.copy_own(problem, (l, m));
+@@ -403,7 +179,7 @@ fn merge(
+             let lin: Vec<KindVar> = instance.lin.iter().map(|&v| shift_var(v, l)).collect();
+             let mult: Vec<KindVar> = instance.mult.iter().map(|&v| shift_var(v, m)).collect();
+             match position.get(&instance.decl) {
+-                Some(&callee) => merged.equate(&lin, &mult, callee, &instance.origin),
++                Some(&callee) => merged.equate(&lin, &mult, callee),
+                 None => {
+                     let scheme = schemes
+                         .get(&instance.decl)
+@@ -438,10 +214,8 @@ impl Merged {
+     }
+ 
+     /// 同じ SCC の宣言の参照は、多相化する前の Kind 変数を共有するのと同じ解にする (docs/spec/types.md の「推論」)。
+-    /// 変数どうしの制約は違反にならないので、宣言の由来にする。呼ばれる宣言のシグネチャに書いた上限は、参照の由来で
+-    /// 参照の変数に写す。上限を破る参照をその位置で報告するためである。写すのは書いた上限だけである。推論した上限は
+-    /// どこかのメンバーの本体にある SCC の外の参照から来ていて、その複写がすでに参照の由来を持つ。
+-    fn equate(&mut self, lin: &[KindVar], mult: &[KindVar], callee: usize, origin: &Provenance) {
++    /// 変数どうしの制約は違反にならないので、宣言の由来にする。
++    fn equate(&mut self, lin: &[KindVar], mult: &[KindVar], callee: usize) {
+         debug_assert_eq!(lin.len(), self.own[callee].lin.len());
+         debug_assert_eq!(mult.len(), self.own[callee].mult.len());
+         for (&v, &w) in lin.iter().zip(&self.own[callee].lin) {
+@@ -456,13 +230,6 @@ impl Merged {
+             self.mult
+                 .require(Bound::Var(w), Bound::Var(v), Provenance::Declaration);
+         }
+-        for &(k, upper, span) in &self.own_bounds[callee] {
+-            self.mult.require(
+-                Bound::Var(mult[k]),
+-                Bound::Const(upper),
+-                bound_origin(origin, BoundSource::Written(span)),
+-            );
+-        }
+     }
+ 
+     /// 前の SCC の宣言のスキームを、具体化した変数について足す。参照した位置の由来 (`Passed`) は、呼んだ関数の中の
+@@ -488,30 +255,8 @@ impl Merged {
+                 .require(rename_lin(lower), rename_lin(upper), origin.clone());
+         }
+         for &(lower, upper) in &scheme.mult {
+-            let origin = match (lower, upper) {
+-                (Bound::Var(v), Bound::Const(_)) => {
+-                    // `bound_sources` は残した制約の正規形と同じく変数の順に並ぶので、二分探索で引く
+-                    let sources = &scheme.bound_sources;
+-                    let at = sources.partition_point(|(var, _)| var.index() < v.index());
+-                    let source = sources
+-                        .get(at)
+-                        .filter(|(var, _)| *var == v)
+-                        .map_or(BoundSource::Unknown, |(_, source)| source.clone());
+-                    // 残した上限はどれも、書いた上限か本体の中の参照の複写から来るので、出どころが見つかるはずである
+-                    debug_assert!(
+-                        !(source == BoundSource::Unknown
+-                            && matches!(
+-                                origin,
+-                                Provenance::At(at) if matches!(at.reason, KindReason::Passed(_))
+-                            )),
+-                        "a bound copied to a reference has no source"
+-                    );
+-                    bound_origin(origin, source)
+-                }
+-                _ => origin.clone(),
+-            };
+             self.mult
+-                .require(rename_mult(lower), rename_mult(upper), origin);
++                .require(rename_mult(lower), rename_mult(upper), origin.clone());
+         }
+         for carry in &scheme.carries {
+             let origin = match origin {
+@@ -535,23 +280,6 @@ impl Merged {
+     }
+ }
+ 
+-/// 宣言のシグネチャに書いた上限。`Shape` の多重度の変数の番号、上限、`never` の位置の組である。
+-fn own_bounds(problem: &KindProblem) -> Vec<(usize, Multiplicity, Span)> {
+-    problem
+-        .mult
+-        .constraints
+-        .iter()
+-        .zip(&problem.mult.origins)
+-        .filter_map(|(&constraint, origin)| match (constraint, origin) {
+-            ((Bound::Var(var), Bound::Const(upper)), Provenance::Bound(span)) => {
+-                let k = problem.own.mult.iter().position(|&own| own == var)?;
+-                Some((k, upper, *span))
+-            }
+-            _ => None,
+-        })
+-        .collect()
+-}
+-
+ fn shift_var(var: KindVar, offset: usize) -> KindVar {
+     KindVar::from_index(var.index() + offset)
+ }
+@@ -643,9 +371,6 @@ pub(super) struct Graph<T> {
+     /// 成分の変数に付いた定数の上限の最小と、定数の下限の最大。
+     upper: Vec<Option<T>>,
+     lower: Vec<Option<T>>,
+-    /// 成分ごとの、上向きの辺をすべてたどって届く成分 (自分を含む) の定数の上限の最小。`reach` と違い、残す成分でも
+-    /// 止まらない。持ち越しの制約が上限から導けるかを、クラスのメソッドの含意 (`entail.rs`) と同じ規則で決めるのに使う。
+-    closed_upper: Vec<Option<T>>,
+     /// SCC の宣言ごとの自分の変数 (`Shape` の番号の順)。
+     own: Vec<Vec<KindVar>>,
+     /// 上向き (下限から上限へ) と下向きの辺。
+@@ -658,10 +383,7 @@ pub(super) struct Graph<T> {
+ 
+ /// 1つの向きで、どの宣言の変数を含む成分にも届かない隣をまとめて扱うための情報。
+ ///
+-/// その向きにたどった先 (成分自身を含む) に宣言の変数を含む成分がない成分を「閉じた成分」と呼ぶ。閉じた成分からは
+-/// 残す成分に届かないので、`reach` がそこから見つけるのは、届く成分の定数をまとめた値だけである。`never` の上限を
+-/// 持つ関数を SCC の各メンバーが呼ぶと、メンバーの row の成分から、上限を持つ参照の成分へメンバーの数だけ辺が出る。
+-/// その辺を宣言ごとにたどると2乗の時間になるので、閉じた隣の値は先にまとめておく。
++/// EN: A component is "closed" when no component reached from it in that direction (itself included) holds a variable of a declaration. No kept component is reached from a closed component, so all `reach` finds there is the joined constant of the components it reaches. When every member of an SCC calls a function whose type variable has the upper bound `Unr`, the component of the members' variable gets one edge per member to the components of the bounded references. Walking those edges for each declaration takes quadratic time, so the value of the closed neighbours is joined beforehand.
+ struct Shortcut<T> {
+     /// 成分ごとの、何もない成分でも閉じた成分でもない隣。
+     open: Vec<Vec<usize>>,
+@@ -670,15 +392,14 @@ struct Shortcut<T> {
+ }
+ 
+ impl<T: Level> Shortcut<T> {
+-    /// `pick` は2つの定数をまとめる。返す組の2つ目は成分ごとの、その向きにたどって届く成分 (自分を含む) の定数を
+-    /// まとめた値である。
++    /// EN: `pick` joins two constants.
+     fn new(
+         edges: &Edges,
+         bounds: &[Option<T>],
+         owners: &[usize],
+         descending: bool,
+         pick: impl Fn(T, T) -> T,
+-    ) -> (Shortcut<T>, Vec<Option<T>>) {
++    ) -> Shortcut<T> {
+         let count = edges.all.len();
+         let join = |a: Option<T>, b: Option<T>| match (a, b) {
+             (Some(a), Some(b)) => Some(pick(a, b)),
+@@ -713,7 +434,7 @@ impl<T: Level> Shortcut<T> {
+                     .fold(None, |acc, &next| join(acc, reached[next]))
+             })
+             .collect();
+-        (Shortcut { open, beyond }, reached)
++        Shortcut { open, beyond }
+     }
+ }
+ 
+@@ -842,15 +563,12 @@ impl<T: Level> Graph<T> {
+         // 下向きの隣は番号が大きい
+         let upward = Edges::new(upward, &upper, &owners, false);
+         let downward = Edges::new(downward, &lower, &owners, true);
+-        let (upward_shortcut, closed_upper) =
+-            Shortcut::new(&upward, &upper, &owners, false, |a, b| a.min(b));
+-        let (downward_shortcut, _) =
+-            Shortcut::new(&downward, &lower, &owners, true, |a, b| a.max(b));
++        let upward_shortcut = Shortcut::new(&upward, &upper, &owners, false, |a, b| a.min(b));
++        let downward_shortcut = Shortcut::new(&downward, &lower, &owners, true, |a, b| a.max(b));
+         Graph {
+             component,
+             upper,
+             lower,
+-            closed_upper,
+             own,
+             upward,
+             downward,
+@@ -920,18 +638,6 @@ impl<T: Level> Graph<T> {
+     }
+ }
+ 
+-/// 成分ごとに、上向きの辺をすべてたどって届く成分 (自分を含む) の `seed` を `join` でまとめる。
+-fn upward_closure<U: Copy>(upward: &Edges, seed: Vec<U>, join: impl Fn(U, U) -> U) -> Vec<U> {
+-    let mut out = seed;
+-    // 上向きの隣は番号が小さいので、番号の順に見れば隣の値は決まっている
+-    for component in 0..out.len() {
+-        for &next in &upward.all[component] {
+-            out[component] = join(out[component], out[next]);
+-        }
+-    }
+-    out
+-}
+-
+ /// 宣言 `member` の自分の変数を含む成分と、その中の自分の変数の `Shape` の番号 (小さい順)。
+ pub(super) fn kept_components<T>(graph: &Graph<T>, member: usize) -> FxHashMap<usize, Vec<usize>> {
+     let mut kept: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+@@ -1007,22 +713,11 @@ fn carry_residual(
+ ) -> Vec<Carry> {
+     let lin_kept = kept_components(lin_graph, member);
+     let mult_kept = kept_components(mult_graph, member);
+-    // 持ち越しの制約が求めるのは row の側が `Once` 以下であることなので、上限が `Once` 以下の自分の変数を row の側に
+-    // 持つ組は、スキームに残る上限から導ける。残すと、上限を超える row を入れた1つの呼び出しが E2020 と E3006 の
+-    // 両方になる (docs/spec/types.md の「推論」)
+-    let entailed: FxHashSet<usize> = mult_kept
+-        .iter()
+-        .filter(|&(&component, _)| {
+-            mult_graph.closed_upper[component].is_some_and(|upper| upper <= Multiplicity::Once)
+-        })
+-        .flat_map(|(_, shapes)| shapes.iter().copied())
+-        .collect();
+     let mut best: FxHashMap<(Bound<Linearity>, Bound<Multiplicity>), &Provenance> =
+         FxHashMap::default();
+     for carry in carries {
+         let lins = lowers(lin_graph, &lin_kept, carry.lin, Linearity::Lin);
+-        let mut mults = lowers(mult_graph, &mult_kept, carry.mult, Multiplicity::Multi);
+-        mults.retain(|mult| !matches!(mult, Bound::Var(v) if entailed.contains(&v.index())));
++        let mults = lowers(mult_graph, &mult_kept, carry.mult, Multiplicity::Multi);
+         for &lin in &lins {
+             for &mult in &mults {
+                 // 両側が定数の組はその本体の中の違反で、解いたときに報告済みである
+@@ -1475,7 +1170,6 @@ mod tests {
+                 mult: Bound::Const(Multiplicity::Multi),
+                 origin: Provenance::at(inner),
+             }],
+-            bound_sources: Vec::new(),
+         };
+         let mut f = KindProblem::default();
+         let a = f.lin.fresh();
+@@ -1516,7 +1210,6 @@ mod tests {
+                         },
+                     }),
+                 }],
+-                bound_sources: Vec::new(),
+             }
+         );
+     }
+diff --git a/crates/eml_types/src/lib.rs b/crates/eml_types/src/lib.rs
+index 58a983d5..48fd967f 100644
+--- a/crates/eml_types/src/lib.rs
++++ b/crates/eml_types/src/lib.rs
+@@ -66,7 +66,6 @@ pub mod codes {
+     pub const BINDING_AMBIGUOUS: ErrorCode = ErrorCode(2017);
+     pub const INPUT_CHANGES_UNIFORM: ErrorCode = ErrorCode(2018);
+     pub const VAR_ESCAPES: ErrorCode = ErrorCode(2019);
+-    pub const ROW_BOUND_EXCEEDED: ErrorCode = ErrorCode(2020);
+     pub const PRIVATE_FIELD: ErrorCode = ErrorCode(2021);
+     pub const FFI_UNSUPPORTED_TYPE: ErrorCode = ErrorCode(2022);
+     pub const FFI_EFFECTS: ErrorCode = ErrorCode(2023);
+diff --git a/crates/eml_types/src/shape.rs b/crates/eml_types/src/shape.rs
+index a9267893..72f9c9c8 100644
+--- a/crates/eml_types/src/shape.rs
++++ b/crates/eml_types/src/shape.rs
+@@ -2,7 +2,6 @@
+ //! 指さず、変数をすべてスキームの中の番号で持つ。シグネチャが必須なので、宣言の型の形はシグネチャだけで決まり、
+ //! 本体の検査は呼び出し先の形だけを見ればよい。
+ 
+-use eml_diagnostics::FileId;
+ use eml_extern::ExternType;
+ use eml_hir::{
+     Constructor, EffectId, EffectRef, Generics, Operation, RowRef, RowVarId, Signature, TypeDef,
+@@ -13,12 +12,12 @@ use rustc_hash::FxHashMap;
+ 
+ use crate::context::Context;
+ use crate::data::Variance;
++use crate::kind::KindVar;
+ use crate::kind::eval::SchemeFacts;
+ use crate::kind::problem::OwnVars;
+-use crate::kind::{KindVar, Provenance, Span};
+ use crate::store::{EffectLabel, Lin, RowTail, RowType, TypeId, TypeKind, TypeStore};
+ use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Table, Tail, Ty, TyShape};
+-use crate::ty::{Linearity, Multiplicity};
++use crate::ty::Linearity;
+ 
+ /// 関数ごとの、シグネチャの型変数と row 変数。本体の注釈も同じ変数を指す (docs/spec/types.md の「推論」)。
+ pub(crate) struct Rigids {
+@@ -747,16 +746,7 @@ impl Shape {
+ 
+     /// 自分の本体のための rigid な具体化。rigid な変数を表の rigid 変数にし、Kind 変数を新しい変数にする。本体の注釈が
+     /// 同じ変数を指せるよう、`generics` の ID から表への対応 (`Rigids`) も返す。
+-    ///
+-    /// シグネチャに書いた row 変数の上限は、ここで宣言の Kind の制約 `σ ≤ Never` にする。`file` は `never` を書いた
+-    /// ファイルである。参照ごとの具体化 (`instantiate`) では足さない。スキームに残った上限を段2が複写するので、足すと
+-    /// 同じ上限が2つになる (docs/spec/types.md の「推論」)。
+-    pub fn instantiate_rigid(
+-        &self,
+-        table: &mut Table<'_>,
+-        generics: &Generics,
+-        file: FileId,
+-    ) -> Own {
++    pub fn instantiate_rigid(&self, table: &mut Table<'_>, generics: &Generics) -> Own {
+         debug_assert_eq!(generics.type_vars.len(), self.rigids.len());
+         debug_assert_eq!(generics.row_vars.len(), self.rows.len());
+         let lin: Vec<KindVar> = (0..self.lin_vars).map(|_| table.fresh_lin_var()).collect();
+@@ -776,14 +766,7 @@ impl Shape {
+             tys.push(ty);
+         }
+         let mut rows = Vec::new();
+-        for ((id, decl), (name, sigma)) in generics.row_vars.iter().zip(&self.rows) {
+-            if let Some(range) = decl.never {
+-                table.mult_at_most(
+-                    mult[sigma.index()],
+-                    Multiplicity::Never,
+-                    Provenance::Bound(Span { file, range }),
+-                );
+-            }
++        for ((id, _), (name, sigma)) in generics.row_vars.iter().zip(&self.rows) {
+             let var = table.fresh_rigid_row_with(name, mult[sigma.index()]);
+             rigids.rows.insert(id, var);
+             rows.push(Tail::Var(var));
+@@ -1204,8 +1187,7 @@ mod tests {
+         let signature = signature(&program);
+         let shape = signature_shape(&context, signature, Arrows::OutermostUnr);
+         let mut table = Table::new(&context);
+-        let own =
+-            shape.instantiate_rigid(&mut table, &signature.generics, program.file(program.entry));
++        let own = shape.instantiate_rigid(&mut table, &signature.generics);
+         assert_eq!(
+             table.kind_vars(own.ty),
+             (own.vars.lin.clone(), own.vars.mult.clone())
+@@ -1222,8 +1204,7 @@ mod tests {
+         let signature = signature(&program);
+         let shape = signature_shape(&context, signature, Arrows::OutermostUnr);
+         let mut table = Table::new(&context);
+-        let own =
+-            shape.instantiate_rigid(&mut table, &signature.generics, program.file(program.entry));
++        let own = shape.instantiate_rigid(&mut table, &signature.generics);
+         assert_eq!(
+             table.kind_vars(own.ty),
+             (own.vars.lin.clone(), own.vars.mult.clone())
+diff --git a/crates/eml_types/src/table/mod.rs b/crates/eml_types/src/table/mod.rs
+index f8ab3374..f951f0c3 100644
+--- a/crates/eml_types/src/table/mod.rs
++++ b/crates/eml_types/src/table/mod.rs
+@@ -286,12 +286,6 @@ impl<'c> Table<'c> {
+             .require(lower, upper, self.kind_origin.clone());
+     }
+ 
+-    /// 多重度の変数の定数の上限。由来は今の由来でなく、呼ぶ側が渡す。
+-    pub fn mult_at_most(&mut self, var: KindVar, upper: Multiplicity, origin: Provenance) {
+-        self.multiplicity
+-            .require(Bound::Var(var), Bound::Const(upper), origin);
+-    }
+-
+     pub fn data_kinds(&self) -> &'c Arc<ItemMap<TypeDef, DataKind>> {
+         &self.context.data_kinds
+     }
+diff --git a/crates/eml_types/src/table/row.rs b/crates/eml_types/src/table/row.rs
+index 224375ea..e90f1956 100644
+--- a/crates/eml_types/src/table/row.rs
++++ b/crates/eml_types/src/table/row.rs
+@@ -3,7 +3,6 @@ use rustc_hash::FxHashSet;
+ use super::unify::Unified;
+ use super::*;
+ use crate::data::Variance;
+-use crate::kind::{KindOrigin, KindReason};
+ 
+ impl Table<'_> {
+     /// 束縛済みの row 変数を展開し、ラベルを1つの並びにまとめる。
+@@ -300,20 +299,10 @@ impl Table<'_> {
+             return Err(UnifyError::Occurs);
+         }
+         let sigma = self.row_vars[var.0 as usize].multiplicity;
+-        // 上限を超えたとき、E2020 がどのエフェクトの row かを指せるよう、ラベルごとの下限にエフェクトを記録する
+-        let origin = self.kind_origin();
+         for label in &row.labels {
+-            let labelled = match &origin {
+-                Provenance::At(at) => Provenance::at(KindOrigin {
+-                    span: at.span,
+-                    reason: KindReason::Performs(label.effect),
+-                }),
+-                other => other.clone(),
+-            };
+-            self.multiplicity.require(
++            self.require_mult(
+                 Bound::Const(self.effect_multiplicity(label.effect)),
+                 Bound::Var(sigma),
+-                labelled,
+             );
+         }
+         if let Tail::Var(tail) = row.tail {
+diff --git a/crates/eml_types/src/ty.rs b/crates/eml_types/src/ty.rs
+index d72f9995..0598f380 100644
+--- a/crates/eml_types/src/ty.rs
++++ b/crates/eml_types/src/ty.rs
+@@ -10,8 +10,7 @@ pub(crate) enum Linearity {
+     Lin,
+ }
+ 
+-/// row に含まれてよい操作の上限。`Never` は `never` の操作だけを含む row で、row 変数の上限 `<never e>` が使う
+-/// (docs/spec/types.md の「Kind」)。
++/// EN: The upper limit of the operations a row may contain. `Never` is a row with only `never` operations (docs/spec/types.md の「Kind」).
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+ pub(crate) enum Multiplicity {
+     Never,
+@@ -34,8 +33,6 @@ pub(crate) enum KindConstraint {
+     Linearity { lower: KindTerm, upper: KindTerm },
+     /// 持ち越しの制約。`value` が `Lin` なら `row` は `Once` 以下である (docs/spec/types.md の「推論」)。
+     Carry { value: KindTerm, row: RowTerm },
+-    /// row 変数の多重度の上限 (docs/spec/types.md の「row 変数の多重度の上限」)。`row` は rigid な row 変数の名前。
+-    RowUpper { row: String, upper: Multiplicity },
+ }
+ 
+ /// 持ち越しの制約の row の側。
+@@ -86,7 +83,6 @@ impl KindConstraint {
+             KindConstraint::Carry { value, row } => {
+                 format!("carry({}, {row})", value.show(types, names))
+             }
+-            KindConstraint::RowUpper { row, upper } => format!("<{row}> <= {upper:?}"),
+         }
+     }
+ }
