@@ -1,0 +1,390 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 3a3c24d0..f1746544 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -694,6 +694,7 @@ dependencies = [
+  "eml_rt",
+  "eml_test_support",
+  "insta",
++ "libc",
+ ]
+ 
+ [[package]]
+diff --git a/crates/eml_native/Cargo.toml b/crates/eml_native/Cargo.toml
+index 8aa2b728..bcbe7fd7 100644
+--- a/crates/eml_native/Cargo.toml
++++ b/crates/eml_native/Cargo.toml
+@@ -23,6 +23,7 @@ cranelift-frontend.workspace = true
+ cranelift-jit.workspace = true
+ cranelift-module.workspace = true
+ cranelift-native.workspace = true
++libc.workspace = true
+ 
+ [dev-dependencies]
+ eml_rows.workspace = true
+diff --git a/crates/eml_native/src/jit.rs b/crates/eml_native/src/jit.rs
+index 26541736..4adda6f4 100644
+--- a/crates/eml_native/src/jit.rs
++++ b/crates/eml_native/src/jit.rs
+@@ -740,7 +740,14 @@ pub fn execute(
+     let finished = if config.load_only {
+         machine.prepare(loaded).map(|_| Finished::not_run())
+     } else {
+-        machine.run(loaded, options)
++        let on = crate::proto::start(machine.symbols());
++        let t = std::time::Instant::now();
++        let r = machine.run(loaded, options);
++        let dt = t.elapsed();
++        if on {
++            crate::proto::stop(machine.symbols(), dt);
++        }
++        r
+     };
+     machine.close();
+     finished
+diff --git a/crates/eml_native/src/lib.rs b/crates/eml_native/src/lib.rs
+index 695a5204..7a6aab13 100644
+--- a/crates/eml_native/src/lib.rs
++++ b/crates/eml_native/src/lib.rs
+@@ -20,3 +20,6 @@ pub const SUPPORTED: bool = eml_nrt::SUPPORTED;
+ pub use jit::{Arg, LoadError, Loaded, NativeMachine, Symbol, execute};
+ pub use lower::rows;
+ pub use unsupported::{Form, Unsupported, unsupported};
++
++#[allow(unsafe_code, missing_docs, clippy::all)]
++pub mod proto;
+diff --git a/crates/eml_native/src/lower/function.rs b/crates/eml_native/src/lower/function.rs
+index c5b3d1cd..47f0f07e 100644
+--- a/crates/eml_native/src/lower/function.rs
++++ b/crates/eml_native/src/lower/function.rs
+@@ -40,10 +40,14 @@ pub(super) fn lower<M: Module>(
+         let mut landed = None;
+         for (position, stmt) in lir.stmts.iter().enumerate() {
+             landed = fx.landing_after(landed, Step::of(stmt));
++            if crate::proto::src() { let v = ((index as u32) << 12 | position as u32) + 1; crate::proto::CUR.store(v, std::sync::atomic::Ordering::Relaxed); fx.b.set_srcloc(cranelift_codegen::ir::SourceLoc::new(v)); }
++            crate::proto::STMTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+             fx.stmt(BlockId(index as u32), position, stmt);
+         }
+         let landed = fx.landing_after(landed, Step::of_term(&lir.term));
+         fx.landing_after(landed, Step::End);
++        if crate::proto::src() { let v = ((index as u32) << 12 | 0xfff) + 1; crate::proto::CUR.store(v, std::sync::atomic::Ordering::Relaxed); fx.b.set_srcloc(cranelift_codegen::ir::SourceLoc::new(v)); }
++        crate::proto::STMTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+         fx.term(&lir.term);
+     }
+     // 値をfrontendの変数でなくブロックの引数に置くので、すべてのブロックを下ろした後で1回sealすれば足りる
+@@ -187,7 +191,16 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
+         let mut all = Vec::with_capacity(args.len() + 1);
+         all.push(self.ctx);
+         all.extend_from_slice(args);
++        let on = crate::proto::src() && crate::proto::calls();
++        if on {
++            let id = crate::proto::CALLSEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++            self.b.set_srcloc(cranelift_codegen::ir::SourceLoc::new(0x4000_0000 | id));
++        }
+         let call = self.b.ins().call(callee, &all);
++        if on {
++            let cur = crate::proto::CUR.load(std::sync::atomic::Ordering::Relaxed);
++            self.b.set_srcloc(cranelift_codegen::ir::SourceLoc::new(cur));
++        }
+         self.b.inst_results(call).first().copied()
+     }
+ 
+diff --git a/crates/eml_native/src/lower/mod.rs b/crates/eml_native/src/lower/mod.rs
+index 1da89023..11243b1b 100644
+--- a/crates/eml_native/src/lower/mod.rs
++++ b/crates/eml_native/src/lower/mod.rs
+@@ -277,6 +277,32 @@ fn define<M: Module>(
+         .expect("a defined function has its code")
+         .code_buffer()
+         .len();
++    {
++        use std::sync::atomic::Ordering::Relaxed;
++        
++        let code = ctx.compiled_code().unwrap();
++        let locs = code.buffer.get_srclocs_sorted();
++        crate::proto::RANGES.fetch_add(locs.len(), Relaxed);
++        let mut dense: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
++        let (mut prev_off, mut prev_pt, mut bytes) = (0u32, 0i64, 0usize);
++        let vlen = |mut v: u64| { let mut n = 1; while v >= 0x80 { v >>= 7; n += 1 } n };
++        for l in locs {
++            let bits = l.loc.as_abs().bits();
++            let next = dense.len() as u32;
++            let pt = *dense.entry(bits).or_insert(next) as i64;
++            let d = pt - prev_pt;
++            bytes += vlen((l.start - prev_off) as u64) + vlen(((d << 1) ^ (d >> 63)) as u64);
++            prev_off = l.start;
++            prev_pt = pt;
++        }
++        crate::proto::VARINT.fetch_add(bytes, Relaxed);
++        crate::proto::POINTS.fetch_add(dense.len(), Relaxed);
++        let mut h: u64 = 0xcbf29ce484222325;
++        for &b in code.code_buffer() { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
++        crate::proto::HASH.fetch_xor(h.rotate_left((size % 61) as u32), Relaxed);
++        crate::proto::CODE.fetch_add(size, Relaxed);
++        crate::proto::FNS.fetch_add(1, Relaxed);
++    }
+     module.clear_context(ctx);
+     Ok(Defined {
+         id,
+diff --git a/crates/eml_native/src/proto.rs b/crates/eml_native/src/proto.rs
+new file mode 100644
+index 00000000..e6890ca0
+--- /dev/null
++++ b/crates/eml_native/src/proto.rs
+@@ -0,0 +1,228 @@
++//! prototype: SIGPROF sampler walking the frame chain of the interrupted worker
++use std::collections::HashMap;
++use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::*};
++
++use crate::Symbol;
++
++pub static STMTS: AtomicUsize = AtomicUsize::new(0);
++pub static RANGES: AtomicUsize = AtomicUsize::new(0);
++pub static DEFAULT: AtomicUsize = AtomicUsize::new(0);
++pub static CODE: AtomicUsize = AtomicUsize::new(0);
++pub static FNS: AtomicUsize = AtomicUsize::new(0);
++pub static VARINT: AtomicUsize = AtomicUsize::new(0);
++pub static POINTS: AtomicUsize = AtomicUsize::new(0);
++pub static HASH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++pub static CALLSEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
++pub static CUR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
++static JIT_LO: AtomicUsize = AtomicUsize::new(0);
++static JIT_HI: AtomicUsize = AtomicUsize::new(0);
++static LR_FIX: AtomicUsize = AtomicUsize::new(0);
++static LEAF_RT: AtomicUsize = AtomicUsize::new(0);
++static WALK_NS: AtomicUsize = AtomicUsize::new(0);
++static WALK_MAX_NS: AtomicUsize = AtomicUsize::new(0);
++static REC_MAX: AtomicUsize = AtomicUsize::new(0);
++static REC_SUM: AtomicUsize = AtomicUsize::new(0);
++static ROOTED: AtomicUsize = AtomicUsize::new(0);
++pub fn calls() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var("EML_PF_NOCALLS").is_err())
++}
++fn now() -> usize {
++    unsafe {
++        let mut ts: libc::timespec = std::mem::zeroed();
++        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
++        ts.tv_sec as usize * 1_000_000_000 + ts.tv_nsec as usize
++    }
++}
++
++const DEPTH: usize = 64;
++const REC: usize = DEPTH + 2;
++const CAP: usize = 200_000;
++static mut BUF: [u64; CAP * REC] = [0; CAP * REC];
++static NEXT: AtomicUsize = AtomicUsize::new(0);
++static DROPPED: AtomicUsize = AtomicUsize::new(0);
++static FOREIGN: AtomicUsize = AtomicUsize::new(0);
++static STOP: AtomicBool = AtomicBool::new(false);
++static ENTER_LO: AtomicUsize = AtomicUsize::new(0);
++static HANDLER_NS: AtomicUsize = AtomicUsize::new(0);
++
++extern "C" fn handler(_sig: i32, _info: *mut libc::siginfo_t, uc: *mut libc::c_void) {
++    unsafe {
++        let me = libc::pthread_self();
++        if me as usize != eml_nrt::run::PROTO_THREAD.load(SeqCst) {
++            FOREIGN.fetch_add(1, Relaxed);
++            return;
++        }
++        let uc = uc as *mut libc::ucontext_t;
++        let ss = &(*(*uc).uc_mcontext).__ss;
++        let (pc, mut fp, sp) = (ss.__pc as usize, ss.__fp as usize, ss.__sp as usize);
++        let lr = ss.__lr as usize;
++        let (jlo, jhi) = (JIT_LO.load(Relaxed), JIT_HI.load(Relaxed));
++        let t0 = now();
++        let hi = libc::pthread_get_stackaddr_np(me) as usize;
++        let i = NEXT.fetch_add(1, Relaxed);
++        if i >= CAP {
++            DROPPED.fetch_add(1, Relaxed);
++            return;
++        }
++        let rec = (&raw mut BUF as *mut u64).add(i * REC);
++        *rec.add(2) = pc as u64;
++        let mut n = 1;
++        let mut flags = 0u64;
++        let lo = ENTER_LO.load(Relaxed);
++        let mut floor = sp;
++        let mut visited = 0usize;
++        let mut first = true;
++        loop {
++            if fp < floor || fp + 16 > hi || fp % 8 != 0 {
++                flags |= 2;
++                break;
++            }
++            let next = *(fp as *const usize);
++            visited += 1;
++            if n < DEPTH {
++                let ret = *((fp + 8) as *const usize);
++                if first {
++                    first = false;
++                    if !(pc >= jlo && pc < jhi) {
++                        LEAF_RT.fetch_add(1, Relaxed);
++                        if lr >= jlo && lr < jhi && lr != ret {
++                            LR_FIX.fetch_add(1, Relaxed);
++                        }
++                    }
++                }
++                *rec.add(2 + n) = ret as u64;
++                n += 1;
++                if ret >= lo && ret < lo + 256 {
++                    flags |= 1;
++                }
++            }
++            if next == 0 {
++                flags |= 4;
++                break;
++            }
++            if visited >= 8_000_000 { break; }
++            floor = fp + 16;
++            fp = next;
++        }
++        if flags & 4 != 0 { ROOTED.fetch_add(1, Relaxed); }
++        let dt = now() - t0;
++        WALK_NS.fetch_add(dt, Relaxed);
++        WALK_MAX_NS.fetch_max(dt, Relaxed);
++        REC_MAX.fetch_max(visited, Relaxed);
++        REC_SUM.fetch_add(visited, Relaxed);
++        *rec = n as u64;
++        *rec.add(1) = flags;
++    }
++}
++
++pub fn start(symbols: &[Symbol]) -> bool {
++    let Ok(hz) = std::env::var("EML_PF_HZ") else { return false };
++    let hz: u64 = hz.parse().unwrap_or(1000);
++    JIT_LO.store(symbols.iter().map(|s| s.address as usize).min().unwrap_or(0), Relaxed);
++    JIT_HI.store(symbols.iter().map(|s| s.address as usize + s.size as usize).max().unwrap_or(0), Relaxed);
++    if hz == 0 { return true; }
++    ENTER_LO.store(eml_nrt::eml_enter as usize, Relaxed);
++    unsafe {
++        let mut sa: libc::sigaction = std::mem::zeroed();
++        sa.sa_sigaction = handler as usize;
++        sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
++        libc::sigaction(libc::SIGPROF, &sa, std::ptr::null_mut());
++    }
++    STOP.store(false, SeqCst);
++    std::thread::spawn(move || {
++        let period = std::time::Duration::from_nanos(1_000_000_000 / hz);
++        while !STOP.load(SeqCst) {
++            std::thread::sleep(period);
++            let t = eml_nrt::run::PROTO_THREAD.load(SeqCst);
++            if t != 0 {
++                unsafe { libc::pthread_kill(t as libc::pthread_t, libc::SIGPROF) };
++            }
++        }
++    });
++    true
++}
++
++fn name_of(symbols: &[(usize, usize, &str)], pc: usize, leaf: bool) -> String {
++    let look = if leaf { pc } else { pc.wrapping_sub(1) };
++    let i = symbols.partition_point(|s| s.0 <= look);
++    if i > 0 {
++        let s = symbols[i - 1];
++        if look < s.0 + s.1 {
++            return s.2.to_string();
++        }
++    }
++    unsafe {
++        let mut info: libc::Dl_info = std::mem::zeroed();
++        if libc::dladdr(look as *const libc::c_void, &mut info) != 0 && !info.dli_sname.is_null() {
++            let s = std::ffi::CStr::from_ptr(info.dli_sname).to_string_lossy();
++            let s = s.split("17h").next().unwrap_or("").to_string();
++            return format!("[rt]{}", s.chars().take(60).collect::<String>());
++        }
++    }
++    "[?]".to_string()
++}
++
++pub fn stop(symbols: &[Symbol], dt: std::time::Duration) {
++    STOP.store(true, SeqCst);
++    std::thread::sleep(std::time::Duration::from_millis(5));
++    let _ = HANDLER_NS.load(Relaxed);
++    let mut table: Vec<(usize, usize, &str)> = symbols
++        .iter()
++        .map(|s| (s.address as usize, s.size as usize, s.name.as_str()))
++        .collect();
++    table.sort();
++    let n = NEXT.load(SeqCst).min(CAP);
++    let (mut reached, mut broken, mut leaf_jit, mut maxd, mut full) = (0, 0, 0, 0, 0);
++    let mut folded: HashMap<String, usize> = HashMap::new();
++    let jit = |pc: usize| {
++        let i = table.partition_point(|s| s.0 <= pc);
++        i > 0 && pc < table[i - 1].0 + table[i - 1].1
++    };
++    for i in 0..n {
++        let rec = unsafe { std::slice::from_raw_parts((&raw const BUF as *const u64).add(i * REC), REC) };
++        let d = rec[0] as usize;
++        if rec[1] & 1 != 0 { reached += 1 }
++        if rec[1] & 2 != 0 { broken += 1 }
++        if d == DEPTH { full += 1 }
++        if jit(rec[2] as usize) { leaf_jit += 1 }
++        maxd = maxd.max(d);
++        let mut names: Vec<String> = (0..d).map(|k| name_of(&table, rec[2 + k] as usize, k == 0)).collect();
++        names.reverse();
++        // collapse runs of the same name (recursion) for a short key
++        let mut key = String::new();
++        let mut last = String::new();
++        for nm in names {
++            if nm != last {
++                if !key.is_empty() { key.push(';') }
++                key.push_str(&nm);
++                last = nm;
++            }
++        }
++        *folded.entry(key).or_default() += 1;
++    }
++    eprintln!(
++        "PF-PROTO samples={n} reached_enter={reached} broken={broken} depth_full={full} leaf_in_jit={leaf_jit} max_depth={maxd} foreign_thread={} dropped={} wall_ms={}",
++        FOREIGN.load(SeqCst), DROPPED.load(SeqCst), dt.as_millis()
++    );
++    eprintln!(
++        "PF-PROTO walk: rooted={} lr_fix={} leaf_outside_jit={} walk_ns_avg={} walk_ns_max={} records_avg={} records_max={}",
++        ROOTED.load(SeqCst), LR_FIX.load(SeqCst), LEAF_RT.load(SeqCst),
++        WALK_NS.load(SeqCst) / n.max(1), WALK_MAX_NS.load(SeqCst), REC_SUM.load(SeqCst) / n.max(1), REC_MAX.load(SeqCst)
++    );
++    eprintln!("PF-PROTO code: hash={:016x} varint_bytes={} points={}", HASH.load(SeqCst), VARINT.load(SeqCst), POINTS.load(SeqCst));
++    eprintln!(
++        "PF-PROTO srcloc: fns={} code_bytes={} lir_stmts={} ranges={} default_ranges={}",
++        FNS.load(SeqCst), CODE.load(SeqCst), STMTS.load(SeqCst), RANGES.load(SeqCst), DEFAULT.load(SeqCst)
++    );
++    let mut rows: Vec<_> = folded.into_iter().collect();
++    rows.sort_by(|a, b| b.1.cmp(&a.1));
++    for (k, c) in rows.iter().take(12) {
++        eprintln!("PF-PROTO {c} {k}");
++    }
++}
++
++pub fn src() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var("EML_PF_NOSRC").is_err())
++}
+diff --git a/crates/eml_nrt/src/run.rs b/crates/eml_nrt/src/run.rs
+index 94a87494..9efec6d6 100644
+--- a/crates/eml_nrt/src/run.rs
++++ b/crates/eml_nrt/src/run.rs
+@@ -69,8 +69,15 @@ pub unsafe fn run(
+                         "the run's hook did not start the worker",
+                     )));
+                 }
++                {
++                    unsafe extern "C" { fn pthread_self() -> usize; }
++                    // SAFETY: proto
++                    PROTO_THREAD.store(unsafe { pthread_self() }, std::sync::atomic::Ordering::SeqCst);
++                }
+                 // SAFETY: 呼ぶ側の約束
+-                unsafe { on_worker(image, start, control, host, options) }
++                let r = unsafe { on_worker(image, start, control, host, options) };
++                PROTO_THREAD.store(0, std::sync::atomic::Ordering::SeqCst);
++                r
+             })
+             .map_err(|_| fault(RunFault::Internal("the worker thread cannot be started")))?;
+         let mut parts = Some((open, worker));
+@@ -265,3 +272,6 @@ fn fatal_error(ctx: &mut Ctx<Fast>, worker: &mut Worker, fatal: Fatal) -> Runtim
+         _ => fault(RunFault::Internal("a fatal code is unknown")),
+     }
+ }
++
++/// proto
++pub static PROTO_THREAD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
