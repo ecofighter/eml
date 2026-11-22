@@ -3040,7 +3040,19 @@ fn a_pinned_page_outlives_recovery<M: Mode>() {
     assert_eq!(mortal(&mut ctx), 0);
 }
 
+/// 監査と本体で手放したリストの最後の参照は、全部のノードを解放する。
+fn an_audited_last_decref_frees_the_chain<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let xs = list(&mut heap, 5);
+    unsafe {
+        heap.audit_decref(xs).unwrap();
+        heap.decref_body(xs).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
 both_modes!(
+    an_audited_last_decref_frees_the_chain,
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
     dropping_a_heap_returns_every_page,

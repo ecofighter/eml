@@ -19,6 +19,7 @@ macro_rules! both_modes {
 }
 
 mod arrays;
+mod audit;
 mod basics;
 mod bytes;
 mod checked;
