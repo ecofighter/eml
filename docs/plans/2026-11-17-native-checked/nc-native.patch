@@ -1,0 +1,841 @@
+diff --git a/crates/eml_native/src/abi.rs b/crates/eml_native/src/abi.rs
+index a15583e2..f929146a 100644
+--- a/crates/eml_native/src/abi.rs
++++ b/crates/eml_native/src/abi.rs
+@@ -102,6 +102,31 @@ pub fn clause_signature(program: &Program, effect: u32, op: u32) -> Signature {
+     tail_signature(&params, &[ret])
+ }
+ 
++/// EN: The signature word (`eml_nrt::image::sig_word`) of the entry of a closure of `function` with `captures` captures.
++pub fn closure_entry_sig_word(function: &LirFn, captures: usize) -> u64 {
++    sig_word(&lower::params(function)[captures..], &lower::rets(function))
++}
++
++/// EN: The signature word of a clause call of `op` of `effect`.
++pub fn clause_sig_word(program: &Program, effect: u32, op: u32) -> i64 {
++    let operation = &program.effects[effect as usize].operations[op as usize];
++    let mut params = vec![Kind::I64];
++    params.extend(operation.params.iter().map(|&repr| lower::kind(repr)));
++    let ret = match operation.ret {
++        OpRet::Repr(repr) => lower::kind(repr),
++        OpRet::Never => Kind::I64,
++    };
++    sig_word(&params, &[ret]) as i64
++}
++
++fn sig_word(params: &[Kind], rets: &[Kind]) -> u64 {
++    let [ret] = rets else {
++        panic!("a function value's entry returns one value")
++    };
++    eml_nrt::image::sig_word(params, *ret)
++        .expect("an entry signature has a float only among its first 47 parameters")
++}
++
+ /// エントリのシグネチャ。記述子だけから作る (docs/spec/native.md の「記述子の表」)。
+ pub fn entry_signature(entry: &Entry, call_conv: CallConv) -> Signature {
+     let mut sig = Signature::new(call_conv);
+diff --git a/crates/eml_native/src/jit.rs b/crates/eml_native/src/jit.rs
+index 26541736..c2ee941b 100644
+--- a/crates/eml_native/src/jit.rs
++++ b/crates/eml_native/src/jit.rs
+@@ -11,7 +11,7 @@ use eml_cabi::Linked;
+ use eml_extern::ExternEffect;
+ use eml_lir::{OpRet, Program, Repr, Trusted};
+ use eml_nrt::image::{
+-    DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
++    CodeRow, DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
+     DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow, Slice,
+     Start, Str,
+ };
+@@ -116,6 +116,7 @@ struct Tables {
+     _datum_rows: Vec<DatumRow>,
+     _masks: Vec<Vec<MaskRow>>,
+     _paps: Vec<PapRow>,
++    _entries: Vec<CodeRow>,
+     image: Image,
+ }
+ 
+@@ -128,6 +129,7 @@ impl Tables {
+         files: Vec<String>,
+         data: Vec<(Datum, *mut u64, Static)>,
+         paps: Vec<PapRow>,
++        entries: Vec<CodeRow>,
+         number: impl Fn(u32) -> u16,
+         raise_effects: (u32, u32),
+     ) -> Tables {
+@@ -188,6 +190,7 @@ impl Tables {
+             files: Slice::new(&file_rows),
+             data: Slice::new(&datum_rows),
+             paps: Slice::new(&paps),
++            entries: Slice::new(&entries),
+             panic_effect: raise_effects.0,
+             io_effect: raise_effects.1,
+         };
+@@ -200,6 +203,7 @@ impl Tables {
+             _datum_rows: datum_rows,
+             _masks: masks,
+             _paps: paps,
++            _entries: entries,
+             image,
+         }
+     }
+@@ -213,6 +217,8 @@ pub struct NativeMachine {
+     config: RunConfig,
+     host: HostRef,
+     keep_clif: bool,
++    /// EN: Checked mode: checked lowering, the checked entry table and the checked run.
++    checked: bool,
+     /// `load`を呼んだか。マシンは1回だけ読み込む。
+     asked: bool,
+     module: Option<JITModule>,
+@@ -236,6 +242,7 @@ impl NativeMachine {
+             config: config.clone(),
+             host,
+             keep_clif: false,
++            checked: config.debug_heap,
+             asked: false,
+             module: None,
+             spent: false,
+@@ -287,7 +294,7 @@ impl NativeMachine {
+                 .or_insert_with(|| effect_number(next));
+         }
+         let mut builder = jit_builder().map_err(|error| LoadError::Module(error.to_string()))?;
+-        for entry in eml_nrt::entries() {
++        for entry in eml_nrt::mode::entries_in(self.checked) {
+             builder.symbol(entry.symbol, (entry.address)());
+         }
+         // `fits`が成り立ったので、`Linked`の約束により、どの呼ぶ先もそのCの関数の宣言の記号を解決した関数で、どのdtorも
+@@ -302,7 +309,7 @@ impl NativeMachine {
+             }
+         }
+         let module = self.module.insert(JITModule::new(builder));
+-        let defined = lower::program(module, program, unwinds, self.keep_clif)
++        let defined = lower::program(module, program, unwinds, self.keep_clif, self.checked)
+             .and_then(|defined| Ok(module.finalize_definitions().map(|()| defined)?));
+         let lowered = match defined {
+             Ok(lowered) => lowered,
+@@ -346,8 +353,10 @@ impl NativeMachine {
+             });
+         }
+         let mut statics = HashMap::with_capacity(lowered.closures.len());
+-        for (closure, arity, defined) in lowered.closures {
++        let mut entries = Vec::new();
++        for (closure, arity, sig, defined) in lowered.closures {
+             let code = module.get_finalized_function(defined.id);
++            entries.push(CodeRow { code, sig });
+             self.symbols.push(Symbol {
+                 name: names::closure_entry(
+                     closure.captures,
+@@ -379,6 +388,10 @@ impl NativeMachine {
+                 size: defined.size,
+             });
+             paps.push(PapRow { rest, code });
++            entries.push(CodeRow {
++                code,
++                sig: u64::from(rest),
++            });
+         }
+         // どの値のslotも、moduleが定義した8バイトの書けるデータの物で、領域とともにマシンが終わるまで生きる
+         let data = lowered
+@@ -412,6 +425,7 @@ impl NativeMachine {
+             program.files.clone(),
+             data,
+             paps,
++            if self.checked { entries } else { Vec::new() },
+             number,
+             raise_effects,
+         ));
+@@ -638,7 +652,8 @@ impl NativeMachine {
+         // `load`もverifierを通してある (P1)。`run`は入口を空の`evv`で動かし、`call`は呼び手がR-5で、空の`evv`と
+         // 渡した引数で関数が前提を満たすことを約束する。`argv`はその関数の引数と結果ごとにslotを持ち、引数を入れてある
+         unsafe {
+-            eml_nrt::run::run(
++            eml_nrt::mode::run_in(
++                self.checked,
+                 &tables.image,
+                 &start,
+                 &self.config,
+diff --git a/crates/eml_native/src/lower/apply.rs b/crates/eml_native/src/lower/apply.rs
+index 26957bb7..8a2bf192 100644
+--- a/crates/eml_native/src/lower/apply.rs
++++ b/crates/eml_native/src/lower/apply.rs
+@@ -11,8 +11,10 @@ use eml_lir::{
+     VarId,
+ };
+ use eml_nrt::Kind;
+-use eml_nrt::image::ACTION_CONTINUE;
++use eml_nrt::image::{ACTION_CONTINUE, CODE_OF_TAG};
++use eml_nrt::worker::COUNT_UNWOUND_FRAMES;
+ 
++use super::audit::{self, Audit};
+ use super::consts::Datum;
+ use super::effects::step_entry;
+ use super::function::FnLower;
+@@ -206,6 +208,11 @@ pub(super) fn define_closure_entry<M: Module>(
+             .zip(&shape.positions[1..])
+             .map(|(&repr, &position)| {
+                 let ty = clif(kind(repr));
++                let load = Audit::Load {
++                    scanned: shape.scanned,
++                    position,
++                };
++                audit::emit(&mut b, module, imports, ctx, clo, load);
+                 (
+                     mem::load_field(&mut b, clo, shape.scanned, position, ty),
+                     repr,
+@@ -240,11 +247,18 @@ fn release_box<M: Module>(
+     let free_block = entry_ref(b, "eml_rt_free_block");
+     let dup = entry_ref(b, Step::Dup.slow());
+     let decref = entry_ref(b, Step::Decref.slow());
++    let audits = imports.checked.then(|| {
++        (
++            entry_ref(b, audit::count_entry(Step::Dup)),
++            entry_ref(b, audit::count_entry(Step::Decref)),
++        )
++    });
+     let last = b.create_block();
+     let ask = b.create_block();
+     b.set_cold_block(ask);
+     let shared = b.create_block();
+     let go = b.create_block();
++    audit::emit(b, module, imports, ctx, clo, Audit::Unique);
+     let rc = mem::load_rc(b, clo);
+     let unique = mem::is_one_ref(b, rc);
+     b.ins().brif(unique, last, &[], ask, &[]);
+@@ -258,10 +272,18 @@ fn release_box<M: Module>(
+     b.switch_to_block(shared);
+     for &(value, repr) in loaded {
+         if repr.is_rc() {
+-            rc::counted(b, ctx, dup, value, repr, Step::Dup);
++            rc::counted(b, ctx, dup, audits.map(|a| a.0), value, repr, Step::Dup);
+         }
+     }
+-    rc::counted(b, ctx, decref, clo, Repr::Obj, Step::Decref);
++    rc::counted(
++        b,
++        ctx,
++        decref,
++        audits.map(|a| a.1),
++        clo,
++        Repr::Obj,
++        Step::Decref,
++    );
+     b.ins().jump(go, &[]);
+     b.switch_to_block(go);
+ }
+@@ -292,6 +314,11 @@ pub(super) fn define_pap_adapter<M: Module>(
+     let (ctx, pap) = (params[0], params[1]);
+     // `eml_nrt_pap`は即値の`callee`を断るので、`callee`はいつも物体である。引数は一様な語で、即値でありうる
+     let loaded = [(1, Repr::Obj), (2, Repr::TObj)].map(|(position, repr)| {
++        let load = Audit::Load {
++            scanned: PAP_SCANNED,
++            position,
++        };
++        audit::emit(&mut b, module, imports, ctx, pap, load);
+         (
+             mem::load_field(&mut b, pap, PAP_SCANNED, position, types::I64),
+             repr,
+@@ -299,6 +326,10 @@ pub(super) fn define_pap_adapter<M: Module>(
+     });
+     release_box(&mut b, module, imports, ctx, pap, &loaded);
+     let callee = loaded[0].0;
++    let expect = Audit::Code {
++        expect: i64::from(rest) + 1,
++    };
++    audit::emit(&mut b, module, imports, ctx, callee, expect);
+     let meta = mem::load_meta(&mut b, callee);
+     let mut args = vec![loaded[1].0];
+     args.extend_from_slice(&params[2..]);
+@@ -325,6 +356,10 @@ pub(super) fn define_apply<M: Module>(
+     b.switch_to_block(entry);
+     let params = b.block_params(entry).to_vec();
+     let (ctx, clo, values) = (params[0], params[1], &params[2..]);
++    let of_tag = Audit::Code {
++        expect: CODE_OF_TAG,
++    };
++    audit::emit(&mut b, module, imports, ctx, clo, of_tag);
+     let meta = mem::load_meta(&mut b, clo);
+     let n = mem::meta_tag(&mut b, meta);
+     let exact = b.create_block();
+@@ -395,6 +430,7 @@ pub(super) fn define_apply<M: Module>(
+         // (docs/spec/native.md の「関数の値」)
+         let (cleanup, hot) = unwind::if_aborting(&mut b, ctx, &[]);
+         b.switch_to_block(cleanup);
++        audit::count(&mut b, module, imports, ctx, COUNT_UNWOUND_FRAMES);
+         let decref = module.declare_func_in_func(imports.entry("eml_rt_decref"), b.func);
+         b.ins().call(decref, &[ctx, last]);
+         let placeholder = b.ins().iconst(types::I64, mem::UNIT);
+@@ -555,6 +591,8 @@ impl<M: Module> FnLower<'_, '_, M> {
+             .expect("`ev_clause` returns the entry");
+         let mut values = vec![ev];
+         values.extend(self.atoms(args, operation.params.iter().copied()));
++        let expect = crate::abi::clause_sig_word(program, *effect, *op);
++        self.audit(clo, Audit::Code { expect });
+         let meta = mem::load_meta(&mut self.b, clo);
+         if operation.ret == OpRet::Never {
+             call_closure_code(&mut self.b, self.ctx, clo, meta, sig, &values, false);
+@@ -565,14 +603,7 @@ impl<M: Module> FnLower<'_, '_, M> {
+                     self.fill_cleanup(cleanup, &Point::from(point));
+                 }
+                 // 末尾の位置ではフレームは何も持たない
+-                None => self.fill_cleanup(
+-                    cleanup,
+-                    &Point {
+-                        owned: &[],
+-                        tokens: &[],
+-                        landing: None,
+-                    },
+-                ),
++                None => self.fill_tail_cleanup(cleanup),
+             }
+             self.b.switch_to_block(hot);
+             self.b.ins().trap(TrapCode::unwrap_user(1));
+@@ -627,6 +658,12 @@ impl<M: Module> FnLower<'_, '_, M> {
+         let clo = self.atom(callee, Repr::TObj);
+         let mut values = vec![self.ctx, clo];
+         values.extend(args.iter().map(|&atom| self.atom(atom, Repr::TObj)));
++        self.audit(
++            clo,
++            Audit::Code {
++                expect: CODE_OF_TAG,
++            },
++        );
+         let meta = mem::load_meta(&mut self.b, clo);
+         let n = mem::meta_tag(&mut self.b, meta);
+         let exact = self.b.create_block();
+diff --git a/crates/eml_native/src/lower/audit.rs b/crates/eml_native/src/lower/audit.rs
+new file mode 100644
+index 00000000..9e2e31f4
+--- /dev/null
++++ b/crates/eml_native/src/lower/audit.rs
+@@ -0,0 +1,149 @@
++//! EN: The audits of checked lowering (docs/spec/native.md 「検査モード」). Checked lowering emits the same inline memory
++//! access as fast lowering, preceded by one call of the audit entry for that access. Every module of `lower/` that names
++//! a `mem::` access helper emits its audits through `emit` here, and fast lowering emits nothing.
++use cranelift_codegen::ir::{FuncRef, InstBuilder, MemFlagsData, Value, types};
++use cranelift_frontend::FunctionBuilder;
++use cranelift_module::Module;
++
++use super::Imports;
++use super::function::FnLower;
++use super::rc::Step;
++use crate::mem;
++
++/// EN: One audit. The object word is passed beside it.
++#[derive(Clone, Copy)]
++pub(super) enum Audit {
++    /// EN: Before a load of the field at `position` of an object with `scanned` scanned words.
++    Load { scanned: u32, position: u32 },
++    /// EN: Before a store of `value` into that field.
++    Store {
++        scanned: u32,
++        position: u32,
++        value: Value,
++    },
++    /// EN: Before `load_rc` + `is_one_ref`.
++    Unique,
++    /// EN: Before `load_meta`, `load_tag` or `is_big_int`.
++    Header,
++    /// EN: Before `load_meta` + `closure_code` of a function value and the indirect call of that code. `expect` is the signature word the call uses, or `CODE_OF_TAG`.
++    Code { expect: i64 },
++    /// EN: Before `load_box`.
++    Boxed { float: bool },
++    /// EN: Before the field loads of a statement that names a constructor.
++    Data { tag: u32, scanned: u32 },
++}
++
++/// EN: The audit entry before the inline count step of `step`.
++pub(super) fn count_entry(step: Step) -> &'static str {
++    match step {
++        Step::Dup => "eml_rt_audit_dup",
++        Step::Decref => "eml_rt_audit_decref",
++    }
++}
++
++/// EN: Emits the call of the count audit `audit` on `obj`; fast lowering passes `None`.
++pub(super) fn call_before(b: &mut FunctionBuilder, ctx: Value, audit: Option<FuncRef>, obj: Value) {
++    if let Some(audit) = audit {
++        b.ins().call(audit, &[ctx, obj]);
++    }
++}
++
++/// EN: The entry and its arguments after `ctx`.
++fn call(b: &mut FunctionBuilder, obj: Value, audit: Audit) -> (&'static str, Vec<Value>) {
++    let word = |b: &mut FunctionBuilder, n: i64| b.ins().iconst(types::I64, n);
++    match audit {
++        Audit::Load { scanned, position } => {
++            let index = word(b, mem::field_index(scanned, position) as i64);
++            let entry = if position < scanned {
++                "eml_rt_audit_field"
++            } else {
++                "eml_rt_audit_raw"
++            };
++            (entry, vec![obj, index])
++        }
++        Audit::Store {
++            scanned,
++            position,
++            value,
++        } => {
++            let index = word(b, mem::field_index(scanned, position) as i64);
++            if position < scanned {
++                ("eml_rt_audit_store", vec![obj, index, value])
++            } else {
++                let bits = if b.func.dfg.value_type(value) == types::F64 {
++                    b.ins().bitcast(types::I64, MemFlagsData::new(), value)
++                } else {
++                    value
++                };
++                ("eml_rt_audit_store_raw", vec![obj, index, bits])
++            }
++        }
++        Audit::Unique => ("eml_rt_audit_unique", vec![obj]),
++        Audit::Header => ("eml_rt_audit_header", vec![obj]),
++        Audit::Code { expect } => {
++            let expect = word(b, expect);
++            ("eml_rt_audit_code", vec![obj, expect])
++        }
++        Audit::Boxed { float } => {
++            let float = word(b, i64::from(float));
++            ("eml_rt_audit_box", vec![obj, float])
++        }
++        Audit::Data { tag, scanned } => {
++            let tag = word(b, i64::from(tag));
++            let scanned = word(b, i64::from(scanned));
++            ("eml_rt_audit_data", vec![obj, tag, scanned])
++        }
++    }
++}
++
++/// EN: Emits `audit` of `obj` in checked lowering, and nothing in fast lowering.
++pub(super) fn emit<M: Module>(
++    b: &mut FunctionBuilder,
++    module: &mut M,
++    imports: &Imports,
++    ctx: Value,
++    obj: Value,
++    audit: Audit,
++) {
++    if !imports.checked {
++        return;
++    }
++    let (symbol, mut args) = call(b, obj, audit);
++    let callee = module.declare_func_in_func(imports.entry(symbol), b.func);
++    args.insert(0, ctx);
++    b.ins().call(callee, &args);
++}
++
++/// EN: Emits one count of the worker's counter `which` in checked lowering.
++pub(super) fn count<M: Module>(
++    b: &mut FunctionBuilder,
++    module: &mut M,
++    imports: &Imports,
++    ctx: Value,
++    which: i64,
++) {
++    if !imports.checked {
++        return;
++    }
++    let callee = module.declare_func_in_func(imports.entry("eml_rt_audit_count"), b.func);
++    let which = b.ins().iconst(types::I64, which);
++    b.ins().call(callee, &[ctx, which]);
++}
++
++impl<M: Module> FnLower<'_, '_, M> {
++    pub(super) fn audit(&mut self, obj: Value, audit: Audit) {
++        if !self.imports.checked {
++            return;
++        }
++        let (symbol, args) = call(&mut self.b, obj, audit);
++        self.call_entry(symbol, &args);
++    }
++
++    pub(super) fn count(&mut self, which: i64) {
++        if !self.imports.checked {
++            return;
++        }
++        let which = self.b.ins().iconst(types::I64, which);
++        self.call_entry("eml_rt_audit_count", &[which]);
++    }
++}
+diff --git a/crates/eml_native/src/lower/data.rs b/crates/eml_native/src/lower/data.rs
+index 2b8f9b2c..38f4764a 100644
+--- a/crates/eml_native/src/lower/data.rs
++++ b/crates/eml_native/src/lower/data.rs
+@@ -9,6 +9,7 @@ use eml_lir::{
+     VarId,
+ };
+ 
++use super::audit::Audit;
+ use super::consts::Datum;
+ use super::function::FnLower;
+ use super::kind;
+@@ -97,8 +98,15 @@ impl<M: Module> FnLower<'_, '_, M> {
+         let new = self.alloc_con(&head, &shape, &values);
+         self.b.ins().jump(done, &[BlockArg::Value(new)]);
+         self.b.switch_to_block(reused);
++        self.count(eml_nrt::worker::COUNT_REUSES);
+         let at = if reuse.in_place {
+-            mem::box_of_token(&mut self.b, tok)
++            if self.imports.checked {
++                let [tag, scanned, _, lin] = head;
++                self.call_entry("eml_rt_reuse_in_place", &[tok, tag, scanned, lin])
++                    .expect("`eml_rt_reuse_in_place` returns its word")
++            } else {
++                mem::box_of_token(&mut self.b, tok)
++            }
+         } else {
+             let [tag, scanned, raw, lin] = head;
+             self.call_entry("eml_rt_con_at", &[tok, tag, scanned, raw, lin])
+@@ -106,7 +114,7 @@ impl<M: Module> FnLower<'_, '_, M> {
+         };
+         for ((&value, &position), &skip) in values.iter().zip(&shape.positions).zip(&reuse.skip) {
+             if !skip {
+-                mem::store_field(&mut self.b, at, shape.scanned, position, value);
++                self.store(at, shape.scanned, position, value);
+             }
+         }
+         self.b.ins().jump(done, &[BlockArg::Value(at)]);
+@@ -125,11 +133,30 @@ impl<M: Module> FnLower<'_, '_, M> {
+             .call_entry("eml_rt_alloc_data", head)
+             .expect("an allocation returns its word");
+         for (&value, &position) in values.iter().zip(&shape.positions) {
+-            mem::store_field(&mut self.b, w, shape.scanned, position, value);
++            self.store(w, shape.scanned, position, value);
+         }
+         w
+     }
+ 
++    /// EN: Writes one field, after its audit.
++    fn store(&mut self, obj: Value, scanned: u32, position: u32, value: Value) {
++        self.audit(
++            obj,
++            Audit::Store {
++                scanned,
++                position,
++                value,
++            },
++        );
++        mem::store_field(&mut self.b, obj, scanned, position, value);
++    }
++
++    /// EN: Reads one field, after its audit.
++    fn load(&mut self, obj: Value, scanned: u32, position: u32, ty: Type) -> Value {
++        self.audit(obj, Audit::Load { scanned, position });
++        mem::load_field(&mut self.b, obj, scanned, position, ty)
++    }
++
+     /// `release value ctor(fields)`。`token`があれば、tokenを作る形である。`value`の参照を1つ手放し、名前を書いた欄が
+     /// その子の参照を1つずつ受け取る。値はいつも欄のある構築子の箱なので、数は即値を確かめずに読む。生成したコードは
+     /// 一意な道だけを持つ。数が1なら、残さない子を手放し、箱を空けるか、箱の語をそのままtokenにする。ほかの数では、冷たい
+@@ -149,6 +176,7 @@ impl<M: Module> FnLower<'_, '_, M> {
+         if unboxed {
+             let dummy = self.cold_block();
+             let object = self.b.create_block();
++            self.audit(x, Audit::Header);
+             let is_dummy = mem::is_big_int(&mut self.b, x);
+             self.b.ins().brif(is_dummy, dummy, &[], object, &[]);
+             self.b.switch_to_block(dummy);
+@@ -171,6 +199,14 @@ impl<M: Module> FnLower<'_, '_, M> {
+             .filter(|(_, repr)| repr.is_rc())
+             .map(|((&field, &position), &repr)| (field, position, repr))
+             .collect();
++        self.audit(
++            x,
++            Audit::Data {
++                tag: ctor.tag,
++                scanned: shape.scanned,
++            },
++        );
++        self.audit(x, Audit::Unique);
+         let rc = mem::load_rc(&mut self.b, x);
+         let unique = mem::is_one_ref(&mut self.b, rc);
+         let owned = self.b.create_block();
+@@ -184,7 +220,12 @@ impl<M: Module> FnLower<'_, '_, M> {
+                 self.b.ins().jump(done, &[]);
+             }
+             Some(_) => {
+-                let tok = mem::token_of_box(&mut self.b, x);
++                let tok = if self.imports.checked {
++                    self.call_entry("eml_rt_into_token", &[x])
++                        .expect("`eml_rt_into_token` returns its word")
++                } else {
++                    mem::token_of_box(&mut self.b, x)
++                };
+                 self.b.ins().jump(done, &[BlockArg::Value(tok)]);
+             }
+         }
+@@ -210,7 +251,7 @@ impl<M: Module> FnLower<'_, '_, M> {
+     fn drop_unkept(&mut self, x: Value, scanned: u32, children: &[(Option<VarId>, u32, Repr)]) {
+         for &(field, position, repr) in children {
+             if field.is_none() {
+-                let child = mem::load_field(&mut self.b, x, scanned, position, types::I64);
++                let child = self.load(x, scanned, position, types::I64);
+                 self.decref(child, repr);
+             }
+         }
+@@ -255,6 +296,7 @@ impl<M: Module> FnLower<'_, '_, M> {
+         for &ty in &types {
+             self.b.append_block_param(done, ty);
+         }
++        self.audit(w, Audit::Header);
+         let is_dummy = mem::is_big_int(&mut self.b, w);
+         self.b.ins().brif(is_dummy, dummy, &[], object, &[]);
+         self.b.switch_to_block(dummy);
+@@ -273,11 +315,18 @@ impl<M: Module> FnLower<'_, '_, M> {
+             .collect();
+         self.b.ins().jump(done, &placeholders);
+         self.b.switch_to_block(object);
++        self.audit(
++            w,
++            Audit::Data {
++                tag: ctor.tag,
++                scanned: shape.scanned,
++            },
++        );
+         let loaded: Vec<BlockArg> = leaves
+             .iter()
+             .zip(&types)
+             .map(|(&(_, position, _), &ty)| {
+-                BlockArg::Value(mem::load_field(&mut self.b, w, shape.scanned, position, ty))
++                BlockArg::Value(self.load(w, shape.scanned, position, ty))
+             })
+             .collect();
+         self.b.ins().jump(done, &loaded);
+@@ -292,9 +341,16 @@ impl<M: Module> FnLower<'_, '_, M> {
+     fn bind_fields(&mut self, value: VarId, ctor: Ctor, fields: &[VarId]) {
+         let shape = self.layout_ctor(ctor).shape();
+         let w = self.var(value);
++        self.audit(
++            w,
++            Audit::Data {
++                tag: ctor.tag,
++                scanned: shape.scanned,
++            },
++        );
+         for (&field, &position) in fields.iter().zip(&shape.positions) {
+             let ty = clif(kind(self.function.repr(field)));
+-            let loaded = mem::load_field(&mut self.b, w, shape.scanned, position, ty);
++            let loaded = self.load(w, shape.scanned, position, ty);
+             self.bind(field, loaded);
+         }
+     }
+@@ -321,6 +377,7 @@ impl<M: Module> FnLower<'_, '_, M> {
+     /// `let var = box atom`。箱の種類はオペランドのReprで決まる。即値に収まる`int`、`enum`、タグは即値の語で、
+     /// 定数の大きい`int`と`float`は読み込み時の値の記号から読む。
+     pub(super) fn boxed(&mut self, var: VarId, atom: Atom) {
++        self.count(eml_nrt::worker::COUNT_BOXES);
+         let w = match atom {
+             Atom::Int(n) if mem::fits_imm(n) => self.b.ins().iconst(types::I64, mem::imm_bits(n)),
+             Atom::Int(n) => self.datum_word(Datum::BigInt(n), types::I64),
+@@ -372,13 +429,18 @@ impl<M: Module> FnLower<'_, '_, M> {
+             unreachable!("an unbox of a constant does not pass the verifier")
+         };
+         let w = self.var(boxed);
++        self.count(eml_nrt::worker::COUNT_UNBOXES);
+         let value = match self.function.repr(var) {
+-            Repr::Float => mem::load_box(&mut self.b, w, types::F64),
++            Repr::Float => {
++                self.audit(w, Audit::Boxed { float: true });
++                mem::load_box(&mut self.b, w, types::F64)
++            }
+             Repr::Int | Repr::Enum => {
+                 let (object, done) = self.on_immediate(w, types::I64);
+                 let small = mem::imm_value(&mut self.b, w);
+                 self.b.ins().jump(done, &[BlockArg::Value(small)]);
+                 self.b.switch_to_block(object);
++                self.audit(w, Audit::Boxed { float: false });
+                 let big = mem::load_box(&mut self.b, w, types::I64);
+                 self.b.ins().jump(done, &[BlockArg::Value(big)]);
+                 self.b.switch_to_block(done);
+@@ -457,13 +519,17 @@ impl<M: Module> FnLower<'_, '_, M> {
+         let w = self.var(var);
+         match self.function.repr(var) {
+             Repr::Enum => self.b.ins().ireduce(types::I32, w),
+-            Repr::Obj => mem::load_tag(&mut self.b, w),
++            Repr::Obj => {
++                self.audit(w, Audit::Header);
++                mem::load_tag(&mut self.b, w)
++            }
+             Repr::TObj => {
+                 let (object, done) = self.on_immediate(w, types::I32);
+                 let small = mem::imm_value(&mut self.b, w);
+                 let small = self.b.ins().ireduce(types::I32, small);
+                 self.b.ins().jump(done, &[BlockArg::Value(small)]);
+                 self.b.switch_to_block(object);
++                self.audit(w, Audit::Header);
+                 let tag = mem::load_tag(&mut self.b, w);
+                 self.b.ins().jump(done, &[BlockArg::Value(tag)]);
+                 self.b.switch_to_block(done);
+diff --git a/crates/eml_native/src/lower/mod.rs b/crates/eml_native/src/lower/mod.rs
+index 1da89023..ed666fdc 100644
+--- a/crates/eml_native/src/lower/mod.rs
++++ b/crates/eml_native/src/lower/mod.rs
+@@ -2,6 +2,7 @@
+ //! それらのどれも名指せる。クロージャのエントリは、データの記号と同じく本体が初めて使うときに宣言し、本体の後で定義する。
+ //! PAPのアダプタはコードが名指さず、`Image.paps`だけが指すので、最後に宣言して定義する (docs/spec/native.md の「関数の形」)。
+ mod apply;
++mod audit;
+ mod c;
+ mod call;
+ pub mod consts;
+@@ -45,7 +46,7 @@ pub struct Lowered {
+     pub functions: Vec<Defined>,
+     pub raise: Defined,
+     /// クロージャのエントリ`c<k>:<f>`と、その値の待つ引数の数。最初に使った順である。
+-    pub closures: Vec<(ClosureEntry, u16, Defined)>,
++    pub closures: Vec<(ClosureEntry, u16, u64, Defined)>,
+     /// `eml$apply$<m>`。添字が`m - 1`である。
+     pub applies: Vec<Defined>,
+     /// PAPのアダプタ`eml$pap$<r>`と、その`r`。
+@@ -56,6 +57,8 @@ pub struct Lowered {
+ 
+ /// 下ろしたコードが名指す、プログラムの関数でない関数。コードは名前と形だけで決まる。
+ struct Imports {
++    /// EN: Checked lowering: the audits are emitted (docs/spec/native.md 「検査モード」).
++    checked: bool,
+     entries: HashMap<&'static str, FuncId>,
+     raise: FuncId,
+     /// `eml$apply$<m>`。添字が`m - 1`である。
+@@ -132,11 +135,12 @@ pub fn program<M: Module>(
+     program: &Program,
+     unwinds: Vec<Unwinds>,
+     keep_clif: bool,
++    checked: bool,
+ ) -> Built<Lowered> {
+     // エントリと`eml$raise`は、プログラムの関数より前に決まった順で宣言する。どの本体もそれらを名指せ、その番号は
+     // プログラムによらない
+     let mut entries = HashMap::new();
+-    for entry in eml_nrt::entries() {
++    for entry in eml_nrt::mode::entries_in(checked) {
+         entries.insert(entry.symbol, declare_import(module, Import::Entry(entry))?);
+     }
+     let raise =
+@@ -161,6 +165,7 @@ pub fn program<M: Module>(
+         });
+     }
+     let imports = Imports {
++        checked,
+         entries,
+         raise,
+         applies,
+@@ -229,6 +234,7 @@ pub fn program<M: Module>(
+         closures.push((
+             closure,
+             args,
++            abi::closure_entry_sig_word(function, closure.captures as usize),
+             define(module, &mut ctx, id, false, Vec::new())?,
+         ));
+     }
+diff --git a/crates/eml_native/src/lower/rc.rs b/crates/eml_native/src/lower/rc.rs
+index 2c0f3a02..40d75a0a 100644
+--- a/crates/eml_native/src/lower/rc.rs
++++ b/crates/eml_native/src/lower/rc.rs
+@@ -7,6 +7,7 @@ use cranelift_frontend::FunctionBuilder;
+ use cranelift_module::Module;
+ use eml_lir::Repr;
+ 
++use super::audit;
+ use super::function::FnLower;
+ use crate::mem;
+ 
+@@ -22,7 +23,7 @@ impl Step {
+     pub(super) fn slow(self) -> &'static str {
+         match self {
+             Step::Dup => "eml_rt_dup_slow",
+-            Step::Decref => "eml_rt_decref",
++            Step::Decref => "eml_rt_decref_slow",
+         }
+     }
+ }
+@@ -40,7 +41,11 @@ impl<M: Module> FnLower<'_, '_, M> {
+ 
+     fn counted(&mut self, w: Value, repr: Repr, step: Step) {
+         let slow = self.func_ref(self.imports.entry(step.slow()));
+-        counted(&mut self.b, self.ctx, slow, w, repr, step);
++        let audit = self
++            .imports
++            .checked
++            .then(|| self.func_ref(self.imports.entry(audit::count_entry(step))));
++        counted(&mut self.b, self.ctx, slow, audit, w, repr, step);
+     }
+ }
+ 
+@@ -50,6 +55,7 @@ pub(super) fn counted(
+     b: &mut FunctionBuilder,
+     ctx: Value,
+     slow: FuncRef,
++    audit: Option<FuncRef>,
+     w: Value,
+     repr: Repr,
+     step: Step,
+@@ -73,6 +79,7 @@ pub(super) fn counted(
+         Repr::Obj | Repr::Ev | Repr::Cev | Repr::Rev => {}
+         _ => unreachable!("only reference counted words are counted"),
+     }
++    audit::call_before(b, ctx, audit, w);
+     let rc = mem::load_rc(b, w);
+     let is_local = local(b, rc);
+     b.ins().brif(is_local, fast, &[], other, &[]);
+diff --git a/crates/eml_native/src/lower/unwind.rs b/crates/eml_native/src/lower/unwind.rs
+index 3509418d..a4a6386f 100644
+--- a/crates/eml_native/src/lower/unwind.rs
++++ b/crates/eml_native/src/lower/unwind.rs
+@@ -14,6 +14,7 @@ use eml_nrt::image::{
+ };
+ 
+ use super::Imports;
++use super::audit::{self, Audit};
+ use super::function::FnLower;
+ use super::{apply, effects};
+ use crate::abi::tail_signature;
+@@ -116,6 +117,10 @@ pub(super) fn define_raise<M: Module>(mut b: FunctionBuilder, module: &mut M, im
+         let args: Vec<Value> = (1..=operands)
+             .map(|i| mem::load_out(&mut b, out, i))
+             .collect();
++        let expect = Audit::Code {
++            expect: operands as i64,
++        };
++        audit::emit(&mut b, module, imports, ctx, clause, expect);
+         let meta = mem::load_meta(&mut b, clause);
+         let sig = apply::uniform(operands);
+         apply::call_closure_code(&mut b, ctx, clause, meta, sig, &args, false);
+@@ -311,6 +316,22 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
+ 
+     /// 地点の後始末。持っている参照を数だけ手放し、tokenを捨て、関数の結果の仮の値を返す。
+     fn cleanup(&mut self, point: &Point) {
++        self.count(eml_nrt::worker::COUNT_UNWOUND_FRAMES);
++        self.release_point(point);
++    }
++
++    /// EN: The cleanup of a tail-position call of a `never` clause. The VM has replaced this frame by the clause's, so an
++    /// abort does not pop it and it is not counted in `unwound_frames`.
++    pub(super) fn fill_tail_cleanup(&mut self, block: Block) {
++        self.b.switch_to_block(block);
++        self.release_point(&Point {
++            owned: &[],
++            tokens: &[],
++            landing: None,
++        });
++    }
++
++    fn release_point(&mut self, point: &Point) {
+         for &(var, count) in point.owned {
+             let word = self.var(var);
+             for _ in 0..count {
+diff --git a/crates/eml_native/src/mem.rs b/crates/eml_native/src/mem.rs
+index 7e4c1fc5..d00f3395 100644
+--- a/crates/eml_native/src/mem.rs
++++ b/crates/eml_native/src/mem.rs
+@@ -174,6 +174,11 @@ fn field_offset(scanned: u32, position: u32) -> i32 {
+         .expect("a field offset fits in 32 bits")
+ }
+ 
++/// EN: The physical index of that field in the payload, as `Heap::field` and `Heap::raw` take it.
++pub fn field_index(scanned: u32, position: u32) -> usize {
++    layout::data_first(scanned as usize, false) + position as usize
++}
++
+ /// `Data`の物体`obj`の欄を型`ty`で読む。
+ pub fn load_field(
+     b: &mut FunctionBuilder,
