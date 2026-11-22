@@ -1782,6 +1782,9 @@ fn fork_child<R: Exec>(
     sched: &mut Scheduler<R::P>,
     g: Word,
 ) -> Result<u32, RunFault> {
+    // ほかのworkerのために値に印を付ける前に、ほかのスレッドから受けた解放を取り込む (docs/spec/object-model.mdの
+    // 「別のスレッドからの解放」)
+    ctx.reclaim_if_due();
     // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
     // 触れない
     let child = unsafe { ctx.heap_mut() }.fork_worker();
@@ -3506,6 +3509,9 @@ fn start_task<R: Exec>(
     g: Word,
     pinned: bool,
 ) -> Result<Option<(Word, Option<Runnable>)>, RunFault> {
+    // `Registry::start`は登録表のlockの下でクロージャに印を付けるので、ほかのスレッドから受けた解放はlockの前のここで取り込む
+    // (docs/spec/object-model.mdの「別のスレッドからの解放」)
+    ctx.reclaim_if_due();
     let roots = unshared_roots(ctx, sched);
     let started = {
         here!(sched, post, here);

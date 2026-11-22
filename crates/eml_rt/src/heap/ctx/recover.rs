@@ -73,7 +73,7 @@ impl<M: Mode> Ctx<M> {
         // (docs/spec/object-model.md の「別のスレッドからの解放」)。根と `Ctx` の持つ語は参照を持つので、その物体を
         // 空けたことにはしない
         let ghost held = s0.kept_set();
-        self.heap.reclaim_held(Ghost(held));
+        self.heap.reclaim_held(Ghost(held), true);
         proof {
             assert(s0.held_set().subset_of(held));
             self.lemma_reclaimed_ctx(c1, s0, held);

@@ -24,7 +24,9 @@ verus! {
 
 /// ヒープごとに1つ持つ、別のスレッドからの解放を受ける先。ページの頭の `sink` はこれを指す。
 pub(crate) struct RemoteSink {
-    /// 受けてまだ取り込んでいない解放の数。取り込む時期を決める目安で、止まった時点では正確になる。
+    /// 持ち主が最後にページを歩いてから積まれた小さいブロックの数。大きい物体のページは数えず、持ち主は`large`がnull
+    /// でないことで見分ける。歩く時期を決める目安で、積むスレッドが積み終えた後は待つ小さいブロックの数を下回らず、
+    /// 止まった時点の`reclaim`で0になる。
     count: AtomicUsize,
     /// 別のスレッドが解放した大きい物体のページの列の先頭。ページの遠隔の空きリストの語でつなぐ。大きい物体のページは
     /// どれも別の確保なので、番地でなくポインタで持つ。
@@ -118,6 +120,7 @@ pub(crate) fn remote_push(
 /// 返さず、持ち主が次に取り込むときに返す。速いモードでは、ページのバイト数をここで `control` から引く。持ち主の
 /// 取り込みを待つと、上限の判定がスレッドの順番に左右されるためである。検査モードの大きい物体のページは隔離して
 /// 返さないので、引かない。`remote_push` だけが呼ぶ。
+/// 受けた数は増やさない。持ち主は、この列が空でなければページを歩かずに取り出す。
 #[verifier::external_body]
 pub(crate) fn remote_large_push(
     h: *mut Header,
@@ -145,7 +148,6 @@ pub(crate) fn remote_large_push(
             Err(now) => old = now,
         }
     }
-    sink.count.fetch_add(1, Ordering::Relaxed);
     if checked {
         sink.pushing.fetch_sub(1, Ordering::Release);
     }
@@ -218,7 +220,7 @@ pub(crate) fn remote_large_take(
     }
 }
 
-/// 受けてまだ取り込んでいない解放の数 (T14)。目安で、ほかのスレッドが同時に足しうる。
+/// 最後にページを歩いてから受けた小さいブロックの数 (T14)。目安で、ほかのスレッドが同時に足しうる。
 #[verifier::external_body]
 #[inline]
 pub(crate) fn sink_count(sink: *const RemoteSink) -> usize {
@@ -226,7 +228,7 @@ pub(crate) fn sink_count(sink: *const RemoteSink) -> usize {
     sink.count.load(Ordering::Relaxed)
 }
 
-/// 取り込みを始める前に、受けた解放の数を 0 に戻す (T14)。
+/// ページを歩く前に、受けた数を0に戻す (T14)。
 #[verifier::external_body]
 #[inline]
 pub(crate) fn sink_count_take(sink: *const RemoteSink) {

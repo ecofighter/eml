@@ -1913,6 +1913,7 @@ impl Registry {
     /// `pinned`なら、タスクをメインのworkerに固定したものとして数える。
     /// 新しい ID に渡す前に、`g` とまだ印のないセッションの根 `roots` に共有の印を付ける (`par` の fork と同じ。
     /// docs/spec/vm.md の「`Async` のタスク」)。
+    /// 呼ぶ側は、登録表のlockを取る前に、同じ`Ctx`で`Ctx::reclaim_if_due`を呼ぶ (docs/spec/object-model.md の「別のスレッドからの解放」)。
     ///
     /// # Safety
     /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
@@ -5902,6 +5903,7 @@ impl Depot {
 
     /// 値 `w` を預ける。送り手の ID のまま、構造に入れる前に呼ぶ。`Unr` の物体に共有の印を付け、`lin` の物体から rc 1 の
     /// 道で届く物体の持ち主を預かる ID にする (docs/spec/object-model.md の「`share`」)。語は変わらない。
+    /// 先に`reclaim_if_due`で取り込むので、登録表のlockの外で呼ぶ (docs/spec/object-model.md の「別のスレッドからの解放」)。
     ///
     /// # Safety
     /// 呼ぶ側は、モジュールの文書の「呼ぶ側の約束」のC1、C2とC3を守る (docs/spec/lir.md の「エンジンの約束」)。
@@ -5910,6 +5912,9 @@ impl Depot {
         ctx: &mut Ctx<M>,
         w: Word,
     ) -> Result<Word, CellFault> {
+        // ほかのworkerのために値に印を付ける前に、ほかのスレッドから受けた解放を取り込む (docs/spec/object-model.mdの
+        // 「別のスレッドからの解放」)
+        ctx.reclaim_if_due();
         unsafe { ctx.heap_mut().share(w, self.worker) }?;
         Ok(w)
     }
