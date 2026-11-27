@@ -230,7 +230,7 @@ fn outside_tests(source: &Source) -> String {
 fn checked_mode_is_named_only_where_the_mode_is_chosen() {
     // crateごとに、テストでないコードで`Checked`を名指してよいファイル
     for (crate_, sources, allowed, doc) in [
-        ("eml_native", native(), &[][..], NATIVE),
+        ("eml_native", native(), &["jit.rs"][..], NATIVE),
         ("eml_nrt", nrt(), &["mode.rs"][..], NRT),
     ] {
         assert!(count(&code_of("eml_rt", "src/mode.rs"), "Checked", true) > 0);
@@ -244,6 +244,66 @@ fn checked_mode_is_named_only_where_the_mode_is_chosen() {
             "{crate_} names Checked outside tests in {found:?} ({doc})"
         );
     }
+}
+
+#[test]
+fn every_inline_access_has_its_audit() {
+    // `mem.rs`の9つの物体の補助。どれかを名指すmoduleはヒープの物体へのインラインの読み書きを出し、検査モードの下ろし方は
+    // `lower/audit.rs`を通してそれぞれの前に監査を置く (docs/spec/native.mdの「検査モード」)
+    let helpers = [
+        "load_rc",
+        "store_rc",
+        "load_field",
+        "store_field",
+        "load_meta",
+        "load_tag",
+        "closure_code",
+        "load_box",
+        "is_big_int",
+    ];
+    let sources = native();
+    let names_helper = |source: &Source| {
+        helpers
+            .iter()
+            .any(|helper| count(&source.code, &format!("mem::{helper}"), true) > 0)
+    };
+    let accessing: Vec<&str> = sources
+        .iter()
+        .filter(|source| source.path.starts_with("lower/") && names_helper(source))
+        .map(|source| source.path.as_str())
+        .collect();
+    assert_eq!(
+        accessing,
+        [
+            "lower/apply.rs",
+            "lower/data.rs",
+            "lower/rc.rs",
+            "lower/unwind.rs"
+        ],
+        "the modules of lower/ that access heap objects inline ({NATIVE})"
+    );
+    let unaudited: Vec<&str> = sources
+        .iter()
+        .filter(|source| accessing.contains(&source.path.as_str()))
+        .filter(|source| {
+            ["audit::", "self.audit(", "self.count("]
+                .iter()
+                .all(|call| count(&source.code, call, false) == 0)
+        })
+        .map(|source| source.path.as_str())
+        .collect();
+    assert!(
+        unaudited.is_empty(),
+        "{unaudited:?} access heap objects inline without an audit ({NATIVE})"
+    );
+    let audit = sources
+        .iter()
+        .find(|source| source.path == "lower/audit.rs")
+        .expect("lower/audit.rs exists");
+    assert!(
+        !names_helper(audit),
+        "lower/audit.rs emits audits and no inline access ({NATIVE})"
+    );
 }
 
 #[test]

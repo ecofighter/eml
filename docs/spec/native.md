@@ -11,7 +11,7 @@
 ### エントリのABI
 
 - 呼び出し規約は、対象のCの既定の規約 (`extern "C"`) である
-- 最初の引数は`ctx: *mut Ctx<M>`で、コードが動いているworkerの`Ctx`である。`M`はモードで、どのエントリも`M`について総称な関数である (「記述子の表」)。ネイティブのコードを動かすJITのホストは、今は速いモード`Fast`だけを選ぶ
+- 最初の引数は`ctx: *mut Ctx<M>`で、コードが動いているworkerの`Ctx`である。`M`はモードで、どのエントリも`M`について総称な関数である (「記述子の表」)。ネイティブのコードを動かすJITのホストは、マシンの`RunConfig`の`debug_heap`でモードを選ぶ (「検査モード」)
 - ほかの引数は、機械の型ではどれも`i64`か`f64`である。語のABIの語 (物体、即値、Unit、列挙のタグ) は`i64`で、`Float`は`f64`で渡す。Rustのシグネチャでは、物体の語 (`obj`、`tobj`、`token`) の型は`Word`である。`Word`は`repr(transparent)`のポインタで、対象のどのABIでも`i64`と同じ渡し方なので、語のprovenanceが入口をまたいで残り、エントリは整数からポインタを作らない。ハンドルの型のdtorを受ける引数 (`dtor`) の型は`Option<eml_rows::ffi::Dtor>`である。関数ポインタの`Option`はポインタと同じABIを持ち、nullが`None`なので、語はキャストも`transmute`もなしに、ABIだけで関数ポインタになる
 - 結果は、`i64`か`f64`が高々1つか、結果なしか、戻らない (`!`) かである
 - 構造体を値で渡すことも返すことも、狭い整数の型を使うこともしない。だからどの対象でも、引数は同じ規則で1つのレジスタか1つのスタックの枠に入る
@@ -138,7 +138,7 @@
 - 実行系は、コードのアドレスから関数を、`code`の順に並べた行の二分探索で探す。並べるのはrunごとに1回で、探すのは冷たい道だけである。どの行の範囲にもないアドレスは、関数`<native code>`として報告する
 - `DatumRow { kind, bits, text, code, slot, items }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`)、`DATUM_FN` (3。静的なクロージャで、`bits`は引数の数、`code`はエントリのコード。「関数の値」)、`DATUM_EMPTY_MUT_ARRAY` (4。空の`MutArray`で、中身はない)、`DATUM_EFFECT` (5。エフェクトのマシンの番号で、`bits`)、`DATUM_MASK` (6。マスクの項目で、`items`。「エフェクト」) のどれかである。`items`は`Slice<MaskRow>`で、`MaskRow { effect, keep, skip }`は`eml_rt::MaskItem`の欄を持つ項目1つで、`effect`はマシンの番号である。ほかの種類の`items`は空である。`slot`はmoduleの書けるデータの物で、8バイトにそろい、`DATUM_MASK`では`mask_bytes(items.len)` (`MaskItem`の大きさの`items.len`倍) バイト、ほかの種類では8バイトである。実行系はrunごとに、最初のエントリの前に、ヒープの種類 (0から4) の値を凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。`DATUM_EFFECT`のslotには`bits`をそのまま書き、`DATUM_MASK`のslotには項目を`MaskItem`としてLIRの順に書く。定数は、VMが定数を作るのと同じ関数 (`eml_rows::constants`と、文字列には`alloc_string_immortal`) で作る。生成したコードは、値をそのslotからのロード1つで読む
 - `PapRow { rest, code }`は、`rest`個の引数を待つPAPのアダプタ1つのコードである (「関数の値」)
-- `CodeRow { code, sig }`は、このimageが作りうる関数の値のエントリのコード1つである。`entries`は、そのすべて、つまりクロージャのエントリ`c<k>:<f>`とPAPのアダプタを、署名の語`sig` (`sig_word`。クロージャの後の引数の数に、`F64`の結果なら1ビット、`F64`の引数ごとに1ビットを足したもの) と一緒に持つ。検査モードのマシンが埋め、速いモードのマシンは空のままにする。読むのは`code`の監査だけである (「ヒープのエントリ」)
+- `CodeRow { code, sig }`は、このimageが作りうる関数の値のエントリのコード1つである。`entries`は、そのすべて、つまりクロージャのエントリ`c<k>:<f>`とPAPのアダプタを、署名の語`sig`と一緒に持つ。語は`sig_word`のもの (クロージャの後の引数の数に、`F64`の結果なら1ビット、`F64`の引数ごとに1ビットを足したもの) である。`sig_word`が書けない署名、つまり添字47以降に`F64`の引数を持つものは、このimageだけの語を持つ。その下の16ビットはすべて1で、`sig_word`の書く語ともタグとも等しくない。検査モードのマシンが埋め、速いモードのマシンは空のままにする。読むのは`code`の監査だけである (「ヒープのエントリ」)
 - slotを書いた後、`Image`は読むだけになる。だから`Image`は`Sync`で、呼ぶ側が待っている間にworkerのスレッドがそれを読む。slotと定数を書くのは、runごとに、そのrunの最初のエントリの前である。1つの`Image`のrunは重ならない (`run`の約束で、`NativeMachine`の`run`と`call`は`&mut self`を取る) ので、書く間にslotを読むコードはない。コードはslotと、それが指す定数を同期なしに読むので、runのコードを動かすネイティブのどのworkerのヒープも、コードを動かす前にそのrunの塊を付ける。runのworkerは1つで、slotを書くときにそのヒープに付ける
 - `Start { thunk, entry, argv, result_rc }`は、runがコードに入る所である。`eml_enter`の引数と、エントリの結果がrunの手放す数える語かどうかを持つ
 - `Options { census, stack, masked }`。`census`は`Census::Skip`か`Census::Check`で、`stack`はworkerのスタックに予約するバイト数である。`masked`は、呼んだスレッドでSIGINTとSIGTERMを塞いだまま、渡したクロージャを1回動かすフックである。既定は`Skip`と`WORKER_STACK`と何も塞がないフックで、`eml_cli::execute_on`は`eml_io::Masked`で塞ぐフックを渡す ([VM](vm.md)の「上限と割り込み」)。`eml_nrt`は自分ではOSのシグナルの関数を呼ばない
@@ -175,10 +175,10 @@ censusは、速いモードのrunの、参照の数の安全網である。検�
 - `Float`の葉の型は`F64`で、ほかのRepr (`obj`、`tobj`、`unit`、`int`、`enum`、`token`と文脈のRepr) の型は`I64`である。開いた後には構造体の値はない。LIRは変数を1回だけ束縛するので、変数1つがCLIFの値1つになり、LIRのブロックの引数はCLIFのブロックの引数になる。定数は使う所ごとに、その位置のReprで作る。`int`はその値、`float`はそのビット、`()`は語`Word::UNIT`で、タグは`enum`の位置ではその番号、`tobj`の位置ではその即値の語である ([LIR](lir.md)の「値の表現」が、タグをこの2つの位置にだけ置く)
 - `return`は葉を順に返し、`jump`は引数をブロックの引数として渡す。`int`の`switch`は、値をcaseと比べる (`cranelift_frontend::Switch`)。タグと文字列の`switch`は「データ」にある。`default`のない`switch`は、合うcaseがなければtrapする。検証したプログラムでは、これは起こらない。定数の`switch`は、VMと同じくコンパイルの時点で行き先を決める
 - 直接の呼び出しは呼ぶ先の関数の記号への`call`で、直接の末尾呼び出しは`return_call`である。`ctx`に続く各引数は、呼ぶ先の引数のReprで作る。複数の値を返す呼び出しは、結果の葉を順に変数に束縛する。呼ぶ先はどれもmoduleが`Linkage::Local`で定義する関数なので、Craneliftはそれを`colocated`にする。エントリはmoduleの外から取り込む記号なので、`colocated`にならない。末尾呼び出しは呼ぶ側のフレームを呼ぶ先のフレームに置き換える。だから末尾呼び出しの連鎖 (自分への末尾呼び出しを含む) は一定のスタックで動き、呼ぶ先は呼ぶ側より多くの引数をスタックで受けてよい。末尾でない呼び出しの後には「巻き戻しの地点」の`Call`の確かめを出す。末尾呼び出しの後には何も確かめない。呼ぶ先が戻ったときに、呼ぶ側の呼び手が確かめるからである
-- どの関数とthunkもmoduleの記号を持つ。その名前はLIRの名前と種類だけで決まり、読み込みの順やアドレスにはよらない。LIRの関数は`f:<名前>`、thunkは`eml$thunk$<引数>$<結果>`で、種類はそれぞれ`i` (`I64`) か`f` (`F64`) と書く。置いた失敗を上げる関数は`eml$raise`である (「巻き戻しの地点」)。関数の値のエントリは`c<k>:<名前>`、`apply`の補助の関数は`eml$apply$<m>`、PAPのアダプタは`eml$pap$<r>`である (「関数の値」)。moduleは、`eml_nrt::entries()`のすべてのエントリ、`eml$raise`、`eml$apply$<m>`を、プログラムの関数より前に決まった順で宣言する。関数の値のエントリは、データの記号と同じく本体が初めて使うときに宣言し、すべての本体の後で定義する。PAPのアダプタはコードが名指さず`Image.paps`だけが指すので、最後に宣言して定義する。moduleが定義する記号はどれもローカルのリンケージを持つので、直接の呼び出しは領域の中のPC相対の呼び出しになる。`NativeMachine::symbols()`は、マシンが定義したすべての関数 (`eml$raise`、関数の値のエントリ、`apply`の補助の関数、PAPのアダプタを含む) とthunkの名前とコードの範囲を返す。`Image.functions[i].{code, size}`と合わせて、コードのアドレスから名前を引ける
+- どの関数とthunkもmoduleの記号を持つ。その名前はLIRの名前と種類だけで決まり、読み込みの順やアドレスにはよらない。LIRの関数は`f:<名前>`、thunkは`eml$thunk$<引数>$<結果>`で、種類はそれぞれ`i` (`I64`) か`f` (`F64`) と書く。置いた失敗を上げる関数は`eml$raise`である (「巻き戻しの地点」)。関数の値のエントリは`c<k>:<名前>`、`apply`の補助の関数は`eml$apply$<m>`、PAPのアダプタは`eml$pap$<r>`である (「関数の値」)。moduleは、`eml_nrt::entries::<Fast>()`のすべてのエントリ (2つのモードの表は、記号と種類が同じである)、`eml$raise`、`eml$apply$<m>`を、プログラムの関数より前に決まった順で宣言する。関数の値のエントリは、データの記号と同じく本体が初めて使うときに宣言し、すべての本体の後で定義する。PAPのアダプタはコードが名指さず`Image.paps`だけが指すので、最後に宣言して定義する。moduleが定義する記号はどれもローカルのリンケージを持つので、直接の呼び出しは領域の中のPC相対の呼び出しになる。`NativeMachine::symbols()`は、マシンが定義したすべての関数 (`eml$raise`、関数の値のエントリ、`apply`の補助の関数、PAPのアダプタを含む) とthunkの名前とコードの範囲を返す。`Image.functions[i].{code, size}`と合わせて、コードのアドレスから名前を引ける
 - `load`はほかの確かめより前に、どのビルドでも、プログラムの`Prelude.Panic`が`obj`を取って戻らない (`never`) 操作をちょうど1つ持ち、`Prelude.IO`が`enum`と`obj`を取って戻らない操作をちょうど1つ持つことを確かめる。そうでなければ何も作らずに、そのエフェクトを名指す`LoadError::Prelude { effect }`を返す。プログラムのエフェクトの表にないエフェクトは確かめない。`eml$raise`はこれらの操作の節を決まったシグネチャで呼ぶからである (「externの失敗」)
-- マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、`eml_nrt::entries::<Fast>()`のすべてのエントリと、`Linked`がつないだCの関数とdtorを記号として登録し (「Cの関数の呼び出し」)、どの関数を定義するよりも前にプログラムのすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。`Linked`がプログラムの表に合わなければ`LoadError::LinkMismatch`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。ただし記号の宣言は領域を使わず、名前の重なりは下ろしの誤りなので、データの記号と関数の値のエントリの宣言が失敗したら、下ろしはpanicする。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`、`call`、`entry_of`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
-- `load`はプログラムを信頼する。プログラムは実行の前提を満たさなければならない ([LIR](lir.md)の「実行の前提」)。ネイティブのコードが実行時に確かめることは、VMの速いモードが確かめることを超えない ([オブジェクトモデル](object-model.md)の「受け入れる制約」) ので、満たさないプログラムの振る舞いは未定義である。verifierはこの前提の一部しか確かめない。`load`は`&eml_lir::Trusted`を取る安全な関数で、前提を約束するのは`Trusted`を作った側である ([LIR](lir.md)の「エンジンの約束」)。`load`はverifierを走らせない。`Trusted`は、`Trusted::new`がすでに確かめたものか、P6の下で`Trusted::unverified`が作ったもので ([LIR](lir.md)の「エンジンの約束」)、`load`は巻き戻しの表をそこから取る。VMと違ってネイティブには検査モードがない
+- マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、マシンのモードの`eml_nrt::entries::<M>()`のすべてのエントリと、`Linked`がつないだCの関数とdtorを記号として登録し (「Cの関数の呼び出し」)、どの関数を定義するよりも前にプログラムのすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。`Linked`がプログラムの表に合わなければ`LoadError::LinkMismatch`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。ただし記号の宣言は領域を使わず、名前の重なりは下ろしの誤りなので、データの記号と関数の値のエントリの宣言が失敗したら、下ろしはpanicする。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`、`call`、`entry_of`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
+- `load`はプログラムを信頼する。プログラムは実行の前提を満たさなければならない ([LIR](lir.md)の「実行の前提」)。速いネイティブのコードが実行時に確かめることは、VMの速いモードが確かめることを超えない ([オブジェクトモデル](object-model.md)の「受け入れる制約」) ので、満たさないプログラムの振る舞いは未定義である。検査モードのネイティブのコードは「検査モード」が述べることを確かめる。verifierはこの前提の一部しか確かめない。`load`は`&eml_lir::Trusted`を取る安全な関数で、前提を約束するのは`Trusted`を作った側である ([LIR](lir.md)の「エンジンの約束」)。`load`はverifierを走らせない。`Trusted`は、`Trusted::new`がすでに確かめたものか、P6の下で`Trusted::unverified`が作ったもので ([LIR](lir.md)の「エンジンの約束」)、`load`は巻き戻しの表をそこから取る
 - マシンのworkerはそのmoduleと領域を共有し、プロセス全体のmoduleはない。マシンは、`close`でも`Drop`でも、終わるときに領域を`free_memory`で返す。どのrunもworkerのスレッドが終わってから戻るので、そのとき領域のコードを実行しているものはない
 - `NativeMachine::run(loaded, options)`は入口を実行する。`loaded`は、同じマシンの`load`が返した`Loaded`である。`Loaded`は欄を隠し、返したマシンの印を持つので、`run`はほかのマシンの`Loaded`を、何も実行せずに内部の誤り`a loaded entry of another machine`で断る。入口は引数を取らない (取れば内部の誤り`the entry function takes parameters`を返す)。`eml_native::execute`は、マシンを作り、プログラムを読み込んで実行し、マシンを閉じる。読み込みの誤りは、入口の関数を名指す内部の誤りになる。その文は、領域が尽きたときは`the native code region is full`、ほかのmoduleの誤りでは`the native code cannot be built`である。`eml_nrt::SUPPORTED`が偽の対象では、`execute`は読み込む前に、`NativeMachine::run`、`call`、`entry_of`はthunkを作る前に、内部の誤り`native code is not supported on this machine`を返す
 
@@ -382,6 +382,40 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
   - `n < m` (`m >= 2`のときだけ): スタックの上限を確かめてから (「安全点」)、最初の`m - 1`個の引数で`eml$apply$(m-1)`を呼び、「巻き戻しの地点」の`Call`と同じ出し手`unwind::if_aborting`で`abort`のバイトを確かめる。中断が始まっていれば、`a_m`を1回`eml_rt_decref`で手放し、仮の値を返す。入れ子のどの段も自分の最後の引数を1回ずつ手放すので、VMの`ApplyRest`のフレームが残りの引数を捨てるのと同じになる。そうでなければ`yielding.target`をロードし、Unitでなければtrapする。1つの`apply`のうちyieldしうるのは最後の矢印だけなので ([Core IR](core-ir.md)の「`apply` の印と分け方」)、最後でない部分から戻るyieldはこの規則を破る。この見張りは、そのダミーを関数の値として先へ渡さずに、そこで止める。その後、結果と`a_m`で`eml$apply$1`を末尾で呼ぶ。最後の矢印がどの部分に来るかは実行時にしか分からないので、どの段の後も確かめる。補助の関数は`n`ごとの腕を持たないので、そのコードは`m`に比例する。結果が残りの引数を2つ以上取るときは、一時のPAPができる。補助の関数のフレームは`m - n`段入れ子になり、どの段も入れ子にする前にスタックの上限を確かめる (スタックポインタの読み1つ、ロード1つ、比較1つ)。引数が1つ余る適用は、直接の呼び出し、上限の確かめ、数がちょうどの腕、中断の確かめ、yieldの見張り、`eml$apply$1`への末尾呼び出しである
   - `eml$apply$1`は`n < 1`でtrapする。`apply`で呼ぶ関数の値のタグは1以上で、タグが0の節の関数の値を`apply`で呼ぶことはないので、実行の前提を満たすプログラムは、そこへ着かない
 - 関数の値のタグとコードの語を読むのは、生成したコード、実行系の読み込み時の値を作る関数、`eml_nrt_pap`だけである。`eml_rt`と`eml_sched`は関数の値を読み解かず、ヒープの操作はクロージャのタグを読まない。[オブジェクトモデル](object-model.md)の「クロージャ」の即値の関数の番号はVMの形で、ネイティブのコードは使わない
+
+## 検査モード
+
+`RunConfig`が`debug_heap`を持つマシンは、検査モードのコードを走らせる。`load`はプログラムを下の監査とともに下ろして`Ctx<Checked>`のエントリを登録し、`run`と`call`は`Ctx<Checked>`の上で動く。マシンの1つの印がこの3つをすべて選ぶので、一方のモードで下ろしたコードが、もう一方のモードのエントリや`Ctx`で動くことはない。物体の配置は、ヘッダの前の前置きのほかは両方のモードで同じなので ([オブジェクトモデル](object-model.md)の「前置き」)、検査モードのコードも同じずれを使う。
+
+検査モードの下ろし方は、速いモードの下ろし方と同じインラインの命令を出す。ヒープの物体へのインラインの読み書きのそれぞれの前に、その読み書きの監査のエントリの呼び出しを1つ出す。続く読み書きは、監査が確かめた記憶だけを読み書きする。監査が失敗すれば、runは失敗の手順で終わる (「失敗の手順」)。その誤りは、VMに同じ操作があれば、VMの検査モードが報告する誤りである。下の表では、監査のエントリを頭の`eml_rt_audit_`を除いて書く。`i`は欄の物理の添字`mem::field_index(scanned, position)`である。
+
+| LIRの文か補助 | 監査 | 続くもの |
+|---|---|---|
+| 数えるReprの`dup`、`decref`、`drop` (`rc::counted`) | `dup(x)`か`decref(x)` | インラインのロード、範囲の確かめ、ストア。数が0なら何もせず、ほかの数では冷たい呼び出し`eml_rt_dup_slow`か`eml_rt_decref_slow` (本体) |
+| reuseのない`con` (`alloc_con`、`closure_value`) | 欄ごとに`store(w, i, v)`か`store_raw(w, i, bits)` | `eml_rt_alloc_data`の呼び出しの後の、インラインのストア |
+| `con ... reuse t` | reuseした腕で`count(REUSES)`、書かない印のない欄ごとにストアの監査 | `eml_rt_reuse_in_place` (検査モードだけの呼び出し) か`eml_rt_con_at`の後の、インラインのストア |
+| tokenのない`release x C(..)` | `data(x, tag, scanned)`、`unique(x)`、一意な腕で残さない子ごとに`field(x, i)` | インラインの`load_rc`と`is_one_ref`、子のロードとインラインの`decref`、`eml_rt_free_block`。ほかの腕は`eml_rt_release` |
+| tokenを作る`release` | 上と同じ | 一意な腕は、箱の語の代わりに`eml_rt_into_token`を呼ぶ (検査モードだけの呼び出し) |
+| 構造体の箱の`release`と構造体の`unbox` | `header(x)`、物体の腕で`data`、葉ごとに`field`か`raw` | インラインの`is_big_int`、葉のロード |
+| `unpack`とcaseの欄 (`bind_fields`) | `data`、欄ごとに`field`か`raw` | インラインのロード |
+| タグの`switch` | `header(x)` | インラインの`load_tag` |
+| `box` | 文の頭で`count(BOXES)` | 速いコードと同じ |
+| `int`、`enum`、`float`への`unbox` | 文の頭で`count(UNBOXES)`。`float`では`box(x, 1)`、`int`と`enum`では物体の腕で`box(x, 0)` | インラインの`load_box` |
+| `apply`、末尾の`apply`、`eml$apply$<m>`、節の呼び出し、`eml$raise` | `code(clo, expect)` | インラインの`load_meta`、タグの比べ、`closure_code`、間接の呼び出し |
+| クロージャのエントリと`release_box` | 捕獲ごとに`field`か`raw`、`unique(clo)`、共有の腕で数の操作ごとに`dup`か`decref` | インラインのロード、`eml_rt_free_block`か`eml_rt_is_last`、インラインの`dup`と`decref` |
+| PAPのアダプタ`eml$pap$<rest>` | 呼ぶ値と引数の`field`、`release_box`の監査、`code(callee, rest + 1)` | インラインのロードと間接の末尾呼び出し |
+| 巻き戻しの地点の後始末と、`eml$apply$<m>`の内の適用が中断したときの後始末 | `count(UNWOUND_FRAMES)` | `eml_rt_decref`と`eml_rt_drop_token`の呼び出し (完全な検査付きの操作) |
+
+- 数の操作の監査は、`dup`か`decref`の確かめを行い、`rc_increments`か`rc_decrements`を数え、不死の物体の操作を終える。続くインラインの数の操作とその冷たい呼び出し (`eml_rt_dup_slow`、`eml_rt_decref_slow`) は本体で、確かめも数えもしない。ほかの監査は、どれも検査付きの読みか書きそのものである。何も数えず、ストアの監査は、続くインラインのストアがもう一度書く語を書く。監査が前にないヒープのエントリの呼び出しは、完全な検査付きの操作である。どの数も2回は数えない
+- `tobj`と`evv`の語では、監査は即値の確かめの後の、物体の道に置く
+- 検査モードのtokenは別の表現なので、速いコードが箱の語を使う所で、検査モードのコードは`eml_rt_into_token`と`eml_rt_reuse_in_place`を呼ぶ
+- 検査モードのコードは、文に属する`RunStats`の4つの数を数える。`boxes`はどの`box`の頭でも、`unboxes`はどの`unbox`の頭でも、`reuses`は空でないtokenを受けた`con`の腕で、`unwound_frames`は中断の間にフレームから戻るどの後始末の頭でも数える。その後始末は、巻き戻しの地点の後始末と`eml$apply$<m>`の後始末である。入口の安全点の後始末も数えるが、今はサービスがその後始末へ進む行動を返すことはない。着地の腕、thunk、`never`の節の末尾の位置の呼び出しの後の後始末は数えない。VMはそこでフレームを外さないためである
+- 関数の値を通した間接の呼び出しも監査する。`code`の監査が通るのは、値が`Data`の物体で、その最初の走査する語が、読み込んだimageのエントリ (`Image.entries`のクロージャのエントリかPAPのアダプタ) のうち、呼び出しが使う署名をちょうど持つもののコードであるときだけである。だから検査モードのコードは、imageがそのようなエントリとして定義していない語へ飛ばない
+- VMと同じく、次のことはプログラムの約束のままである。数えるReprの語は即値か、runのヒープの中を指す (監査は、物体が要る所の即値と、runが持たないページを断る)。生の欄は読む前に書いてある
+- 規則: 生成したコードのヒープの物体へのインラインの読み書きは、どれも検査モードの下ろし方で`lower/audit.rs`を通して出す監査を持ち、テストが検査モードのCLIFを速いCLIFの隣に固定する。そうでなければ、その操作は、検査モードの下ろし方では、インラインの読み書きを持たない完全な検査付きの操作の呼び出しである。`Ctx`の頭の欄、データの記号、フレームの読み書きは、このような読み書きではない
+- テストは、verifierが拒むLIRを`Trusted::unverified`で包んで監査に届く ([LIR](lir.md)の「エンジンの約束」のP6)。verifierが拒む関数は、中断がそのフレームを通っても何も手放さない
+- 検査モードで、リークか失敗の手順で終わったrunは、その物体の数を`RunConfig`の`Control`のworkerごとの表に残す。だから同じ`Control`での後の検査モードのrun (同じマシンの`run`か`call`をもう一度、または設定の複製での別のrun) は、何をしても`OwnedMiscount`を報告する
+- 検査モードはサンドボックスではない。[オブジェクトモデル](object-model.md)の「報告する誤り」が挙げる誤った使い方を報告し、ほかのことはプログラムを信頼する ([LIR](lir.md)の「エンジンの約束」)
 
 ## 断る形
 

@@ -145,7 +145,8 @@ pub struct PapRow {
     pub code: *const u8,
 }
 
-/// 関数の値1つのエントリのコード。クロージャのエントリ`c<k>:<f>`かPAPのアダプタと、その署名の語 (`sig_word`) である。
+/// 関数の値1つのエントリのコード。クロージャのエントリ`c<k>:<f>`かPAPのアダプタと、その署名の語である。語は`sig_word`の
+/// ものか、`sig_word`が書けない署名では、下の16ビットがすべて1の、imageだけの語である (docs/spec/native.mdの「`Image`」)。
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CodeRow {

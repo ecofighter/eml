@@ -12,8 +12,10 @@ use eml_nrt::image::{
     ARITH_DIVISION_BY_ZERO, ARITH_INTEGER_OVERFLOW, NO_FILE, PURITY_EFFECTFUL, PURITY_PANICS,
     PURITY_PURE, RAISE_IO, RAISE_PANIC, SiteRow,
 };
+use eml_nrt::worker::COUNT_UNWOUND_FRAMES;
 
 use super::Imports;
+use super::audit::{Audit, Glue};
 use super::function::FnLower;
 use super::{apply, effects};
 use crate::abi::tail_signature;
@@ -94,6 +96,7 @@ pub(super) fn define_raise<M: Module>(mut b: FunctionBuilder, module: &mut M, im
     b.switch_to_block(entry);
     let params = b.block_params(entry).to_vec();
     let ctx = params[0];
+    let mut glue = Glue::new(imports, ctx);
     // `eml_nrt_failed`は節と引数を4語まで書く
     let (out, address) = mem::out_words(&mut b, 4);
     let failed = module.declare_func_in_func(imports.entry("eml_nrt_failed"), b.func);
@@ -116,6 +119,10 @@ pub(super) fn define_raise<M: Module>(mut b: FunctionBuilder, module: &mut M, im
         let args: Vec<Value> = (1..=operands)
             .map(|i| mem::load_out(&mut b, out, i))
             .collect();
+        let expect = Audit::Code {
+            expect: operands as i64,
+        };
+        glue.emit(&mut b, module, clause, expect);
         let meta = mem::load_meta(&mut b, clause);
         let sig = apply::uniform(operands);
         apply::call_closure_code(&mut b, ctx, clause, meta, sig, &args, false);
@@ -311,6 +318,22 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
 
     /// 地点の後始末。持っている参照を数だけ手放し、tokenを捨て、関数の結果の仮の値を返す。
     fn cleanup(&mut self, point: &Point) {
+        self.count(COUNT_UNWOUND_FRAMES);
+        self.release_point(point);
+    }
+
+    /// `never`の節の末尾の位置の呼び出しの後始末。VMはこのフレームを節のフレームで置き換えてあるので、中断はこれを
+    /// 外さず、`unwound_frames`にも数えない。
+    pub(super) fn fill_tail_cleanup(&mut self, block: Block) {
+        self.b.switch_to_block(block);
+        self.release_point(&Point {
+            owned: &[],
+            tokens: &[],
+            landing: None,
+        });
+    }
+
+    fn release_point(&mut self, point: &Point) {
         for &(var, count) in point.owned {
             let word = self.var(var);
             for _ in 0..count {

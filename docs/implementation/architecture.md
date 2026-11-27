@@ -444,14 +444,16 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 - `abi.rs`は、emlのコード、adapter、補助の関数、thunkのCraneliftのフラグを作る唯一の関数`isa`、emlの関数の`tail`のシグネチャ、記述子から作るエントリのシグネチャ、importを宣言する関数`declare_import` (エントリ、Cの関数、ハンドルのdtor) と、`isa(false)`のISAと`JIT_REGION_BYTES`の予約した領域からJITのmoduleのbuilderを作る関数`jit_builder`を持つ ([ネイティブの実行系](../spec/native.md) の「`eml_enter`」)。`thunk.rs`は、`eml_enter`が呼ぶthunkを作る。どちらも`cranelift_module::Module`について総称で、`JITModule`を名指すのは`jit.rs`だけである。ABIのテストが結合テストなので、この2つは`pub`である
 - `mem.rs`は`eml_rt`を名指す唯一のmoduleで、`REUSE_SCANNED_LIMIT`が`layout::INLINE_SCAN_LIMIT`以下であることをコンパイル時のassertで確かめる。メモリに触るコード生成はここに置く
-- `jit.rs`は、JITのホスト`NativeMachine`と`execute`を持つ。`NativeMachine::load`と`execute`は`&eml_lir::Trusted`を取る。マシンは、JITのmodule 1つとその領域、`Image`の表、名前で引くエフェクトの番号、thunkを持ち、プログラムを1回だけ読み込んで`eml_nrt::run::run`で走らせる。`load`は`Trusted`の巻き戻しの表を読み、verifierを走らせない ([ネイティブの実行系](../spec/native.md)の「関数の形」「実行の始めと終わり」)
+- `jit.rs`は、JITのホスト`NativeMachine`と`execute`を持つ。`NativeMachine::load`と`execute`は`&eml_lir::Trusted`を取る。マシンは、JITのmodule 1つとその領域、`Image`の表、名前で引くエフェクトの番号、thunkを持ち、プログラムを1回だけ読み込んで`eml_nrt::run::run`で走らせる。`load`は`Trusted`の巻き戻しの表を読み、verifierを走らせない ([ネイティブの実行系](../spec/native.md)の「関数の形」「実行の始めと終わり」)。マシンは`new`で`RunConfig::debug_heap`を1回読み、その1つの印が、下ろし方、登録するエントリ、`run`のモードを選ぶ
+- `lower/audit.rs`は、検査モードの下ろし方の監査と数えを出すただ1つの所である。`lower::Lowering { checked }`がそれを選び、`Checked`を名指すのは`jit.rs`だけである ([ネイティブの実行系](../spec/native.md)の「検査モード」)
 - `lower/`は、LIRをCLIFに下ろす。`mod.rs`はどの関数を定義するよりも前にすべての関数を宣言し、`names.rs`は記号の名前を作り、`function.rs`はLIRの関数1つ (ブロック、ブロックの引数、文、終端、atom) を下ろす。`call.rs`は直接の呼び出しと末尾呼び出しを、`unwind.rs`は巻き戻しの地点の後のコード、後始末、`eml$raise`を、`safepoint.rs`は入口の安全点を、`rc.rs`はインラインの`dup`と`decref`を、`data.rs`は構築子、欄、`switch`、箱、`release`、token、reuseを、`consts.rs`は読み込み時の値のデータの記号 (エフェクトの番号の`e:`とマスクの項目の`m:`を含む) と、`release`の`keep`のバイトの読み取り専用の物`k:`を、`effects.rs`はエフェクトの基本操作 (インラインの`yielding`と`yield_status`、ほかの基本操作のエントリ`eml_rt_<Prim::name()>`の呼び出し。名前を綴るのは`entry`だけである) を下ろす。`apply.rs`は関数の値を下ろす。適用する所、`closure`、クロージャのエントリ`c<k>:<f>`、`n < m`の腕でスタックの上限を確かめる`apply`の補助の関数`eml$apply$m`、PAPのアダプタ`eml$pap$<r>`である ([ネイティブの実行系](../spec/native.md)の「関数の値」)。`rows.rs`は、ネイティブのコードがインラインに展開するstdの行 (`INLINE`) を挙げ、`lowering`は規則で、行をインラインに展開するか、エントリで呼ぶか、断るか (`None`) を返す。`lower/c.rs`は、`blocking`でない利用者のCの関数の行を、範囲の確かめ、貸すエントリ、import`eml_c$<名前>`の直接の呼び出し、結果の変換の順に下ろす。貸すエントリとCの関数の呼び出しを出すのは、1つの関数`lend_and_call`だけである ([ネイティブの実行系](../spec/native.md)の「Cの関数の呼び出し」)
 - `unsupported.rs`は、ネイティブのコードが断るLIRの形を述べる唯一の所である (`Form`、`unsupported`)。診断、ネイティブのUIテスト、下ろしは、どれもこれを使う ([ネイティブの実行系](../spec/native.md)の「断る形」)
 - コード生成器は、次の置き場所の規則を守る。`tests/placement.rs`が、規則ごとにソースのファイルを走査して確かめる
   - importを宣言する (`Linkage::Import`) のも、`tail`の呼び出し規約を名指す (`CallConv::Tail`) のも、`preserve_frame_pointers`を置くのも、`abi.rs`だけである。Craneliftのフラグを作る (`settings::builder`) のは、`abi.rs`だけである
   - 生成したコードは、`mem.rs`を通してだけメモリをロードしストアする (狭い幅の形、アトミック、スタックの枠への読み書きを含む)。ほかにロードとストアを書くのは、`thunk.rs` (`eml_enter`の引数と結果の配列) だけである
   - `call_indirect`は、呼ぶ先が実行時の値である所、つまり`lower/apply.rs` (関数の値の適用)、`thunk.rs`だけで使う
-  - `CTX_*`のずれを定めない。`mem.rs`を通して`eml_rt`から読む。`eml_rt::Ctx`、`eml_rt::Heap`、`Ctx<…>`の型も、`Checked`も名指さない
+  - `CTX_*`のずれを定めない。`mem.rs`を通して`eml_rt`から読む。`eml_rt::Ctx`、`eml_rt::Heap`、`Ctx<…>`の型を名指さない。`Checked`を名指すのは`jit.rs`だけである
+  - `mem.rs`の9つの物体の補助のどれかを名指す`lower/`のmoduleは、どれも`audit::` (か`FnLower::audit`と`FnLower::count`) を通して監査を出し、`lower/audit.rs`自身はインラインの読み書きをしない
   - `eml_sched`と`eml_rows`への辺を持たない。実行の境界の型には`eml_nrt`の再エクスポートを通して届き、テストは共有の行の関数をdev-dependencyの`eml_rows`から読む。thread-localは使わない
   - `eml_native`、`eml_nrt`、`eml_sched`、`eml_rows`、`eml_clink`のファイル (コード、コメント、マニフェスト) が引く`docs/`の文書は、`docs/spec/`と`docs/implementation/`の下だけである
 - `unsafe`を書いてよいのは`jit.rs`だけである ([テスト戦略](testing.md)の「`eml_native` の検証」)

@@ -5,16 +5,17 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cranelift_jit::JITModule;
+use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Module, ModuleError};
 use eml_cabi::Linked;
 use eml_extern::ExternEffect;
 use eml_lir::{OpRet, Program, Repr, Trusted};
 use eml_nrt::image::{
-    DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
+    CodeRow, DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
     DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow, Slice,
     Start, Str,
 };
+use eml_nrt::mode::{Checked, Engine, Fast};
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
 use crate::abi::jit_builder;
@@ -116,6 +117,7 @@ struct Tables {
     _datum_rows: Vec<DatumRow>,
     _masks: Vec<Vec<MaskRow>>,
     _paps: Vec<PapRow>,
+    _entries: Vec<CodeRow>,
     image: Image,
 }
 
@@ -128,6 +130,7 @@ impl Tables {
         files: Vec<String>,
         data: Vec<(Datum, *mut u64, Static)>,
         paps: Vec<PapRow>,
+        entries: Vec<CodeRow>,
         number: impl Fn(u32) -> u16,
         raise_effects: (u32, u32),
     ) -> Tables {
@@ -188,7 +191,7 @@ impl Tables {
             files: Slice::new(&file_rows),
             data: Slice::new(&datum_rows),
             paps: Slice::new(&paps),
-            entries: Slice::new(&[]),
+            entries: Slice::new(&entries),
             panic_effect: raise_effects.0,
             io_effect: raise_effects.1,
         };
@@ -201,6 +204,7 @@ impl Tables {
             _datum_rows: datum_rows,
             _masks: masks,
             _paps: paps,
+            _entries: entries,
             image,
         }
     }
@@ -258,11 +262,12 @@ impl NativeMachine {
 
     /// `program`のすべての関数をコンパイルする。マシンは1回だけ読み込むので、2回目の呼び出しは、1回目が失敗していても
     /// `LoadError::Loaded`を返す。`load`は`program`を信頼する。その約束は`Trusted`を作った側が負う
-    /// (docs/spec/lir.mdの「エンジンの約束」)。ネイティブのコードは実行時に何も確かめない (docs/spec/native.mdの「関数の形」)。
-    /// 巻き戻しの表は`Trusted`のものを使う。`Trusted`は、すでにverifierを通ったものか、P6の下で作ったものである。
-    /// `unsupported`が断る形は、下ろしの中でpanicする。`linked`はプログラムのCの関数をつないだ結果で、その宣言が
-    /// プログラムの表と違えば、何も作らずに`LoadError::LinkMismatch`を返す。
+    /// (docs/spec/lir.mdの「エンジンの約束」)。速いモードのネイティブのコードは実行時に何も確かめず、検査モードのコードは
+    /// 監査で確かめる (docs/spec/native.mdの「関数の形」「検査モード」)。巻き戻しの表は`Trusted`のものを使う。`Trusted`は、
+    /// すでにverifierを通ったものか、P6の下で作ったものである。`unsupported`が断る形は、下ろしの中でpanicする。`linked`は
+    /// プログラムのCの関数をつないだ結果で、その宣言がプログラムの表と違えば、何も作らずに`LoadError::LinkMismatch`を返す。
     pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<Loaded, LoadError> {
+        let checked = self.checked();
         if std::mem::replace(&mut self.asked, true) {
             return Err(LoadError::Loaded);
         }
@@ -283,8 +288,10 @@ impl NativeMachine {
                 .or_insert_with(|| effect_number(next));
         }
         let mut builder = jit_builder().map_err(|error| LoadError::Module(error.to_string()))?;
-        for entry in eml_nrt::entries::<eml_nrt::mode::Fast>() {
-            builder.symbol(entry.symbol, (entry.address)());
+        if checked {
+            register_entries::<Checked>(&mut builder);
+        } else {
+            register_entries::<Fast>(&mut builder);
         }
         // `fits`が成り立ったので、`Linked`の約束により、どの呼ぶ先もそのCの関数の宣言の記号を解決した関数で、どのdtorも
         // そのハンドルの型の宣言のdtorである。生成したコードは、それらを記号の名前でだけ名指す
@@ -298,7 +305,8 @@ impl NativeMachine {
             }
         }
         let module = self.module.insert(JITModule::new(builder));
-        let defined = lower::program(module, program, self.keep_clif)
+        let lowering = lower::Lowering { checked };
+        let defined = lower::program(module, program, self.keep_clif, lowering)
             .and_then(|defined| Ok(module.finalize_definitions().map(|()| defined)?));
         let lowered = match defined {
             Ok(lowered) => lowered,
@@ -342,13 +350,19 @@ impl NativeMachine {
             });
         }
         let mut statics = HashMap::with_capacity(lowered.closures.len());
-        for (closure, arity, defined) in lowered.closures {
+        let mut entries = Vec::new();
+        for (closure, arity, sig, defined) in lowered.closures {
             let code = module.get_finalized_function(defined.id);
+            if let Some(sig) = sig {
+                entries.push(CodeRow { code, sig });
+            }
+            let name =
+                names::closure_entry(closure.captures, &program.function(closure.function).name);
+            if let Some(clif) = defined.clif {
+                self.clif.insert(name.clone(), clif);
+            }
             self.symbols.push(Symbol {
-                name: names::closure_entry(
-                    closure.captures,
-                    &program.function(closure.function).name,
-                ),
+                name,
                 address: code,
                 size: defined.size,
             });
@@ -369,12 +383,21 @@ impl NativeMachine {
         let mut paps = Vec::with_capacity(lowered.paps.len());
         for (rest, defined) in lowered.paps {
             let code = module.get_finalized_function(defined.id);
+            if let Some(clif) = defined.clif {
+                self.clif.insert(names::pap(rest), clif);
+            }
             self.symbols.push(Symbol {
                 name: names::pap(rest),
                 address: code,
                 size: defined.size,
             });
             paps.push(PapRow { rest, code });
+            if checked {
+                entries.push(CodeRow {
+                    code,
+                    sig: u64::from(rest),
+                });
+            }
         }
         // どの値のslotも、moduleが定義した8バイトの書けるデータの物で、領域とともにマシンが終わるまで生きる
         let data = lowered
@@ -408,6 +431,7 @@ impl NativeMachine {
             program.files.clone(),
             data,
             paps,
+            entries,
             number,
             raise_effects,
         ));
@@ -418,7 +442,9 @@ impl NativeMachine {
     }
 
     /// 読み込んだプログラムの入口を実行する。入口は引数を取らない。ほかのマシンが返した`loaded`は、何も実行せずに
-    /// 内部の誤りで断る。
+    /// 内部の誤りで断る。検査モードでは、リークか失敗の手順で終わったrunは、その物体の数を`RunConfig`の`Control`の
+    /// workerごとの表に残す。だから同じ`Control`での後の検査モードのrun (このマシンの`run`か`call`をもう一度、または
+    /// 設定の複製での別のrun) は、何をしても`OwnedMiscount`を報告する (docs/spec/native.mdの「検査モード」)。
     pub fn run(&mut self, loaded: Loaded, options: Options) -> Result<Finished, RuntimeError> {
         let (thunk, code, results, counted) = self.prepare(loaded)?;
         let mut argv = vec![0u64; results];
@@ -528,8 +554,8 @@ impl NativeMachine {
         Ok((thunk, code))
     }
 
-    /// 読み込んだ関数`name`、または補助の関数`eml$apply$<m>`か`eml$raise`の、コンパイルの前のCLIF。`new_with_clif`で
-    /// 作ったマシンだけが持つ。
+    /// 読み込んだ関数`name`、または補助の関数`eml$apply$<m>`、`eml$raise`、関数の値のエントリ`c<k>:<f>`、PAPのアダプタ
+    /// `eml$pap$<r>`の、コンパイルの前のCLIF。`new_with_clif`で作ったマシンだけが持つ。
     #[doc(hidden)]
     pub fn clif(&self, name: &str) -> Option<&str> {
         self.clif.get(name).map(String::as_str)
@@ -635,14 +661,29 @@ impl NativeMachine {
         // docs/spec/lir.mdの「エンジンの約束」)。`run`は入口を空の`evv`で動かし、`call`は呼び手がR-5で、空の`evv`と
         // 渡した引数で関数が前提を満たすことを約束する。`argv`はその関数の引数と結果ごとにslotを持ち、引数を入れてある
         unsafe {
-            eml_nrt::run::run::<eml_nrt::mode::Fast>(
-                &tables.image,
-                &start,
-                &self.config,
-                self.host.clone(),
-                options,
-            )
+            if self.checked() {
+                run_in::<Checked>(
+                    &tables.image,
+                    &start,
+                    &self.config,
+                    self.host.clone(),
+                    options,
+                )
+            } else {
+                run_in::<Fast>(
+                    &tables.image,
+                    &start,
+                    &self.config,
+                    self.host.clone(),
+                    options,
+                )
+            }
         }
+    }
+
+    /// 検査モードか。マシンの`RunConfig`から読むこの1つの印が、下ろし方、エントリの表、runを選ぶ。
+    fn checked(&self) -> bool {
+        self.config.debug_heap
     }
 }
 
@@ -654,6 +695,28 @@ impl Drop for NativeMachine {
             // thunkとコードのアドレスだけで、それを通して呼ぶことも読むことも`unsafe`を要する
             unsafe { module.free_memory() };
         }
+    }
+}
+
+/// モード`M`での`eml_nrt::run::run`。`M`はマシンの下ろし方のモードである。
+///
+/// # Safety
+/// `eml_nrt::run::run`と同じ。
+unsafe fn run_in<M: Engine>(
+    image: &Image,
+    start: &Start,
+    config: &RunConfig,
+    host: HostRef,
+    options: Options,
+) -> Result<Finished, RuntimeError> {
+    // SAFETY: 呼ぶ側の約束
+    unsafe { eml_nrt::run::run::<M>(image, start, config, host, options) }
+}
+
+/// `builder`に、モード`M`のどのエントリのアドレスも渡す。`M`は、マシンの下ろし方とrunのモードである。
+fn register_entries<M: Engine>(builder: &mut JITBuilder) {
+    for entry in eml_nrt::entries::<M>() {
+        builder.symbol(entry.symbol, (entry.address)());
     }
 }
 

@@ -3,6 +3,7 @@ mod abort;
 mod apply;
 mod c;
 mod calls;
+mod checked;
 mod clif;
 mod common;
 mod data;
