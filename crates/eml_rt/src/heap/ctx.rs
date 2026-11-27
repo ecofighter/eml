@@ -15,7 +15,7 @@ use super::Heap;
 use super::chain_err;
 #[cfg(verus_only)]
 use super::model::BlockState;
-use crate::control::{Control, Stop, stop_reason};
+use crate::control::{Control, Owners, Stop, stop_reason};
 use crate::error::HeapError;
 use crate::externs::Fault;
 use crate::host::HostRef;
@@ -1104,7 +1104,7 @@ impl<M: Mode> Ctx<M> {
         &&& !M::CHECKED ==> self.held_ok()
     }
 
-    /// worker 0 の `Ctx` (`for_worker(control, host, 0)`)。
+    /// worker 0の`Ctx`。`for_worker`と同じく作り、ヒープは自分の所有者の表を持つ。
     ///
     /// # Panics
     /// `control`に語0がないとき。`Control::new`の前提 (`main`を走らせるworkerがあり、`+ 1`が溢れない) の中で作った
@@ -1118,15 +1118,20 @@ impl<M: Mode> Ctx<M> {
             r.held_ok(),
             r.finished(),
     {
-        Ctx::for_worker(control, host, 0)
+        let heap = Heap::with_control(control.clone());
+        Ctx::around(heap, control, host, 0)
     }
 
-    /// worker `k` の、`evv` が空で yield していない文脈。ページはセッションの `control` に数え、出力とファイルは `host`
-    /// を通す。安全点は `control` の `k` 番目の止める語を読む。
+    /// worker `k`の、`evv`が空でyieldしていない文脈。ページはセッションの`control`に数え、出力とファイルは`host`を
+    /// 通す。安全点は`control`の`k`番目の止める語を読む。検査モードでは、ヒープは`owners`の表で数える
+    /// (`Heap::with_owners`)。
     ///
     /// # Panics
-    /// `k`が`control.limits().workers`より大きいとき。
-    pub fn for_worker(control: Arc<Control>, host: HostRef, k: usize) -> (r: Ctx<M>)
+    /// `k`が`control.limits().workers`より大きいとき。検査モードで、`owners`が表を持たないとき、つまり速いモードの
+    /// ヒープのハンドルのとき。
+    pub fn for_worker(control: Arc<Control>, owners: &Owners, host: HostRef, k: usize) -> (r: Ctx<
+        M,
+    >)
         requires
             k < control.word_count(),
         ensures
@@ -1134,9 +1139,27 @@ impl<M: Mode> Ctx<M> {
             r.held_ok(),
             r.finished(),
     {
+        let heap = Heap::with_owners(control.clone(), owners);
+        Ctx::around(heap, control, host, k)
+    }
+
+    /// `new`と`for_worker`の本体。空のヒープ`heap`を持つworker `k`の文脈を作る。
+    fn around(heap: Heap<M>, control: Arc<Control>, host: HostRef, k: usize) -> (r: Ctx<M>)
+        requires
+            k < control.word_count(),
+            heap.wf(),
+            heap.consistent(),
+            heap.settled(),
+            heap.region_spec() is None,
+            heap.worker_spec() == 0,
+            heap.unused(),
+        ensures
+            r.wf(),
+            r.held_ok(),
+            r.finished(),
+    {
         let limits = control.limits();
         let word = control.word(k);
-        let heap = Heap::with_control(control.clone());
         let stop = stop_of(&word);
         let r = Ctx {
             native: Native {

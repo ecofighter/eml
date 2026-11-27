@@ -269,17 +269,15 @@ fn retiring_an_id_twice_panics() {
     let _ = heap.retire_worker(child);
 }
 
-/// 同じ `Control` のヒープは1つの表で ID を出し、数える。
+/// 1つのハンドルで作った2つのヒープ。1つの表でIDを出し、その表で数える。
 fn two_heaps() -> (H, H) {
-    let control = Arc::new(Control::new(Limits::default()));
-    (
-        H::with_control(Arc::clone(&control)),
-        H::with_control(control),
-    )
+    let a = H::with_control(Arc::new(Control::new(Limits::default())));
+    let b = H::with_owners(a.control().clone(), &a.owners());
+    (a, b)
 }
 
 #[test]
-fn heaps_of_one_control_hand_out_ids_from_one_table() {
+fn heaps_made_on_one_handle_hand_out_ids_from_one_table() {
     let (mut a, mut b) = two_heaps();
     assert_eq!(
         [a.fork_worker(), b.fork_worker(), a.fork_worker()],
@@ -291,9 +289,9 @@ fn heaps_of_one_control_hand_out_ids_from_one_table() {
     assert_eq!(a.fork_worker(), 10);
 }
 
-/// 数は物体のあるヒープによらず ID ごとに足し、`check_owned` はすべてのヒープの物体から数え直す。
+/// 数は物体のあるヒープによらずIDごとに足し、`Owners::check`はすべてのヒープの物体から数え直す。
 #[test]
-fn check_owned_counts_every_heap_of_the_control() {
+fn a_check_counts_every_heap_of_the_table() {
     let (mut a, mut b) = two_heaps();
     let child = a.fork_worker();
     b.set_worker(child);
@@ -301,15 +299,14 @@ fn check_owned_counts_every_heap_of_the_control() {
     let y = list(&mut b, 3);
     assert_eq!((a.owned_by(0), b.owned_by(0)), (2, 2));
     assert_eq!((a.owned_by(child), b.owned_by(child)), (3, 3));
-    let control = Arc::clone(a.control());
-    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
+    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
     // 1つのヒープだけでは、もう1つのヒープの物体の数が合わない
     assert_eq!(
-        control.check_owned(&[&a]),
+        a.owners().check(&[&a]),
         Err(HeapError::OwnedMiscount { worker: child })
     );
     assert_eq!(
-        control.check_owned(&[&b]),
+        b.owners().check(&[&b]),
         Err(HeapError::OwnedMiscount { worker: 0 })
     );
     unsafe {
@@ -318,7 +315,7 @@ fn check_owned_counts_every_heap_of_the_control() {
     }
     b.set_worker(0);
     assert_eq!(a.retire_worker(child), Ok(()));
-    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
+    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
 }
 
 /// 表は ID を 64 個ずつの塊で持つ。ほかのヒープが伸ばした塊も、数えるときに写し直して数える。
@@ -329,8 +326,7 @@ fn a_count_past_the_first_chunk_reaches_every_heap() {
     b.set_worker(3000);
     let x = list(&mut b, 1);
     assert_eq!(a.owned_by(3000), 1);
-    let control = Arc::clone(a.control());
-    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
+    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
     unsafe { b.decref(x) }.unwrap();
     assert_eq!(a.owned_by(3000), 0);
 }
@@ -352,23 +348,30 @@ fn a_miscount_past_every_chunk_is_reported() {
 }
 
 #[test]
-#[should_panic(expected = "check_owned over a heap of another Control")]
-fn check_owned_refuses_a_heap_of_another_control() {
+#[should_panic(expected = "an owner check over a heap of another table")]
+fn a_check_refuses_a_heap_of_another_table() {
     let heap = H::new();
-    let _ = Control::new(Limits::default()).check_owned(&[&heap]);
+    let _ = crate::Owners::new().check(&[&heap]);
+}
+
+/// 検査モードのヒープは、表を持たない速いモードのヒープのハンドルを断る。
+#[test]
+#[should_panic(expected = "an owner handle of a fast heap for a checked heap")]
+fn a_checked_heap_refuses_the_handle_of_a_fast_heap() {
+    let fast = Heap::<Fast>::new();
+    let _ = H::with_owners(Arc::clone(fast.control()), &fast.owners());
 }
 
 #[test]
-fn check_owned_does_nothing_in_fast_mode() {
+fn a_check_does_nothing_in_fast_mode() {
     let mut heap = Heap::<Fast>::new();
     let _ = list(&mut heap, 2);
-    let control = Arc::clone(heap.control());
-    assert_eq!(control.check_owned(&[&heap]), Ok(()));
+    assert_eq!(heap.owners().check(&[&heap]), Ok(()));
 }
 
-/// 回復は表を消してから写す。捨てたヒープの ID と数は残らず、写した物体だけを数える。
+/// 回復は新しいヒープを新しい表で作る。捨てたヒープのIDと数はその表になく、写した物体だけを数える。
 #[test]
-fn recovery_resets_the_table() {
+fn recovery_counts_in_a_new_table() {
     let mut ctx = ctx::<Checked>();
     let child;
     unsafe {
@@ -390,4 +393,34 @@ fn recovery_resets_the_table() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
+}
+
+/// 生きている物体を持ったヒープを落とした後に同じ`Control`で作ったヒープは、0から数える。
+#[test]
+fn a_heap_made_after_a_dropped_one_counts_from_zero() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut first = H::with_control(Arc::clone(&control));
+    let _leaked = list(&mut first, 3);
+    drop(first);
+    let mut second = H::with_control(control);
+    assert_owned(&mut second, &[(0, 0)]);
+    let l = list(&mut second, 2);
+    assert_owned(&mut second, &[(0, 2)]);
+    unsafe { second.decref(l) }.unwrap();
+    assert_owned(&mut second, &[(0, 0)]);
+}
+
+/// 1つの`Control`で別々に作った2つのヒープは、それぞれ自分の表を持つ。どちらも自分の表でIDを出し、自分の物体だけを
+/// 数える。
+#[test]
+fn heaps_of_one_control_made_apart_count_apart() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut a = H::with_control(Arc::clone(&control));
+    let mut b = H::with_control(control);
+    assert_eq!((a.fork_worker(), b.fork_worker()), (1, 1));
+    let l = list(&mut b, 2);
+    assert_eq!((a.owned_by(0), b.owned_by(0)), (0, 2));
+    assert_eq!(super::check_all(&mut a), Ok(()));
+    assert_eq!(super::check_all(&mut b), Ok(()));
+    unsafe { b.decref(l) }.unwrap();
 }

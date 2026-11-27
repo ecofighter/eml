@@ -1,0 +1,617 @@
+diff --git a/crates/eml_nrt/src/mode.rs b/crates/eml_nrt/src/mode.rs
+index 1cca7a12..8259dd62 100644
+--- a/crates/eml_nrt/src/mode.rs
++++ b/crates/eml_nrt/src/mode.rs
+@@ -46,8 +46,8 @@ impl Engine for Checked {
+         };
+         ctx.check_invariants().map_err(fault)?;
+         ctx.heap()
+-            .control()
+-            .check_owned(&[ctx.heap()])
++            .owners()
++            .check(&[ctx.heap()])
+             .map_err(fault)?;
+         let leaks = ctx.leaks();
+         if leaks.is_empty() {
+diff --git a/crates/eml_rt/src/control.rs b/crates/eml_rt/src/control.rs
+index 0b1344da..52977d82 100644
+--- a/crates/eml_rt/src/control.rs
++++ b/crates/eml_rt/src/control.rs
+@@ -4,7 +4,6 @@
+ 
+ use std::collections::BTreeMap;
+ use std::fmt;
+-use std::ptr;
+ use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+ 
+@@ -63,7 +62,6 @@ pub struct Control {
+     signals: AtomicU32,
+     watched: AtomicU32,
+     limits: Limits,
+-    workers: WorkerIds,
+     pages: PageMap,
+     /// ページの表の登録の証が、どの `Control` のものかを見分ける番号。
+     // 仕様だけが読む
+@@ -192,10 +190,16 @@ fn fresh_control_id() -> u64 {
+ /// 何も持たない写しのまま触れない。
+ #[verifier::external_body]
+ pub(crate) struct IdCounts {
+-    control: Option<Arc<Control>>,
++    table: Option<Arc<WorkerIds>>,
+     chunks: Vec<Arc<Chunk>>,
+ }
+ 
++/// PROTOTYPE: the owner table of one run or session, shared by its heaps. A fast heap has none.
++#[verifier::external_body]
++pub struct Owners {
++    table: Option<Arc<WorkerIds>>,
++}
++
+ impl PageMap {
+     #[verifier::external_body]
+     pub(crate) fn empty_map() -> PageMap {
+@@ -203,17 +207,6 @@ impl PageMap {
+     }
+ }
+ 
+-impl WorkerIds {
+-    #[verifier::external_body]
+-    pub(crate) fn empty_table() -> WorkerIds {
+-        WorkerIds {
+-            next: AtomicU32::new(1),
+-            free: Mutex::new(Vec::new()),
+-            chunks: Mutex::new(Vec::new()),
+-        }
+-    }
+-}
+-
+ // どの関数も値について何も約束しない (T15)。`fork_id` と `retire_id` は前提が破れていれば状態を変えずに `None` を返し、
+ // 呼ぶ側が T5 の関数で止める
+ impl IdCounts {
+@@ -221,22 +214,40 @@ impl IdCounts {
+     /// 置き場が使う。
+     #[verifier::external_body]
+     pub(crate) fn detached() -> IdCounts {
+-        IdCounts { control: None, chunks: Vec::new() }
++        IdCounts { table: None, chunks: Vec::new() }
+     }
+ 
+-    /// `control` の表の写し。基の ID 0 を使っている ID にする。
++    /// PROTOTYPE: a copy of a new table of its own, with the base ID 0 in use.
+     #[verifier::external_body]
+-    pub(crate) fn for_control(control: &Arc<Control>) -> IdCounts {
+-        let mut counts = IdCounts { control: Some(Arc::clone(control)), chunks: Vec::new() };
++    pub(crate) fn alone() -> IdCounts {
++        let mut counts = IdCounts { table: Some(Arc::new(WorkerIds::empty_table())), chunks: Vec::new() };
+         counts.enter_id(0);
+         counts
+     }
+ 
++    /// PROTOTYPE: a copy of the table of `owners`; a handle without a table gives a new table.
++    #[verifier::external_body]
++    pub(crate) fn of(owners: &Owners) -> IdCounts {
++        match &owners.table {
++            Some(table) => {
++                let mut counts = IdCounts { table: Some(Arc::clone(table)), chunks: Vec::new() };
++                counts.enter_id(0);
++                counts
++            },
++            None => IdCounts::alone(),
++        }
++    }
++
++    /// PROTOTYPE: the handle of this copy's table.
++    #[verifier::external_body]
++    pub(crate) fn owners(&self) -> Owners {
++        Owners { table: self.table.clone() }
++    }
++
+     /// `id` を使っている ID にする。まだ出していない ID からも退いた ID からも外し、数の塊を `id` まで伸ばす。
+     #[verifier::external_body]
+     pub(crate) fn enter_id(&mut self, id: u32) {
+-        if let Some(control) = &self.control {
+-            let ids = &control.workers;
++        if let Some(ids) = &self.table {
+             let mut free = lock(&ids.free);
+             ids.next.fetch_max(id.saturating_add(1), Ordering::Relaxed);
+             if let Some(i) = free.iter().position(|f| *f == id) {
+@@ -254,8 +265,8 @@ impl IdCounts {
+     pub(crate) fn count_id(&mut self, id: u32, up: bool) {
+         let (c, i) = (id as usize / CHUNK_IDS, id as usize % CHUNK_IDS);
+         if c >= self.chunks.len() {
+-            match &self.control {
+-                Some(control) => self.chunks = lock(&control.workers.chunks).clone(),
++            match &self.table {
++                Some(ids) => self.chunks = lock(&ids.chunks).clone(),
+                 None => return,
+             }
+             if c >= self.chunks.len() {
+@@ -273,8 +284,7 @@ impl IdCounts {
+     /// 最後に退いた ID か、なければまだ出していない最小の ID を出す。ID が `u32` の上限に届いていれば `None` を返す。
+     #[verifier::external_body]
+     pub(crate) fn fork_id(&mut self) -> Option<u32> {
+-        let control = self.control.as_ref()?;
+-        let ids = &control.workers;
++        let ids = self.table.as_ref()?;
+         let mut free = lock(&ids.free);
+         let id = match free.pop() {
+             Some(id) => id,
+@@ -301,8 +311,7 @@ impl IdCounts {
+     /// (docs/spec/object-model.md の「論理的な worker ID」)。
+     #[verifier::external_body]
+     pub(crate) fn retire_id(&self, id: u32) -> Option<u64> {
+-        let control = self.control.as_ref()?;
+-        let ids = &control.workers;
++        let ids = self.table.as_ref()?;
+         let mut free = lock(&ids.free);
+         if id == 0 || id >= ids.next.load(Ordering::Relaxed) || free.contains(&id) {
+             return None;
+@@ -313,23 +322,6 @@ impl IdCounts {
+         }
+         Some(live)
+     }
+-
+-    /// 表を消す。数をすべて 0 にし、出した ID と退いた ID を忘れる。回復が写す前に呼ぶ
+-    /// (docs/spec/object-model.md の「回復」)。
+-    #[verifier::external_body]
+-    pub(crate) fn reset_ids(&self) {
+-        if let Some(control) = &self.control {
+-            let ids = &control.workers;
+-            let mut free = lock(&ids.free);
+-            free.clear();
+-            ids.next.store(1, Ordering::Relaxed);
+-            for chunk in lock(&ids.chunks).iter() {
+-                for n in chunk.iter() {
+-                    n.store(0, Ordering::Relaxed);
+-                }
+-            }
+-        }
+-    }
+ }
+ 
+ /// 0 の止める語を `n` 個作る。
+@@ -369,7 +361,6 @@ impl Control {
+             signals: AtomicU32::new(0),
+             watched: AtomicU32::new(0),
+             limits,
+-            workers: WorkerIds::empty_table(),
+             pages: PageMap::empty_map(),
+             id: fresh_control_id(),
+         }
+@@ -700,6 +691,14 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+ }
+ 
+ impl WorkerIds {
++    fn empty_table() -> WorkerIds {
++        WorkerIds {
++            next: AtomicU32::new(1),
++            free: Mutex::new(Vec::new()),
++            chunks: Mutex::new(Vec::new()),
++        }
++    }
++
+     /// 数の塊を `id` まで伸ばし、塊の一覧の写しを返す。
+     fn grow(&self, id: u32) -> Vec<Arc<Chunk>> {
+         let mut chunks = lock(&self.chunks);
+@@ -721,30 +720,48 @@ impl WorkerIds {
+ impl IdCounts {
+     /// ID `id` の、rc が正の生きている物体の数。
+     pub(crate) fn owned_by(&self, id: u32) -> u64 {
+-        self.control
+-            .as_ref()
+-            .map_or(0, |control| control.workers.live(id))
++        self.table.as_ref().map_or(0, |ids| ids.live(id))
+     }
+ }
+ 
+-impl Control {
+-    /// ID ごとの数を、`heaps` のページの rc が正の生きている物体の所有者から数え直して確かめる。食い違う ID のうち最小の
+-    /// ものを `OwnedMiscount` で返す。速いモードでは何もしない (docs/spec/object-model.md の「論理的な worker ID」)。
+-    ///
+-    /// 数え直す前に、この `Control` のすべてのヒープを渡し、どのヒープもほかのスレッドからの解放を取り込み終えていて、
+-    /// 呼んでいる間どのスレッドもヒープに触れないこと。この関数は取り込めないので、検査モードでは、受けて取り込んで
+-    /// いない解放の残るヒープがあれば `NotQuiescent` を返す。
++impl Clone for Owners {
++    fn clone(&self) -> Owners {
++        Owners {
++            table: self.table.clone(),
++        }
++    }
++}
++
++impl Default for Owners {
++    fn default() -> Owners {
++        Owners::new()
++    }
++}
++
++impl Owners {
++    /// PROTOTYPE: a new, empty table.
++    pub fn new() -> Owners {
++        Owners {
++            table: Some(Arc::new(WorkerIds::empty_table())),
++        }
++    }
++
++    /// PROTOTYPE: recount over every heap of this table (was `Control::check_owned`).
+     ///
+     /// # Panics
+-    /// ほかの `Control` のヒープを渡したとき。
+-    pub fn check_owned<M: Mode>(&self, heaps: &[&Heap<M>]) -> Result<(), HeapError> {
+-        assert!(
+-            heaps.iter().all(|heap| ptr::eq(&**heap.control(), self)),
+-            "check_owned over a heap of another Control"
+-        );
++    /// When a heap of another table is passed.
++    pub fn check<M: Mode>(&self, heaps: &[&Heap<M>]) -> Result<(), HeapError> {
+         if !M::CHECKED {
+             return Ok(());
+         }
++        let ids = self
++            .table
++            .as_ref()
++            .expect("a checked heap has an owner table");
++        assert!(
++            heaps.iter().all(|heap| heap.counts_in(ids)),
++            "an owner check over a heap of another table"
++        );
+         if heaps.iter().any(|heap| heap.remote_pending()) {
+             return Err(HeapError::NotQuiescent);
+         }
+@@ -754,7 +771,7 @@ impl Control {
+                 *counted.entry(owner).or_default() += 1;
+             }
+         }
+-        let chunks = lock(&self.workers.chunks);
++        let chunks = lock(&ids.chunks);
+         let table = chunks.len() * CHUNK_IDS;
+         let in_table = (0..table).find(|&i| {
+             chunks[i / CHUNK_IDS][i % CHUNK_IDS].load(Ordering::Relaxed)
+@@ -773,6 +790,13 @@ impl Control {
+     }
+ }
+ 
++impl IdCounts {
++    /// この写しの表が `ids` か。
++    pub(crate) fn counts_in(&self, ids: &Arc<WorkerIds>) -> bool {
++        self.table.as_ref().is_some_and(|t| Arc::ptr_eq(t, ids))
++    }
++}
++
+ /// 止める理由。割り込み、終了の求め (`TERMINATE`)、確保量、runの終わり (`END`)、知らせ、深さの順に先に
+ /// 報告する。ビットがどれも立っていなければ、深さの上限で止めたとする。ビットは呼ぶ側が速い道で読んだ値を受け、
+ /// 読み直さない。読み直すと、その間にほかのスレッドが`clear`したとき、深さの上限を超えていなくても`DepthLimit`を
+diff --git a/crates/eml_rt/src/heap/ctx.rs b/crates/eml_rt/src/heap/ctx.rs
+index b727e7cf..86d20776 100644
+--- a/crates/eml_rt/src/heap/ctx.rs
++++ b/crates/eml_rt/src/heap/ctx.rs
+@@ -15,7 +15,7 @@ use super::Heap;
+ use super::chain_err;
+ #[cfg(verus_only)]
+ use super::model::BlockState;
+-use crate::control::{Control, Stop, stop_reason};
++use crate::control::{Control, Owners, Stop, stop_reason};
+ use crate::error::HeapError;
+ use crate::externs::Fault;
+ use crate::host::HostRef;
+@@ -1133,10 +1133,40 @@ impl<M: Mode> Ctx<M> {
+             r.wf(),
+             r.held_ok(),
+             r.finished(),
++    {
++        let heap = Heap::with_control(control.clone());
++        Ctx::around(heap, control, host, k)
++    }
++
++    /// PROTOTYPE: worker `k`'s context whose heap counts in the table of `owners`.
++    pub fn for_worker_of(control: Arc<Control>, owners: &Owners, host: HostRef, k: usize) -> (r: Ctx<M>)
++        requires
++            k < control.word_count(),
++        ensures
++            r.wf(),
++            r.held_ok(),
++            r.finished(),
++    {
++        let heap = Heap::with_owners(control.clone(), owners);
++        Ctx::around(heap, control, host, k)
++    }
++
++    fn around(heap: Heap<M>, control: Arc<Control>, host: HostRef, k: usize) -> (r: Ctx<M>)
++        requires
++            k < control.word_count(),
++            heap.wf(),
++            heap.consistent(),
++            heap.settled(),
++            heap.region_spec() is None,
++            heap.worker_spec() == 0,
++            heap.unused(),
++        ensures
++            r.wf(),
++            r.held_ok(),
++            r.finished(),
+     {
+         let limits = control.limits();
+         let word = control.word(k);
+-        let heap = Heap::with_control(control.clone());
+         let stop = stop_of(&word);
+         let r = Ctx {
+             native: Native {
+diff --git a/crates/eml_rt/src/heap/mod.rs b/crates/eml_rt/src/heap/mod.rs
+index b76753cf..b641cd4e 100644
+--- a/crates/eml_rt/src/heap/mod.rs
++++ b/crates/eml_rt/src/heap/mod.rs
+@@ -39,7 +39,7 @@ use crate::alloc::FREE_META;
+ use crate::alloc::{PagePin, Pages, page_of, pin_page, too_large};
+ #[cfg(verus_only)]
+ use crate::alloc::{page_base, region_cap, region_ptr};
+-use crate::control::{Control, IdCounts};
++use crate::control::{Control, IdCounts, Owners};
+ use crate::error::HeapError;
+ use crate::foreign;
+ #[cfg(verus_keep_ghost)]
+@@ -701,10 +701,45 @@ impl<M: Mode> Heap<M> {
+             r.unused(),
+     {
+         let owned = if M::CHECKED {
+-            IdCounts::for_control(&control)
++            IdCounts::alone()
+         } else {
+             IdCounts::detached()
+         };
++        Self::counting(control, owned)
++    }
++
++    /// PROTOTYPE: an empty heap that counts in the table of `owners`.
++    pub fn with_owners(control: Arc<Control>, owners: &Owners) -> (r: Heap<M>)
++        ensures
++            r.wf(),
++            r.consistent(),
++            r.settled(),
++            r.region_spec() is None,
++            r.worker_spec() == 0,
++            r.unused(),
++    {
++        let owned = if M::CHECKED {
++            IdCounts::of(owners)
++        } else {
++            IdCounts::detached()
++        };
++        Self::counting(control, owned)
++    }
++
++    /// PROTOTYPE: the handle of this heap's table.
++    pub fn owners(&self) -> Owners {
++        self.owned.owners()
++    }
++
++    fn counting(control: Arc<Control>, owned: IdCounts) -> (r: Heap<M>)
++        ensures
++            r.wf(),
++            r.consistent(),
++            r.settled(),
++            r.region_spec() is None,
++            r.worker_spec() == 0,
++            r.unused(),
++    {
+         let mut heap = Heap {
+             core: Self::empty_core(control),
+             region: ManuallyDrop::new(None),
+@@ -871,9 +906,6 @@ impl<M: Mode> Heap<M> {
+             r.worker_spec() == self.worker_spec(),
+             r.same_region(*self),
+     {
+-        if M::CHECKED {
+-            self.owned.reset_ids();
+-        }
+         let mut r = Heap::with_control(self.control().clone());
+         r.set_worker(self.worker);
+         if let Some(a) = &*self.region {
+diff --git a/crates/eml_rt/src/heap/walk.rs b/crates/eml_rt/src/heap/walk.rs
+index 9cd5d5cb..990dd661 100644
+--- a/crates/eml_rt/src/heap/walk.rs
++++ b/crates/eml_rt/src/heap/walk.rs
+@@ -979,6 +979,11 @@ impl<M: Mode> Heap<M> {
+     pub(crate) fn remote_pending(&self) -> bool {
+         sink_pending(self.core.pages.sink())
+     }
++
++    /// PROTOTYPE: whether this heap counts in the table `ids`.
++    pub(crate) fn counts_in(&self, ids: &Arc<crate::control::WorkerIds>) -> bool {
++        self.owned.counts_in(ids)
++    }
+ }
+ 
+ // 落とすときは、ほかのヒープのページにも `RemoteSink` にも触れず、`decref` もしない。ほかのヒープを生かしたまま
+diff --git a/crates/eml_rt/src/lib.rs b/crates/eml_rt/src/lib.rs
+index 85267261..13acdcb1 100644
+--- a/crates/eml_rt/src/lib.rs
++++ b/crates/eml_rt/src/lib.rs
+@@ -29,7 +29,7 @@ mod trust;
+ mod word;
+ 
+ pub use alloc::PagePin;
+-pub use control::{Control, Limits, Stop};
++pub use control::{Control, Limits, Owners, Stop};
+ pub use driver::{
+     Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, OsHandle, OsSocket,
+     PipePair, RawFile, RawPipe, RawProcess, RawResource, RawSocket, Submit,
+diff --git a/crates/eml_rt/src/trust.rs b/crates/eml_rt/src/trust.rs
+index 9291cc77..6307edf4 100644
+--- a/crates/eml_rt/src/trust.rs
++++ b/crates/eml_rt/src/trust.rs
+@@ -222,15 +222,16 @@ const TRUSTED: &[(&str, &str)] = &[
+     ("remote.rs: external_body foreign_header", "T14"),
+     ("remote.rs: external_body foreign_children", "T14"),
+     ("control.rs: external_body WorkerIds", "T15"),
+-    ("control.rs: external_body empty_table", "T15"),
+     ("control.rs: external_body IdCounts", "T15"),
++    ("control.rs: external_body Owners", "T15"),
++    ("control.rs: external_body alone", "T15"),
++    ("control.rs: external_body of", "T15"),
++    ("control.rs: external_body owners", "T15"),
+     ("control.rs: external_body detached", "T15"),
+-    ("control.rs: external_body for_control", "T15"),
+     ("control.rs: external_body enter_id", "T15"),
+     ("control.rs: external_body count_id", "T15"),
+     ("control.rs: external_body fork_id", "T15"),
+     ("control.rs: external_body retire_id", "T15"),
+-    ("control.rs: external_body reset_ids", "T15"),
+     ("control.rs: external_body PageMap", "T15"),
+     ("control.rs: external_body fresh_control_id", "T15"),
+     ("control.rs: external_body page_known", "T15"),
+diff --git a/crates/eml_vm/src/code.rs b/crates/eml_vm/src/code.rs
+index 98b9e697..3ace838d 100644
+--- a/crates/eml_vm/src/code.rs
++++ b/crates/eml_vm/src/code.rs
+@@ -6,7 +6,7 @@ use std::sync::Arc;
+ use eml_cabi::{CCall, Dtor};
+ use eml_extern::{CFunction, CHandleType, Extern};
+ use eml_lir::{FloatBits, Loc, Repr};
+-use eml_rt::{Control, Ctx, Frozen, HeapError, HostRef, MaskItem, Mode, Word};
++use eml_rt::{Control, Ctx, Frozen, HeapError, HostRef, MaskItem, Mode, Owners, Word};
+ use rustc_hash::FxHashMap;
+ 
+ use crate::error::{RunFault, RuntimeError, SourceLocation};
+@@ -278,8 +278,14 @@ impl<M: Mode> CodeBase<M> {
+     /// worker `k`の`Ctx`。コードの領域は作るときに付ける。定数はどのworkerのヒープでも付けた塊として届くので、
+     /// 定数の物体を読む前提がどのworkerでも成り立つ (docs/spec/object-model.mdの「凍結した領域」)。
+     /// 付けるのは`Arc`を1つ持つだけで何も確保しないので、検査モードで作るときに取るページの課金の順は変わらない。
+-    pub(crate) fn worker_ctx(&self, control: Arc<Control>, host: HostRef, k: usize) -> Ctx<M> {
+-        let mut ctx = Ctx::for_worker(control, host, k);
++    pub(crate) fn worker_ctx(
++        &self,
++        control: Arc<Control>,
++        owners: &Owners,
++        host: HostRef,
++        k: usize,
++    ) -> Ctx<M> {
++        let mut ctx = Ctx::for_worker_of(control, owners, host, k);
+         if let Some(region) = &self.region {
+             // SAFETY: 付けるのは`Arc`を1つ持つだけで、`Ctx`の持つ語には触れないので、`heap_mut`の前提を崩さない
+             unsafe { ctx.heap_mut() }.attach(Arc::clone(region));
+diff --git a/crates/eml_vm/src/lib.rs b/crates/eml_vm/src/lib.rs
+index d6c92325..8f5fef61 100644
+--- a/crates/eml_vm/src/lib.rs
++++ b/crates/eml_vm/src/lib.rs
+@@ -945,7 +945,12 @@ fn run_scheduled<M: Mode, P: Policy>(
+     // メインのworkerの`Ctx`はworker 0を作る前に作る。検査モードでは作るときにページを1枚取り、確保量に数えるので、
+     // その課金がプログラムの確保とどう前後するかをスレッドの速さで決めないためである。決定的な方針では確保量の上限に
+     // 当たる安全点が確保量だけで決まる (docs/spec/vm.mdの「メインのworker」「タスクとスケジュール」)
+-    let main_ctx = code.worker_ctx(Arc::clone(&control), start.host.clone(), run.main());
++    let main_ctx = code.worker_ctx(
++        Arc::clone(&control),
++        &ctx.heap().owners(),
++        start.host.clone(),
++        run.main(),
++    );
+     let (worker_ctx, worker_task, worker_counts) = (&mut *ctx, &mut *task, &mut *counts);
+     let (joined, main) = thread::scope(|scope| {
+         // 呼んだスレッドの panic でも `END` を立ててすべての worker を起こし、scope が worker 0 を join できるようにする
+@@ -1188,6 +1193,7 @@ fn entry_body<M: Mode, P: Policy>(
+                     &sched.policy,
+                     &sched.run,
+                     &sched.watcher.control,
++                    &ctx.heap().owners(),
+                     &sched.cells,
+                     &host,
+                     max_depth,
+@@ -1611,7 +1617,7 @@ fn check_heaps(ctx: &mut Ctx<Checked>, others: &mut [Ctx<Checked>]) -> Result<()
+     let heaps: Vec<_> = std::iter::once(ctx.heap())
+         .chain(others.iter().map(Ctx::heap))
+         .collect();
+-    ctx.heap().control().check_owned(&heaps)
++    ctx.heap().owners().check(&heaps)
+ }
+ 
+ /// 検査モードの `at_run_end`。成功した run の後のほかの worker のヒープには、生きている物体が残らない。根を持つ
+diff --git a/crates/eml_vm/src/sched.rs b/crates/eml_vm/src/sched.rs
+index 0b89bfde..27586f2f 100644
+--- a/crates/eml_vm/src/sched.rs
++++ b/crates/eml_vm/src/sched.rs
+@@ -1229,7 +1229,12 @@ mod tests {
+             mut ctx,
+         } = worker_1();
+         let (host, _) = crate::capture_host(Default::default());
+-        let mut home = Ctx::<eml_rt::Checked>::new(Arc::clone(&control), host);
++        let mut home = Ctx::<eml_rt::Checked>::for_worker_of(
++            Arc::clone(&control),
++            &ctx.heap().owners(),
++            host,
++            0,
++        );
+         let x = unsafe { home.heap_mut() }.fork_worker();
+         // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
+         // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
+@@ -1265,7 +1270,7 @@ mod tests {
+         assert!(home.heap().stats().reclaimed >= 1);
+         let leaks = home.leaks();
+         assert!(leaks.is_empty(), "{leaks:?}");
+-        control.check_owned(&[home.heap(), ctx.heap()]).unwrap();
++        home.heap().owners().check(&[home.heap(), ctx.heap()]).unwrap();
+     }
+ 
+     /// worker 0 が自分のタスクに付けた取り消しの項は、worker 1 の集める地点が取らずに mail に残す。待ちは外さず、
+@@ -1371,7 +1376,8 @@ mod tests {
+         );
+         let (out, _) = crate::capture_host(Default::default());
+         let host_ctx = Ctx::new(Arc::clone(&control), out.clone());
+-        let owner_ctx = Ctx::for_worker(Arc::clone(&control), out, 1);
++        let owner_ctx =
++            Ctx::for_worker_of(Arc::clone(&control), &host_ctx.heap().owners(), out, 1);
+         Forwarding {
+             control,
+             run,
+diff --git a/crates/eml_vm/src/workers.rs b/crates/eml_vm/src/workers.rs
+index d7bff8a3..5c64ba25 100644
+--- a/crates/eml_vm/src/workers.rs
++++ b/crates/eml_vm/src/workers.rs
+@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+ use std::thread::{self, Scope, ScopedJoinHandle};
+ use std::time::Duration;
+ 
+-use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop, Word};
++use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Owners, Stop, Word};
+ 
+ use crate::cells::{CellRef, HostBin, Post, Shared, Woken};
+ use crate::code::CodeBase;
+@@ -807,6 +807,7 @@ pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
+     policy: &P,
+     run: &Arc<Run>,
+     control: &Arc<Control>,
++    owners: &Owners,
+     cells: &Arc<Shared>,
+     host: &HostRef,
+     max_depth: usize,
+@@ -819,12 +820,13 @@ pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
+             .stack_size(WORKER_STACK);
+         let (run_k, control_k, host_k) = (Arc::clone(run), Arc::clone(control), host.clone());
+         let cells_k = Arc::clone(cells);
++        let owners_k = owners.clone();
+         // worker 0 は run の方針をそのまま使い、worker 1..N-1 は worker ごとの方針を使う
+         let policy_k = policy.for_worker(k);
+         // worker 0のほかのworkerは、本体の始めにSIGINTとSIGTERMを塞ぐ (docs/spec/vm.md の「上限と割り込み」)
+         match eml_io::spawn_scoped_masked(scope, builder, move || {
+             run_worker::<M, P>(
+-                code, policy_k, run_k, control_k, cells_k, host_k, k, max_depth,
++                code, policy_k, run_k, control_k, owners_k, cells_k, host_k, k, max_depth,
+             )
+         }) {
+             Ok(handle) => handles.push(handle),
+@@ -845,6 +847,7 @@ fn run_worker<M: Mode, P: Policy>(
+     policy: P,
+     run: Arc<Run>,
+     control: Arc<Control>,
++    owners: Owners,
+     cells: Arc<Shared>,
+     host: HostRef,
+     k: usize,
+@@ -855,7 +858,7 @@ fn run_worker<M: Mode, P: Policy>(
+         &control,
+         k,
+         format!("<worker {k}>"),
+-        || code.worker_ctx(Arc::clone(&control), host, k),
++        || code.worker_ctx(Arc::clone(&control), &owners, host, k),
+         |ctx| work::<M, P>(code, ctx, policy, &run, &control, cells, k, max_depth),
+     )
+ }

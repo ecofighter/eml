@@ -46,7 +46,7 @@ mod workers;
 pub(super) fn check_all<L: Live<M = Checked>>(live: &mut L) -> Result<(), HeapError> {
     let heap = live.heap_for_walk();
     heap.check_invariants()?;
-    heap.control().check_owned(&[heap])
+    heap.owners().check(&[heap])
 }
 
 /// 解放の連鎖と `share` が再帰しないことを確かめる長さ。

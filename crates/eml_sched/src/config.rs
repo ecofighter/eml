@@ -176,8 +176,8 @@ pub struct RunConfig {
     pub debug_heap: bool,
     /// 読み込みまでして`main`を実行せずに戻る。実行系の`execute`が見る (docs/spec/vm.mdの「`--load-only`」)。
     pub load_only: bool,
-    /// 止める理由のビットは `Control::clear` でしか下りないので、1つの `Control` は1回の実行にだけ使う。終わりの欄は
-    /// 実行の始めに開くので、使い回しの妨げにならない。`clone` した設定は同じ `Control` を指す。
+    /// 止める理由のビットは`Control::clear`でしか下りないので、`Control`を次の実行に使うのは、呼ぶ側がビットを下ろした
+    /// 後である。終わりの欄は実行の始めに開くので、使い回しの妨げにならない。`clone`した設定は同じ`Control`を指す。
     pub control: Arc<Control>,
     /// タスクを切り替える方針。既定は横取りしない `Sched::Sequential` である。
     pub sched: Sched,

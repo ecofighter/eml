@@ -2,10 +2,14 @@
 //! 通る中断、検査モードのコードが数える4つの数を確かめる (docs/spec/native.mdの「検査モード」)。verifierが拒むLIRは
 //! `Trusted::unverified`で包む (`native_unverified`)。どのテストも、その誤りか数をリテラルで固定する。
 #![cfg(not(miri))]
-use eml_nrt::{Finished, RunFault, RuntimeError};
+use eml_lir::Trusted;
+use eml_native::NativeMachine;
+use eml_nrt::{Finished, RunConfig, RunFault, RuntimeError};
 use eml_rt::{Fault, HeapError};
 
-use crate::common::native::{native, native_checked, native_unverified};
+use crate::common::native::{
+    host, native, native_checked, native_options, native_unverified, program, unverified,
+};
 
 #[test]
 fn a_leak() {
@@ -26,6 +30,61 @@ fn f(n.0: int) -> unit {
         result.unwrap_err(),
         RuntimeError::Leak(vec![("Data".to_string(), 1)])
     );
+}
+
+/// 物体を1つ確保して手放すプログラム。検査モードのrunは、終わりの検査をすべて通る。
+const CLEAN: &str = "\
+layout P { P(int) }
+fn entry$main() -> unit {
+  let u.0: unit = call f(1)
+  return u.0
+}
+fn f(n.0: int) -> unit {
+  let d.1: obj = con P #0(n.0)
+  decref d.1
+  return ()
+}
+";
+
+/// `first`を検査モードの1つのマシンで2回流し、それから`CLEAN`を同じ`RunConfig`で`eml_native::execute`に通す。3つのrunは
+/// 1つの`Control`を分け合う。
+fn run_twice(first: &Trusted) -> [Result<Finished, RuntimeError>; 3] {
+    let config = RunConfig::default().with_debug_heap(true);
+    let mut machine = NativeMachine::new(&config, host());
+    let loaded = machine.load(first, &eml_test_support::link(first)).unwrap();
+    let a = machine.run(loaded, native_options());
+    let b = machine.run(loaded, native_options());
+    machine.close();
+    let clean = program(CLEAN);
+    let c = eml_native::execute(
+        &clean,
+        &eml_test_support::link(&clean),
+        &config,
+        host(),
+        native_options(),
+    );
+    [a, b, c]
+}
+
+#[test]
+fn a_run_after_a_leak_reports_its_own_leak() {
+    // runはどれも自分の所有者の表で数えるので、1回目のrunのリークを、2回目のrunも、同じ`RunConfig`のrunも数え直さない
+    let text = "\
+layout P { P(int) }
+fn entry$main() -> unit {
+  let u.0: unit = call f(1)
+  return u.0
+}
+fn f(n.0: int) -> unit {
+  let d.1: obj = con P #0(n.0)
+  return ()
+}
+";
+    let [a, b, c] = run_twice(&unverified(text));
+    let leak = RuntimeError::Leak(vec![("Data".to_string(), 1)]);
+    assert_eq!(a.unwrap_err(), leak);
+    assert_eq!(b.unwrap_err(), leak);
+    assert!(c.is_ok(), "{c:?}");
 }
 
 const TRY_PANIC: &str = "\
@@ -324,6 +383,20 @@ mod fatal {
         format!(
             "{layouts}fn entry$main() -> unit {{\n  let r.0: {ret} = call f(1)\n  return ()\n}}\nfn f(n.0: int) -> {ret} {{\n{body}}}\n"
         )
+    }
+
+    #[test]
+    fn a_run_after_a_fatal_error_counts_from_zero() {
+        // `d.1`の2回目の`decref`が失敗の手順に入るとき`k.2`はまだ生きているので、落としたヒープは数える物体を持っていた
+        let text = calling_f(
+            "layout P { P(int, int) }\n",
+            "unit",
+            "  let k.2: obj = con P #0(n.0, n.0)\n  let d.1: obj = con P #0(n.0, n.0)\n  decref d.1\n  decref d.1\n  decref k.2\n  return ()\n",
+        );
+        let [a, b, c] = run_twice(&unverified(&text));
+        assert_eq!(fault((String::new(), a)), heap(HeapError::UseAfterFree));
+        assert_eq!(fault((String::new(), b)), heap(HeapError::UseAfterFree));
+        assert!(c.is_ok(), "{c:?}");
     }
 
     #[test]

@@ -39,7 +39,7 @@ use crate::alloc::FREE_META;
 use crate::alloc::{PagePin, Pages, page_of, pin_page, too_large};
 #[cfg(verus_only)]
 use crate::alloc::{page_base, region_cap, region_ptr};
-use crate::control::{Control, IdCounts};
+use crate::control::{Control, IdCounts, Owners};
 use crate::error::HeapError;
 use crate::foreign;
 #[cfg(verus_keep_ghost)]
@@ -176,10 +176,10 @@ pub struct Heap<M: Mode> {
     // なったためである (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     region: ManuallyDrop<Option<Arc<Frozen<M>>>>,
     worker: u32,
-    /// 検査モードの、`Control` の ID の表の写し (docs/spec/object-model.md の「論理的な worker ID」)。速いモードでは
+    /// 検査モードの、このヒープの所有者の表の写し (docs/spec/object-model.mdの「論理的なworker ID」)。速いモードでは
     /// 何も持たない写しのまま触れない。
-    // 数は証明の対象にせず、`Control::check_owned` が数え直して確かめる。数の誤りは診断の誤りで、メモリの安全には
-    // 関わらないので、モデルを広げる費用に見合わないためである
+    // 数は証明の対象にせず、`Owners::check`が数え直して確かめる。数の誤りは診断の誤りで、メモリの安全には関わらないので、
+    // モデルを広げる費用に見合わないためである
     owned: IdCounts,
     /// 検査モードの構築中の物体のブロックの番地。なければ 0 で、速いモードではいつも 0 である。
     // 検査モードの前置きの状態は構築中と生存を分けないので、`set_field` と `set_raw` が、構築中でない rc 0 以下の物体
@@ -690,7 +690,8 @@ impl<M: Mode> Heap<M> {
         Self::with_control(Control::unbounded())
     }
 
-    /// `new` と同じ空のヒープで、ページをセッションの `control` に数える。
+    /// `new`と同じ空のヒープで、ページをセッションの`control`に数える。検査モードでは、自分だけの新しい所有者の表で
+    /// 数える。
     pub fn with_control(control: Arc<Control>) -> (r: Heap<M>)
         ensures
             r.wf(),
@@ -701,10 +702,45 @@ impl<M: Mode> Heap<M> {
             r.unused(),
     {
         let owned = if M::CHECKED {
-            IdCounts::for_control(&control)
+            IdCounts::alone()
         } else {
             IdCounts::detached()
         };
+        Self::counting(control, owned)
+    }
+
+    /// `with_control`と同じ空のヒープで、検査モードでは`owners`の表で数える。物体がヒープの間を移るので、実行系は1つの
+    /// runかセッションのヒープを1つのハンドルで作る (docs/spec/object-model.mdの「論理的なworker ID」)。
+    ///
+    /// # Panics
+    /// 検査モードで、`owners`が表を持たないとき、つまり速いモードのヒープのハンドルのとき。
+    pub fn with_owners(control: Arc<Control>, owners: &Owners) -> (r: Heap<M>)
+        ensures
+            r.wf(),
+            r.consistent(),
+            r.settled(),
+            r.region_spec() is None,
+            r.worker_spec() == 0,
+            r.unused(),
+    {
+        let owned = if M::CHECKED {
+            IdCounts::of(owners)
+        } else {
+            IdCounts::detached()
+        };
+        Self::counting(control, owned)
+    }
+
+    /// `with_control`と`with_owners`の本体。所有者の表の写しが`owned`である空のヒープ。
+    fn counting(control: Arc<Control>, owned: IdCounts) -> (r: Heap<M>)
+        ensures
+            r.wf(),
+            r.consistent(),
+            r.settled(),
+            r.region_spec() is None,
+            r.worker_spec() == 0,
+            r.unused(),
+    {
         let mut heap = Heap {
             core: Self::empty_core(control),
             region: ManuallyDrop::new(None),
@@ -857,9 +893,8 @@ impl<M: Mode> Heap<M> {
         &&& self.core.env@.region matches Some(s) ==> s@ == other.core.env@.region->0@
     }
 
-    /// 同じ `Control`、worker、付けた塊を持つ空のヒープ。回復が写し先にする
-    /// (docs/spec/object-model.md の「回復」)。検査モードでは、先に `Control` の ID の表を消す。写した物体を新しい表で
-    /// 数え、捨てるヒープの物体の数を残さないためである。
+    /// 同じ`Control`、worker、付けた塊を持つ空のヒープ。回復が写し先にする (docs/spec/object-model.mdの「回復」)。
+    /// 検査モードでは新しい所有者の表で数えるので、写した物体はその表で数え、捨てるヒープの数は古い表に残る。
     pub(crate) fn fresh(&self) -> (r: Heap<M>)
         requires
             self.wf(),
@@ -871,9 +906,6 @@ impl<M: Mode> Heap<M> {
             r.worker_spec() == self.worker_spec(),
             r.same_region(*self),
     {
-        if M::CHECKED {
-            self.owned.reset_ids();
-        }
         let mut r = Heap::with_control(self.control().clone());
         r.set_worker(self.worker);
         if let Some(a) = &*self.region {

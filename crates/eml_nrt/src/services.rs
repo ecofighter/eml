@@ -29,8 +29,8 @@ crate::entries! {
             match ctx.poll(0) {
                 Ok(()) => break,
                 // 知らせではrunを止めない。知らせが立っている間に立った止めるビットを見落とさないよう、もう1度確かめる
-                // 下ろすのは`run`が`for_worker`に渡した番号の語である。`Heap::worker()`は論理的なworker IDで、
-                // 止める語の添字ではない (docs/spec/object-model.md の「論理的な worker ID」)
+                // 下ろすのは、runのworker (`WORKER`) の語である。`Heap::worker()`は論理的なworker IDで、止める語の
+                // 添字ではない (docs/spec/object-model.mdの「論理的なworker ID」)
                 Err(Stop::Notice) => ctx.heap().control().take_notice(WORKER),
                 Err(stop) => {
                     // SAFETY: 呼ぶ側の約束。`ctx.runtime()`は`worker::of`の前提を満たす`Worker`を指す

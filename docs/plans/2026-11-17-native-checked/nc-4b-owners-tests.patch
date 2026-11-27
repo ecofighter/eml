@@ -1,0 +1,393 @@
+diff --git a/crates/eml_native/tests/main.rs b/crates/eml_native/tests/main.rs
+index 3d5c0849..c89daea6 100644
+--- a/crates/eml_native/tests/main.rs
++++ b/crates/eml_native/tests/main.rs
+@@ -15,3 +15,4 @@ mod rc;
+ mod reuse;
+ mod rows;
+ mod unsupported;
++mod rerun;
+diff --git a/crates/eml_native/tests/rerun.rs b/crates/eml_native/tests/rerun.rs
+new file mode 100644
+index 00000000..ad1e3b61
+--- /dev/null
++++ b/crates/eml_native/tests/rerun.rs
+@@ -0,0 +1,141 @@
++//! scratch repro: a second checked run on one Control
++#![cfg(not(miri))]
++use eml_native::NativeMachine;
++use eml_nrt::{RunConfig, RuntimeError};
++use eml_test_support::{Engine, execute_finished, native_options};
++
++use crate::common::native::{host, program, unverified};
++
++const LEAK: &str = "\
++layout P { P(int) }
++fn entry$main() -> unit {
++  let u.0: unit = call f(1)
++  return u.0
++}
++fn f(n.0: int) -> unit {
++  let d.1: obj = con P #0(n.0)
++  return ()
++}
++fn clean(n.0: int) -> int {
++  return n.0
++}
++";
++
++const CLEAN: &str = "\
++fn entry$main() -> unit {
++  return ()
++}
++";
++
++const FATAL: &str = "\
++layout P { P(int, int) }
++fn entry$main() -> unit {
++  let r.0: unit = call f(1)
++  return ()
++}
++fn f(n.0: int) -> unit {
++  let k.9: obj = con P #0(n.0, n.0)
++  let d.1: obj = con P #0(n.0, n.0)
++  decref d.1
++  decref d.1
++  decref k.9
++  return ()
++}
++";
++
++fn show(r: Result<eml_nrt::Finished, RuntimeError>) -> String {
++    match r {
++        Ok(f) => format!("ok exit={:?}", f.exit),
++        Err(e) => format!("err {e:?}"),
++    }
++}
++
++#[test]
++fn repro_two_runs_on_one_machine_after_a_leak() {
++    let config = RunConfig::default().with_debug_heap(true);
++    let p = unverified(LEAK);
++    let mut m = NativeMachine::new(&config, host());
++    let loaded = m.load(&p, &eml_test_support::link(&p)).unwrap();
++    eprintln!("REPRO native leak run1: {}", show(m.run(loaded, native_options())));
++    eprintln!("REPRO native leak run2: {}", show(m.run(loaded, native_options())));
++    // SAFETY: `clean` takes an int and returns it
++    let c = unsafe { m.call("clean", &[eml_native::Arg::I64(3)], native_options()) };
++    eprintln!("REPRO native leak call3 (clean fn): {c:?}");
++    m.close();
++    let q = program(CLEAN);
++    eprintln!(
++        "REPRO native execute on the same config after the leak: {}",
++        show(execute_finished(&q, &config, host(), Engine::Native))
++    );
++}
++
++#[test]
++fn repro_execute_twice_after_a_fatal() {
++    let config = RunConfig::default().with_debug_heap(true);
++    let p = unverified(FATAL);
++    eprintln!(
++        "REPRO native fatal run1: {}",
++        show(execute_finished(&p, &config, host(), Engine::Native))
++    );
++    let q = program(CLEAN);
++    eprintln!(
++        "REPRO native clean after fatal, same config: {}",
++        show(execute_finished(&q, &config, host(), Engine::Native))
++    );
++    eprintln!(
++        "REPRO native clean again: {}",
++        show(execute_finished(&q, &config, host(), Engine::Native))
++    );
++}
++
++#[test]
++fn repro_vm_execute_twice() {
++    for (name, text) in [("leak", LEAK), ("fatal", FATAL)] {
++        let config = RunConfig::default().with_debug_heap(true);
++        let p = unverified(text);
++        eprintln!(
++            "REPRO vm {name} run1: {}",
++            show(execute_finished(&p, &config, host(), Engine::Vm))
++        );
++        let q = program(CLEAN);
++        eprintln!(
++            "REPRO vm clean after {name}, same config: {}",
++            show(execute_finished(&q, &config, host(), Engine::Vm))
++        );
++    }
++}
++
++#[test]
++fn control_clean_baseline() {
++    let config = RunConfig::default().with_debug_heap(true);
++    let q = program(CLEAN);
++    for _ in 0..2 {
++        eprintln!(
++            "REPRO baseline clean: {}",
++            show(execute_finished(&q, &config, host(), Engine::Native))
++        );
++    }
++}
++
++/// The table's counts as a fresh checked heap on the same Control sees them.
++fn table(config: &RunConfig) -> Vec<u64> {
++    let heap = eml_rt::Heap::<eml_rt::Checked>::with_control(config.control.clone());
++    (0..4).map(|id| heap.owned_by(id)).collect()
++}
++
++#[test]
++fn probe_counts_left() {
++    for (name, text) in [("leak", LEAK), ("fatal", FATAL)] {
++        for engine in [Engine::Native, Engine::Vm] {
++            let config = RunConfig::default().with_debug_heap(true);
++            eprintln!("PROBE {name} before: {:?}", table(&config));
++            let p = unverified(text);
++            let r = show(execute_finished(&p, &config, host(), engine));
++            eprintln!("PROBE {name} {r} after: owned_by(0..4) = {:?}", table(&config));
++        }
++    }
++    let config = RunConfig::default().with_debug_heap(true);
++    let q = program(CLEAN);
++    let r = show(execute_finished(&q, &config, host(), Engine::Native));
++    eprintln!("PROBE clean {r} after: {:?}", table(&config));
++}
+diff --git a/crates/eml_rt/src/heap/tests/mod.rs b/crates/eml_rt/src/heap/tests/mod.rs
+index 399d0beb..4ead31a2 100644
+--- a/crates/eml_rt/src/heap/tests/mod.rs
++++ b/crates/eml_rt/src/heap/tests/mod.rs
+@@ -46,7 +46,7 @@ mod workers;
+ pub(super) fn check_all<L: Live<M = Checked>>(live: &mut L) -> Result<(), HeapError> {
+     let heap = live.heap_for_walk();
+     heap.check_invariants()?;
+-    heap.control().check_owned(&[heap])
++    heap.owners().check(&[heap])
+ }
+ 
+ /// 解放の連鎖と `share` が再帰しないことを確かめる長さ。
+diff --git a/crates/eml_rt/src/heap/tests/remote.rs b/crates/eml_rt/src/heap/tests/remote.rs
+index 915c162b..ce14f628 100644
+--- a/crates/eml_rt/src/heap/tests/remote.rs
++++ b/crates/eml_rt/src/heap/tests/remote.rs
+@@ -10,7 +10,7 @@ use crate::{Checked, Control, Heap, HeapError, Limits, Mode};
+ fn pushed<M: Mode>(n: usize) -> (Heap<M>, Heap<M>) {
+     let control = Arc::new(Control::new(Limits::default()));
+     let mut a = Heap::<M>::with_control(control.clone());
+-    let mut b = Heap::<M>::with_control(control);
++    let mut b = Heap::<M>::with_owners(control, &a.owners());
+     let xs = list(&mut a, n);
+     unsafe {
+         a.share(xs, 0).unwrap();
+@@ -104,11 +104,11 @@ both_modes!(
+ fn check_owned_refuses_a_heap_with_pending_frees() {
+     let (mut a, b) = pushed::<Checked>(3);
+     assert_eq!(
+-        a.control().check_owned(&[&a, &b]),
++        a.owners().check(&[&a, &b]),
+         Err(HeapError::NotQuiescent)
+     );
+     a.reclaim();
+-    assert_eq!(a.control().check_owned(&[&a, &b]), Ok(()));
++    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
+ }
+ 
+ // 生存の列挙とリークの数えは、先に取り込む
+diff --git a/crates/eml_rt/src/heap/tests/trusted.rs b/crates/eml_rt/src/heap/tests/trusted.rs
+index 0929dbab..90fa1612 100644
+--- a/crates/eml_rt/src/heap/tests/trusted.rs
++++ b/crates/eml_rt/src/heap/tests/trusted.rs
+@@ -982,10 +982,9 @@ fn recovery_tells_own_blocks_from_region_blocks<M: Mode>() {
+ /// 共有の Control を持つヒープを2つ作る。
+ fn two_heaps<M: Mode>(limits: Limits) -> (Heap<M>, Heap<M>) {
+     let control = Arc::new(Control::new(limits));
+-    (
+-        Heap::with_control(control.clone()),
+-        Heap::with_control(control),
+-    )
++    let a = Heap::with_control(control);
++    let b = Heap::with_owners(a.control().clone(), &a.owners());
++    (a, b)
+ }
+ 
+ /// 長さ `n` の共有のリスト。
+@@ -1609,7 +1608,7 @@ fn checked_words_cross_heaps_and_unknown_pages_are_refused() {
+     let control = Arc::new(Control::new(Limits::default()));
+     let mut a = Heap::<Checked>::with_control(control.clone());
+     let id = a.fork_worker();
+-    let b = Heap::<Checked>::with_control(control.clone());
++    let b = Heap::<Checked>::with_owners(control.clone(), &a.owners());
+     let (mut b, xs, s) = std::thread::spawn(move || {
+         let mut b = b;
+         let s = b.alloc_string("on b");
+@@ -1633,9 +1632,9 @@ fn checked_words_cross_heaps_and_unknown_pages_are_refused() {
+     }
+     assert_eq!(a.owned_by(id), 0);
+     assert_eq!(a.stats().remote_frees, 3);
+-    assert_eq!(control.check_owned(&[&a, &b]), Err(HeapError::NotQuiescent));
++    assert_eq!(a.owners().check(&[&a, &b]), Err(HeapError::NotQuiescent));
+     b.reclaim();
+-    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
++    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
+     assert_eq!(a.check_invariants(), Ok(()));
+     assert_eq!(a.retire_worker(id), Ok(()));
+     // 落としたヒープのページを指す語。落とした後は、同じ `Control` のどのヒープもページを取らない。取ると、同じ
+@@ -3139,3 +3138,78 @@ both_modes!(
+     a_pinned_frozen_page_outlives_its_chunk,
+     a_pinned_page_outlives_recovery,
+ );
++
++// ---- adversarial probes against "subtract at drop" ----
++
++/// A1: a destructor that panics during the drop walk leaves the blocks after it in the table.
++#[test]
++fn adv_a_panicking_finalizer_during_drop_leaves_counts() {
++    let control = Arc::new(Control::new(Limits::default()));
++    let mut heap = Heap::<Checked>::with_control(control.clone());
++    let panics = Arc::new(AtomicUsize::new(0));
++    let _first = heap.alloc_foreign(Panicker(panics.clone()), false);
++    let _rest = list(&mut heap, 5);
++    let before = heap.owned_by(0);
++    let result = catch_unwind(AssertUnwindSafe(move || drop(heap)));
++    let mut next = Heap::<Checked>::with_control(control.clone());
++    eprintln!(
++        "ADV A1: drop panicked={} before={} left owned_by(0)={} check={:?}",
++        result.is_err(),
++        before,
++        next.owned_by(0),
++        super::check_all(&mut next)
++    );
++}
++
++/// A1b: the same inside recovery: the old heap's drop unwinds out of `recover`.
++#[test]
++fn adv_a_panicking_finalizer_during_recovery() {
++    let mut ctx = ctx_tests::ctx::<Checked>();
++    let panics = Arc::new(AtomicUsize::new(0));
++    unsafe {
++        let heap = ctx.heap_mut();
++        let _first = heap.alloc_foreign(Panicker(panics.clone()), false);
++        let _rest = list(heap, 5);
++        let kept = list(heap, 2);
++        ctx.root_set(0, kept).unwrap();
++    }
++    let result = catch_unwind(AssertUnwindSafe(|| unsafe { ctx.recover() }));
++    eprintln!(
++        "ADV A1b: recover panicked={} owned_by(0)={} check={:?}",
++        result.is_err(),
++        ctx.heap().owned_by(0),
++        super::check_all(&mut ctx)
++    );
++}
++
++/// A3: IDs are forgotten by recovery while another heap of the abandoned run still holds
++/// objects of a forked ID; an ID issued before that heap is dropped inherits their count.
++#[test]
++fn adv_an_id_reissued_before_the_other_heap_is_dropped() {
++    let control = Arc::new(Control::new(Limits::default()));
++    let mut ctx = Ctx::<Checked>::for_worker(control.clone(), host(&Arc::new(MemoryHost::default())), 0);
++    let mut other = Heap::<Checked>::with_owners(control.clone(), &ctx.heap().owners());
++    let child = unsafe { ctx.heap_mut() }.fork_worker();
++    other.set_worker(child);
++    let _lost = list(&mut other, 3);
++    unsafe { ctx.recover() }.unwrap();
++    let again = unsafe { ctx.heap_mut() }.fork_worker();
++    let retire = unsafe { ctx.heap_mut() }.retire_worker(again);
++    eprintln!("ADV A3: child={child} reissued={again} retire={retire:?}");
++    drop(other);
++}
++
++/// A11: a run that ends without retiring its IDs leaves them issued for good.
++#[test]
++fn adv_ids_of_a_dropped_heap_stay_issued() {
++    let control = Arc::new(Control::new(Limits::default()));
++    let mut ids = Vec::new();
++    for _ in 0..3 {
++        let mut heap = Heap::<Checked>::with_control(control.clone());
++        let id = heap.fork_worker();
++        heap.set_worker(id);
++        let _lost = list(&mut heap, 2);
++        ids.push(id);
++    }
++    eprintln!("ADV A11: forked ids over three abandoned heaps = {ids:?}");
++}
+diff --git a/crates/eml_rt/src/heap/tests/workers.rs b/crates/eml_rt/src/heap/tests/workers.rs
+index 8c30d022..763549be 100644
+--- a/crates/eml_rt/src/heap/tests/workers.rs
++++ b/crates/eml_rt/src/heap/tests/workers.rs
+@@ -271,11 +271,9 @@ fn retiring_an_id_twice_panics() {
+ 
+ /// 同じ `Control` のヒープは1つの表で ID を出し、数える。
+ fn two_heaps() -> (H, H) {
+-    let control = Arc::new(Control::new(Limits::default()));
+-    (
+-        H::with_control(Arc::clone(&control)),
+-        H::with_control(control),
+-    )
++    let a = H::with_control(Arc::new(Control::new(Limits::default())));
++    let b = H::with_owners(a.control().clone(), &a.owners());
++    (a, b)
+ }
+ 
+ #[test]
+@@ -301,15 +299,14 @@ fn check_owned_counts_every_heap_of_the_control() {
+     let y = list(&mut b, 3);
+     assert_eq!((a.owned_by(0), b.owned_by(0)), (2, 2));
+     assert_eq!((a.owned_by(child), b.owned_by(child)), (3, 3));
+-    let control = Arc::clone(a.control());
+-    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
++    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
+     // 1つのヒープだけでは、もう1つのヒープの物体の数が合わない
+     assert_eq!(
+-        control.check_owned(&[&a]),
++        a.owners().check(&[&a]),
+         Err(HeapError::OwnedMiscount { worker: child })
+     );
+     assert_eq!(
+-        control.check_owned(&[&b]),
++        b.owners().check(&[&b]),
+         Err(HeapError::OwnedMiscount { worker: 0 })
+     );
+     unsafe {
+@@ -318,7 +315,7 @@ fn check_owned_counts_every_heap_of_the_control() {
+     }
+     b.set_worker(0);
+     assert_eq!(a.retire_worker(child), Ok(()));
+-    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
++    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
+ }
+ 
+ /// 表は ID を 64 個ずつの塊で持つ。ほかのヒープが伸ばした塊も、数えるときに写し直して数える。
+@@ -329,8 +326,7 @@ fn a_count_past_the_first_chunk_reaches_every_heap() {
+     b.set_worker(3000);
+     let x = list(&mut b, 1);
+     assert_eq!(a.owned_by(3000), 1);
+-    let control = Arc::clone(a.control());
+-    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
++    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
+     unsafe { b.decref(x) }.unwrap();
+     assert_eq!(a.owned_by(3000), 0);
+ }
+@@ -352,18 +348,17 @@ fn a_miscount_past_every_chunk_is_reported() {
+ }
+ 
+ #[test]
+-#[should_panic(expected = "check_owned over a heap of another Control")]
++#[should_panic(expected = "an owner check over a heap of another table")]
+ fn check_owned_refuses_a_heap_of_another_control() {
+     let heap = H::new();
+-    let _ = Control::new(Limits::default()).check_owned(&[&heap]);
++    let _ = crate::Owners::new().check(&[&heap]);
+ }
+ 
+ #[test]
+ fn check_owned_does_nothing_in_fast_mode() {
+     let mut heap = Heap::<Fast>::new();
+     let _ = list(&mut heap, 2);
+-    let control = Arc::clone(heap.control());
+-    assert_eq!(control.check_owned(&[&heap]), Ok(()));
++    assert_eq!(heap.owners().check(&[&heap]), Ok(()));
+ }
+ 
+ /// 回復は表を消してから写す。捨てたヒープの ID と数は残らず、写した物体だけを数える。

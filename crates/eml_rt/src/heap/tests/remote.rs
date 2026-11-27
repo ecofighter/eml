@@ -6,11 +6,11 @@ use std::sync::Arc;
 use super::{list, mortal};
 use crate::{Checked, Control, Heap, HeapError, Limits, Mode};
 
-/// 共有の Control を持つヒープ `a` と `b`。`b` が `a` の共有のリストを空けて、`a` に積む。
+/// 1つの`Control`のヒープ`a`と`b`で、1つの所有者の表で作る。`b`が`a`の共有のリストを空けて、`a`に積む。
 fn pushed<M: Mode>(n: usize) -> (Heap<M>, Heap<M>) {
     let control = Arc::new(Control::new(Limits::default()));
     let mut a = Heap::<M>::with_control(control.clone());
-    let mut b = Heap::<M>::with_control(control);
+    let mut b = Heap::<M>::with_owners(control, &a.owners());
     let xs = list(&mut a, n);
     unsafe {
         a.share(xs, 0).unwrap();
@@ -99,16 +99,13 @@ both_modes!(
     large_frees_do_not_count_toward_the_walk,
 );
 
-// 取り込めない `check_owned` は、受けて取り込んでいない解放が残るヒープを断る
+// 取り込めない`Owners::check`は、受けて取り込んでいない解放が残るヒープを断る
 #[test]
-fn check_owned_refuses_a_heap_with_pending_frees() {
+fn a_check_refuses_a_heap_with_pending_frees() {
     let (mut a, b) = pushed::<Checked>(3);
-    assert_eq!(
-        a.control().check_owned(&[&a, &b]),
-        Err(HeapError::NotQuiescent)
-    );
+    assert_eq!(a.owners().check(&[&a, &b]), Err(HeapError::NotQuiescent));
     a.reclaim();
-    assert_eq!(a.control().check_owned(&[&a, &b]), Ok(()));
+    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
 }
 
 // 生存の列挙とリークの数えは、先に取り込む

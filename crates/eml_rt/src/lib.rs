@@ -29,7 +29,7 @@ mod trust;
 mod word;
 
 pub use alloc::PagePin;
-pub use control::{Control, Limits, Stop};
+pub use control::{Control, Limits, Owners, Stop};
 pub use driver::{
     Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, OsHandle, OsSocket,
     PipePair, RawFile, RawPipe, RawProcess, RawResource, RawSocket, Submit,
@@ -69,14 +69,15 @@ const _: fn() = || {
     let _ = <Ctx<Checked> as AmbiguousIfSync<_>>::some_item;
 };
 
-// `Control` はセッションのどのスレッドからも同じものを見る。`RemoteSink` は、ほかのスレッドがページの頭から指して
-// 解放を積む。`WorkerIds` は `Control` の中で、どの worker のヒープも同じ表で数える。`PageMap` も `Control` の中で、
-// どの worker のヒープも同じ表にページを登録して引く
+// `Control`はセッションのどのスレッドからも同じものを見る。`RemoteSink`は、ほかのスレッドがページの頭から指して
+// 解放を積む。1つのrunのどのworkerのヒープも、`WorkerIds`とそのハンドル`Owners`を分け合い、1つの表で数える。
+// `PageMap`は`Control`の中で、どのworkerのヒープも同じ表にページを登録して引く
 const _: fn() = || {
     fn send_and_sync<T: Send + Sync>() {}
     send_and_sync::<Control>();
     send_and_sync::<remote::RemoteSink>();
     send_and_sync::<control::WorkerIds>();
+    send_and_sync::<Owners>();
     send_and_sync::<control::PageMap>();
 };
 

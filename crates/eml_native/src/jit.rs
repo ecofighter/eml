@@ -457,9 +457,9 @@ impl NativeMachine {
     }
 
     /// 読み込んだプログラムの入口を実行する。入口は引数を取らない。ほかのマシンが返した`loaded`は、何も実行せずに
-    /// 内部の誤りで断る。検査モードでは、リークか失敗の手順で終わったrunは、その物体の数を`RunConfig`の`Control`の
-    /// workerごとの表に残す。だから同じ`Control`での後の検査モードのrun (このマシンの`run`か`call`をもう一度、または
-    /// 設定の複製での別のrun) は、成功して終わるはずのrunでも`OwnedMiscount`を報告しうる (docs/spec/native.mdの「検査モード」)。
+    /// 内部の誤りで断る。検査モードでは、前のrunがどう終わっても、次のrunは0から数える。runはどれも自分の所有者の
+    /// 表で数えるためである (docs/spec/native.mdの「実行の始めと終わり」)。runが立てたままにした止めるビットは、呼ぶ側が
+    /// 下ろす (`Control::clear`)。
     pub fn run(&mut self, loaded: Loaded, options: Options) -> Result<Finished, RuntimeError> {
         let (thunk, code, results, counted) = self.prepare(loaded)?;
         let mut argv = vec![0u64; results];

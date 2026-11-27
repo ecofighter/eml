@@ -149,10 +149,10 @@
 
 1. `config.control.begin_run()`で終わりの欄を開く ([VM](vm.md)の「誤り、止めること、終わり」)
 2. `options.stack`を予約したworkerのスレッド`eml-worker-0`を作る。workerは何かを動かす前に門で待つ。呼んだスレッドは`options.masked`の中で門を開けてworkerを待つので、workerは呼んだスレッドが2つのシグナルを塞ぐまでコードを動かさない。フックがクロージャを呼ばなければ、workerは何も動かさず、runは内部の誤り`the run's hook did not start the worker`で終わる
-3. そのスレッドの上で、`Ctx::<M>::for_worker(control, host, 0)`で`Ctx`を作り、`stack_limit`を置き (下の「安全点」)、読み込み時の値を作ってslotを書き (上の「`Image`」)、workerの構造体を`ctx.runtime`の後ろに置く。それから`Ctx`への生のポインタだけを持って`enter(ctx, start.thunk, start.entry, start.argv)`を呼ぶ (「`eml_enter`」の入り直しの規則)。戻ったら`ctx.runtime`をnullに戻すので、`Ctx`はどの`eml_enter`の外にもある
+3. そのスレッドの上で、`Ctx::<M>::new(control, host)`で`Ctx`を作り、`stack_limit`を置き (下の「安全点」)、読み込み時の値を作ってslotを書き (上の「`Image`」)、workerの構造体を`ctx.runtime`の後ろに置く。それから`Ctx`への生のポインタだけを持って`enter(ctx, start.thunk, start.entry, start.argv)`を呼ぶ (「`eml_enter`」の入り直しの規則)。戻ったら`ctx.runtime`をnullに戻すので、`Ctx`はどの`eml_enter`の外にもある。検査モードでは、runは`Ctx::new`で新しい所有者の表の上に`Ctx`を作るので、同じ`Control`の前のrunが所有者の数に何を残しても、0から数える ([オブジェクトモデル](object-model.md)の「論理的なworker ID」)。リークか失敗の手順で終わったrunの後でも、`NativeMachine::run`と`call`はもう一度呼んでよく、`RunConfig`の写しで別のrunを流してもよい。そうしたrunが立てたままにした止めるビットは、呼ぶ側が下ろす (`Control::clear`)
 4. `enter`がふつうに戻ったとき
    - 中断の途中 (`ctx.yielding() != 0`) で、workerの構造体が`exit`の終了コードを持っていれば、巻き戻しがどのフレームも片付けてある。`yield_finish`で中断を終え、`evv`を空に戻し、`control.exit(code)`で終了コードを書く。先に書いた者がいれば、その終了コードが勝つ (VMと同じ)。終了コードのない中断は内部の誤り`an abort reached the bottom of the task`である。中断の途中でなく、`start.result_rc`が真なら、`argv[0]`の結果を手放す
-   - 続けて、次の順で行う。`flush` (誤りはそのfaultになる)、`check_finished` (偽なら内部の誤り`the evidence list or a yield is left at the end`)、置いたままのfaultの確かめ (置いたpanicも含む。あれば内部の誤り`a fault is left parked at the end`)、モードごとの終わりの検査 (速いモードでは`Census::Check`ならcensus。検査モードでは`Ctx::check_invariants`、runのヒープについての`Control::check_owned`、`Ctx::leaks`で、`Ctx::leaks`が空でなければ`RuntimeError::Leak`)
+   - 続けて、次の順で行う。`flush` (誤りはそのfaultになる)、`check_finished` (偽なら内部の誤り`the evidence list or a yield is left at the end`)、置いたままのfaultの確かめ (置いたpanicも含む。あれば内部の誤り`a fault is left parked at the end`)、モードごとの終わりの検査 (速いモードでは`Census::Check`ならcensus。検査モードでは`Ctx::check_invariants`、runのヒープについての`Owners::check`、`Ctx::leaks`で、`Ctx::leaks`が空でなければ`RuntimeError::Leak`)
    - 結果は`Finished { stats, exit: control.exit_code(), .. }`で、ほかの数はどれも0である。速いモードでは`stats`は`RunStats::default()`である。検査モードでは、`Ctx::stats`の`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`と、`Heap::stats`の`rc_increments`、`rc_decrements`、`allocations`、`peak_objects`、`shared_objects`と、検査モードのコードが`eml_rt_audit_count`で数える、workerの構造体の`boxes`、`unboxes`、`unwound_frames`、`reuses`を持つ。`peak_stack`とスケジューラが数える欄は0である
 5. `enter`が`Err(fatal)`を返したとき、誤りは符号が決める場所から読む (「`eml_fatal`」の表)。`FATAL_RECORDED`ならworkerの構造体に記録した誤り、`FATAL_FAULT`なら`ctx.take_fault()`のfaultを持つ`RunFault::Extern(fault)`、`FATAL_PANICKED`なら内部の誤り`a runtime entry panicked`である。その後`flush`を呼び、その誤りは捨てる。出力と誤りの順を保つためである
 
@@ -414,7 +414,6 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - VMと同じく、次のことはプログラムの約束のままである。数えるReprの語は即値か、runのヒープの中を指す (監査は、物体が要る所の即値と、runが持たないページを断る)。生の欄は読む前に書いてある
 - 規則: 生成したコードのヒープの物体へのインラインの読み書きは、どれも検査モードの下ろし方で`lower/audit.rs`を通して出す監査を持ち、テストが検査モードのCLIFを速いCLIFの隣に固定する。そうでなければ、その操作は、検査モードの下ろし方では、インラインの読み書きを持たない完全な検査付きの操作の呼び出しである。`Ctx`の頭の欄、データの記号、フレームの読み書きは、このような読み書きではない
 - テストは、verifierが拒むLIRを`Trusted::unverified`で包んで流し、監査に届かせる ([LIR](lir.md)の「エンジンの約束」のP6)。verifierが拒む関数は、中断がそのフレームを通っても何も手放さない
-- 検査モードで、リークか失敗の手順で終わったrunは、その物体の数を`RunConfig`の`Control`のworkerごとの表に残す。だから同じ`Control`での後の検査モードのrun (同じマシンの`run`か`call`をもう一度、または設定の複製での別のrun) は、成功して終わるはずのrunでも`OwnedMiscount`を報告しうる
 - 検査モードはサンドボックスではない。[オブジェクトモデル](object-model.md)の「報告する誤り」が挙げる誤った使い方を報告し、ほかのことはプログラムを信頼する ([LIR](lir.md)の「エンジンの約束」)
 
 ## 断る形

@@ -45,10 +45,7 @@ impl Engine for Checked {
             at: None,
         };
         ctx.check_invariants().map_err(fault)?;
-        ctx.heap()
-            .control()
-            .check_owned(&[ctx.heap()])
-            .map_err(fault)?;
+        ctx.heap().owners().check(&[ctx.heap()]).map_err(fault)?;
         let leaks = ctx.leaks();
         if leaks.is_empty() {
             Ok(())

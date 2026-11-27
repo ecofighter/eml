@@ -1125,7 +1125,7 @@ mod tests {
             Arc::clone(&shared),
         );
         let (host, _) = crate::capture_host(Default::default());
-        let ctx = Ctx::for_worker(Arc::clone(&control), host, 1);
+        let ctx = Ctx::for_worker(Arc::clone(&control), &eml_rt::Owners::new(), host, 1);
         Worker1 {
             control,
             run,
@@ -1229,7 +1229,8 @@ mod tests {
             mut ctx,
         } = worker_1();
         let (host, _) = crate::capture_host(Default::default());
-        let mut home = Ctx::<eml_rt::Checked>::new(Arc::clone(&control), host);
+        let mut home =
+            Ctx::<eml_rt::Checked>::for_worker(Arc::clone(&control), &ctx.heap().owners(), host, 0);
         let x = unsafe { home.heap_mut() }.fork_worker();
         // SAFETY: テストが渡す語は、渡す`Ctx`の上で確保したものか登録表から受け取ったもので、
         // 登録表とdriverはテストが作ったものである (`eml_sched::cells`の「呼ぶ側の約束」)
@@ -1265,7 +1266,10 @@ mod tests {
         assert!(home.heap().stats().reclaimed >= 1);
         let leaks = home.leaks();
         assert!(leaks.is_empty(), "{leaks:?}");
-        control.check_owned(&[home.heap(), ctx.heap()]).unwrap();
+        home.heap()
+            .owners()
+            .check(&[home.heap(), ctx.heap()])
+            .unwrap();
     }
 
     /// worker 0 が自分のタスクに付けた取り消しの項は、worker 1 の集める地点が取らずに mail に残す。待ちは外さず、
@@ -1371,7 +1375,7 @@ mod tests {
         );
         let (out, _) = crate::capture_host(Default::default());
         let host_ctx = Ctx::new(Arc::clone(&control), out.clone());
-        let owner_ctx = Ctx::for_worker(Arc::clone(&control), out, 1);
+        let owner_ctx = Ctx::for_worker(Arc::clone(&control), &host_ctx.heap().owners(), out, 1);
         Forwarding {
             control,
             run,

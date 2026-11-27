@@ -17,6 +17,7 @@ use super::inv::{p_owner, p_word};
 #[cfg(verus_only)]
 use super::model::BlockState;
 use crate::alloc::FREE_META;
+use crate::control::Owners;
 use crate::error::HeapError;
 use crate::foreign::{finalizer_of, run_finalizer};
 use crate::frozen::Frozen;
@@ -928,8 +929,8 @@ pub(super) fn release_region<M: Mode>(region: Option<Arc<Frozen<M>>>) {
 } // verus!
 
 impl Heap<Checked> {
-    /// 生存の列挙で見つかる不変条件の違反 (docs/spec/object-model.md の「報告する誤り」)。ID ごとの数は、
-    /// `Control::check_owned` が同じ `Control` のすべてのヒープについて数え直す。
+    /// 生存の列挙で見つかる不変条件の違反 (docs/spec/object-model.mdの「報告する誤り」)。IDごとの数は、
+    /// `Owners::check`が同じ表のすべてのヒープについて数え直す。
     ///
     /// ページを歩くので、ほかのスレッドがこのヒープの共有の物体の参照を持たず、このヒープのページの物体を空けている
     /// 途中でもない時点で呼ぶ。先に `reclaim` で取り込み、積んでいる途中の解放を見つければ `NotQuiescent` を返す
@@ -948,8 +949,8 @@ impl Heap<Checked> {
         self.check_lin_parts()
     }
 
-    /// ID `id` の、rc が正の生きている物体の数。同じ `Control` のどのヒープの物体も数える
-    /// (docs/spec/object-model.md の「論理的な worker ID」)。
+    /// ID`id`の、rcが正の生きている物体の数。同じ表のどのヒープの物体も数える
+    /// (docs/spec/object-model.mdの「論理的なworker ID」)。
     pub fn owned_by(&self, id: u32) -> u64 {
         self.owned.owned_by(id)
     }
@@ -978,6 +979,11 @@ impl<M: Mode> Heap<M> {
     /// ほかのスレッドから受けて、まだ取り込んでいない解放があるか。
     pub(crate) fn remote_pending(&self) -> bool {
         sink_pending(self.core.pages.sink())
+    }
+
+    /// このヒープの所有者の表のハンドル。速いモードのヒープのハンドルは表を持たない。
+    pub fn owners(&self) -> Owners {
+        self.owned.owners()
     }
 }
 

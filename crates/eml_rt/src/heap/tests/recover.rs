@@ -514,3 +514,22 @@ fn checked_recovery_refuses_a_root_on_an_unregistered_page() {
     assert_eq!(mortal(&mut other), 0);
     assert_eq!(mortal(&mut ctx), 0);
 }
+
+/// 断った回復は、古いヒープの所有者の表をそのままにする。作りかけのヒープは自分の表で数え、その表はヒープと一緒に
+/// 消えた。
+#[test]
+fn a_refused_recovery_leaves_the_table_as_it_was() {
+    let mut ctx = ctx::<Checked>();
+    unsafe {
+        let heap = ctx.heap_mut();
+        let good = list(heap, 2);
+        let lin = heap.alloc_data(0, 0, 1, true);
+        let holder = cons(heap, good, lin);
+        ctx.root_set(0, holder).unwrap();
+    }
+    assert_eq!(ctx.heap().owned_by(0), 4);
+    assert_eq!(unsafe { ctx.recover() }, Err(HeapError::Unrecoverable));
+    assert_eq!(ctx.heap().owned_by(0), 4);
+    assert_eq!(super::check_all(&mut ctx), Ok(()));
+    ctx.take_roots();
+}
