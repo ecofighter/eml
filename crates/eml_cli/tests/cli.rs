@@ -1864,6 +1864,8 @@ fn native_each(cases: &[NativeCase], dir: &Path) -> Vec<Output> {
     })
 }
 
+const COUNTED: &str = "import List\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (List.length [1, 2, 3]))\n";
+
 const PAR: &str = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = Par.par (fn () -> 1) (fn () -> 2)\n  println (show (a + b))\n";
 
 #[test]
@@ -1971,24 +1973,46 @@ fn load_only_with_native_still_rejects_with_e0004() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `--native --debug-heap`は使い方の誤りにならず、プログラムが流れる。
 #[test]
-fn native_conflicts_with_debug_heap_and_stats() {
-    let dir = temp_project("native-conflicts", &[("a.em", PAR)]);
+fn native_runs_checked() {
+    let dir = temp_project("native-checked", &[("a.em", COUNTED)]);
+    let output = native(&["run", "--native", "--debug-heap", "a.em"], &dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `--native --stats`は検査モードのネイティブのコードの数を出す。ネイティブのコードが測らない`peak_stack`のほかは、
+/// VMの数と同じである (docs/spec/native.mdの「VMとの違い」)。
+#[test]
+fn native_prints_the_vms_stats() {
+    let dir = temp_project("native-stats", &[("a.em", COUNTED)]);
     let outputs = native_each(
         &[
-            (&["run", "--native", "--debug-heap", "a.em"], &[]),
             (&["run", "--native", "--stats", "a.em"], &[]),
+            (&["run", "--stats", "a.em"], &[]),
         ],
         &dir,
     );
-    for (flag, output) in ["--debug-heap", "--stats"].iter().zip(outputs) {
-        assert_eq!(output.status.code(), Some(2), "{output:?}");
+    // `peak_stack`のない`stats:`の行
+    let stats = |output: &Output| {
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains(&format!("'--native' cannot be used with '{flag}'")),
-            "{stderr}"
-        );
-    }
+        let line = stderr
+            .lines()
+            .find_map(|line| line.strip_prefix("stats: "))
+            .unwrap_or_else(|| panic!("no stats line: {stderr}"))
+            .to_string();
+        line.split(' ')
+            .filter(|field| !field.starts_with("peak_stack="))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let (native, vm) = (stats(&outputs[0]), stats(&outputs[1]));
+    assert!(native.contains("allocations="), "{native}");
+    assert_eq!(native, vm);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

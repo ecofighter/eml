@@ -320,6 +320,15 @@ pub fn schedule_independent(mut stats: RunStats) -> RunStats {
     stats
 }
 
+/// `RunStats`のうち、実行系で変わる欄を0にし、ほかの欄はみな残す。その欄は`peak_stack`だけである。VMは自分の
+/// スタックの語を数え、ネイティブのコードにはその数がなく0を報告する (docs/spec/native.mdの「実行の始めと終わり」)。
+/// 2つの実行系の検査モードのrunは、残りの欄で比べる。
+#[cfg(feature = "run")]
+pub fn engine_independent(mut stats: RunStats) -> RunStats {
+    stats.peak_stack = 0;
+    stats
+}
+
 /// channel を使った run の `RunStats` のうち、スケジュールの方針によらない欄だけを残す。待つかどうかと、送り手が
 /// 参照を持ち続けた品物の裏返しが順で変わり、仕事の回数がそれに従うので、残すのはタスクの数、時間の登録、捨てた失敗、
 /// run の終わりに放した channel の数、driver の完了の数だけである (docs/implementation/testing.md の「seed で流す」)。
@@ -443,7 +452,8 @@ pub fn execute(
     execute_on(program, config, capture(), Engine::Vm)
 }
 
-/// LIR を `engine` で `host` に実行し、捕まえた標準出力を返す。ネイティブは数えないので、`RunStats` は既定の値になる。
+/// LIRを`engine`で`host`に実行し、捕まえた標準出力を返す。速いネイティブのコードは数えないので、その`RunStats`は
+/// 既定の値になる。
 #[cfg(feature = "run")]
 pub fn execute_on(
     program: &eml_lir::Trusted,

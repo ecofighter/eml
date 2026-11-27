@@ -75,7 +75,7 @@ crates/eml_lir/src/lib.rs: pub use eml_extern::{FloatBits, Mark, OpRet, Repr, St
 crates/eml_native/src/lib.rs: pub use eml_nrt::image::Options;
 crates/eml_nrt/src/lib.rs: pub use eml_rt as __rt;
 crates/eml_nrt/src/lib.rs: pub use eml_rt::HostRef;
-crates/eml_nrt/src/lib.rs: pub use eml_sched::config::{Finished, RunConfig};
+crates/eml_nrt/src/lib.rs: pub use eml_sched::config::{Finished, RunConfig, RunStats};
 crates/eml_nrt/src/lib.rs: pub use eml_sched::error::{RunFault, RuntimeError};
 crates/eml_nrt/src/mode.rs: pub use eml_rt::{Checked, Fast};
 crates/eml_rows/src/ffi.rs: pub use eml_cabi::Dtor;

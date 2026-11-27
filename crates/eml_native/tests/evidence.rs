@@ -1,11 +1,11 @@
-//! evidence passing の基本操作と節の呼び出しを、EP の出力の形の手書きの LIR で確かめる
-//! (docs/spec/core-ir.md の「evidence passing」と docs/spec/lir.md の「基本操作」)。
-
+//! evidence passingの基本操作と節の呼び出しを、EPの出力の形の手書きのLIRで、検査モードのネイティブのコードと、続けて
+//! 速いネイティブのコードで確かめる (docs/spec/core-ir.mdの「evidence passing」とdocs/spec/lir.mdの「基本操作」)。
+//! JITしたコードにエントリのstubを通して入るので、Miriでは流さない。
+#![cfg(not(miri))]
+use eml_nrt::{RunFault, RuntimeError};
 use eml_rt::{Fault, HeapError};
-use eml_sched::error::RunFault;
-use eml_vm::RuntimeError;
 
-use crate::common::{run_lir, run_unverified};
+use crate::common::native::{run_lir, run_unverified};
 
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
@@ -337,12 +337,14 @@ fn a_dummy_passes_through_box_unbox_dup_and_decref() {
 fn fault(fault: RunFault) -> RuntimeError {
     RuntimeError::Fault {
         fault,
-        function: "main".to_string(),
+        function: "<native code>".to_string(),
         at: None,
     }
 }
 
 const LEFT_AT_END: &str = "the evidence list or a yield is left at the end";
+
+const ABORT_AT_THE_BOTTOM: &str = "an abort reached the bottom of the task";
 
 fn heap_fault(error: HeapError) -> RuntimeError {
     fault(RunFault::Extern(Fault::Heap(error)))
@@ -352,7 +354,8 @@ fn internal_error(what: &'static str) -> RuntimeError {
     fault(RunFault::Internal(what))
 }
 
-/// 終わりに残る `evv` や yield は VM が `Ctx::check_finished` で見つけ、誤りの種類は分けない。
+/// 終わりに残る`evv`は駆動の`check_finished`が見つけ、誤りの種類は分けない。駆動が作る誤りは、関数の名前を
+/// `<native code>`とする (docs/spec/native.mdの「実行の始めと終わり」)。
 #[test]
 fn a_program_that_ends_with_a_nonempty_evidence_list_is_an_error() {
     let text = format!(
@@ -373,11 +376,12 @@ fn main() -> unit {{
     assert_eq!(error, internal_error(LEFT_AT_END));
     assert_eq!(
         error.to_string(),
-        "internal error: the evidence list or a yield is left at the end in `main`"
+        "internal error: the evidence list or a yield is left at the end in `<native code>`"
     );
 }
 
-/// 終わりに残る `evv` や yield は VM が `Ctx::check_finished` で見つけ、誤りの種類は分けない。
+/// 終わりにまだ途中のyieldは、駆動にとっては終了コードのない中断なので、runは内部の誤り
+/// `an abort reached the bottom of the task`で終わる (docs/spec/native.mdの「実行の始めと終わり」)。
 #[test]
 fn a_program_that_ends_during_a_yield_is_an_error() {
     let text = format!(
@@ -390,44 +394,10 @@ fn main() -> unit {{
 }}
 {ID}{COUNTER_ENTRIES}"
     );
-    assert_eq!(run_unverified(&text).1, Err(internal_error(LEFT_AT_END)));
-}
-
-/// 2つ目の yield は、1つ目が終わる前には始まらない。`yield_abort` は検査モードで `YieldMisuse` を返す (`eml_rt` の `Ctx`)。
-#[test]
-fn a_yield_does_not_start_during_another_yield() {
-    let text = format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  let w.0: evv = prim evv_get()
-  let e.1: ev lin = evidence Counter((), w.0) [&get$entry, &put$entry]
-  dup e.1
-  let u.2: unit = prim yield_to(e.1, (), &id)
-  let u.3: unit = prim yield_abort(e.1, ())
-  return u.3
-}}
-{ID}{COUNTER_ENTRIES}"
-    );
     assert_eq!(
         run_unverified(&text).1,
-        Err(heap_fault(HeapError::YieldMisuse))
+        Err(internal_error(ABORT_AT_THE_BOTTOM))
     );
-}
-
-/// 今の`evv`に`Counter`のevidenceがなければ、節の呼び出しは操作のevidenceを探せない。`ev_lookup`は検査モードで
-/// `NoHandler`を返す。
-#[test]
-fn a_lookup_without_evidence_is_an_error() {
-    let text = format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  let s.0: tobj = clause Counter.get(())
-  decref s.0
-  return ()
-}}
-"
-    );
-    assert_eq!(run_lir(&text).1, Err(heap_fault(HeapError::NoHandler)));
 }
 
 /// `mask` 付きの呼び出しの中の操作は、呼び出しより外側の同じエフェクトの handler を、`mask` に並ぶ数だけ飛ばす。
@@ -530,4 +500,47 @@ fn an_inner_handle_returns_through_each_resumption_of_an_outer_multi_operation()
     let (stdout, result) = run_lir(include_str!("ir/multi_resume.lir"));
     assert_eq!(result, Ok(()));
     assert_eq!(stdout, "203\n");
+}
+
+/// 基本操作のエントリの失敗で終わるrun。ネイティブでは失敗の手順を通るので、AddressSanitizerのジョブは`fatal::`を
+/// 飛ばす (docs/implementation/testing.mdの「`eml_native` の検証」)。
+mod fatal {
+    use super::*;
+
+    /// 2つ目のyieldは、1つ目が終わる前には始まらない。`yield_abort`は検査モードで`YieldMisuse`を返す (`eml_rt`の`Ctx`)。
+    #[test]
+    fn a_yield_does_not_start_during_another_yield() {
+        let text = format!(
+            "{COUNTER}\
+fn main() -> unit {{
+  let w.0: evv = prim evv_get()
+  let e.1: ev lin = evidence Counter((), w.0) [&get$entry, &put$entry]
+  dup e.1
+  let u.2: unit = prim yield_to(e.1, (), &id)
+  let u.3: unit = prim yield_abort(e.1, ())
+  return u.3
+}}
+{ID}{COUNTER_ENTRIES}"
+        );
+        assert_eq!(
+            run_unverified(&text).1,
+            Err(heap_fault(HeapError::YieldMisuse))
+        );
+    }
+
+    /// 今の`evv`に`Counter`のevidenceがなければ、節の呼び出しは操作のevidenceを探せない。`ev_lookup`は検査モードで
+    /// `NoHandler`を返す。
+    #[test]
+    fn a_lookup_without_evidence_is_an_error() {
+        let text = format!(
+            "{COUNTER}\
+fn main() -> unit {{
+  let s.0: tobj = clause Counter.get(())
+  decref s.0
+  return ()
+}}
+"
+        );
+        assert_eq!(run_lir(&text).1, Err(heap_fault(HeapError::NoHandler)));
+    }
 }

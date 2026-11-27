@@ -24,7 +24,7 @@ pub use arch::{JmpBuf, SUPPORTED};
 #[doc(hidden)]
 pub use eml_rt as __rt;
 pub use eml_rt::HostRef;
-pub use eml_sched::config::{Finished, RunConfig};
+pub use eml_sched::config::{Finished, RunConfig, RunStats};
 pub use eml_sched::error::{RunFault, RuntimeError};
 pub use enter::{
     FATAL_FAULT, FATAL_PANICKED, FATAL_RECORDED, Fatal, Raise, Thunk, detached, eml_enter,

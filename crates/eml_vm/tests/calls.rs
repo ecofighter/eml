@@ -1,5 +1,6 @@
-//! LIR のテキストで、クロージャの eval/apply を確かめる (docs/spec/core-ir.md)。handler をまたぐ再開は evidence の
-//! 命令が要るので、`evidence.rs` で確かめる。関数の値として使う関数は一様なので、`Int` は `box` して渡し、結果は `unbox` して受ける。
+//! LIRのテキストで、クロージャのeval/applyを確かめる (docs/spec/core-ir.md)。handlerをまたぐ再開はevidenceの
+//! 命令が要るので、`eml_native`の`tests/evidence.rs`で確かめる。関数の値として使う関数は一様なので、`Int`は`box`して渡し、
+//! 結果は`unbox`して受ける。
 
 use std::sync::Arc;
 

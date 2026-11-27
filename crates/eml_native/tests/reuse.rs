@@ -1,12 +1,18 @@
-//! `release`、token、reuseの`con`、構造体の箱 (docs/spec/native.md の「データ」)。差分のテストは、代役のthunkがrunの
-//! ヒープに作った物体を生成したコードに渡し、その後の物体を、`Heap`の操作を通した対の物体と比べる。JITしたコードに
-//! エントリのstubを通して入るので、Miriでは流さない。
+//! `release`、token、reuseの`con`、構造体の箱 (docs/spec/native.mdの「データ」)。差分のテストは、代役のthunkがrunの
+//! ヒープに作った物体を生成したコードに渡し、その後の物体を、`Heap`の操作を通した対の物体と比べる。ファイルの終わりの
+//! テストは、手書きのLIRとemlのソースの出力と、検査モードのネイティブのコードのreuseと確保の数 (`checked_stats`) を
+//! 固定する。JITしたコードにエントリのstubを通して入るので、Miriでは流さない。
 #![cfg(not(miri))]
 use eml_native::Arg;
+use eml_nrt::{RunConfig, RunStats};
 use eml_rt::rc::LOCAL_MAX;
 use eml_rt::{Ctx, Fast, Kind, Token, Word, layout};
+use eml_test_support::{Engine, capture, execute_finished};
 
-use crate::common::native::{Visit, agree, call, call_visited, clif, native, visit};
+use crate::common::native::{
+    Visit, agree, call, call_visited, clif, native, program, run_lir, run_lir_stats,
+    run_source_stats, visit,
+};
 
 /// 差分のテストの関数。`rel`は残す欄を返す`release`で、`repl`はtokenを作る`release`と、その場のreuseの`con`である。
 /// `repl`は欄0と生の欄を書かず、欄1に引数`c.1`を書く。結果の変数の印は`lin`で、親は`lin`ビットを持たない。その場の
@@ -830,4 +836,235 @@ fn a_big_int_box_counts_as_the_dummy() {
             ok: true
         }
     );
+}
+
+/// 検査モードのネイティブのコードの数。出力を確かめた後に読む。文字列はみな定数なので、確保の回数は`con`の分と、
+/// ヒープが最初に作る不死のダミーの1回だけになる (docs/spec/object-model.mdの「ダミーの値」)。
+fn checked_stats(text: &str) -> RunStats {
+    run_lir_stats(text)
+        .1
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+const P: &str = "layout P { P(obj, obj) }\n";
+
+/// 一意な`P`の箱をtokenにし、フィールドを入れ替えた`P`をその箱に作る。
+const SWAPPED: &str = "\
+fn main() -> unit {
+  let a.0: obj = const \"1\"
+  let b.1: obj = const \"2\"
+  let p.2: obj = con P #0(a.0, b.1)
+  unpack p.2 P #0(x.3: obj, y.4: obj)
+  let r.5: token = release p.2 P #0(x.3, y.4)
+  let q.6: obj = con P #0(y.4, x.3) reuse r.5
+  unpack q.6 P #0(u.7: obj, v.8: obj)
+  release q.6 P #0(u.7, v.8)
+  let o.9: unit = extern Prelude.println(u.7)
+  let o.10: unit = extern Prelude.println(v.8)
+  return o.10
+}
+";
+
+#[test]
+fn a_unique_box_is_reused() {
+    let text = format!("{P}{SWAPPED}");
+    assert_eq!(run_lir(&text), ("2\n1\n".to_string(), Ok(())));
+    let stats = checked_stats(&text);
+    // ダミーと最初の`P`の2回で、2つ目の`P`は確保しない
+    assert_eq!((stats.reuses, stats.allocations), (1, 2));
+}
+
+/// 共有された箱のtokenは空なので、`con`は新しく確保し、元の値はそのまま残る。
+#[test]
+fn a_shared_box_gives_an_empty_token() {
+    let text = format!(
+        "{P}fn main() -> unit {{
+  let a.0: obj = const \"1\"
+  let b.1: obj = const \"2\"
+  let p.2: obj = con P #0(a.0, b.1)
+  dup p.2
+  unpack p.2 P #0(x.3: obj, y.4: obj)
+  let r.5: token = release p.2 P #0(x.3, y.4)
+  let q.6: obj = con P #0(y.4, x.3) reuse r.5
+  unpack q.6 P #0(u.7: obj, v.8: obj)
+  release q.6 P #0(u.7, v.8)
+  let o.9: unit = extern Prelude.println(u.7)
+  let o.10: unit = extern Prelude.println(v.8)
+  unpack p.2 P #0(s.11: obj, t.12: obj)
+  release p.2 P #0(s.11, t.12)
+  let o.13: unit = extern Prelude.println(s.11)
+  let o.14: unit = extern Prelude.println(t.12)
+  return o.14
+}}
+"
+    );
+    assert_eq!(run_lir(&text), ("2\n1\n1\n2\n".to_string(), Ok(())));
+    let stats = checked_stats(&text);
+    // ダミーと2つの`P`の3回
+    assert_eq!((stats.reuses, stats.allocations), (0, 3));
+}
+
+/// その場の書き換えの道を通す。正しいLIRでは書かない引数は箱に残っている値と同じなので、このテストは書かない印を
+/// 無視して書き直す実装と見分けない。書かないフィールドを確かめるのは、空のtokenの道の次のテストである。
+#[test]
+fn a_skipped_field_keeps_its_value() {
+    let text = format!(
+        "{P}fn main() -> unit {{
+  let a.0: obj = const \"1\"
+  let b.1: obj = const \"2\"
+  let p.2: obj = con P #0(a.0, b.1)
+  unpack p.2 P #0(x.3: obj, y.4: obj)
+  let r.5: token = release p.2 P #0(x.3, y.4)
+  decref y.4
+  let c.6: obj = const \"3\"
+  let q.7: obj = con P #0(=x.3, c.6) reuse r.5 in place
+  unpack q.7 P #0(u.8: obj, v.9: obj)
+  release q.7 P #0(u.8, v.9)
+  let o.10: unit = extern Prelude.println(u.8)
+  let o.11: unit = extern Prelude.println(v.9)
+  return o.11
+}}
+"
+    );
+    assert_eq!(run_lir(&text), ("1\n3\n".to_string(), Ok(())));
+    assert_eq!(checked_stats(&text).reuses, 1);
+}
+
+/// 共有された箱のtokenは空なので、`con`は新しい箱を確保し、書かない印の引数も書く。書かなければ新しい箱の
+/// フィールドが空のままになり、出力が違うか、引数の参照が漏れる。元の値はそのまま残る。
+#[test]
+fn a_skipped_field_is_written_when_the_token_is_empty() {
+    let text = format!(
+        "{P}fn main() -> unit {{
+  let a.0: obj = const \"1\"
+  let b.1: obj = const \"2\"
+  let p.2: obj = con P #0(a.0, b.1)
+  dup p.2
+  unpack p.2 P #0(x.3: obj, y.4: obj)
+  let r.5: token = release p.2 P #0(x.3, y.4)
+  decref y.4
+  let c.6: obj = const \"3\"
+  let q.7: obj = con P #0(=x.3, c.6) reuse r.5 in place
+  unpack q.7 P #0(u.8: obj, v.9: obj)
+  release q.7 P #0(u.8, v.9)
+  let o.10: unit = extern Prelude.println(u.8)
+  let o.11: unit = extern Prelude.println(v.9)
+  unpack p.2 P #0(s.12: obj, t.13: obj)
+  release p.2 P #0(s.12, t.13)
+  let o.14: unit = extern Prelude.println(s.12)
+  let o.15: unit = extern Prelude.println(t.13)
+  return o.15
+}}
+"
+    );
+    assert_eq!(run_lir(&text), ("1\n3\n1\n2\n".to_string(), Ok(())));
+    let stats = checked_stats(&text);
+    // ダミーと2つの`P`の3回
+    assert_eq!((stats.reuses, stats.allocations), (0, 3));
+}
+
+/// 別の型の同じ大きさのコンストラクタが箱を使うと、ヘッダのタグが書き直され、switchはそのタグのcaseに進む。
+/// `run_lir`は検査モードと速いモードの両方で流す。
+#[test]
+fn another_constructor_rewrites_the_header() {
+    let text = format!(
+        "{P}layout E {{ L(obj), R(obj, obj) }}
+fn main() -> unit {{
+  let a.0: obj = const \"1\"
+  let b.1: obj = const \"2\"
+  let p.2: obj = con P #0(a.0, b.1)
+  unpack p.2 P #0(x.3: obj, y.4: obj)
+  let r.5: token = release p.2 P #0(x.3, y.4)
+  let q.6: obj = con E #1(y.4, x.3) reuse r.5
+  switch q.6 E {{ #0(z.7: obj) -> b1, #1(u.8: obj, v.9: obj) -> b2 }}
+b1:
+  release q.6 E #0(z.7)
+  decref z.7
+  let s.10: obj = const \"left\"
+  let o.11: unit = extern Prelude.println(s.10)
+  return o.11
+b2:
+  release q.6 E #1(u.8, v.9)
+  let o.12: unit = extern Prelude.println(u.8)
+  let o.13: unit = extern Prelude.println(v.9)
+  return o.13
+}}
+"
+    );
+    assert_eq!(run_lir(&text), ("2\n1\n".to_string(), Ok(())));
+    assert_eq!(checked_stats(&text).reuses, 1);
+}
+
+/// `exit`の中断が、生きているtokenを通って巻き戻す。巻き戻しがtokenを手放さなければ、検査モードのrunの終わりの検査が
+/// 箱を漏れとして報告する (docs/spec/native.mdの「巻き戻しの地点」)。両方のモードで流す。
+#[test]
+fn a_live_token_is_dropped_on_exit() {
+    let text = format!(
+        "{P}fn main() -> unit {{
+  let a.0: obj = const \"1\"
+  let b.1: obj = const \"2\"
+  let p.2: obj = con P #0(a.0, b.1)
+  unpack p.2 P #0(x.3: obj, y.4: obj)
+  let r.5: token = release p.2 P #0(x.3, y.4)
+  let z.6: unit = extern Prelude.exit(3)
+  let q.7: obj = con P #0(y.4, x.3) reuse r.5
+  decref q.7
+  return z.6
+}}
+"
+    );
+    let program = program(&text);
+    for debug_heap in [true, false] {
+        let host = capture();
+        let out = host.output();
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let finished = execute_finished(&program, &config, host.into_ref(), Engine::Native)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!((finished.exit, out.contents()), (Some(3), String::new()));
+    }
+}
+
+/// stdの`List.map`は、ループの中で手放すconsの箱を新しいconsに使い回す。`release`が新しい`con`の後に
+/// あっても、パスが`con`の前へ上げる (docs/spec/lir.mdの「reuse」)。`List.reverse`の箱も使い回すので、要素ごとに
+/// 2回である。
+#[test]
+fn std_list_map_reuses_its_cells() {
+    let text = "import List\n\
+range : Int -> Int -> <Panic> List Int
+range lo hi = if lo > hi then [] else lo :: range (lo + 1) hi
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let ys = List.map (fn x -> x * 3 + 1) (range 1 1000)
+  println (show (List.length ys))
+";
+    let (out, result) = run_source_stats(text);
+    assert_eq!(out, "1000\n", "{result:?}");
+    let stats = result.unwrap_or_else(|error| panic!("{error}"));
+    assert!(stats.reuses >= 2000, "{stats:?}");
+}
+
+/// 中断が生きているtokenを通るUIテストで、reuseが本当に起きていること。`run`に埋め込まれた`step`が`Stats`
+/// の箱をtokenにし、中断しうる呼び出し (`check`、`probe`) をまたいで作り直すので、中断の前の3回は箱を使い回し、
+/// 中断の回はtokenが生きたまま巻き戻る。reuseが起きなくなると、UIテストは巻き戻しのtokenを確かめないまま
+/// 通ってしまう (docs/spec/native.mdの「巻き戻しの地点」)。
+#[test]
+fn the_unwinding_ui_tests_reuse_boxes() {
+    for (name, text, output) in [
+        (
+            "reuse_token_exit",
+            include_str!("../../../tests/ui/run/unwind/reuse_token_exit.em"),
+            "count 1\ncount 2\ncount 3\n",
+        ),
+        (
+            "reuse_token_io_failure",
+            include_str!("../../../tests/ui/run/unwind/reuse_token_io_failure.em"),
+            "count 1\ncount 2\ncount 3\nErr cannot open `missing.txt`: not found\n",
+        ),
+    ] {
+        let (out, result) = run_source_stats(text);
+        assert_eq!(out, output, "{name}: {result:?}");
+        let stats = result.unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(stats.reuses > 0, "{name}: {stats:?}");
+    }
 }

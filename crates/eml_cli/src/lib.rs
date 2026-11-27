@@ -329,7 +329,7 @@ pub enum Engine {
     Native,
 }
 
-/// `program`を`engine`で1回流す。ネイティブは既定の`Options`に塞ぎのフックを足して流し、`RunStats`は数えない。
+/// `program`を`engine`で1回流す。ネイティブは既定の`Options`に塞ぎのフックを足して流す。
 #[cfg(feature = "run")]
 pub fn execute_on(
     engine: Engine,

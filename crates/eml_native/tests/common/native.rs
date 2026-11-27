@@ -5,7 +5,7 @@ use eml_cabi::Linked;
 use eml_lir::Trusted;
 use eml_native::{Arg, NativeMachine};
 use eml_nrt::image::Start;
-use eml_nrt::{Finished, HostRef, RunConfig, RuntimeError, Thunk};
+use eml_nrt::{Finished, HostRef, RunConfig, RunStats, RuntimeError, Thunk};
 use eml_rt::{Buffering, Ctx, Fast, StdHost, Word};
 use eml_test_support::{Engine, capture, execute_finished};
 
@@ -446,4 +446,55 @@ pub fn native_checked(text: &str) -> (String, Result<Finished, RuntimeError>) {
 /// verifierが拒むLIRのテキストを、検査モードのネイティブのコードで流す (`unverified`、`run_checked`)。
 pub fn native_unverified(text: &str) -> (String, Result<Finished, RuntimeError>) {
     run_checked(&unverified(text))
+}
+
+/// 手書きのLIRをverifierに通し、検査モードのネイティブのコードで流す。通ったときは速いネイティブのコードでも流し、出力が
+/// 同じことを確かめる。速いモードは前提を確かめないので、検査モードが通らなかったLIRでは流さない
+/// (docs/implementation/testing.mdの「`eml_native` の検証」)。
+pub fn run_lir(text: &str) -> (String, Result<(), RuntimeError>) {
+    let (out, result) = run_lir_stats(text);
+    (out, result.map(|_| ()))
+}
+
+/// `run_lir`と同じく流し、検査モードの`RunStats`を返す。
+pub fn run_lir_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
+    run_both(&program(text))
+}
+
+/// verifierが拒むLIRを`unverified`で包み、検査モードのネイティブのコードだけで流す。
+pub fn run_unverified(text: &str) -> (String, Result<(), RuntimeError>) {
+    let (out, result) = native_unverified(text);
+    (out, result.map(|_| ()))
+}
+
+/// emlのソースをコンパイルし、`run_lir_stats`と同じく流す。ネイティブのコードはそのプログラムを受け入れなければならない。
+pub fn run_source_stats(source: &str) -> (String, Result<RunStats, RuntimeError>) {
+    let program = eml_test_support::lir(source);
+    let forms = eml_native::unsupported(&program);
+    assert!(
+        forms.is_empty(),
+        "native code refuses the program: {forms:?}"
+    );
+    run_both(&program)
+}
+
+fn run_both(program: &Trusted) -> (String, Result<RunStats, RuntimeError>) {
+    let (out, result) = run_checked(program);
+    if result.is_ok() {
+        let host = capture();
+        let fast_out = host.output();
+        let fast = execute_finished(
+            program,
+            &RunConfig::default(),
+            host.into_ref(),
+            Engine::Native,
+        );
+        assert_eq!(fast.map(|_| ()), Ok(()), "the fast mode failed");
+        assert_eq!(
+            fast_out.contents(),
+            out,
+            "the fast mode printed something else"
+        );
+    }
+    (out, result.map(|finished| finished.stats))
 }

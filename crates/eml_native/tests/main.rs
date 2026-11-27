@@ -8,6 +8,7 @@ mod clif;
 mod common;
 mod data;
 mod effects;
+mod evidence;
 mod machine;
 mod placement;
 mod raise;
