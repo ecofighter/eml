@@ -65,9 +65,9 @@ pub(crate) fn create() -> Result<Native, GuiError> {
             "cannot open the GUI: WinUI needs Windows 11 or later".to_string(),
         ));
     }
-    // DPIを知らないプロセスでは、Windowsがウィンドウをビットマップとして引き伸ばし、`GetDpiForWindow`は96を返す。
+    // DPIに対応しないプロセスでは、Windowsがウィンドウをビットマップとして引き伸ばし、`GetDpiForWindow`は96を返す。
     // manifestでなくここで置くのは、GUIを開かない`eml`のプロセスに影響させないためである。既に置かれていて断られても、
-    // 描画がぼやけるだけで配置は正しいので、失敗は無視する
+    // 配置は正しく、悪くても描画がぼやけるだけなので、失敗は無視する (docs/implementation/architecture.md の「`eml_gui`の内部」)
     // SAFETY: 引数は文書にある定数の擬似ハンドルで、プロセスの設定を1つ変えるだけである
     let _ =
         unsafe { SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2 as *mut core::ffi::c_void) };
@@ -453,7 +453,7 @@ impl WinUiWidgets {
     }
 
     /// `Remeasure`の後にも呼ばれ、表示しているウィンドウの大きさと最小の大きさをその場で変える。`Activate`は最初の1回だけ
-    /// にする。表示し直すたびにウィンドウを前に出さないためである。
+    /// にする。表示し直すたびにウィンドウを前に出さないためである (docs/implementation/architecture.md の「`eml_gui`の内部」)。
     fn show(
         &self,
         window: &Window,
@@ -471,15 +471,16 @@ impl WinUiWidgets {
         let scale = if dpi == 0 { 1.0 } else { f64::from(dpi) / 96.0 };
         let px = |v: f32| (f64::from(v) * scale).ceil() as i32;
         let client_area = app_window.cast::<IAppWindow2>()?;
-        client_area.ResizeClient(SizeInt32 {
-            width: px(size.w),
-            height: px(size.h),
-        })?;
-        // 最小の大きさは枠を含むウィンドウ全体の大きさで置く
+        // 最小の大きさは枠を含むウィンドウ全体の大きさで置く。枠の幅は中身の大きさによらない。最小を大きさより先に置くのは、
+        // 表示し直すときに、前の最小が新しい大きさを押さえないためである
         let (outer, client) = (app_window.Size()?, client_area.ClientSize()?);
         let presenter = app_window.Presenter()?.cast::<IOverlappedPresenter3>()?;
         presenter.SetPreferredMinimumWidth(Some(px(min.w) + outer.width - client.width))?;
         presenter.SetPreferredMinimumHeight(Some(px(min.h) + outer.height - client.height))?;
+        client_area.ResizeClient(SizeInt32 {
+            width: px(size.w),
+            height: px(size.h),
+        })?;
         if first { window.Activate() } else { Ok(()) }
     }
 }
@@ -538,8 +539,9 @@ impl Widgets for WinUiWidgets {
             let theme = root
                 .cast::<IFrameworkElement>()?
                 .ActualThemeChanged(move |_, _| push(RawEvent::Invalidate(id)))?;
-            // XAMLの島が動き出すまで、コントロールはテンプレートもテーマの資源も持たず、ボタンは文字の高さで幅0と測れる。
-            // 島の最初の配置の後に来る`Loaded`で、測り直しを求める
+            // ウィンドウのXAMLが最初に配置されるまで、コントロールはテンプレートもテーマの資源も持たず、ボタンは幅0で文字の
+            // 高さに測られる。最初の配置の後に来る`Loaded`で、測り直しを求める
+            // (docs/implementation/architecture.md の「`eml_gui`の内部」)
             let loaded = root
                 .cast::<IFrameworkElement>()?
                 .Loaded(move |_, _| push(RawEvent::Remeasure(id)))?;

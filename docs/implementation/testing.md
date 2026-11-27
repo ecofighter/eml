@@ -797,7 +797,7 @@ nativeのGUIのbackendは、自動のテストでは開かない。CIの`gui-nat
 
 Linuxでは`nix build`で組んだ`eml`を、X11かWaylandのデスクトップ (`DISPLAY`か`WAYLAND_DISPLAY`がある) で`timeout 60 result/bin/eml run tests/ui/run/gui/<例>.em`として動かす。`result/bin/eml`は`wrapQtAppsHook`が作ったラッパーで、Qtのプラグインの場所を置く。Linuxの6は、デスクトップがアプリケーションを終わらせる操作 (Dockやウィンドウの一覧の「終了」など) で、ウィンドウを1つずつ閉じる。7のDockのアイコンはLinuxにはない。9はLinuxとmacOSにはない
 
-Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-AppxPackage *WindowsAppRuntime.2*`に出る) の下で、`cargo run -p eml_cli --features gui-native -- run tests/ui/run/gui/<例>.em`として動かす。表示の拡大率は、100%と150%の両方で確かめる。9は、runtimeのないWindowsでcounterを動かして確かめる。Windowsの6は、タスクバーの「すべてのウィンドウを閉じる」で、ウィンドウを1つずつ閉じる。7のDockのアイコンはWindowsにはない
+Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-AppxPackage *WindowsAppRuntime.2*`に出る) の下で、`cargo run -p eml_cli --features gui-native -- run tests/ui/run/gui/<例>.em`として動かす。表示の拡大率は、100%と150%の両方で確かめる。150%では、文字がぼやけずに描かれ、タスクマネージャーの「詳細」の「DPI認識」の列で、`eml.exe`がモニターごとのv2 (Per-Monitor v2) であることも確かめる。プロセスがDPIに対応しないと、Windowsがウィンドウ全体を引き伸ばすので、8の配置は同じに見えるからである。9は、runtimeのないWindowsでcounterを動かして確かめる。Windowsの6は、タスクバーの「すべてのウィンドウを閉じる」で、ウィンドウを1つずつ閉じる。7のDockのアイコンはWindowsにはない
 
 ## CI
 

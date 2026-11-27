@@ -195,7 +195,7 @@
 - WinUIのbackendを動かしたのは、Windows App SDK 2.7.0.0のruntimeを入れたWindows 11だけである。そこでは、bootstrapがruntimeを見つけ、「GUIの手での確認」の1から5と8が通った。6と7は確かめていない ([テスト戦略](testing.md)の「GUIの手での確認」)。CIのrunnerにはruntimeがないので、CIでは確かめない ([配布とGUIの前提](distribution.md)の「Windows App SDKのruntime」)
 - WinUIの`Application`を作れなかったときに、`EnqueueEventLoopExit`で`Application::Start`を戻す道は試していない
 - `eml run`の外のプロセスで、ネイティブのGUIをrunをまたいで開くこと (`Machine`のAPIのhost) は試していない。WinUIのbackendは、Rustのruntimeが`main`と名づけたスレッドでだけ開く。AppKitとQtのbackendは、プロセスの最初のスレッドで開く ([コンパイラの構成](architecture.md)の「`eml_gui`の内部」)
-- ウィンドウのネイティブの最小の大きさは初めて表示するときに決め、後で中身が増えても変えない
+- ウィンドウのネイティブの最小の大きさは、初めて表示するときと、backendが`Remeasure`を積んだとき (WinUIの`Loaded`) にだけ決め、後で中身が増えても変えない
 - 拡張の継ぎ目はcfgのfeatureで、`Plugin`のtraitはない ([FFI と拡張の設計](../future/ffi.md)の「拡張」)
 - `eml repl`ではGUIを開けず、`Gui.run`は`NotAvailable`で失敗する ([ロードマップ](../future/roadmap.md)の「REPL」)
 - GUIのタスクが待つタスク(`await`するタスクや、`app`の中の`Async.scope`の本体)から満ちたchannelへの`Gui.post`は、いつまでも待つ。GUIが開いている間はrunの外の待ちの印が立つので、デッドロックとしても報告しない([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)

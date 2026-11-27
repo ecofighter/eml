@@ -127,7 +127,7 @@ pub enum RawEvent {
     User(Event),
     Resized(Id, Size),
     Invalidate(Id),
-    /// ウィンドウを表示した時には、backendが中身をまだ確かに測れなかった。自然な大きさを測り直して表示し直す。
+    /// ウィンドウを表示したときには、backendが中身をまだ正しく測れなかった。自然な大きさを測り直して表示し直す。
     Remeasure(Id),
     QuitRequested,
 }
