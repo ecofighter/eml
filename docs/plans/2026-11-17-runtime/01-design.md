@@ -502,7 +502,7 @@ Decisions and reasons:
 | `eml_gui` | `native` |
 | `eml_cli` | `types` < `core` < `run`; `tls`, `gui` (default), `gui-native`; the only crate that forwards |
 | `eml_test_support` | stage features |
-| `eml_sched`, `eml_steps`, `eml_native`, `eml_clink`, `eml_cabi` | none: hooks are `Policy::at`; `Script` is ordinary public API; `load_unverified` goes with `eml_vm` (a test that needs IR the verifier rejects is deleted or restated as a verifier test, listed by VR-2) |
+| `eml_sched`, `eml_steps`, `eml_native`, `eml_clink`, `eml_cabi` | none: hooks are `Policy::at`; `Script` is ordinary public API; `load_unverified` and `eml_vm`'s `testing` are gone at `native-checked` (NC-3b): tests that need IR the verifier rejects run on native code through `Trusted::unverified` |
 
 ### 13.3 Moves per stage
 
@@ -510,7 +510,7 @@ Decisions and reasons:
 |---|---|---|
 | `sched-core` | new `eml_steps`; edge `eml_sched -> eml_steps`; new files in `eml_sched` | EDGES; `expect_tree`: `eml_steps` reaches no workspace crate; the `eml_sched` check keeps its list |
 | `jit-tasks` | `eml_nrt/src/rows/task.rs`, `rows/blocking.rs` born in place (`eml_nrt/src/rows.rs` is the module root); edge `eml_nrt -> eml_cabi` | EDGES |
-| `vm-retire` | `eml_vm` deleted; the map below; features move to `eml_nrt`; `eml_sched`'s and `eml_vm`'s `testing` deleted; edge `eml_cli -> eml_nrt` | EDGES, FEATURES, REEXPORTS rewritten; closure checks use `eml_nrt/tls`, `eml_nrt/gui-native`; the three `eml_vm` checks and the `load_unverified` check deleted; new: `grep -rn 'eml_fatal\|extern "C"' crates/eml_sched/src` empty |
+| `vm-retire` | `eml_vm` deleted; the map below; features move to `eml_nrt`; `eml_sched`'s `testing` deleted; edge `eml_cli -> eml_nrt` | EDGES, FEATURES, REEXPORTS rewritten; closure checks use `eml_nrt/tls`, `eml_nrt/gui-native`; the three `eml_vm` checks deleted; new: `grep -rn 'eml_fatal\|extern "C"' crates/eml_sched/src` empty |
 
 The `vm-retire` file map (no target exists before the move):
 

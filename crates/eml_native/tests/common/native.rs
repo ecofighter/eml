@@ -15,14 +15,12 @@ pub fn program(text: &str) -> Trusted {
 }
 
 fn parsed(text: &str) -> eml_lir::Program {
-    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-    program
+    eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"))
 }
 
 pub fn trust(program: eml_lir::Program) -> Trusted {
     // SAFETY: 手書きのLIRの約束はテストが負う。テストは検査モードでも動かして確かめる
-    unsafe { Trusted::new(program) }
+    unsafe { Trusted::new(program) }.unwrap_or_else(|error| panic!("{error}"))
 }
 
 pub fn host() -> HostRef {

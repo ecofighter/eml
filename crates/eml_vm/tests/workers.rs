@@ -13,7 +13,7 @@ use eml_vm::{Finished, Machine, RunConfig, RuntimeError};
 
 use eml_test_support::schedule_independent;
 
-use crate::common::{parse, trusted};
+use crate::common::trusted;
 
 /// `par` の両方の子が値を返し、親が和を表示する。
 const PAR: &str = "\
@@ -354,7 +354,7 @@ fn twice(p.0: unit) -> tobj {{
     let config = RunConfig::default()
         .with_debug_heap(true)
         .with_control(limits(2));
-    let (_, result) = crate::common::execute_unverified(&parse(&text), &config);
+    let (_, result) = eml_test_support::execute(&crate::common::unverified(&text), &config);
     let error = result.unwrap_err();
     assert!(
         matches!(

@@ -3,12 +3,11 @@
 //! 失敗で終わるrunは、censusを取らない致命的な誤りの道で終わるので、そのテストでは、サービスが後に何も持たないことを
 //! 確かめない (docs/spec/native.mdの「externの失敗」)。
 #![cfg(not(miri))]
-use eml_lir::{Prim, Rhs, Stmt};
 use eml_native::LoadError;
 use eml_nrt::RunConfig;
 use eml_test_support::{Engine, capture, execute_finished};
 
-use crate::common::native::{agree, agree_source, machine, native, program, trust};
+use crate::common::native::{agree, agree_source, machine, native, program};
 
 /// `agree_source`と同じだが、ネイティブのrunの標準出力が`expected`であることも確かめる。ハンドラが失敗を捕まえたことを、
 /// VMと同じだというだけでなく文で確かめるためである。
@@ -364,55 +363,4 @@ fn boom(p.0: unit) -> tobj {{
     );
     agree(&text);
     assert_eq!(native(&text), ("after\n".to_string(), Ok(None)));
-}
-
-/// verifierを通さずに読んだプログラムの`evv_mask`の項目を空にして読み込むと、どのビルドでも読み込みのverifierが断って
-/// panicする。下ろしの`assert`は2つ目の守りとして残る。
-#[test]
-fn release_check_an_empty_mask_panics() {
-    let mut program = eml_lir::parse(
-        "\
-effect Other { ask(unit) -> tobj }
-fn main() -> unit {
-  let w.0: evv = prim evv_get()
-  let m.1: evv = prim evv_mask[Other](w.0)
-  decref w.0
-  decref m.1
-  return ()
-}
-",
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
-    let mut emptied = 0;
-    for block in program.functions.iter_mut().flat_map(|f| &mut f.blocks) {
-        for stmt in &mut block.stmts {
-            if let Stmt::Let {
-                rhs: Rhs::Prim(Prim::EvvMask(items), _),
-                ..
-            } = stmt
-            {
-                items.clear();
-                emptied += 1;
-            }
-        }
-    }
-    assert_eq!(emptied, 1);
-    let program = trust(program);
-    let linked = eml_test_support::link(&program);
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut machine = machine();
-        let _ = machine.load(&program, &linked);
-    }))
-    .expect_err("the load panics");
-    let message = match panic.downcast::<String>() {
-        Ok(message) => *message,
-        Err(panic) => panic
-            .downcast::<&str>()
-            .map(|message| message.to_string())
-            .unwrap_or_default(),
-    };
-    assert!(
-        message.contains("invalid LIR at the native load"),
-        "{message}"
-    );
 }

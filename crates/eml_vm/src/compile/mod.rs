@@ -63,23 +63,21 @@ impl<M: Mode> CodeBase<M> {
             self.functions.is_empty(),
             "internal error: load on a machine that has code; use extend"
         );
-        self.load_verified(program, linked)
+        self.add(program, linked)
     }
 
     /// プログラムを追記し、エントリの関数の番号を返す。すでにある名前の関数は前の番号を使い、ない名前の関数だけを変換して
-    /// 末尾に足す。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭を引くので、関数の先頭の位置が決まる前に
-    /// 呼び出しを書ける。名前が同じ関数はいつも同じコードになるので (docs/spec/vm.md の「追記」)、debug ビルドでは
+    /// 末尾に足す。呼び出しは関数の番号で指し、VMが`FnEntry`から先頭を引くので、関数の先頭の位置が決まる前に
+    /// 呼び出しを書ける。名前が同じ関数はいつも同じコードになるので (docs/spec/vm.mdの「追記」)、debugビルドでは
     /// すでにある名前の関数も変換し直して比べる。表を書き始めた後の誤りは表を使えなくし、この後の読み込みと実行は
-    /// どのビルドでもpanicする。何も書く前の誤り (`Invalid`、`MultiValueEntry`、Cの表の`Mismatch`) の後は、
+    /// どのビルドでもpanicする。何も書く前の誤り (`MultiValueEntry`、Cの表の`Mismatch`) の後は、
     /// 表を使い続けてよい。
     ///
     /// `linked` は、このプログラムの C の表をつないだ結果である。ポインタが組にした宣言を解決したものであることは
     /// `Linked::new` の約束で、ここでは `fits` でその宣言をプログラムの表と比べる。合わないのは呼び手の誤りなので、
     /// panic する (docs/spec/vm.md の「C の関数の命令」)。
     ///
-    /// `linked`を比べた後に、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムは
-    /// `CodeBase`に何も書かずに`Invalid`で断る。たどるのは変換する関数だけで、debugのビルドでは変換し直す関数もたどる。プログラム全体の規則は
-    /// プログラム全体に当てる (docs/spec/vm.mdの「追記」)。
+    /// 巻き戻しの表は`Trusted`のものを使う (docs/spec/vm.mdの「巻き戻しの表」)。
     ///
     /// # Safety
     ///
@@ -91,70 +89,15 @@ impl<M: Mode> CodeBase<M> {
         program: &Trusted,
         linked: &Linked,
     ) -> Result<u32, CompileError> {
-        self.load_verified(program, linked)
+        self.add(program, linked)
     }
 
-    fn load_verified(&mut self, program: &Trusted, linked: &Linked) -> Result<u32, CompileError> {
-        self.load_with(program, linked, |code| {
-            eml_lir::unwind::verified_for(program, |index| code.walked(program, index))
-                .map_err(CompileError::Invalid)
-        })
-    }
-
-    /// verifierを通さずにプログラムを読み込む。verifierが拒む関数はエントリの行だけを持ち、地点の行を持たないので、
-    /// その関数の地点で止まったフレームを通る中断は内部の誤りになる。VM自身の見張りと検査モードを確かめるテストの
-    /// ためだけにある (docs/implementation/testing.mdの「`eml_vm` のテスト」)。
-    ///
-    /// # Safety
-    ///
-    /// プログラムは、呼ぶテストがわざと起こす誤りを除いて、verifierが確かめる規則をすべて含む実行の前提を満たす
-    /// (docs/spec/lir.mdの「実行の前提」)。テストは、VMの見張りと検査モードだけを守りとして受け入れる。関数を持つ表に
-    /// 読み込むときは、`extend`のP2も約束する。
-    #[cfg(feature = "testing")]
-    pub unsafe fn load_unverified(
-        &mut self,
-        program: &Program,
-        linked: &Linked,
-    ) -> Result<u32, CompileError> {
-        self.load_with(program, linked, |code| {
-            Ok(
-                eml_lir::unwind::points(program, |index| code.walked(program, index))
-                    .into_iter()
-                    .map(|table| {
-                        table.map(|table| {
-                            table.unwrap_or(Unwinds {
-                                entry: Vec::new(),
-                                points: Vec::new(),
-                            })
-                        })
-                    })
-                    .collect(),
-            )
-        })
-    }
-
-    /// 読み込みが表を要る関数。変換する関数 (名前がまだない関数) と、debugのビルドでは変換し直して比べる関数である。
-    fn walked(&self, program: &Program, FnIdx(i): FnIdx) -> bool {
-        cfg!(debug_assertions)
-            || !self
-                .index
-                .functions
-                .contains_key(&program.functions[i as usize].name)
-    }
-
-    /// `tables`は`walked`の関数の巻き戻しの表を、`program.functions`の欄に並べて返す。
-    fn load_with(
-        &mut self,
-        program: &Program,
-        linked: &Linked,
-        tables: impl FnOnce(&Self) -> Result<Vec<Option<Unwinds>>, CompileError>,
-    ) -> Result<u32, CompileError> {
+    fn add(&mut self, program: &Trusted, linked: &Linked) -> Result<u32, CompileError> {
         self.refuse_spent();
         assert!(
             linked.fits(&program.c_functions, &program.c_handles),
             "the linked calls and dtors line up with the C tables of the program"
         );
-        let unwinds = tables(self)?;
         let entry = program.function(program.entry);
         if entry.rets.len() > 1 {
             return Err(CompileError::MultiValueEntry {
@@ -164,7 +107,7 @@ impl<M: Mode> CodeBase<M> {
         let c_links = self.c_links(program, linked)?;
         // 書く途中のpanicも表を途中まで書いたまま残すので、書き終えるまでは使えないものとしておく
         self.spent = true;
-        let written = self.write(program, &unwinds, c_links);
+        let written = self.write(program, program.unwinds(), c_links);
         self.spent = written.is_err();
         written
     }
@@ -182,7 +125,7 @@ impl<M: Mode> CodeBase<M> {
     fn write(
         &mut self,
         program: &Program,
-        unwinds: &[Option<Unwinds>],
+        unwinds: &[Unwinds],
         c_links: CLinks,
     ) -> Result<u32, CompileError> {
         let known_c = self.c_functions.len();
@@ -218,7 +161,7 @@ impl<M: Mode> CodeBase<M> {
                     program,
                     FnIdx(i as u32),
                     function,
-                    unwinds[i].as_ref().expect("a converted function is walked"),
+                    &unwinds[i],
                     &links,
                     &mut pool,
                     out,
@@ -437,7 +380,7 @@ fn async_entries(program: &Program, index: &Index) -> Result<Option<AsyncEntries
 )]
 fn check_known<M: Mode>(
     program: &Program,
-    unwinds: &[Option<Unwinds>],
+    unwinds: &[Unwinds],
     links: &Links,
     functions: &[FnEntry],
     known: usize,
@@ -456,9 +399,7 @@ fn check_known<M: Mode>(
             program,
             FnIdx(i as u32),
             function,
-            unwinds[i]
-                .as_ref()
-                .expect("a debug build walks every function"),
+            &unwinds[i],
             links,
             pool,
             out,

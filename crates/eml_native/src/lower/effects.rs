@@ -118,8 +118,8 @@ impl<M: Module> FnLower<'_, '_, M> {
         };
         match prim {
             Prim::EvvMask(items) => {
-                // 項目のないマスクは0バイトのデータの物になる。LIRのverifierはdebugのビルドでそれを断り、この確かめは
-                // どのビルドでも成り立つ
+                // 項目のないマスクは0バイトのデータの物になる。`Trusted::new`のverifierはどのビルドでもそれを断り、
+                // この確かめは`Trusted::unverified`のプログラムにも成り立つ
                 assert!(
                     !items.is_empty(),
                     "`{}` masks no evidence",

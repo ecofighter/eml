@@ -11,5 +11,6 @@ mod perceus;
 mod reuse;
 mod shape;
 mod text;
+mod trusted;
 mod unwind;
 mod verify;

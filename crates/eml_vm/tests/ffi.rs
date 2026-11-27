@@ -21,7 +21,7 @@ use eml_vm::{
 use crate::common::c::{
     ADD_I32_CALLS, calls, dtors, linked, published, rs_frees, rs_gate_open, rs_gate_wait,
 };
-use crate::common::trusted;
+use crate::common::{trusted, unverified};
 
 fn linked_all(program: &Trusted) -> Linked {
     linked(program, &calls(), &dtors())
@@ -348,7 +348,7 @@ fn a_misaligned_linked_table_is_a_programming_error() {
     // ためである
     let narrower = trusted(&ABS_FIRST.replace("(i64) -> i64", "(i32) -> i64"));
     rejected(&narrower, &linked_all(&first), "another word type");
-    let text = trusted(&ABS_FIRST.replace("(i64) -> i64", "(text) -> i64"));
+    let text = unverified(&ABS_FIRST.replace("(i64) -> i64", "(text) -> i64"));
     rejected(
         &text,
         &linked_all(&first),

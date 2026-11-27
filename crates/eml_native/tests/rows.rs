@@ -474,12 +474,7 @@ fn entry$main() -> unit {
 }
 ";
         let program = program(text);
-        let points = eml_lir::unwind::points(&program, |_| true);
-        let f = points[0]
-            .as_ref()
-            .expect("every function is wanted")
-            .as_ref()
-            .unwrap_or_else(|error| panic!("{error}"));
+        let f = &program.unwinds()[0];
         // 掛け算は`f`の入口のブロックの2つ目の文で、その地点は`s.1`を持つ
         let multiply = f
             .points

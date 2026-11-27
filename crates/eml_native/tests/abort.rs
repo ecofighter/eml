@@ -35,19 +35,14 @@ fn entry$main() -> unit {
 }
 
 /// `program`の関数`name`の、ただ1つの直接の呼び出しの巻き戻しの地点。
-fn call_point(program: &eml_lir::Program, name: &str) -> eml_lir::unwind::UnwindPoint {
+fn call_point(program: &eml_lir::Trusted, name: &str) -> eml_lir::unwind::UnwindPoint {
     let index = program
         .functions
         .iter()
         .position(|function| function.name == name)
         .unwrap_or_else(|| panic!("no function `{name}`"));
     let function = &program.functions[index];
-    let points = eml_lir::unwind::points(program, |_| true);
-    let unwinds = points[index]
-        .as_ref()
-        .expect("every function is wanted")
-        .as_ref()
-        .unwrap_or_else(|error| panic!("{error}"));
+    let unwinds = &program.unwinds()[index];
     let calls: Vec<_> = unwinds
         .points
         .iter()

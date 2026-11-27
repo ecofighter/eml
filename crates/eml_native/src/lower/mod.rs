@@ -22,8 +22,7 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataId, FuncId, Linkage, Module};
-use eml_lir::unwind::Unwinds;
-use eml_lir::{FnIdx, LirFn, Program, Repr};
+use eml_lir::{FnIdx, LirFn, Program, Repr, Trusted};
 use eml_nrt::Kind;
 use eml_nrt::image::SiteRow;
 
@@ -126,13 +125,9 @@ pub fn signature_of(function: &LirFn) -> Signature {
     tail_signature(&params(function), &rets(function))
 }
 
-/// `unwinds`は、`eml_lir::unwind::verified`が`program`について返した表である。
-pub fn program<M: Module>(
-    module: &mut M,
-    program: &Program,
-    unwinds: Vec<Unwinds>,
-    keep_clif: bool,
-) -> Built<Lowered> {
+/// 巻き戻しの表は`Trusted`のものを使う (docs/spec/native.mdの「巻き戻しの地点」)。
+pub fn program<M: Module>(module: &mut M, trusted: &Trusted, keep_clif: bool) -> Built<Lowered> {
+    let program: &Program = trusted;
     // エントリと`eml$raise`は、プログラムの関数より前に決まった順で宣言する。どの本体もそれらを名指せ、その番号は
     // プログラムによらない
     let mut entries = HashMap::new();
@@ -181,7 +176,12 @@ pub fn program<M: Module>(
     let mut data = Data::default();
     let mut closure_entries = ClosureEntries::default();
     let callees = Callees { program, ids };
-    for ((function, &id), unwinds) in program.functions.iter().zip(&callees.ids).zip(unwinds) {
+    for ((function, &id), unwinds) in program
+        .functions
+        .iter()
+        .zip(&callees.ids)
+        .zip(trusted.unwinds())
+    {
         ctx.func.signature = signature_of(function);
         ctx.func.name = UserFuncName::testcase(names::function(&function.name));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
@@ -194,7 +194,7 @@ pub fn program<M: Module>(
             &callees,
             id,
             function,
-            &unwinds,
+            unwinds,
         );
         functions.push(define(module, &mut ctx, id, keep_clif, sites)?);
     }

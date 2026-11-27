@@ -259,9 +259,9 @@ impl NativeMachine {
     /// `program`のすべての関数をコンパイルする。マシンは1回だけ読み込むので、2回目の呼び出しは、1回目が失敗していても
     /// `LoadError::Loaded`を返す。`load`は`program`を信頼する。その約束は`Trusted`を作った側が負う
     /// (docs/spec/lir.mdの「エンジンの約束」)。ネイティブのコードは実行時に何も確かめない (docs/spec/native.mdの「関数の形」)。
-    /// どのビルドも、この約束のうちverifierが確かめる部分を確かめ、破れていればpanicする。`unsupported`が断る形は、
-    /// 下ろしの中でpanicする。`linked`はプログラムのCの関数をつないだ結果で、その宣言がプログラムの表と違えば、何も
-    /// 作らずに`LoadError::LinkMismatch`を返す。
+    /// 巻き戻しの表は`Trusted`のものを使う。`Trusted`は、すでにverifierを通ったものか、P6の下で作ったものである。
+    /// `unsupported`が断る形は、下ろしの中でpanicする。`linked`はプログラムのCの関数をつないだ結果で、その宣言が
+    /// プログラムの表と違えば、何も作らずに`LoadError::LinkMismatch`を返す。
     pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<Loaded, LoadError> {
         if std::mem::replace(&mut self.asked, true) {
             return Err(LoadError::Loaded);
@@ -270,11 +270,6 @@ impl NativeMachine {
         if !linked.fits(&program.c_functions, &program.c_handles) {
             return Err(LoadError::LinkMismatch);
         }
-        // プログラムを信頼するコード (エントリの形、エフェクトの番号、下ろし) より前に確かめる
-        let unwinds = match eml_lir::unwind::verified(program) {
-            Ok(unwinds) => unwinds,
-            Err(error) => panic!("internal error: invalid LIR at the native load: {error}"),
-        };
         let entry = program.function(program.entry);
         if lower::rets(entry) != [Kind::I64] {
             return Err(LoadError::Entry {
@@ -303,7 +298,7 @@ impl NativeMachine {
             }
         }
         let module = self.module.insert(JITModule::new(builder));
-        let defined = lower::program(module, program, unwinds, self.keep_clif)
+        let defined = lower::program(module, program, self.keep_clif)
             .and_then(|defined| Ok(module.finalize_definitions().map(|()| defined)?));
         let lowered = match defined {
             Ok(lowered) => lowered,
@@ -635,8 +630,9 @@ impl NativeMachine {
         // SAFETY: `image`の表は`self`のもので、呼び出しの間生きていて変わらない。どの`Str`も`String`から作る。どの
         // データのslotも、moduleが値ごとに1つ定義した8バイトにそろえた書ける語で、領域はマシンが終わるまで返さない。
         // ここを呼ぶ`run`と`call`は`&mut self`を取るので、同じslotを使うrunは重ならない。`thunk`は`code`の関数の
-        // 種類の並びのthunkである。その関数は`load`に渡した`Trusted`のプログラムからコンパイルしたもので、どのビルドの
-        // `load`もverifierを通してある (P1)。`run`は入口を空の`evv`で動かし、`call`は呼び手がR-5で、空の`evv`と
+        // 種類の並びのthunkである。その関数は`load`に渡した`Trusted`のプログラムからコンパイルしたもので、その前提は
+        // `Trusted`を作った側が約束する (`Trusted::new`はverifierを通したうえでP1、`Trusted::unverified`はP6。
+        // docs/spec/lir.mdの「エンジンの約束」)。`run`は入口を空の`evv`で動かし、`call`は呼び手がR-5で、空の`evv`と
         // 渡した引数で関数が前提を満たすことを約束する。`argv`はその関数の引数と結果ごとにslotを持ち、引数を入れてある
         unsafe {
             eml_nrt::run::run::<eml_nrt::mode::Fast>(

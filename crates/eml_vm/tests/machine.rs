@@ -16,7 +16,7 @@ use eml_vm::{
     AnyMachine, CompileError, Machine, RunConfig, RuntimeError, capture_host, disassemble,
 };
 
-use crate::common::{parse, trusted};
+use crate::common::{trusted, unverified};
 
 fn names<M: eml_rt::Mode>(machine: &Machine<M>) -> Vec<&str> {
     machine
@@ -37,7 +37,6 @@ fn run_two(first: &str, second: &str) -> String {
         let mut machine = AnyMachine::new(&config, host);
         for text in [first, second] {
             let program = trusted(text);
-            eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
             // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
             let loaded = unsafe { machine.extend(&program, &eml_vm::Linked::default()) }
                 .unwrap_or_else(|error| panic!("{error:?}"));
@@ -351,37 +350,6 @@ fn main() -> unit {
     other.close().unwrap();
 }
 
-/// 読み込みはどのビルドでもプログラムをverifierで確かめ、verifierが拒むプログラムを何も変換せずに断る。文言は規則と
-/// 関数を挙げる (docs/spec/vm.mdの「追記」)。
-#[test]
-fn a_program_the_verifier_refuses_is_not_loaded() {
-    let text = "\
-fn main() -> unit {
-  let s.0: obj = const \"kept\"
-  return ()
-}
-";
-    let (host, _) = capture_host(Default::default());
-    let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
-    let program = trusted(text);
-    let error = machine
-        .load(&program, &eml_vm::Linked::default())
-        .unwrap_err();
-    assert!(
-        matches!(&error, CompileError::Invalid(error) if error.function == "main"),
-        "{error:?}"
-    );
-    assert_eq!(
-        error.to_string(),
-        "invalid LIR: `s.0` is still owned at the end of the function in `main`"
-    );
-    assert!(names(&machine).is_empty());
-    assert_eq!(
-        eml_vm::compile_error(&program, error).to_string(),
-        "internal error: invalid LIR: `s.0` is still owned at the end of the function in `main`"
-    );
-}
-
 /// 位置だけが違う同じ関数は一致する。命令の位置は関数の先頭からの位置にそろえて比べるので、別の関数の後ろに並べ直した
 /// 写しも同じコードである。
 #[test]
@@ -641,9 +609,10 @@ fn main() -> unit {
         let (host, _) = capture_host(root.clone());
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
-        // SAFETY: 根に`lin`の値を置くことのほかは実行の前提を守り、それを回復の見張りが断る
-        let loaded =
-            unsafe { machine.load_unverified(&parse(text), &eml_vm::Linked::default()) }.unwrap();
+        // 根に`lin`の値を置くのはわざと入れた誤りで、回復の見張りが断る
+        let loaded = machine
+            .load(&unverified(text), &eml_vm::Linked::default())
+            .unwrap();
         errors.push(machine.run(loaded).unwrap_err());
     }
     std::fs::remove_dir_all(&root).unwrap();
@@ -693,7 +662,6 @@ fn a_shown_entry_returns_its_text_after_the_output() {
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
         let program = trusted(SHOWN);
-        eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
         let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
         // SAFETY: P4: `SHOWN`のエントリは文字列を返す
         let (_, text) = unsafe { machine.run_shown(loaded, 100) }.unwrap();

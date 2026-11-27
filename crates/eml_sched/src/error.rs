@@ -17,8 +17,6 @@ pub enum RunFault {
     Stopped(Stop),
     /// verifier を通った IR では起きないはずの誤り。
     Internal(&'static str),
-    /// 所有の段のverifierが拒むプログラムと、その破った規則。読み込みが断る (docs/spec/vm.mdの「`CodeBase` と `FnEntry`」)。
-    Invalid(String),
     /// 実行待ちのタスクも時間の待ちもないのに、終わっていないタスクがある (docs/spec/vm.md の「時計と driver」)。
     Deadlock,
     /// I/O の driver を作れなかったか、driver が壊れた (docs/spec/vm.md の「時計と driver」)。
@@ -41,7 +39,6 @@ impl fmt::Display for RunFault {
             RunFault::Panicked(message) => write!(f, "panicked: {message}"),
             RunFault::Stopped(stop) => write!(f, "{stop}"),
             RunFault::Internal(what) => write!(f, "internal error: {what}"),
-            RunFault::Invalid(rule) => write!(f, "internal error: invalid LIR: {rule}"),
             RunFault::Deadlock => f.write_str(DEADLOCK),
             RunFault::Driver(error) => write!(f, "the I/O driver failed: {error}"),
             RunFault::Park(error) => write!(f, "the main worker's park failed: {error}"),
@@ -145,7 +142,6 @@ impl RuntimeError {
             self,
             RuntimeError::Fault {
                 fault: RunFault::Internal(_)
-                    | RunFault::Invalid(_)
                     | RunFault::Driver(_)
                     | RunFault::Extern(Fault::Heap(_) | Fault::Engine),
                 ..

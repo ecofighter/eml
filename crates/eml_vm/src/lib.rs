@@ -341,23 +341,6 @@ impl<M: Mode> Machine<M> {
         Ok(self.loaded(entry))
     }
 
-    /// verifierを通さずにプログラムを追記する。ほかは`extend`と同じである (`CodeBase::load_unverified`)。
-    ///
-    /// # Safety
-    ///
-    /// `CodeBase::load_unverified`と同じである。
-    #[cfg(feature = "testing")]
-    pub unsafe fn load_unverified(
-        &mut self,
-        program: &Program,
-        linked: &Linked,
-    ) -> Result<Loaded, CompileError> {
-        self.refuse_after_panic();
-        // SAFETY: 呼ぶ側が`CodeBase::load_unverified`の約束を引き継ぐ
-        let entry = unsafe { self.code.load_unverified(program, linked) }?;
-        Ok(self.loaded(entry))
-    }
-
     /// 読み込んだ塊を付け替え、エントリの関数の番号にこの`Machine`の印を付ける。
     fn loaded(&mut self, entry: u32) -> Loaded {
         self.attach_region();
@@ -1564,22 +1547,6 @@ impl AnyMachine {
         }
     }
 
-    /// # Safety
-    ///
-    /// `CodeBase::load_unverified`と同じである。
-    #[cfg(feature = "testing")]
-    pub unsafe fn load_unverified(
-        &mut self,
-        program: &Program,
-        linked: &Linked,
-    ) -> Result<Loaded, CompileError> {
-        // SAFETY: 呼ぶ側が`CodeBase::load_unverified`の約束を引き継ぐ
-        match self {
-            AnyMachine::Fast(machine) => unsafe { machine.load_unverified(program, linked) },
-            AnyMachine::Checked(machine) => unsafe { machine.load_unverified(program, linked) },
-        }
-    }
-
     pub fn run(&mut self, loaded: Loaded) -> Result<Finished, RuntimeError> {
         match self {
             AnyMachine::Fast(machine) => machine.run(loaded),
@@ -1668,18 +1635,10 @@ fn check_leaks(ctx: &mut Ctx<Checked>) -> Result<(), RuntimeError> {
 }
 
 /// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。REPLは`Machine::load`の誤りをこれで報告する。
-/// verifierの誤りは破った規則を残す。配置の規則の誤りは関数を名指さないので、エントリの関数の名前を付ける。
+/// 配置の規則の誤りは関数を名指さないので、エントリの関数の名前を付ける。
 pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
     let entry = || program.function(program.entry).name.clone();
     let (fault, function) = match error {
-        CompileError::Invalid(error) => {
-            let function = if program.functions.iter().any(|f| f.name == error.function) {
-                error.function
-            } else {
-                entry()
-            };
-            (RunFault::Invalid(error.message), function)
-        }
         CompileError::Freeze(_) => (RunFault::Internal(error.what()), entry()),
         CompileError::TooManySlots { ref function }
         | CompileError::Mismatch { ref function }
@@ -1699,5 +1658,5 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
 pub(crate) fn trusted(text: &str) -> Trusted {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
     // SAFETY: テストの手書きLIRの約束はテストが負う。テストは検査モードでも動かして確かめる
-    unsafe { Trusted::new(program) }
+    unsafe { Trusted::new(program) }.unwrap_or_else(|error| panic!("{error}"))
 }

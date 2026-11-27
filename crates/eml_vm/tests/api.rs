@@ -183,7 +183,6 @@ fn main() -> unit {
 }
 ";
     let program = trusted(text);
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
     let control = Arc::new(Control::new(Limits::default()));
     control.interrupt();
     let config = RunConfig::default()
