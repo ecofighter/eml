@@ -191,8 +191,8 @@
 
 ### GUI
 
-- ネイティブのbackendの画面は、3つのOSのどれでもまだ手で確かめていない。CIはネイティブのbackendを組んでつなぐが、テストはどれもstubで流す ([テスト戦略](testing.md)の「GUIの手での確認」)
-- WinUIのbackendは、Windows App SDKのruntimeを入れたWindowsで動かしたことがない。CIのrunnerにはruntimeがない。そのため、bootstrapが入れてある2.6.4以降のruntimeを見つけるかは確かめていない ([配布とGUIの前提](distribution.md)の「Windows App SDKのruntime」)
+- ネイティブのbackendの画面は、macOSとLinuxではまだ手で確かめていない。CIはネイティブのbackendを組んでつなぐが、テストはどれもstubで流す ([テスト戦略](testing.md)の「GUIの手での確認」)
+- WinUIのbackendを動かしたのは、Windows App SDK 2.7.0.0のruntimeを入れたWindows 11だけである。そこでは、bootstrapがruntimeを見つけ、「GUIの手での確認」の1から5と8が通った。6と7は確かめていない ([テスト戦略](testing.md)の「GUIの手での確認」)。CIのrunnerにはruntimeがないので、CIでは確かめない ([配布とGUIの前提](distribution.md)の「Windows App SDKのruntime」)
 - WinUIの`Application`を作れなかったときに、`EnqueueEventLoopExit`で`Application::Start`を戻す道は試していない
 - `eml run`の外のプロセスで、ネイティブのGUIをrunをまたいで開くこと (`Machine`のAPIのhost) は試していない。WinUIのbackendは、Rustのruntimeが`main`と名づけたスレッドでだけ開く。AppKitとQtのbackendは、プロセスの最初のスレッドで開く ([コンパイラの構成](architecture.md)の「`eml_gui`の内部」)
 - ウィンドウのネイティブの最小の大きさは初めて表示するときに決め、後で中身が増えても変えない
