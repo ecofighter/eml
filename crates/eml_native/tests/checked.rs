@@ -5,7 +5,7 @@
 use eml_nrt::{Finished, RunFault, RuntimeError};
 use eml_rt::{Fault, HeapError};
 
-use crate::common::native::{native_checked, native_unverified};
+use crate::common::native::{native, native_checked, native_unverified};
 
 #[test]
 fn a_leak() {
@@ -259,6 +259,48 @@ internal clause Counter.get fn get$entry(e.0: cev, u.1: unit) -> tobj {
     assert_eq!(result.map(|finished| finished.exit), Ok(None));
 }
 
+#[test]
+fn a_wide_clause_call_passes_its_audit() {
+    // 操作が47個の`int`の引数と最後の`float`を持つ節の呼び出し。エントリの署名は添字48に`float`を持ち、`sig_word`は
+    // これを書けないので、呼び出しの所はその語をデータの記号`w:`からロードし、エントリの行も同じimageだけの語を持つ。
+    // 速いマシンも同じプログラムを読み込んで走らせる
+    let ints: Vec<String> = (1..=47).map(|i| format!("a.{i}: int")).collect();
+    let args: Vec<String> = (1..=47).map(|i| i.to_string()).collect();
+    let text = format!(
+        "\
+effect Wide {{ op({}, float) -> tobj }}
+fn entry$main() -> unit {{
+  let w.0: evv = prim evv_get()
+  dup w.0
+  dup w.0
+  let c.1: ev lin = evidence Wide((), w.0) [&op$entry]
+  let w.2: evv = prim evv_enter(w.0, c.1)
+  let u.3: unit = prim evv_set(w.2)
+  let r.4: tobj = clause Wide.op({}, 2.5)
+  let u.5: unit = prim evv_set(w.0)
+  let u.6: unit = drop c.1
+  let x.7: float = unbox r.4
+  decref r.4
+  let t.8: obj = extern \"Prelude.Show Float.show\"(x.7)
+  let u.9: unit = extern Prelude.println(t.8)
+  return u.9
+}}
+internal clause Wide.op fn op$entry(e.0: cev, {}, f.48: float) -> tobj {{
+  decref e.0
+  let b.49: tobj = box f.48
+  return b.49
+}}
+",
+        vec!["int"; 47].join(", "),
+        args.join(", "),
+        ints.join(", "),
+    );
+    let (out, result) = native_checked(&text);
+    assert_eq!(out, "2.5\n");
+    assert_eq!(result.map(|finished| finished.exit), Ok(None));
+    assert_eq!(native(&text), ("2.5\n".to_string(), Ok(None)));
+}
+
 /// 監査の失敗で終わるrun。ネイティブでは失敗の手順を通るので、AddressSanitizerのジョブは`fatal::`を飛ばす
 /// (docs/implementation/testing.mdの「`eml_native` の検証」)。
 mod fatal {
@@ -376,7 +418,8 @@ fn f(x.0: obj) -> unit {
     }
 
     /// `field`から作った`C`の箱を`()`に適用するプログラム。箱は、欄が関数の値である配置`F`を通して読む。verifierは
-    /// 値を作ったときの配置を追わない。箱のタグは1なので、`code`の監査は1つの引数を待つ値のエントリを求める。
+    /// 値を作ったときの配置を追わないので、このLIRはverifierを通るが、verifierが確かめない実行の前提を破る。速いモード
+    /// なら語へ跳ぶ。箱のタグは1なので、`code`の監査は1つの引数を待つ値のエントリを求める。
     fn applying(field: &str) -> String {
         format!(
             "\
@@ -414,6 +457,46 @@ fn g(borrowed w.0: obj) -> tobj {{
         // エントリではない
         let text = applying("  let v.0: tobj = box 5\n");
         assert_eq!(fault(native_checked(&text)), heap(HeapError::WrongKind));
+    }
+
+    #[test]
+    fn a_wide_clause_call_to_another_wide_signature() {
+        // 広い署名の節の呼び出しの所は、別の広い署名のエントリを断る。2つの操作はimageだけの語が違うので、一方の所の
+        // `code`の監査は、evidenceに入れ違えたもう一方の節のクロージャを`WrongKind`で断る
+        let ints = |n: usize| -> Vec<String> { (1..=n).map(|i| format!("a.{i}: int")).collect() };
+        let args: Vec<String> = (1..=47).map(|i| i.to_string()).collect();
+        let text = format!(
+            "\
+effect Wide {{ op({op}, float) -> tobj, other({other}, float) -> tobj }}
+fn entry$main() -> unit {{
+  let w.0: evv = prim evv_get()
+  dup w.0
+  dup w.0
+  let c.1: ev lin = evidence Wide((), w.0) [&other$entry, &op$entry]
+  let w.2: evv = prim evv_enter(w.0, c.1)
+  let u.3: unit = prim evv_set(w.2)
+  let r.4: tobj = clause Wide.op({args}, 2.5)
+  let u.5: unit = prim evv_set(w.0)
+  let u.6: unit = drop c.1
+  decref r.4
+  return ()
+}}
+internal clause Wide.op fn op$entry(e.0: cev, {op_params}, f.48: float) -> tobj {{
+  decref e.0
+  return ()
+}}
+internal clause Wide.other fn other$entry(e.0: cev, {other_params}, f.49: float) -> tobj {{
+  decref e.0
+  return ()
+}}
+",
+            op = vec!["int"; 47].join(", "),
+            other = vec!["int"; 48].join(", "),
+            args = args.join(", "),
+            op_params = ints(47).join(", "),
+            other_params = ints(48).join(", "),
+        );
+        assert_eq!(fault(native_unverified(&text)), heap(HeapError::WrongKind));
     }
 
     #[test]

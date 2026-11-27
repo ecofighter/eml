@@ -15,7 +15,7 @@ use eml_nrt::image::{
 use eml_nrt::worker::COUNT_UNWOUND_FRAMES;
 
 use super::Imports;
-use super::audit::{Audit, Glue};
+use super::audit::{Audit, Expect, Glue};
 use super::function::FnLower;
 use super::{apply, effects};
 use crate::abi::tail_signature;
@@ -120,7 +120,7 @@ pub(super) fn define_raise<M: Module>(mut b: FunctionBuilder, module: &mut M, im
             .map(|i| mem::load_out(&mut b, out, i))
             .collect();
         let expect = Audit::Code {
-            expect: operands as i64,
+            expect: Expect::Word(operands as i64),
         };
         glue.emit(&mut b, module, clause, expect);
         let meta = mem::load_meta(&mut b, clause);

@@ -16,7 +16,7 @@ use crate::constants::{self, Datum};
 use crate::enter::{FATAL_FAULT, FATAL_PANICKED, FATAL_RECORDED, Fatal, detached, enter};
 use crate::image::{
     DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
-    DATUM_STRING, DatumRow, Image, Options, Start,
+    DATUM_SIG, DATUM_STRING, DatumRow, Image, Options, Start,
 };
 use crate::worker::{NATIVE_CODE, Worker};
 
@@ -144,7 +144,7 @@ unsafe fn fill_data<M: Mode>(
     control: &Arc<Control>,
     data: &[DatumRow],
 ) -> Result<(), RuntimeError> {
-    let raw = |row: &&DatumRow| matches!(row.kind, DATUM_EFFECT | DATUM_MASK);
+    let raw = |row: &&DatumRow| matches!(row.kind, DATUM_EFFECT | DATUM_SIG | DATUM_MASK);
     let data_of = |row: &&DatumRow| match row.kind {
         // SAFETY: 呼ぶ側の約束
         DATUM_STRING => Ok(Datum::String(unsafe { row.text.as_str() })),
@@ -175,7 +175,7 @@ unsafe fn fill_data<M: Mode>(
         unsafe { row.slot.cast::<Word>().write(w) };
     }
     for row in data.iter().filter(raw) {
-        // SAFETY: 呼ぶ側の約束。行の種類は`DATUM_EFFECT`か`DATUM_MASK`である
+        // SAFETY: 呼ぶ側の約束。行の種類は`DATUM_EFFECT`、`DATUM_SIG`、`DATUM_MASK`のどれかである
         unsafe { constants::write_raw(row) };
     }
     Ok(())

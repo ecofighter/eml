@@ -3554,7 +3554,7 @@ fn f(s.0: obj, n.1: int) -> tobj {
 /// `twin`がそれを、速いCLIFに監査を足したものだと確かめる (docs/implementation/testing.mdの「`eml_native` の検証」)。
 mod checked {
     use super::RELEASES;
-    use crate::common::native::twin;
+    use crate::common::native::{clif, clif_checked, twin};
 
     #[test]
     fn inline_dup_and_decref() {
@@ -4759,6 +4759,107 @@ fn f() -> tobj {
 
         block5:
             return v37
+        }
+        ");
+    }
+
+    #[test]
+    fn a_wide_clause_call() {
+        // `sig_word`が書けない署名の節の呼び出しは、検査モードのコードでは、その語を署名のデータの記号`w:`からロードする。
+        // 速いコードには監査も`w:`の記号もない。ロードが1つ増えるので`twin`ではなく、2つのCLIFを別に確かめる
+        let params: Vec<String> = (1..=47).map(|i| format!("a.{i}: int")).collect();
+        let args: Vec<String> = (1..=47).map(|i| format!("a.{i}")).collect();
+        let text = format!(
+            "\
+effect Wide {{ op({}, float) -> tobj }}
+fn f({}, x.48: float) -> tobj {{
+  let r.49: tobj = clause Wide.op({}, x.48)
+  return r.49
+}}
+",
+            vec!["int"; 47].join(", "),
+            params.join(", "),
+            args.join(", "),
+        );
+        assert!(!clif(&text, "f").contains("w:"));
+        insta::assert_snapshot!(clif_checked(&text, "f"), @"
+        function %f:f(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, f64) -> i64 tail {
+            gv0 = symbol colocated %e:Wide
+            gv1 = symbol colocated %w:iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiif$i
+            sig0 = (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, f64) -> i64 tail
+            sig1 = (i64, i64, i64) -> i64 c
+            sig2 = (i64, i64) c
+            sig3 = (i64, i64) -> i64 c
+            sig4 = (i64, i64, i64) -> i64 c
+            sig5 = (i64, i64, i64) c
+            sig6 = (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, f64) -> i64 tail
+            fn0 = colocated %f:f sig0
+            fn1 = %eml_nrt_safepoint sig1
+            fn2 = %eml_rt_audit_count sig2
+            fn3 = %eml_rt_ev_lookup sig3
+            fn4 = %eml_rt_ev_clause sig4
+            fn5 = %eml_rt_audit_code sig5
+
+        block0(v0: i64, v1: i64, v2: i64, v3: i64, v4: i64, v5: i64, v6: i64, v7: i64, v8: i64, v9: i64, v10: i64, v11: i64, v12: i64, v13: i64, v14: i64, v15: i64, v16: i64, v17: i64, v18: i64, v19: i64, v20: i64, v21: i64, v22: i64, v23: i64, v24: i64, v25: i64, v26: i64, v27: i64, v28: i64, v29: i64, v30: i64, v31: i64, v32: i64, v33: i64, v34: i64, v35: i64, v36: i64, v37: i64, v38: i64, v39: i64, v40: i64, v41: i64, v42: i64, v43: i64, v44: i64, v45: i64, v46: i64, v47: i64, v48: f64):
+            v49 = load.i64 notrap aligned v0+40
+            v50 = load.i32 notrap aligned v49
+            v51 = iconst.i32 0
+            v52 = icmp ne v50, v51  ; v51 = 0
+            v53 = get_stack_pointer.i64 
+            v54 = load.i64 notrap aligned v0+48
+            v55 = icmp ult v53, v54
+            v56 = bor v52, v55
+            brif v56, block1, block3
+
+        block1 cold:
+            v57 = func_addr.i64 fn0
+            v58 = iconst.i64 0
+            v59 = call fn1(v0, v57, v58)  ; v58 = 0
+            v60 = iconst.i64 0
+            v61 = icmp eq v59, v60  ; v60 = 0
+            brif v61, block3, block2
+
+        block2 cold:
+            v62 = iconst.i64 2
+            call fn2(v0, v62)  ; v62 = 2
+            v63 = iconst.i64 1
+            return v63  ; v63 = 1
+
+        block3:
+            v64 = symbol_value.i64 gv0
+            v65 = load.i64 notrap aligned v64
+            v66 = call fn3(v0, v65)
+            v67 = iconst.i64 0
+            v68 = call fn4(v0, v66, v67)  ; v67 = 0
+            v69 = symbol_value.i64 gv1
+            v70 = load.i64 notrap aligned v69
+            call fn5(v0, v68, v70)
+            v71 = load.i32 notrap aligned v68+4
+            v72 = iconst.i32 16
+            v73 = ushr v71, v72  ; v72 = 16
+            v74 = iconst.i32 255
+            v75 = band v73, v74  ; v74 = 255
+            v76 = iconst.i32 255
+            v77 = icmp eq v75, v76  ; v76 = 255
+            v78 = iconst.i64 8
+            v79 = iconst.i64 16
+            v80 = select v77, v79, v78  ; v79 = 16, v78 = 8
+            v81 = iadd v68, v80
+            v82 = load.i64 notrap aligned v81
+            v83 = iconst.i64 1
+            v84 = sshr v82, v83  ; v83 = 1
+            v85 = call_indirect sig6, v84(v0, v68, v66, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30, v31, v32, v33, v34, v35, v36, v37, v38, v39, v40, v41, v42, v43, v44, v45, v46, v47, v48)
+            v86 = load.i8 notrap aligned v0+24
+            brif v86, block4, block5
+
+        block4 cold:
+            v87 = iconst.i64 2
+            call fn2(v0, v87)  ; v87 = 2
+            v88 = iconst.i64 1
+            return v88  ; v88 = 1
+
+        block5:
+            return v85
         }
         ");
     }

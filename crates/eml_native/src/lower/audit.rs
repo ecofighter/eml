@@ -30,11 +30,20 @@ pub(super) enum Audit {
     Header,
     /// 関数の値の`load_meta`と`closure_code`と、そのコードの間接の呼び出しの前。`expect`は呼び出しが使う署名の語か、
     /// `CODE_OF_TAG`である。
-    Code { expect: i64 },
+    Code { expect: Expect },
     /// `load_box`の前。
     Boxed { float: bool },
     /// 構築子を名指す文の欄のロードの前。`what` (`DATA_*`) は、食い違ったときのVMの文言を選ぶ。
     Data { tag: u32, scanned: u32, what: i64 },
+}
+
+/// 関数の値を通した間接の呼び出しが待つ語。定数か、データの記号からロードした語である。
+#[derive(Clone, Copy)]
+pub(super) enum Expect {
+    /// コードに書いた、呼び出しの署名の語。
+    Word(i64),
+    /// `sig_word`が書けない署名の語。ホストが埋めるデータの記号`w:`からロードする。
+    Loaded(Value),
 }
 
 /// `step`のインラインの数の操作の前の監査のエントリ。
@@ -85,7 +94,10 @@ fn call(b: &mut FunctionBuilder, obj: Value, audit: Audit) -> (&'static str, Vec
         Audit::Unique => ("eml_rt_audit_unique", vec![obj]),
         Audit::Header => ("eml_rt_audit_header", vec![obj]),
         Audit::Code { expect } => {
-            let expect = word(b, expect);
+            let expect = match expect {
+                Expect::Word(n) => word(b, n),
+                Expect::Loaded(value) => value,
+            };
             ("eml_rt_audit_code", vec![obj, expect])
         }
         Audit::Boxed { float } => {
@@ -118,7 +130,8 @@ impl<'a> Glue<'a> {
         }
     }
 
-    fn entry<M: Module>(
+    /// エントリ`symbol`の関数の参照。この補助の関数で1回だけ宣言する。
+    pub(super) fn entry<M: Module>(
         &mut self,
         b: &mut FunctionBuilder,
         module: &mut M,

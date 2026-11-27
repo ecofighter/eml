@@ -12,13 +12,13 @@ use eml_extern::ExternEffect;
 use eml_lir::{OpRet, Program, Repr, Trusted};
 use eml_nrt::image::{
     CodeRow, DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
-    DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow, Slice,
-    Start, Str,
+    DATUM_SIG, DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow,
+    Slice, Start, Str,
 };
 use eml_nrt::mode::{Checked, Engine, Fast};
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
-use crate::abi::jit_builder;
+use crate::abi::{EntrySig, SigWords, jit_builder};
 use crate::lower::consts::Datum;
 use crate::lower::{self, names};
 use crate::thunk::define_thunk;
@@ -123,17 +123,37 @@ struct Tables {
 
 impl Tables {
     /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードと待つ引数の数を持つ。`number`はプログラムの
-    /// エフェクトの添字をマシンの番号にする。`raise_effects`は`Prelude.Panic`と`Prelude.IO`のマシンの番号か`NO_EFFECT`
-    /// である。
+    /// エフェクトの添字をマシンの番号にする。`entries`は、クロージャのエントリごとに、そのコードと署名を持つ。検査モードで
+    /// だけ`Some`で、速いモードでは`None`である。`raise_effects`は`Prelude.Panic`と`Prelude.IO`のマシンの番号か
+    /// `NO_EFFECT`である。
     fn new(
         functions: Vec<Function>,
         files: Vec<String>,
         data: Vec<(Datum, *mut u64, Static)>,
         paps: Vec<PapRow>,
-        entries: Vec<CodeRow>,
+        entries: Option<Vec<(*const u8, EntrySig)>>,
         number: impl Fn(u32) -> u16,
         raise_effects: (u32, u32),
     ) -> Tables {
+        // `Image.entries`の行と`w:`のslotは1つの表から語を取るので、呼び出しの所と、そこが呼びうるエントリは同じ語を見る
+        let mut words = SigWords::default();
+        let entries: Vec<CodeRow> = match &entries {
+            // `rest`個の引数を待つPAPのアダプタは`rest`個の引数の一様な署名を持ち、`sig_word`はその語を`rest`と書くので、
+            // 鍵は要らない
+            Some(closures) => closures
+                .iter()
+                .map(|(code, sig)| CodeRow {
+                    code: *code,
+                    sig: words.word(sig),
+                })
+                .chain(paps.iter().map(|pap| CodeRow {
+                    code: pap.code,
+                    sig: u64::from(pap.rest),
+                }))
+                .collect(),
+            None => Vec::new(),
+        };
+
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
         let mut rows: Vec<FnRow> = functions
             .iter()
@@ -174,6 +194,7 @@ impl Tables {
                     }
                     Datum::Effect(effect) => (DATUM_EFFECT, u64::from(number(*effect)), ""),
                     Datum::Mask(_) => (DATUM_MASK, 0, ""),
+                    Datum::Sig(entry) => (DATUM_SIG, words.word(entry), ""),
                     Datum::Keep(_) => unreachable!("the loader never writes a keep datum"),
                 };
                 DatumRow {
@@ -354,7 +375,7 @@ impl NativeMachine {
         for (closure, arity, sig, defined) in lowered.closures {
             let code = module.get_finalized_function(defined.id);
             if let Some(sig) = sig {
-                entries.push(CodeRow { code, sig });
+                entries.push((code, sig));
             }
             let name =
                 names::closure_entry(closure.captures, &program.function(closure.function).name);
@@ -392,12 +413,6 @@ impl NativeMachine {
                 size: defined.size,
             });
             paps.push(PapRow { rest, code });
-            if checked {
-                entries.push(CodeRow {
-                    code,
-                    sig: u64::from(rest),
-                });
-            }
         }
         // どの値のslotも、moduleが定義した8バイトの書けるデータの物で、領域とともにマシンが終わるまで生きる
         let data = lowered
@@ -431,7 +446,7 @@ impl NativeMachine {
             program.files.clone(),
             data,
             paps,
-            entries,
+            checked.then_some(entries),
             number,
             raise_effects,
         ));
@@ -444,7 +459,7 @@ impl NativeMachine {
     /// 読み込んだプログラムの入口を実行する。入口は引数を取らない。ほかのマシンが返した`loaded`は、何も実行せずに
     /// 内部の誤りで断る。検査モードでは、リークか失敗の手順で終わったrunは、その物体の数を`RunConfig`の`Control`の
     /// workerごとの表に残す。だから同じ`Control`での後の検査モードのrun (このマシンの`run`か`call`をもう一度、または
-    /// 設定の複製での別のrun) は、何をしても`OwnedMiscount`を報告する (docs/spec/native.mdの「検査モード」)。
+    /// 設定の複製での別のrun) は、成功して終わるはずのrunでも`OwnedMiscount`を報告しうる (docs/spec/native.mdの「検査モード」)。
     pub fn run(&mut self, loaded: Loaded, options: Options) -> Result<Finished, RuntimeError> {
         let (thunk, code, results, counted) = self.prepare(loaded)?;
         let mut argv = vec![0u64; results];

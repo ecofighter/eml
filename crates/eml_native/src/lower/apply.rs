@@ -14,14 +14,14 @@ use eml_nrt::Kind;
 use eml_nrt::image::{ACTION_CONTINUE, CODE_OF_TAG};
 use eml_nrt::worker::COUNT_UNWOUND_FRAMES;
 
-use super::audit::{Audit, Glue};
+use super::audit::{Audit, Expect, Glue};
 use super::consts::Datum;
 use super::effects::step_entry;
 use super::function::FnLower;
 use super::rc::{self, Step};
 use super::unwind::{self, After, Point};
 use super::{Callees, Imports, kind, names};
-use crate::abi::{SigWords, clause_signature, clif, closure_entry_signature, tail_signature};
+use crate::abi::{EntrySig, clause_signature, clif, closure_entry_signature, tail_signature};
 use crate::mem;
 
 /// 引数`args`個の一様な関数の値のシグネチャ`tail (ctx, clo, args x I64) -> I64`。関数の値への呼び出しとエントリは、
@@ -142,8 +142,6 @@ pub struct ClosureEntry {
 /// コードが決まってから定義すれば足りるので、本体をすべて下ろした後に定義する (docs/spec/native.md の「関数の形」)。
 #[derive(Default)]
 pub(super) struct ClosureEntries {
-    /// imageの署名の語。検査モードの下ろし方でだけ作る。
-    pub(super) words: SigWords,
     ids: HashMap<ClosureEntry, FuncId>,
     /// 最初に使った順である。
     declared: Vec<(ClosureEntry, FuncId)>,
@@ -177,9 +175,9 @@ impl ClosureEntries {
         id
     }
 
-    /// 宣言したエントリ (最初に使った順) と、署名の語。
-    pub(super) fn declared(self) -> (Vec<(ClosureEntry, FuncId)>, SigWords) {
-        (self.declared, self.words)
+    /// 宣言したエントリ。最初に使った順である。
+    pub(super) fn declared(self) -> Vec<(ClosureEntry, FuncId)> {
+        self.declared
     }
 }
 
@@ -242,14 +240,11 @@ fn release_box<M: Module>(
     clo: Value,
     loaded: &[(Value, Repr)],
 ) {
-    let (imports, ctx) = (glue.imports, glue.ctx);
-    let mut entry_ref = |b: &mut FunctionBuilder, symbol: &str| {
-        module.declare_func_in_func(imports.entry(symbol), b.func)
-    };
-    let is_last = entry_ref(b, "eml_rt_is_last");
-    let free_block = entry_ref(b, "eml_rt_free_block");
-    let dup = entry_ref(b, Step::Dup.slow());
-    let decref = entry_ref(b, Step::Decref.slow());
+    let ctx = glue.ctx;
+    let is_last = glue.entry(b, module, "eml_rt_is_last");
+    let free_block = glue.entry(b, module, "eml_rt_free_block");
+    let dup = glue.entry(b, module, Step::Dup.slow());
+    let decref = glue.entry(b, module, Step::Decref.slow());
     let audits = glue.rc_refs(b, module);
     let last = b.create_block();
     let ask = b.create_block();
@@ -326,7 +321,7 @@ pub(super) fn define_pap_adapter<M: Module>(
     release_box(&mut b, module, &mut glue, pap, &loaded);
     let callee = loaded[0].0;
     let expect = Audit::Code {
-        expect: i64::from(rest) + 1,
+        expect: Expect::Word(i64::from(rest) + 1),
     };
     glue.emit(&mut b, module, callee, expect);
     let meta = mem::load_meta(&mut b, callee);
@@ -357,7 +352,7 @@ pub(super) fn define_apply<M: Module>(
     let (ctx, clo, values) = (params[0], params[1], &params[2..]);
     let mut glue = Glue::new(imports, ctx);
     let of_tag = Audit::Code {
-        expect: CODE_OF_TAG,
+        expect: Expect::Word(CODE_OF_TAG),
     };
     glue.emit(&mut b, module, clo, of_tag);
     let meta = mem::load_meta(&mut b, clo);
@@ -592,7 +587,13 @@ impl<M: Module> FnLower<'_, '_, M> {
         let mut values = vec![ev];
         values.extend(self.atoms(args, operation.params.iter().copied()));
         if self.imports.checked {
-            let expect = self.closures.words.clause(program, *effect, *op) as i64;
+            // 操作の署名の語。`sig_word`の語は定数で、それが書けない署名では、ホストが読み込みのときに埋めるその署名の
+            // データの記号`w:`の語である。コードは署名だけで決まる
+            let sig = EntrySig::clause(program, *effect, *op);
+            let expect = match sig.written() {
+                Some(word) => Expect::Word(word as i64),
+                None => Expect::Loaded(self.datum_word(Datum::Sig(sig), types::I64)),
+            };
             self.audit(clo, Audit::Code { expect });
         }
         let meta = mem::load_meta(&mut self.b, clo);
@@ -663,7 +664,7 @@ impl<M: Module> FnLower<'_, '_, M> {
         self.audit(
             clo,
             Audit::Code {
-                expect: CODE_OF_TAG,
+                expect: Expect::Word(CODE_OF_TAG),
             },
         );
         let meta = mem::load_meta(&mut self.b, clo);

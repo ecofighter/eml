@@ -29,7 +29,7 @@ use eml_nrt::image::SiteRow;
 
 use self::apply::{ClosureEntries, ClosureEntry};
 use self::consts::{Data, Datum};
-use crate::abi::{self, Built, Import, declare_import, tail_signature};
+use crate::abi::{self, Built, EntrySig, Import, declare_import, tail_signature};
 
 pub struct Defined {
     pub id: FuncId,
@@ -44,9 +44,9 @@ pub struct Defined {
 pub struct Lowered {
     pub functions: Vec<Defined>,
     pub raise: Defined,
-    /// クロージャのエントリ`c<k>:<f>`と、その値の待つ引数の数と、エントリの署名の語 (`abi::SigWords`。検査モードの
-    /// 下ろし方でだけ作る)。最初に使った順である。
-    pub closures: Vec<(ClosureEntry, u16, Option<u64>, Defined)>,
+    /// クロージャのエントリ`c<k>:<f>`と、その値の待つ引数の数と、エントリの署名 (`abi::EntrySig`。検査モードの下ろし方で
+    /// だけ作る。語はホストが読み込みのときに決める)。最初に使った順である。
+    pub closures: Vec<(ClosureEntry, u16, Option<EntrySig>, Defined)>,
     /// `eml$apply$<m>`。添字が`m - 1`である。
     pub applies: Vec<Defined>,
     /// PAPのアダプタ`eml$pap$<r>`と、その`r`。
@@ -225,8 +225,7 @@ pub fn program<M: Module>(
     let mut closures = Vec::new();
     // どの関数の値もクロージャのエントリを持つので、エントリの待つ引数の数の最大が、関数の値の待ちうる数の最大である
     let mut largest = 0;
-    let (declared, mut words) = closure_entries.declared();
-    for (closure, id) in declared {
+    for (closure, id) in closure_entries.declared() {
         let function = program.function(closure.function);
         let args = apply::arity(function, closure.captures as usize);
         largest = largest.max(args);
@@ -251,7 +250,7 @@ pub fn program<M: Module>(
             args,
             lowering
                 .checked
-                .then(|| words.closure_entry(function, closure.captures as usize)),
+                .then(|| EntrySig::closure_entry(function, closure.captures as usize)),
             define(module, &mut ctx, id, keep_clif, Vec::new())?,
         ));
     }

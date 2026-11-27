@@ -7,7 +7,7 @@ use eml_rows::constants::{empty_mut_array, immortal_big_int, immortal_float};
 use eml_rt::{Control, Frozen, Heap, HeapError, MaskItem, Mode, Word, layout};
 
 use crate::closures::code_word;
-use crate::image::{DATUM_EFFECT, DatumRow};
+use crate::image::{DATUM_EFFECT, DATUM_SIG, DatumRow};
 
 /// 中身で表した読み込み時の値1つ。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,15 +70,15 @@ fn static_closure<M: Mode>(heap: &mut Heap<M>, arity: u16, code: *const u8) -> W
     }
 }
 
-/// runが物体にしない値 (`DATUM_EFFECT`か`DATUM_MASK`の行) をそのslotに書く。エフェクトは番号そのものを、マスクは
-/// 項目を順に`MaskItem`として書く (docs/spec/native.mdの「`Image`」)。
+/// runが物体にしない値 (`DATUM_EFFECT`、`DATUM_SIG`、`DATUM_MASK`の行) をそのslotに書く。エフェクトは番号そのものを、
+/// 署名の語は語そのものを、マスクは項目を順に`MaskItem`として書く (docs/spec/native.mdの「`Image`」)。
 ///
 /// # Safety
-/// `row.kind`は`DATUM_EFFECT`か`DATUM_MASK`である。`row.slot`は、ほかの誰も使わない書ける領域で、8にそろい、
-/// `DATUM_MASK`では`mask_bytes(row.items.len)`バイト、`DATUM_EFFECT`では1語である。`DATUM_MASK`の行の`items`は、
+/// `row.kind`は`DATUM_EFFECT`、`DATUM_SIG`、`DATUM_MASK`のどれかである。`row.slot`は、ほかの誰も使わない書ける領域で、
+/// 8にそろい、`DATUM_MASK`では`mask_bytes(row.items.len)`バイト、ほかでは1語である。`DATUM_MASK`の行の`items`は、
 /// 生きている行を指す。
 pub(crate) unsafe fn write_raw(row: &DatumRow) {
-    if row.kind == DATUM_EFFECT {
+    if row.kind == DATUM_EFFECT || row.kind == DATUM_SIG {
         // SAFETY: 呼ぶ側の約束
         unsafe { row.slot.write(row.bits) };
         return;
