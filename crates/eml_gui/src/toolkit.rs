@@ -198,7 +198,7 @@ impl Toolkit {
         }
     }
 
-    /// ループの`step`が取り出した`Resized`か`Invalidate`を反映し、そのウィンドウをすぐに配置し直す。
+    /// ループの`step`が取り出した`Resized`、`Invalidate`、`Remeasure`を反映し、そのウィンドウをすぐに配置し直す。
     /// まだ表示していないウィンドウは次の`flush`で配置するので、ここでは測った大きさを忘れるだけにする。
     pub fn settle(&mut self, event: &RawEvent) {
         let (w, resized) = match *event {
@@ -206,6 +206,10 @@ impl Toolkit {
             RawEvent::Invalidate(w) if self.table.contains_key(&w) => {
                 self.invalidate(w);
                 (w.window(), None)
+            }
+            RawEvent::Remeasure(w) => {
+                self.remeasure(w);
+                return;
             }
             RawEvent::Invalidate(_) | RawEvent::User(_) | RawEvent::QuitRequested => return,
         };
@@ -217,6 +221,24 @@ impl Toolkit {
             return;
         };
         layout.relayout(&mut *self.widgets.borrow_mut(), resized.unwrap_or(size));
+        self.layouts += 1;
+    }
+
+    /// 表示したウィンドウを、新しいウィンドウと同じく中身の自然な大きさで表示し直す。最小の大きさも置き直す
+    /// (docs/implementation/architecture.md の「`eml_gui`の内部」)。
+    fn remeasure(&mut self, w: Id) {
+        let Some(window) = self.windows.get_mut(&w) else {
+            return;
+        };
+        let layout = &mut window.layout;
+        if layout.size().is_none() {
+            return;
+        }
+        let mut widgets = self.widgets.borrow_mut();
+        layout.invalidate(w);
+        let (size, min) = layout.natural(&mut *widgets);
+        layout.relayout(&mut *widgets, size);
+        widgets.show_window(w, size, min);
         self.layouts += 1;
     }
 
@@ -684,6 +706,55 @@ mod tests {
         assert!(asked.iter().any(|&(id, _, _)| id == l));
     }
 
+    #[test]
+    fn remeasure_shows_a_shown_window_again_at_its_new_natural_size() {
+        let (mut tk, requests, knobs) = probe(false);
+        let (w, label) = counter(&mut tk);
+        tk.flush();
+        take_transcript();
+        requests.borrow_mut().clear();
+        // backendの測る大きさが、表示した後に確かなものになった
+        knobs.grow.set(10.0);
+        tk.settle(&RawEvent::Remeasure(w));
+        let asked = requests.take();
+        for leaf in [label, Id::new(1, 3), Id::new(1, 4)] {
+            assert!(
+                asked.iter().any(|&(id, _, _)| id == leaf),
+                "{leaf} was not measured again"
+            );
+        }
+        assert_eq!(
+            placements(),
+            [
+                "place #1:1 (12, 12) 74x76",
+                "place #1:2 (0, 0) 74x34",
+                "place #1:3 (0, 42) 33x34",
+                "place #1:4 (41, 42) 33x34",
+                "show_window #1:0 98x100 min 98x100",
+            ]
+        );
+        assert_eq!(tk.layouts(), 2);
+    }
+
+    #[test]
+    fn remeasure_ignores_unknown_and_unshown_windows() {
+        let (mut tk, _) = counting_toolkit();
+        let (w, _) = counter(&mut tk);
+        tk.settle(&RawEvent::Remeasure(w));
+        tk.settle(&RawEvent::Remeasure(Id::new(9, 0)));
+        assert_eq!(placements(), Vec::<String>::new());
+        assert_eq!(tk.layouts(), 0);
+        // 表示していないウィンドウは、次の`flush`で1回だけ測って表示する
+        tk.flush();
+        assert_eq!(
+            placements()
+                .iter()
+                .filter(|l| l.starts_with("show_window "))
+                .count(),
+            1
+        );
+    }
+
     type Requests = Rc<RefCell<Vec<(Id, crate::Measure, crate::Measure)>>>;
 
     /// `measure`の問い合わせを、stubに渡す前に記録する。
@@ -692,6 +763,7 @@ mod tests {
         requests: Requests,
         wrap: bool,
         fail_create: Rc<std::cell::Cell<bool>>,
+        grow: Rc<std::cell::Cell<f32>>,
     }
 
     impl Widgets for Counting {
@@ -714,7 +786,11 @@ mod tests {
             self.requests.borrow_mut().push((w, width, height));
             let natural = self.inner.borrow_mut().measure(w, width, height);
             if !self.wrap {
-                return natural;
+                let grow = self.grow.get();
+                return Size {
+                    w: natural.w + grow,
+                    h: natural.h + grow,
+                };
             }
             // 折り返すラベルのように、幅が足りなければ1行24の高さで行を増やす
             let room = match width {
@@ -746,22 +822,32 @@ mod tests {
         (tk, requests)
     }
 
-    /// `wrap`なら測る大きさを折り返すラベルのようにする。返す旗を立てると、次の`create`が1回だけ失敗する。
-    fn probe(wrap: bool) -> (Toolkit, Requests, Rc<std::cell::Cell<bool>>) {
+    /// `Counting`の振る舞いを、テストの途中で変えるつまみ。
+    #[derive(Default)]
+    struct Knobs {
+        /// 立てると、次の`create`が1回だけ失敗する。
+        fail_create: Rc<std::cell::Cell<bool>>,
+        /// 測った大きさの幅と高さに足す論理px。
+        grow: Rc<std::cell::Cell<f32>>,
+    }
+
+    /// `wrap`なら測る大きさを折り返すラベルのようにする。
+    fn probe(wrap: bool) -> (Toolkit, Requests, Knobs) {
         take_transcript();
         let native = Backend::Stub(Script::default()).create().unwrap();
         let requests = Requests::default();
-        let fail_create = Rc::default();
+        let knobs = Knobs::default();
         let counting = Counting {
             inner: native.widgets,
             requests: Rc::clone(&requests),
             wrap,
-            fail_create: Rc::clone(&fail_create),
+            fail_create: Rc::clone(&knobs.fail_create),
+            grow: Rc::clone(&knobs.grow),
         };
         (
             Toolkit::new(Rc::new(RefCell::new(counting)), native.queue, 0),
             requests,
-            fail_create,
+            knobs,
         )
     }
 
@@ -809,7 +895,7 @@ mod tests {
 
     #[test]
     fn a_failed_create_uses_up_the_pending_cell() {
-        let (mut tk, _, fail_create) = probe(false);
+        let (mut tk, _, knobs) = probe(false);
         tk.begin_window("A").unwrap();
         tk.begin_grid(&[Track::Fr(1), Track::Fr(1)], &[]).unwrap();
         tk.next_cell(Cell {
@@ -817,7 +903,7 @@ mod tests {
             ..Cell::default()
         })
         .unwrap();
-        fail_create.set(true);
+        knobs.fail_create.set(true);
         assert_eq!(
             tk.create(Init::Label("z".into())),
             Err(GuiError::Backend("refused".into()))

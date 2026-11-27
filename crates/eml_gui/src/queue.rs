@@ -44,7 +44,7 @@ impl EventQueue {
         self.0.pushed.replace(false)
     }
 
-    /// ユーザーのイベント以外のイベント (`QuitRequested`、`Resized`、`Invalidate`) を順に取り出す。ユーザーのイベントは列に残る。
+    /// ユーザーのイベント以外のイベント (`QuitRequested`、`Resized`、`Invalidate`、`Remeasure`) を順に取り出す。ユーザーのイベントは列に残る。
     pub fn take_control(&self) -> Vec<RawEvent> {
         let mut events = self.0.events.borrow_mut();
         let (user, control) = events
@@ -118,6 +118,25 @@ mod tests {
         assert_eq!(q.pop_user(), Some(Event::Click(Id::new(1, 1))));
         assert_eq!(q.pop_user(), Some(Event::Click(Id::new(1, 2))));
         assert_eq!(q.pop_user(), None);
+    }
+
+    #[test]
+    fn take_control_returns_remeasure_in_order() {
+        let q = EventQueue::new();
+        q.attach();
+        q.push(RawEvent::Invalidate(Id::new(1, 0)));
+        q.push(click(1));
+        q.push(RawEvent::Remeasure(Id::new(1, 0)));
+        q.push(RawEvent::QuitRequested);
+        assert_eq!(
+            q.take_control(),
+            vec![
+                RawEvent::Invalidate(Id::new(1, 0)),
+                RawEvent::Remeasure(Id::new(1, 0)),
+                RawEvent::QuitRequested,
+            ]
+        );
+        assert_eq!(q.pop_user(), Some(Event::Click(Id::new(1, 1))));
     }
 
     #[test]

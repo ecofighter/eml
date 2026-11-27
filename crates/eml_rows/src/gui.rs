@@ -263,7 +263,7 @@ mod on {
                             interrupt();
                         }
                     }
-                    RawEvent::Resized(..) | RawEvent::Invalidate(_) => {
+                    RawEvent::Resized(..) | RawEvent::Invalidate(_) | RawEvent::Remeasure(_) => {
                         if let Some(toolkit) = &mut *self.toolkit.borrow_mut() {
                             toolkit.settle(&event);
                         }
