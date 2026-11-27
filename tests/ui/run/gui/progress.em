@@ -19,6 +19,8 @@ work sink =
     if i == 10 then Gui.post sink (Done acc)
     else
       let r = Async.compute (fn () -> chunk 1000)
+      -- 手で確かめるときに棒の進みが見えるよう、段ごとに待つ。UIテストの仮想の時計では、待ちに実際の時間はかからない (docs/implementation/testing.mdの「GUIの手での確認」)
+      Async.sleep_ms 300
       Gui.post sink (Step (i + 1))
       go (i + 1) (acc + r)
   go 0 0
