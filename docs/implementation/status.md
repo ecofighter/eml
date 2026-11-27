@@ -192,7 +192,7 @@
 ### GUI
 
 - ネイティブのbackendの画面は、macOSとLinuxではまだ手で確かめていない。CIはネイティブのbackendを組んでつなぐが、テストはどれもstubで流す ([テスト戦略](testing.md)の「GUIの手での確認」)
-- WinUIのbackendを動かしたのは、Windows App SDK 2.7.0.0のruntimeを入れたWindows 11だけである。そこでは、bootstrapがruntimeを見つけ、表示の拡大率100%と150%で「GUIの手での確認」の1から5と8が通った。6と7は確かめていない。モニターは1つだけで、拡大率の違うモニターへウィンドウを動かすことは試していない。そのとき最小の大きさは前のモニターの物理的なpxのまま残る ([ロードマップ](../future/roadmap.md)の「その後の項目」) ([テスト戦略](testing.md)の「GUIの手での確認」)。CIのrunnerにはruntimeがないので、CIでは確かめない ([配布とGUIの前提](distribution.md)の「Windows App SDKのruntime」)
+- WinUIのbackendを動かしたのは、Windows App SDK 2.7.0.0のruntimeを入れたWindows 11だけである。そこでは、bootstrapがruntimeを見つけ、表示の拡大率100%と150%で「GUIの手での確認」の1から8が通った ([テスト戦略](testing.md)の「GUIの手での確認」)。9は、runtimeのないWindowsが要るので確かめていない。モニターは1つだけで、拡大率の違うモニターへウィンドウを動かすことは試していない。そのとき最小の大きさは前のモニターの物理的なpxのまま残る ([ロードマップ](../future/roadmap.md)の「その後の項目」)。CIのrunnerにはruntimeがないので、CIでは確かめない ([配布とGUIの前提](distribution.md)の「Windows App SDKのruntime」)
 - WinUIの`Application`を作れなかったときに、`EnqueueEventLoopExit`で`Application::Start`を戻す道は試していない
 - `eml run`の外のプロセスで、ネイティブのGUIをrunをまたいで開くこと (`Machine`のAPIのhost) は試していない。WinUIのbackendは、Rustのruntimeが`main`と名づけたスレッドでだけ開く。AppKitとQtのbackendは、プロセスの最初のスレッドで開く ([コンパイラの構成](architecture.md)の「`eml_gui`の内部」)
 - ウィンドウのネイティブの最小の大きさは、初めて表示するときと、backendが`Remeasure`を積んだとき (WinUIの`Loaded`) にだけ決め、後で中身が増えても変えない
