@@ -28,7 +28,7 @@ fn every_prim_entry_is_named_after_its_prim() {
     const NO_ENTRY: [&str; 3] = ["yielding", "yield_status", "empty_mut_array"];
     for prim in Prim::KINDS {
         let symbol = format!("eml_rt_{}", prim.name());
-        let entry = eml_nrt::entries().find(|e| e.symbol == symbol);
+        let entry = eml_nrt::entries::<eml_nrt::mode::Fast>().find(|e| e.symbol == symbol);
         if NO_ENTRY.contains(&prim.name()) {
             assert!(entry.is_none(), "{symbol}");
             continue;
@@ -44,7 +44,7 @@ fn every_prim_entry_is_named_after_its_prim() {
     }
     for step in Step::ALL {
         let symbol = format!("eml_rt_{}", step.name());
-        let entry = eml_nrt::entries()
+        let entry = eml_nrt::entries::<eml_nrt::mode::Fast>()
             .find(|e| e.symbol == symbol)
             .unwrap_or_else(|| panic!("no entry {symbol}"));
         assert_eq!(entry.params.len(), step.operands(), "{symbol}");

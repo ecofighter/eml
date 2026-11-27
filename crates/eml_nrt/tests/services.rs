@@ -41,6 +41,7 @@ fn run_f(sites: &[SiteRow], thunk: Thunk, argv: &mut [u64]) -> Result<Finished, 
         files: Slice::new(&files),
         data: Slice::new(&[]),
         paps: Slice::new(&[]),
+        entries: Slice::new(&[]),
         panic_effect: NO_EFFECT,
         io_effect: NO_EFFECT,
     };
@@ -52,7 +53,9 @@ fn run_f(sites: &[SiteRow], thunk: Thunk, argv: &mut [u64]) -> Result<Finished, 
     };
     let options = Options::default();
     // SAFETY: `image`の表はこの呼び出しの間生きていて、代役のthunkは`argv`の中だけを読み書きする
-    unsafe { eml_nrt::run::run(&image, &start, &RunConfig::default(), host(), options) }
+    unsafe {
+        eml_nrt::run::run::<eml_rt::Fast>(&image, &start, &RunConfig::default(), host(), options)
+    }
 }
 
 fn control(ctx: *mut Ctx<Fast>) -> Arc<Control> {
@@ -62,7 +65,12 @@ fn control(ctx: *mut Ctx<Fast>) -> Arc<Control> {
 
 /// workerに知らせを求めてから安全点を通り、その結果と、後のworkerの語を`argv[0..2]`に書く。サービスは致命的な
 /// 誤りで戻らないことがあるので、デストラクタを持つ値をまたいで呼ばない (docs/spec/native.md の「`eml_fatal`」)。
-unsafe extern "C" fn notice_then_safepoint(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+unsafe extern "C" fn notice_then_safepoint(
+    ctx: *mut std::ffi::c_void,
+    _entry: *const u8,
+    argv: *mut u64,
+) {
+    let ctx = ctx.cast::<Ctx<Fast>>();
     control(ctx).notice(0);
     unsafe {
         *argv = eml_nrt_safepoint(ctx, *argv as i64, 0) as u64;
@@ -101,10 +109,11 @@ mod fatal {
 
     /// 割り込みを立ててから安全点を通る。
     unsafe extern "C" fn interrupt_then_safepoint(
-        ctx: *mut Ctx<Fast>,
+        ctx: *mut std::ffi::c_void,
         _entry: *const u8,
         argv: *mut u64,
     ) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         control(ctx).interrupt();
         unsafe { eml_nrt_safepoint(ctx, *argv as i64, 0) };
     }
@@ -117,7 +126,12 @@ mod fatal {
     }
 
     /// 0で割ったfaultを置き、`argv[0]`の関数の地点`argv[1]`で失敗を上げる。
-    unsafe extern "C" fn divide_by_zero(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn divide_by_zero(
+        ctx: *mut std::ffi::c_void,
+        _entry: *const u8,
+        argv: *mut u64,
+    ) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe {
             let _ = (*ctx).set_fault(Fault::Arith(ArithFault::DivisionByZero));
             let mut out = [Word::from_bits(0); 4];
@@ -160,7 +174,12 @@ mod fatal {
     }
 
     /// panicのメッセージを置き、地点0で失敗を上げる。置いた後の生きている物体の数を`argv[4]`に書く。
-    unsafe extern "C" fn panic_and_raise(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn panic_and_raise(
+        ctx: *mut std::ffi::c_void,
+        _entry: *const u8,
+        argv: *mut u64,
+    ) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe {
             let message = (*ctx).heap_mut().alloc_string("oh no");
             park_panic(&mut *ctx, message);
@@ -173,7 +192,12 @@ mod fatal {
 
     /// 入れ子の`enter`の中でpanicを上げ、戻った後のfaultの語を`argv[2]`に、生きている物体の数を`argv[5]`に書いてから、
     /// 同じ符号で投げ直す。サービスがメッセージの語をちょうど1回手放したことを、物体の数で確かめる。
-    unsafe extern "C" fn raise_inside(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn raise_inside(
+        ctx: *mut std::ffi::c_void,
+        _entry: *const u8,
+        argv: *mut u64,
+    ) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe {
             let fatal = enter(ctx, panic_and_raise, std::ptr::null(), argv).unwrap_err();
             *argv.add(2) = fault_word(ctx);
@@ -199,7 +223,12 @@ mod fatal {
     }
 
     /// 何も置かずに失敗を上げる。
-    unsafe extern "C" fn raise_nothing(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn raise_nothing(
+        ctx: *mut std::ffi::c_void,
+        _entry: *const u8,
+        argv: *mut u64,
+    ) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         let mut out = [Word::from_bits(0); 4];
         unsafe { eml_nrt_failed(ctx, *argv as i64, 0, 0, out.as_mut_ptr()) };
     }

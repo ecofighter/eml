@@ -452,10 +452,12 @@ fn f(x.0: obj, borrowed y.1: tobj) -> tobj {
         sig1 = (i64, i64, i64) -> i64 c
         sig2 = (i64, i64) c
         sig3 = (i64, i64) c
+        sig4 = (i64, i64) c
         fn0 = colocated %f:f sig0
         fn1 = %eml_nrt_safepoint sig1
         fn2 = %eml_rt_decref sig2
-        fn3 = %eml_rt_dup_slow sig3
+        fn3 = %eml_rt_decref_slow sig3
+        fn4 = %eml_rt_dup_slow sig4
 
     block0(v0: i64, v1: i64, v2: i64):
         v3 = load.i64 notrap aligned v0+40
@@ -499,7 +501,7 @@ fn f(x.0: obj, borrowed y.1: tobj) -> tobj {
         brif.i32 v17, block6, block7
 
     block6 cold:
-        call fn2(v0, v1)
+        call fn3(v0, v1)
         jump block7
 
     block7:
@@ -525,7 +527,7 @@ fn f(x.0: obj, borrowed y.1: tobj) -> tobj {
         brif.i32 v26, block10, block11
 
     block10 cold:
-        call fn3(v0, v2)
+        call fn4(v0, v2)
         jump block11
 
     block11:
@@ -631,10 +633,12 @@ fn f(s.0: obj, c.1: tobj, x.2: tobj) -> obj {
         sig2 = (i64, i64) c
         sig3 = (i64, i64, i64) -> i64 tail
         sig4 = (i64, i64, i64) -> i64 tail
+        sig5 = (i64, i64) c
         fn0 = colocated %f:f sig0
         fn1 = %eml_nrt_safepoint sig1
         fn2 = %eml_rt_decref sig2
         fn3 = colocated %eml$apply$1 sig4
+        fn4 = %eml_rt_decref_slow sig5
 
     block0(v0: i64, v1: i64, v2: i64, v3: i64):
         v4 = load.i64 notrap aligned v0+40
@@ -723,7 +727,7 @@ fn f(s.0: obj, c.1: tobj, x.2: tobj) -> obj {
         brif.i32 v43, block11, block12
 
     block11 cold:
-        call fn2(v0, v23)
+        call fn4(v0, v23)
         jump block12
 
     block12:
@@ -1069,10 +1073,12 @@ b2:
         sig1 = (i64, i64, i64) -> i64 c
         sig2 = (i64, i64) c
         sig3 = (i64, i64) -> i64 tail
+        sig4 = (i64, i64) c
         fn0 = colocated %f:f sig0
         fn1 = %eml_nrt_safepoint sig1
         fn2 = %eml_rt_decref sig2
         fn3 = colocated %f:g sig3
+        fn4 = %eml_rt_decref_slow sig4
 
     block0(v0: i64, v1: i64):
         v2 = load.i64 notrap aligned v0+40
@@ -1137,7 +1143,7 @@ b2:
         brif.i32 v25, block10, block11
 
     block10 cold:
-        call fn2(v0, v16)
+        call fn4(v0, v16)
         jump block11
 
     block11:
@@ -1191,6 +1197,7 @@ internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
         sig7 = (i64) -> i64 c
         sig8 = (i64, i64) -> i64 c
         sig9 = (i64, i64, i64) -> i64 tail
+        sig10 = (i64, i64) c
         fn0 = colocated %f:f sig0
         fn1 = %eml_nrt_safepoint sig1
         fn2 = %eml_rt_decref sig2
@@ -1200,6 +1207,7 @@ internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
         fn6 = %eml_nrt_landed sig7
         fn7 = %eml_rt_ev_last_state sig8
         fn8 = colocated %f:prompt$ sig9
+        fn9 = %eml_rt_decref_slow sig10
 
     block0(v0: i64, v1: i64, v2: i64):
         v3 = load.i64 notrap aligned v0+40
@@ -1321,7 +1329,7 @@ internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
         brif.i32 v61, block15, block16
 
     block15 cold:
-        call fn2(v0, v56)
+        call fn9(v0, v56)
         jump block16
 
     block16:
@@ -1459,12 +1467,14 @@ fn a_release() {
         sig1 = (i64, i64, i64) -> i64 c
         sig2 = (i64, i64) c
         sig3 = (i64, i64) c
-        sig4 = (i64, i64, i64, i64) c
+        sig4 = (i64, i64) c
+        sig5 = (i64, i64, i64, i64) c
         fn0 = colocated %f:f sig0
         fn1 = %eml_nrt_safepoint sig1
         fn2 = %eml_rt_decref sig2
-        fn3 = %eml_rt_free_block sig3
-        fn4 = %eml_rt_release sig4
+        fn3 = %eml_rt_decref_slow sig3
+        fn4 = %eml_rt_free_block sig4
+        fn5 = %eml_rt_release sig5
 
     block0(v0: i64, v1: i64):
         v2 = load.i64 notrap aligned v0+40
@@ -1518,17 +1528,17 @@ fn a_release() {
         brif.i32 v23, block9, block10
 
     block9 cold:
-        call fn2(v0, v22)
+        call fn3(v0, v22)
         jump block10
 
     block10:
-        call fn3(v0, v1)
+        call fn4(v0, v1)
         jump block4
 
     block6 cold:
         v30 = symbol_value.i64 gv0
         v31 = iconst.i64 2
-        call fn4(v0, v1, v30, v31)  ; v31 = 2
+        call fn5(v0, v1, v30, v31)  ; v31 = 2
         jump block4
 
     block4:
@@ -1541,13 +1551,15 @@ fn a_release() {
         sig0 = (i64, i64) -> i64 tail
         sig1 = (i64, i64, i64) -> i64 c
         sig2 = (i64, i64) c
-        sig3 = (i64, i64, i64, i64) c
-        sig4 = (i64, i64) c
+        sig3 = (i64, i64) c
+        sig4 = (i64, i64, i64, i64) c
+        sig5 = (i64, i64) c
         fn0 = colocated %f:g sig0
         fn1 = %eml_nrt_safepoint sig1
         fn2 = %eml_rt_decref sig2
-        fn3 = %eml_rt_release sig3
-        fn4 = %eml_rt_drop_token sig4
+        fn3 = %eml_rt_decref_slow sig3
+        fn4 = %eml_rt_release sig4
+        fn5 = %eml_rt_drop_token sig5
 
     block0(v0: i64, v1: i64):
         v2 = load.i64 notrap aligned v0+40
@@ -1601,7 +1613,7 @@ fn a_release() {
         brif.i32 v24, block9, block10
 
     block9 cold:
-        call fn2(v0, v23)
+        call fn3(v0, v23)
         jump block10
 
     block10:
@@ -1610,12 +1622,12 @@ fn a_release() {
     block6 cold:
         v31 = symbol_value.i64 gv0
         v32 = iconst.i64 2
-        call fn3(v0, v1, v31, v32)  ; v32 = 2
+        call fn4(v0, v1, v31, v32)  ; v32 = 2
         v33 = iconst.i64 0
         jump block4(v33)  ; v33 = 0
 
     block4(v19: i64):
-        call fn4(v0, v19)
+        call fn5(v0, v19)
         return v16
     }
     ");

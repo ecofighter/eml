@@ -136,7 +136,7 @@ pub fn program<M: Module>(
     // エントリと`eml$raise`は、プログラムの関数より前に決まった順で宣言する。どの本体もそれらを名指せ、その番号は
     // プログラムによらない
     let mut entries = HashMap::new();
-    for entry in eml_nrt::entries() {
+    for entry in eml_nrt::entries::<eml_nrt::mode::Fast>() {
         entries.insert(entry.symbol, declare_import(module, Import::Entry(entry))?);
     }
     let raise =

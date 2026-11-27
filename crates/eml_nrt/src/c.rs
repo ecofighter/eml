@@ -5,7 +5,7 @@
 
 use eml_extern::CInt;
 use eml_rows::ffi::{CHandle, Raise, handle_new};
-use eml_rt::{Ctx, Fast, Word};
+use eml_rt::{Ctx, Mode, Word};
 use eml_sched::error::RunFault;
 
 use crate::enter::Fatal;
@@ -15,7 +15,7 @@ use crate::worker;
 ///
 /// # Safety
 /// `worker::record`と同じ。
-unsafe fn internal(ctx: &mut Ctx<Fast>, fault: impl Into<RunFault>) -> Fatal {
+unsafe fn internal<M: Mode>(ctx: &mut Ctx<M>, fault: impl Into<RunFault>) -> Fatal {
     // SAFETY: 呼ぶ側の約束
     unsafe { worker::record(ctx, fault.into(), None) }
 }
@@ -25,7 +25,7 @@ unsafe fn internal(ctx: &mut Ctx<Fast>, fault: impl Into<RunFault>) -> Fatal {
 /// # Safety
 /// - `worker::park_panic`と同じ。ただしメッセージの語はここで作る
 /// - `name`は、この`ctx`のヒープか、それに付けた塊の生きている文字列で、呼ぶ側が借りている
-unsafe fn park(ctx: &mut Ctx<Fast>, name: Word, why: Raise) -> Result<(), Fatal> {
+unsafe fn park<M: Mode>(ctx: &mut Ctx<M>, name: Word, why: Raise) -> Result<(), Fatal> {
     // SAFETY: 呼ぶ側の約束
     let name = match unsafe { ctx.heap().string(name) } {
         Ok(name) => name,
@@ -49,7 +49,7 @@ crate::entries! {
     /// # Safety
     /// `ctx.runtime()`は`worker::of`の約束を満たし、失敗を置いていない。`name`はこの`ctx`のヒープか、それに付けた塊の
     /// 生きている文字列である。
-    pub(crate) shim fn eml_x_c_narrow(ctx, name: obj, arg: int, int: int, value: int) -> never {
+    pub(crate) shim[Row] fn eml_x_c_narrow(ctx, name: obj, arg: int, int: int, value: int) -> never {
         let (Some(arg), Some(int)) = (
             usize::try_from(arg).ok().filter(|&arg| arg > 0),
             CInt::from_code(int),
@@ -68,7 +68,7 @@ crate::entries! {
     /// `ctx.runtime()`は`worker::of`の約束を満たす。`handle`は、この`ctx`のヒープの生きている物体で、呼ぶ側が借りている。
     /// 返したポインタをCに渡す者は、Cがそのポインタを使う間`handle`を生かしておく。だからその間、セルは落ちず、dtorは
     /// 走らない (`eml_rows::ffi::CHandle::new`の約束が、後で`ptr`をCに渡す者に課す務めである)。
-    pub(crate) shim fn eml_x_c_handle_ptr(ctx, handle: obj) -> i64 {
+    pub(crate) shim[Row] fn eml_x_c_handle_ptr(ctx, handle: obj) -> i64 {
         // SAFETY: このエントリの約束。`foreign`は速いモードでも中身の型を確かめる
         match unsafe { ctx.heap().foreign::<CHandle>(handle) } {
             // SAFETY: `cell`は、生きている物体の中身の`CHandle`を指す
@@ -87,7 +87,7 @@ crate::entries! {
     /// 渡して、これを満たす。`load`はその取り込みを、`Linked::fits`が成り立った後でだけ`Linked::dtors()`の要素に結ぶ。
     /// `ptr`が0なら、`ctx.runtime()`は`worker::of`の約束を満たし、失敗を置いておらず、`name`はこの`ctx`のヒープか、
     /// それに付けた塊の生きている文字列である。
-    pub(crate) shim fn eml_x_c_handle_new(ctx, name: obj, dtor: dtor, ptr: i64) -> obj {
+    pub(crate) shim[Row] fn eml_x_c_handle_new(ctx, name: obj, dtor: dtor, ptr: i64) -> obj {
         // SAFETY: `ptr`と`dtor`はこのエントリの約束による。`Ctx::heap_mut`の約束は、`shim`が渡すこのworkerの生きている
         // `Ctx`で満たす。`handle_new`は物体を1つ作るだけで、`Ctx`の持つ語に触れない
         match unsafe { handle_new(ctx, ptr, dtor) } {

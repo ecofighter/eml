@@ -1,7 +1,7 @@
 //! 生成したコードが冷たい道で呼ぶサービス (docs/spec/native.mdの「安全点」、「巻き戻しの地点」、「externの失敗」)。
 #![allow(unsafe_code)]
 
-use eml_rt::{Ctx, Fast, Fault, Stop, Word};
+use eml_rt::{Ctx, Fault, Mode, Stop, Word};
 use eml_sched::error::RunFault;
 
 use crate::arch;
@@ -22,7 +22,7 @@ crate::entries! {
     /// `ctx.runtime()`は`worker::of`の前提を満たす`Worker`を指し、`ctx.jmp`は置いてある (`eml_enter`の中である)。
     /// このworkerのスレッドから呼ぶ。`run`が`enter`で入ったコードは、どちらも満たす (docs/spec/native.md の
     /// 「実行の始めと終わり」)。
-    pub shim fn eml_nrt_safepoint(ctx, function: i64, ep_helper: i64) -> i64 {
+    pub shim[Service] fn eml_nrt_safepoint(ctx, function: i64, ep_helper: i64) -> i64 {
         let _ = ep_helper;
         let at = Some(At { function: function as usize, site: None });
         loop {
@@ -52,7 +52,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `eml_nrt_safepoint`と同じ。さらに、`out`は書ける4語を指す。中断も中断でないyieldも進んでいない。
-    pub shim fn eml_nrt_failed(ctx, function: i64, site: i64, purity: i64, out: ptr) -> i64 {
+    pub shim[Service] fn eml_nrt_failed(ctx, function: i64, site: i64, purity: i64, out: ptr) -> i64 {
         debug_assert!((PURITY_PURE..=PURITY_EFFECTFUL).contains(&purity), "a purity word is unknown");
         debug_assert!(
             site == ENTRY_SITE || u32::try_from(site).is_ok(),
@@ -125,7 +125,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `eml_nrt_safepoint`と同じ。
-    pub shim fn eml_nrt_landed(ctx) -> obj {
+    pub shim[Service] fn eml_nrt_landed(ctx) -> obj {
         Ok::<Word, Fatal>(ctx.heap().dummy())
     }
 }
@@ -156,7 +156,7 @@ fn class(fault: &Fault, purity: i64) -> Option<Class> {
 ///
 /// # Safety
 /// `worker::of`と同じ。`fault`が`Fault::Engine`なら、workerの構造体は文言を持つ。
-unsafe fn uncaught(ctx: &mut Ctx<Fast>, fault: Fault, at: Option<At>) -> Fatal {
+unsafe fn uncaught<M: Mode>(ctx: &mut Ctx<M>, fault: Fault, at: Option<At>) -> Fatal {
     let fault = match fault {
         Fault::Engine => {
             // SAFETY: 呼ぶ側の約束

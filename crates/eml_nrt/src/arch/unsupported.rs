@@ -1,7 +1,6 @@
 //! stubのない対象。ネイティブのコードはここでは動かず、`eml_enter`を呼ぶとプロセスが止まる (`extern "C"`の中のpanic)。
 //! 走らせる側は先に`SUPPORTED`を見て断る (docs/spec/native.md の「対象」)。
 #![allow(unsafe_code)]
-use eml_rt::{Ctx, Fast};
 
 use crate::enter::Thunk;
 
@@ -20,13 +19,14 @@ pub struct JmpBuf {
 }
 
 /// # Safety
+/// `ctx`の指す`Ctx<M>`のモード`M`は、`thunk`とそれが呼ぶエントリ (`eml_nrt::entries::<M>()`) のモードと同じである。
 /// `ctx`はこのworkerの生きている`Ctx`で、呼ぶ側はそれへの`&`も`&mut`も持たない。`thunk`は`entry`と`argv`を受ける
 /// 既定の規約の関数で、`argv`はその引数と結果の語の数だけ読み書きできる (docs/spec/native.md の「`eml_enter`」)。
 /// `thunk`が実行系のエントリを呼ぶなら (コンパイルしたemlのコードは呼ぶ)、`ctx.runtime()`は`worker::of`の約束の
 /// とおりに置いた生きている`Worker`を指し、`ctx.stack_limit()`はこのスレッドのスタックの番地で、その下に
 /// docs/spec/native.mdの「安全点」が名指す余白がある。`run`はどちらもそのとおりに置く。
 pub unsafe extern "C" fn eml_enter(
-    _ctx: *mut Ctx<Fast>,
+    _ctx: *mut core::ffi::c_void,
     _thunk: Thunk,
     _entry: *const u8,
     _argv: *mut u64,
@@ -34,6 +34,6 @@ pub unsafe extern "C" fn eml_enter(
     unreachable!("native code is not supported on this target")
 }
 
-pub(crate) unsafe extern "C" fn longjmp(_ctx: *mut Ctx<Fast>, _value: u64) -> ! {
+pub(crate) unsafe extern "C" fn longjmp(_ctx: *mut core::ffi::c_void, _value: u64) -> ! {
     unreachable!("native code is not supported on this target")
 }

@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 
-use eml_rt::{Ctx, Fast};
+use eml_rt::{Ctx, Mode};
 
 /// 数える物体のうち残ったものの、種類の名前と数を、名前の順に返す。不死の物体 (ダミー、定数) は数えない。
-pub(crate) fn census(ctx: &mut Ctx<Fast>) -> Vec<(String, u64)> {
+pub(crate) fn census<M: Mode>(ctx: &mut Ctx<M>) -> Vec<(String, u64)> {
     ctx.reclaim();
     // SAFETY: censusは`Ctx`の持つ語を変えず、物体を作らない
     let heap = unsafe { ctx.heap_mut() };

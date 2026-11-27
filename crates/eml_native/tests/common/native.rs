@@ -104,7 +104,8 @@ struct Stand<V> {
 
 /// どの代役にも共通の入口のthunk。`Start.entry`を`Stand<V>`に戻すのはここだけで、`V`は`run_stand_in`が置いたものと
 /// 型引数で同じになる。
-unsafe extern "C" fn trampoline<V>(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
+unsafe extern "C" fn trampoline<V>(ctx: *mut std::ffi::c_void, entry: *const u8, _argv: *mut u64) {
+    let ctx = ctx.cast::<Ctx<Fast>>();
     // SAFETY: `run_stand_in`が`entry`に`Stand<V>`を置き、runの間それを使うのはこのthunkだけである
     let stand = unsafe { &mut *entry.cast_mut().cast::<Stand<V>>() };
     // SAFETY: 代役の約束は、それを`visit`か`visit_each`に渡した呼び手が守る
@@ -127,7 +128,9 @@ fn run_stand_in<V>(
     let image = machine.image().expect("a program is loaded");
     // SAFETY: `trampoline`は代役を呼ぶだけで、代役は`StandIn`の約束を守る。`stand`はrunの間生きていて、`trampoline`
     // だけがそれを使う
-    unsafe { eml_nrt::run::run(image, &start, config, host(), native_options()) }
+    unsafe {
+        eml_nrt::run::run::<eml_nrt::mode::Fast>(image, &start, config, host(), native_options())
+    }
 }
 
 /// `text`のプログラムを読み込んだマシン。
@@ -207,7 +210,7 @@ pub unsafe fn call_visited_at<R>(
 ) {
     let (thunk, code) = visit.entries[index];
     // SAFETY: 呼ぶ側の約束
-    unsafe { thunk(ctx, code, argv.as_mut_ptr()) }
+    unsafe { thunk(ctx.cast(), code, argv.as_mut_ptr()) }
 }
 
 /// 代役から試す関数を呼ぶ。`argv`はその引数と結果のslotである。
@@ -217,7 +220,7 @@ pub unsafe fn call_visited_at<R>(
 /// またいで`ctx`への参照を持たない。
 pub unsafe fn call_visited<R>(ctx: *mut Ctx<Fast>, visit: &Visit<R>, argv: &mut [u64]) {
     // SAFETY: 呼ぶ側の約束
-    unsafe { (visit.thunk)(ctx, visit.code, argv.as_mut_ptr()) }
+    unsafe { (visit.thunk)(ctx.cast(), visit.code, argv.as_mut_ptr()) }
 }
 
 /// LIRのテキストをVMの検査モードとネイティブで流し、標準出力と結果の文と終了コードが同じで、censusがきれいなことを確かめる。

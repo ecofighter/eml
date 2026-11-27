@@ -71,7 +71,7 @@ run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_native", "dep:eml_nrt", "
 testing = []'
 
 # eml_cliとeml_test_support以外のcrateが、ほかのworkspaceのcrateから再exportする項目。再exportするのは自分の公開の
-# シグネチャの型だけで、moduleはeml_nrtの__rtだけである
+# シグネチャの型と、公開の総称な関数を具体化する型だけで、moduleはeml_nrtの__rtだけである
 REEXPORTS='crates/eml_clink/src/lib.rs: pub use eml_cabi::Linked;
 crates/eml_lir/src/lib.rs: pub use eml_extern::{FloatBits, Mark, OpRet, Repr, StructId};
 crates/eml_native/src/lib.rs: pub use eml_nrt::image::Options;
@@ -79,6 +79,7 @@ crates/eml_nrt/src/lib.rs: pub use eml_rt as __rt;
 crates/eml_nrt/src/lib.rs: pub use eml_rt::HostRef;
 crates/eml_nrt/src/lib.rs: pub use eml_sched::config::{Finished, RunConfig};
 crates/eml_nrt/src/lib.rs: pub use eml_sched::error::{RunFault, RuntimeError};
+crates/eml_nrt/src/mode.rs: pub use eml_rt::{Checked, Fast};
 crates/eml_rows/src/ffi.rs: pub use eml_cabi::Dtor;
 crates/eml_rows/src/gui.rs: pub use eml_gui::{Backend, Script};
 crates/eml_sched/src/lib.rs: pub use eml_rt::{Control, HostRef, Limits, Stop};

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use eml_rows::constants::{empty_mut_array, immortal_big_int, immortal_float};
-use eml_rt::{Control, Fast, Frozen, Heap, HeapError, MaskItem, Word, layout};
+use eml_rt::{Control, Frozen, Heap, HeapError, MaskItem, Mode, Word, layout};
 
 use crate::closures::code_word;
 use crate::image::{DATUM_EFFECT, DatumRow};
@@ -25,20 +25,23 @@ pub(crate) enum Datum<'a> {
 }
 
 /// 値の語 (値と同じ順) と、その物体を持つ凍結した塊。値がなければ塊もない。
-pub(crate) struct Built {
+pub(crate) struct Built<M: Mode> {
     pub(crate) words: Vec<Word>,
-    pub(crate) region: Option<Arc<Frozen<Fast>>>,
+    pub(crate) region: Option<Arc<Frozen<M>>>,
 }
 
 /// `data`を、VMが定数を作るのと同じ関数で作る。だから定数の表現は、どちらのエンジンでも同じ1つである。
-pub(crate) fn build(control: &Arc<Control>, data: &[Datum]) -> Result<Built, HeapError> {
+pub(crate) fn build<M: Mode>(
+    control: &Arc<Control>,
+    data: &[Datum],
+) -> Result<Built<M>, HeapError> {
     if data.is_empty() {
         return Ok(Built {
             words: Vec::new(),
             region: None,
         });
     }
-    let mut heap = Heap::<Fast>::with_control(Arc::clone(control));
+    let mut heap = Heap::<M>::with_control(Arc::clone(control));
     let words = data
         .iter()
         .map(|datum| match *datum {
@@ -57,7 +60,7 @@ pub(crate) fn build(control: &Arc<Control>, data: &[Datum]) -> Result<Built, Hea
 
 /// 不死のクロージャ`{ tag = arity, [code] }`。捕まえた値はない。節の関数の値では`arity`が0である
 /// (docs/spec/native.mdの「関数の値」)。
-fn static_closure(heap: &mut Heap<Fast>, arity: u16, code: *const u8) -> Word {
+fn static_closure<M: Mode>(heap: &mut Heap<M>, arity: u16, code: *const u8) -> Word {
     // SAFETY: 構築中の物体で、ほかの操作の前にコードの語を書き終える。コードの語は即値なので、参照を移さない
     unsafe {
         let w = heap.alloc_immortal(1, layout::data_meta(arity, 1, false));
@@ -117,7 +120,7 @@ mod tests {
     #[test]
     fn no_data_builds_no_region() {
         let control = Arc::new(Control::new(Limits::default()));
-        let built = build(&control, &[]).unwrap();
+        let built = build::<Fast>(&control, &[]).unwrap();
         assert!(built.words.is_empty() && built.region.is_none());
     }
 

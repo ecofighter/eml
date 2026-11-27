@@ -9,6 +9,7 @@ const FILES: &[(&str, &str)] = &[
     ("image.rs", include_str!("image.rs")),
     ("worker.rs", include_str!("worker.rs")),
     ("run.rs", include_str!("run.rs")),
+    ("mode.rs", include_str!("mode.rs")),
     ("census.rs", include_str!("census.rs")),
     ("constants.rs", include_str!("constants.rs")),
     ("services.rs", include_str!("services.rs")),

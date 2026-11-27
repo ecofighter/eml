@@ -22,7 +22,7 @@ impl Step {
     pub(super) fn slow(self) -> &'static str {
         match self {
             Step::Dup => "eml_rt_dup_slow",
-            Step::Decref => "eml_rt_decref",
+            Step::Decref => "eml_rt_decref_slow",
         }
     }
 }

@@ -188,6 +188,7 @@ impl Tables {
             files: Slice::new(&file_rows),
             data: Slice::new(&datum_rows),
             paps: Slice::new(&paps),
+            entries: Slice::new(&[]),
             panic_effect: raise_effects.0,
             io_effect: raise_effects.1,
         };
@@ -287,7 +288,7 @@ impl NativeMachine {
                 .or_insert_with(|| effect_number(next));
         }
         let mut builder = jit_builder().map_err(|error| LoadError::Module(error.to_string()))?;
-        for entry in eml_nrt::entries() {
+        for entry in eml_nrt::entries::<eml_nrt::mode::Fast>() {
             builder.symbol(entry.symbol, (entry.address)());
         }
         // `fits`が成り立ったので、`Linked`の約束により、どの呼ぶ先もそのCの関数の宣言の記号を解決した関数で、どのdtorも
@@ -638,7 +639,7 @@ impl NativeMachine {
         // `load`もverifierを通してある (P1)。`run`は入口を空の`evv`で動かし、`call`は呼び手がR-5で、空の`evv`と
         // 渡した引数で関数が前提を満たすことを約束する。`argv`はその関数の引数と結果ごとにslotを持ち、引数を入れてある
         unsafe {
-            eml_nrt::run::run(
+            eml_nrt::run::run::<eml_nrt::mode::Fast>(
                 &tables.image,
                 &start,
                 &self.config,

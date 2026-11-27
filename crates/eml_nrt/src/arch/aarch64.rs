@@ -2,7 +2,7 @@
 #![allow(unsafe_code)]
 use core::mem::{offset_of, size_of};
 
-use eml_rt::{CTX_JMP, Ctx, Fast};
+use eml_rt::CTX_JMP;
 
 use crate::enter::Thunk;
 
@@ -24,7 +24,7 @@ pub(crate) fn stack_pointer() -> usize {
 #[repr(C)]
 pub struct JmpBuf {
     pub prev: *mut JmpBuf,
-    ctx: *mut Ctx<Fast>,
+    ctx: *mut core::ffi::c_void,
     /// x19..x28, x29, x30
     x: [u64; 12],
     /// d8..d15
@@ -41,6 +41,7 @@ const _: () = assert!(SIZE.is_multiple_of(16) && offset_of!(JmpBuf, ctx) == PREV
 /// `thunk(ctx, entry, argv)`を呼ぶ。thunkから戻れば0を、`eml_fatal`で切られればその符号とsiteを返す。
 ///
 /// # Safety
+/// `ctx`の指す`Ctx<M>`のモード`M`は、`thunk`とそれが呼ぶエントリ (`eml_nrt::entries::<M>()`) のモードと同じである。
 /// `ctx`はこのworkerの生きている`Ctx`で、呼ぶ側はそれへの`&`も`&mut`も持たない。`thunk`は`entry`と`argv`を受ける
 /// 既定の規約の関数で、`argv`はその引数と結果の語の数だけ読み書きできる (docs/spec/native.md の「`eml_enter`」)。
 /// `thunk`が実行系のエントリを呼ぶなら (コンパイルしたemlのコードは呼ぶ)、`ctx.runtime()`は`worker::of`の約束の
@@ -48,7 +49,7 @@ const _: () = assert!(SIZE.is_multiple_of(16) && offset_of!(JmpBuf, ctx) == PREV
 /// docs/spec/native.mdの「安全点」が名指す余白がある。`run`はどちらもそのとおりに置く。
 #[unsafe(naked)]
 pub unsafe extern "C" fn eml_enter(
-    ctx: *mut Ctx<Fast>,
+    ctx: *mut core::ffi::c_void,
     thunk: Thunk,
     entry: *const u8,
     argv: *mut u64,
@@ -91,7 +92,7 @@ pub unsafe extern "C" fn eml_enter(
 /// いちばん内側の`eml_enter`が保存したレジスタを戻し、そのバッファをつなぎから外し、`value`を返してその`eml_enter`から
 /// 戻る。呼ぶのは`eml_fatal`だけである。
 #[unsafe(naked)]
-pub(crate) unsafe extern "C" fn longjmp(ctx: *mut Ctx<Fast>, value: u64) -> ! {
+pub(crate) unsafe extern "C" fn longjmp(ctx: *mut core::ffi::c_void, value: u64) -> ! {
     core::arch::naked_asm!(
         "ldr x9, [x0, #{jmp}]",
         "mov sp, x9",

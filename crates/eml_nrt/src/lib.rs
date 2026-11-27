@@ -12,6 +12,7 @@ mod enter;
 mod entries;
 mod heap;
 pub mod image;
+pub mod mode;
 mod rows;
 pub mod run;
 mod services;
@@ -29,24 +30,23 @@ pub use enter::{
     FATAL_FAULT, FATAL_PANICKED, FATAL_RECORDED, Fatal, Raise, Thunk, detached, eml_enter,
     eml_fatal, enter,
 };
-pub use entries::{Entry, Kind};
+pub use entries::{Class, Entry, Kind};
 pub use services::{eml_nrt_failed, eml_nrt_safepoint};
 
 // 関数の値のエントリ (docs/spec/native.md の「関数の値」)
 pub use closures::eml_nrt_pap;
 
-/// エントリの表。エントリを宣言するmoduleは、自分の表をここに並べる (docs/spec/native.md の「記述子の表」)。
-const TABLES: &[&[Entry]] = &[
-    enter::ENTRIES,
-    services::SERVICES,
-    heap::HEAP,
-    rows::ROWS,
-    effects::EFFECTS,
-    closures::CLOSURES,
-    c::C,
-];
-
 /// 生成したコードが呼べるすべてのエントリ。
-pub fn entries() -> impl Iterator<Item = &'static Entry> {
-    TABLES.iter().flat_map(|table| table.iter())
+pub fn entries<M: eml_rt::Mode>() -> impl Iterator<Item = &'static Entry> {
+    [
+        enter::ENTRIES::<M>(),
+        services::SERVICES::<M>(),
+        heap::HEAP::<M>(),
+        rows::ROWS::<M>(),
+        effects::EFFECTS::<M>(),
+        closures::CLOSURES::<M>(),
+        c::C::<M>(),
+    ]
+    .into_iter()
+    .flat_map(|table| table.iter())
 }

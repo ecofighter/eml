@@ -145,6 +145,37 @@ pub struct PapRow {
     pub code: *const u8,
 }
 
+/// 関数の値1つのエントリのコード。クロージャのエントリ`c<k>:<f>`かPAPのアダプタと、その署名の語 (`sig_word`) である。
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CodeRow {
+    pub code: *const u8,
+    pub sig: u64,
+}
+
+/// `eml_rt_audit_code`の`expect`の語のうち、値自身のタグが待つ引数の数の一様な署名を求めるもの。
+pub const CODE_OF_TAG: i64 = -1;
+
+/// エントリの署名`tail (ctx, clo, params..) -> ret`の語。`params`の数に、`F64`の結果ならビット16を、`F64`の引数`i`ならビット
+/// `17 + i`を足したものである。引数`n`個の一様な署名は語`n`になる。添字47以降の引数が`F64`なら`None`。
+pub fn sig_word(params: &[crate::Kind], ret: crate::Kind) -> Option<u64> {
+    let mut word = u64::try_from(params.len())
+        .ok()
+        .filter(|&n| n < u64::from(u16::MAX))?;
+    if ret == crate::Kind::F64 {
+        word |= 1 << 16;
+    }
+    for (i, &kind) in params.iter().enumerate() {
+        if kind == crate::Kind::F64 {
+            if i > 46 {
+                return None;
+            }
+            word |= 1 << (17 + i);
+        }
+    }
+    Some(word)
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Image {
@@ -152,6 +183,8 @@ pub struct Image {
     pub files: Slice<Str>,
     pub data: Slice<DatumRow>,
     pub paps: Slice<PapRow>,
+    /// このimageの関数の値が持ちうるエントリのコードすべて。検査モードのマシンが埋め、速いモードのマシンは空のままにする。
+    pub entries: Slice<CodeRow>,
     /// 組み込みの`Panic`と`IO`のマシンの番号。プログラムのエフェクトの表になければ`NO_EFFECT`である。
     pub panic_effect: u32,
     pub io_effect: u32,
@@ -240,3 +273,35 @@ pub const RAISE_IO: i64 = 1;
 /// (docs/spec/native.md の「ヒープのエントリ」)。
 pub const ARITH_DIVISION_BY_ZERO: i64 = 0;
 pub const ARITH_INTEGER_OVERFLOW: i64 = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::sig_word;
+    use crate::Kind::{F64, I64};
+
+    #[test]
+    fn the_signature_word_tells_signatures_apart() {
+        // 引数`n`個の一様な署名は語`n`である
+        assert_eq!(sig_word(&[], I64), Some(0));
+        assert_eq!(sig_word(&[I64, I64, I64], I64), Some(3));
+        // `F64`の結果と、`F64`の引数のそれぞれが、別のビットを立てる
+        assert_eq!(sig_word(&[I64, I64], F64), Some(2 | 1 << 16));
+        assert_eq!(sig_word(&[F64, I64], I64), Some(2 | 1 << 17));
+        assert_eq!(sig_word(&[I64, F64], I64), Some(2 | 1 << 18));
+        let mut words = [
+            sig_word(&[I64], I64),
+            sig_word(&[I64], F64),
+            sig_word(&[F64], I64),
+            sig_word(&[I64, I64], I64),
+        ];
+        words.sort_unstable();
+        assert!(words.windows(2).all(|pair| pair[0] != pair[1]));
+        // 添字46までの`F64`の引数は語に収まり、47からは収まらない
+        let mut params = vec![I64; 47];
+        params[46] = F64;
+        assert_eq!(sig_word(&params, I64), Some(47 | 1 << 63));
+        params.push(I64);
+        params[47] = F64;
+        assert_eq!(sig_word(&params, I64), None);
+    }
+}
