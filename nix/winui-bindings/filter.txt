@@ -10,7 +10,7 @@ Microsoft.UI.Xaml.ApplicationInitializationCallback
 Microsoft.UI.Xaml.DispatcherShutdownMode
 Microsoft.UI.Xaml.IApplicationOverrides
 Microsoft.UI.Xaml.LaunchActivatedEventArgs::{}
-Microsoft.UI.Xaml.FrameworkElement::{Width, Height, ActualThemeChanged}
+Microsoft.UI.Xaml.FrameworkElement::{Width, Height, ActualThemeChanged, Loaded}
 Microsoft.UI.Xaml.UIElement::{Measure, DesiredSize}
 Microsoft.UI.Xaml.ResourceDictionary::{MergedDictionaries}
 Microsoft.UI.Xaml.TextWrapping

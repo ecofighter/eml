@@ -785,7 +785,7 @@ CIの段「feature resolution of tls」は、`cargo tree`の5つの検査で配�
 
 nativeのGUIのbackendは、自動のテストでは開かない。CIの`gui-native`のジョブはbackendを組んでつなぎ、stubのテストを流すだけである (「CI」)。そこでnativeのbackendか、`eml_rows`の`gui.rs`のループの扱いを変えたときは、そのOSで`gui-native`を足して組んだ`eml`で`tests/ui/run/gui/`の3つの例 (`counter.em`、`form.em`、`progress.em`) を開き、次を手で確かめる。動かすのは`timeout 60 cargo run -p eml_cli --features gui-native -- run tests/ui/run/gui/<例>.em`である。
 
-1. counterが中身の自然な大きさで開き、最小の大きさより小さくできず、+と−でラベルの数が変わる
+1. counterが中身の自然な大きさで開き、どのウィジェットもウィンドウの中に収まり、最小の大きさより小さくできず、+と−でラベルの数が変わる
 2. ウィンドウの大きさを変えると、升目が広がる (counterの2つの`Fr 1`の列が幅を等しく分ける)
 3. formでは、名前が空でなく、箱に印が付くまでSubmitを押せない
 4. progressでは、Startの後に棒が進み、仕事の間もウィンドウを動かせる
@@ -797,7 +797,7 @@ nativeのGUIのbackendは、自動のテストでは開かない。CIの`gui-nat
 
 Linuxでは`nix build`で組んだ`eml`を、X11かWaylandのデスクトップ (`DISPLAY`か`WAYLAND_DISPLAY`がある) で`timeout 60 result/bin/eml run tests/ui/run/gui/<例>.em`として動かす。`result/bin/eml`は`wrapQtAppsHook`が作ったラッパーで、Qtのプラグインの場所を置く。Linuxの6は、デスクトップがアプリケーションを終わらせる操作 (Dockやウィンドウの一覧の「終了」など) で、ウィンドウを1つずつ閉じる。7のDockのアイコンはLinuxにはない。9はLinuxとmacOSにはない
 
-Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-AppxPackage *WindowsAppRuntime.2*`に出る) の下で、`cargo run -p eml_cli --features gui-native -- run tests/ui/run/gui/<例>.em`として動かす。9は、runtimeのないWindowsでcounterを動かして確かめる。Windowsの6は、タスクバーの「すべてのウィンドウを閉じる」で、ウィンドウを1つずつ閉じる。7のDockのアイコンはWindowsにはない
+Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-AppxPackage *WindowsAppRuntime.2*`に出る) の下で、`cargo run -p eml_cli --features gui-native -- run tests/ui/run/gui/<例>.em`として動かす。表示の拡大率は、100%と150%の両方で確かめる。150%では、文字がぼやけずに描かれ、タスクマネージャーの「詳細」の「DPI認識」の列で、`eml.exe`がモニターごとのv2 (Per-Monitor v2) であることも確かめる。プロセスがDPIに対応しないと、Windowsがウィンドウ全体を引き伸ばすので、8の配置は同じに見えるからである。9は、runtimeのないWindowsでcounterを動かして確かめる。Windowsの6は、タスクバーの「すべてのウィンドウを閉じる」で、ウィンドウを1つずつ閉じる。7のDockのアイコンはWindowsにはない
 
 ## CI
 

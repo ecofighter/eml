@@ -127,6 +127,8 @@ pub enum RawEvent {
     User(Event),
     Resized(Id, Size),
     Invalidate(Id),
+    /// ウィンドウを表示したときには、backendが中身をまだ正しく測れなかった。自然な大きさを測り直して表示し直す。
+    Remeasure(Id),
     QuitRequested,
 }
 
@@ -232,6 +234,8 @@ pub trait Widgets {
     /// 0という上限ではない (`Measure`を参照)。
     fn measure(&mut self, w: Id, width: Measure, height: Measure) -> Size;
     fn place(&mut self, w: Id, rect: Rect);
+    /// `Remeasure`を積むbackendには、同じウィンドウについて2回以上呼ばれる。2回目からは、表示しているウィンドウの大きさと
+    /// 最小の大きさをその場で変える。
     fn show_window(&mut self, w: Id, size: Size, min: Size);
     fn destroy(&mut self, w: Id);
     /// AppKitでは、activation policyを`Regular`と`Prohibited`の間で切り替える。ほかのbackendは何もしない。
