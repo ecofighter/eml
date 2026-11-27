@@ -38,6 +38,10 @@ use crate::{
 const FIELD_WIDTH: f32 = 160.0;
 
 windows_core::link!("user32.dll" "system" fn GetDpiForWindow(hwnd: *mut core::ffi::c_void) -> u32);
+windows_core::link!("user32.dll" "system" fn SetProcessDpiAwarenessContext(context: *mut core::ffi::c_void) -> i32);
+
+/// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`。
+const PER_MONITOR_AWARE_V2: isize = -4;
 
 /// `Window`のHWNDを渡す相互運用のインターフェース。宣言はWindows App SDKのヘッダ`microsoft.ui.xaml.window.h`にだけ
 /// あり、メタデータにはないので、ここで宣言する。
@@ -61,6 +65,12 @@ pub(crate) fn create() -> Result<Native, GuiError> {
             "cannot open the GUI: WinUI needs Windows 11 or later".to_string(),
         ));
     }
+    // DPIを知らないプロセスでは、Windowsがウィンドウをビットマップとして引き伸ばし、`GetDpiForWindow`は96を返す。
+    // manifestでなくここで置くのは、GUIを開かない`eml`のプロセスに影響させないためである。既に置かれていて断られても、
+    // 描画がぼやけるだけで配置は正しいので、失敗は無視する
+    // SAFETY: 引数は文書にある定数の擬似ハンドルで、プロセスの設定を1つ変えるだけである
+    let _ =
+        unsafe { SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2 as *mut core::ffi::c_void) };
     bootstrap()?;
     // SAFETY: このスレッドのWindows Runtimeをシングルスレッドのアパートメントで始めるだけである
     unsafe { RoInitialize(RO_INIT_SINGLETHREADED) }
@@ -157,7 +167,12 @@ fn push_if_changed(id: Id, now: Value, event: Event) {
 }
 
 enum Part {
-    Window { window: Window, root: Canvas },
+    /// `shown`は、`show_window`が一度でも`Activate`したかである。
+    Window {
+        window: Window,
+        root: Canvas,
+        shown: bool,
+    },
     Grid(Canvas),
     Label(TextBlock),
     Button(Button),
@@ -437,7 +452,15 @@ impl WinUiWidgets {
         })
     }
 
-    fn show(&self, window: &Window, size: Size, min: Size) -> windows_core::Result<()> {
+    /// `Remeasure`の後にも呼ばれ、表示しているウィンドウの大きさと最小の大きさをその場で変える。`Activate`は最初の1回だけ
+    /// にする。表示し直すたびにウィンドウを前に出さないためである。
+    fn show(
+        &self,
+        window: &Window,
+        size: Size,
+        min: Size,
+        first: bool,
+    ) -> windows_core::Result<()> {
         let app_window: AppWindow = window.cast::<IWindow2>()?.AppWindow()?;
         // AppWindowの大きさは物理的なpxなので、ここでだけ論理pxに倍率を掛ける
         // SAFETY: `IWindowNative`はWinUIの`Window`が持つ相互運用のインターフェースである
@@ -457,7 +480,7 @@ impl WinUiWidgets {
         let presenter = app_window.Presenter()?.cast::<IOverlappedPresenter3>()?;
         presenter.SetPreferredMinimumWidth(Some(px(min.w) + outer.width - client.width))?;
         presenter.SetPreferredMinimumHeight(Some(px(min.h) + outer.height - client.height))?;
-        window.Activate()
+        if first { window.Activate() } else { Ok(()) }
     }
 }
 
@@ -515,12 +538,18 @@ impl Widgets for WinUiWidgets {
             let theme = root
                 .cast::<IFrameworkElement>()?
                 .ActualThemeChanged(move |_, _| push(RawEvent::Invalidate(id)))?;
+            // XAMLの島が動き出すまで、コントロールはテンプレートもテーマの資源も持たず、ボタンは文字の高さで幅0と測れる。
+            // 島の最初の配置の後に来る`Loaded`で、測り直しを求める
+            let loaded = root
+                .cast::<IFrameworkElement>()?
+                .Loaded(move |_, _| push(RawEvent::Remeasure(id)))?;
             Ok((
                 Part::Window {
                     window: window.clone(),
                     root,
+                    shown: false,
                 },
-                vec![closing, resized, theme],
+                vec![closing, resized, theme, loaded],
             ))
         })()
         .map_err(winui_error)?;
@@ -623,11 +652,19 @@ impl Widgets for WinUiWidgets {
             return;
         }
         if let Some(Held {
-            part: Part::Window { window, .. },
+            part: Part::Window { window, shown, .. },
             ..
         }) = self.parts.get(&w)
         {
-            let _ = self.show(window, size, min);
+            let (window, first) = (window.clone(), !shown);
+            if self.show(&window, size, min, first).is_ok()
+                && let Some(Held {
+                    part: Part::Window { shown, .. },
+                    ..
+                }) = self.parts.get_mut(&w)
+            {
+                *shown = true;
+            }
         }
     }
 
