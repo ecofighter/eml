@@ -394,10 +394,10 @@ mod interrupts {
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::Path;
     use std::process::{Child, ChildStdin, Command, Stdio};
-    use std::sync::mpsc::{Receiver, channel};
+    use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
     use std::time::{Duration, Instant};
 
-    use crate::cli::{DEADLINE, kill_after_deadline, sigint};
+    use crate::cli::{HangGuard, sigint};
     use crate::common::temp_project;
 
     /// 標準入力を開いたまま、入力を1つずつ送る `eml repl`。標準出力と標準エラーは別のスレッドで行ごとに読み続ける。
@@ -405,22 +405,26 @@ mod interrupts {
     struct LiveRepl {
         child: Child,
         stdin: ChildStdin,
-        out: Receiver<String>,
-        err: Receiver<String>,
-        deadline: Instant,
+        lines: Receiver<Line>,
+        guard: HangGuard,
     }
 
-    fn lines_of(stream: impl Read + Send + 'static) -> Receiver<String> {
-        let (send, receive) = channel();
+    /// 子の標準出力か標準エラーの1行。待ちがどちらでも終われるように、2つを1つのチャネルに送る。入力は、標準出力の
+    /// 出力か、標準エラーの`interrupted`で終わる。
+    enum Line {
+        Out(String),
+        Err(String),
+    }
+
+    fn send_lines(stream: impl Read + Send + 'static, tag: fn(String) -> Line, send: Sender<Line>) {
         std::thread::spawn(move || {
             for line in BufReader::new(stream).lines() {
                 let Ok(line) = line else { break };
-                if send.send(line).is_err() {
+                if send.send(tag(line)).is_err() {
                     break;
                 }
             }
         });
-        receive
     }
 
     impl LiveRepl {
@@ -437,14 +441,15 @@ mod interrupts {
                 .spawn()
                 .unwrap();
             let stdin = child.stdin.take().unwrap();
-            let out = lines_of(child.stdout.take().unwrap());
-            let err = lines_of(child.stderr.take().unwrap());
+            let (send, lines) = channel();
+            send_lines(child.stdout.take().unwrap(), Line::Out, send.clone());
+            send_lines(child.stderr.take().unwrap(), Line::Err, send);
+            let guard = HangGuard::new(&child);
             let mut repl = LiveRepl {
                 child,
                 stdin,
-                out,
-                err,
-                deadline: Instant::now() + DEADLINE,
+                lines,
+                guard,
             };
             repl.send("\"ready\"");
             repl.expect_out("\"ready\"");
@@ -459,47 +464,59 @@ mod interrupts {
         /// `line` が標準出力に出るまで待つ。
         fn expect_out(&mut self, line: &str) {
             loop {
-                let left = self.deadline.saturating_duration_since(Instant::now());
-                match self.out.recv_timeout(left) {
-                    Ok(got) if got == line => return,
+                match self.lines.recv() {
+                    Ok(Line::Out(got)) if got == line => return,
                     Ok(_) => {}
-                    Err(_) => {
-                        kill_after_deadline(&mut self.child, &format!("`{line}` did not arrive"))
+                    Err(_) => panic!("the session ended before `{line}` arrived"),
+                }
+            }
+        }
+
+        /// 標準エラーに`interrupted`が出るまで、100 msごとにSIGINTを送り、送った数を返す。続けて届いたSIGINTは1つに
+        /// まとまることがあり、読みに入る直前に届いたSIGINTは読みを止めない (docs/spec/repl.md の「残る制限」) ので、
+        /// 送り続ける。REPLはSIGINTで終わらないので、何回送ってもよい。
+        fn interrupt_until_reported(&mut self) -> usize {
+            let mut sent = 0;
+            loop {
+                sigint(&self.child);
+                sent += 1;
+                let resend = Instant::now() + Duration::from_millis(100);
+                // 動き続ける入力の出力でチャネルが空にならないので、受けた行でなく時刻で送り直しを決める
+                while let Some(left) = resend.checked_duration_since(Instant::now()) {
+                    match self.lines.recv_timeout(left) {
+                        Ok(Line::Err(line)) if line == "interrupted" => return sent,
+                        Ok(_) => {}
+                        Err(RecvTimeoutError::Timeout) => break,
+                        Err(RecvTimeoutError::Disconnected) => {
+                            panic!("the session ended before the input was interrupted")
+                        }
                     }
                 }
             }
         }
 
-        /// 標準エラーに `interrupted` が出るまで、100 ms ごとに SIGINT を送る。続けて届いた SIGINT は1つにまとまる
-        /// ことがあり、読みに入る直前に届いた SIGINT は読みを止めない (docs/spec/repl.md の「残る制限」) ので、
-        /// 送り続ける。REPL は SIGINT で終わらないので、何回送ってもよい。最後に送った SIGINT が、次の入力の始めの
-        /// `clear` の後に届くと次の入力を止めるので、出た後に少し待つ。
-        fn interrupt_until_reported(&mut self) {
-            loop {
-                sigint(&self.child);
-                match self.err.recv_timeout(Duration::from_millis(100)) {
-                    Ok(line) if line == "interrupted" => break,
-                    _ if Instant::now() >= self.deadline => {
-                        kill_after_deadline(&mut self.child, "the input was not interrupted")
+        /// `input`を送り、`line`が標準出力に出るまで待つ。先に送ったSIGINTのハンドラが`input`の始めの`clear`の後で
+        /// 動くと`input`が止まるので、送り直す。SIGINTは1つで高々1つの入力しか止めないので、送り直しは`strays`回まで
+        /// である。それより多く止まったときは、入力の始めに止める語が下りていない。
+        fn send_until_out(&mut self, input: &str, line: &str, strays: usize) {
+            for _ in 0..=strays {
+                self.send(input);
+                loop {
+                    match self.lines.recv() {
+                        Ok(Line::Out(got)) if got == line => return,
+                        Ok(Line::Err(got)) if got == "interrupted" => break,
+                        Ok(_) => {}
+                        Err(_) => panic!("the session ended before `{line}` arrived"),
                     }
-                    _ => {}
                 }
             }
-            std::thread::sleep(Duration::from_millis(200));
+            panic!("`{input}` was interrupted more often than the SIGINTs sent can explain");
         }
 
         /// `:quit` を送り、終了コードを返す。
         fn quit(mut self) -> Option<i32> {
             self.send(":quit");
-            loop {
-                if let Some(status) = self.child.try_wait().unwrap() {
-                    return status.code();
-                }
-                if Instant::now() >= self.deadline {
-                    kill_after_deadline(&mut self.child, "the session did not end");
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            self.guard.wait(&mut self.child).code()
         }
     }
 
@@ -514,9 +531,9 @@ mod interrupts {
         );
         repl.expect_out("\"defined\"");
         repl.send("spin 0");
-        repl.interrupt_until_reported();
-        repl.send("\"after\"");
-        repl.expect_out("\"after\"");
+        // 止めたSIGINTのほかは、どれも後の入力を止めうる
+        let strays = repl.interrupt_until_reported() - 1;
+        repl.send_until_out("\"after\"", "\"after\"", strays);
         let code = repl.quit();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(code, Some(0));
@@ -547,17 +564,17 @@ mod interrupts {
             {
                 Ok(writer) => break writer,
                 Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
-                    if Instant::now() >= repl.deadline {
-                        kill_after_deadline(&mut repl.child, "the input did not open the pipe");
+                    if let Some(status) = repl.guard.exited() {
+                        panic!("the session ended before the input opened the pipe: {status}");
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 Err(error) => panic!("{error}"),
             }
         };
-        repl.interrupt_until_reported();
-        repl.send("\"after\"");
-        repl.expect_out("\"after\"");
+        // 止めたSIGINTのほかは、どれも後の入力を止めうる
+        let strays = repl.interrupt_until_reported() - 1;
+        repl.send_until_out("\"after\"", "\"after\"", strays);
         let code = repl.quit();
         drop(writer);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -569,12 +586,13 @@ mod interrupts {
     fn interrupts_while_waiting_do_not_end_the_repl() {
         let dir = temp_project("cli-repl-sigint-idle", &[]);
         let mut repl = LiveRepl::start(&dir, &[]);
+        // 間を置くのは、3つのSIGINTが別々に届きやすくするためだけである。合否は間に依らない。遅れて届いたSIGINTは、
+        // 下の送り直しが吸収する
         for _ in 0..3 {
             sigint(&repl.child);
             std::thread::sleep(Duration::from_millis(50));
         }
-        repl.send("1 + 1");
-        repl.expect_out("2");
+        repl.send_until_out("1 + 1", "2", 3);
         let code = repl.quit();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(code, Some(0));
