@@ -81,6 +81,7 @@ const FIELDS: &[(&str, Reason)] = &[
     ("eml_nrt/src/arch/x86_64_sysv.rs: JmpBuf::prev", Address),
     ("eml_nrt/src/arch/x86_64_win64.rs: JmpBuf::prev", Address),
     ("eml_nrt/src/entries.rs: Entry::address", Address),
+    ("eml_nrt/src/image.rs: CodeRow::code", Address),
     ("eml_nrt/src/image.rs: DatumRow::code", Address),
     ("eml_nrt/src/image.rs: DatumRow::slot", Address),
     ("eml_nrt/src/image.rs: FnRow::code", Address),

@@ -3,10 +3,10 @@
 
 use eml_rt::{ArithFault, Fault, HeapError};
 use eml_sched::error::{RunFault, SourceLocation};
-use eml_test_support::run_stats;
+use eml_test_support::{execute, run_stats};
 use eml_vm::RuntimeError;
 
-use crate::common::{execute_unverified, parse, run_lir, run_unverified};
+use crate::common::{parse, run_lir, run_unverified, unverified};
 
 #[test]
 fn hello_prints_a_line() {
@@ -140,11 +140,167 @@ fn main() -> unit {
         "memory leak: objects were not freed: 1 String"
     );
     // 速いモードはリークを確かめないので、同じ IR が成功で終わる
-    let (_, fast) = execute_unverified(
-        &parse(text),
+    let (_, fast) = execute(
+        &unverified(text),
         &eml_vm::RunConfig::default().with_debug_heap(false),
     );
     assert_eq!(fast.map(|_| ()), Ok(()));
+}
+
+/// EPが書く形の`try_panic`、`prompt$`とその補助の関数、それにpanicする`boom`。
+const TRY_PANIC: &str = "\
+fn boom(p.0: unit) -> tobj {
+  let m.1: obj = const \"boom\"
+  let r.2: tobj = extern Prelude.panic(m.1)
+  return r.2
+}
+fn try_panic(f.0: tobj, c.1: tobj) -> tobj {
+  let w.2: evv = prim evv_get()
+  dup w.2
+  let ev.3: ev lin = evidence Prelude.Panic(c.1, w.2) [&panicked$entry]
+  let w.5: evv = prim evv_enter(w.2, ev.3)
+  let u.6: unit = prim evv_set(w.5)
+  let x.7: tobj poly = yields apply f.0(()) prompt ev.3
+  tail call prompt$(ev.3, &return$, x.7)
+}
+clause Prelude.Panic.panicked fn panicked$entry(e.0: cev, m.1: obj) -> obj poly {
+  decref m.1
+  let u.2: unit = prim yield_abort(e.0, &panicked$clause)
+  let d.3: obj poly = prim dummy()
+  return d.3
+}
+fn panicked$clause(c.0: tobj) -> tobj {
+  return c.0
+}
+yields fn prompt$(ev.0: ev lin, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: evv = prim ev_take_evv(ev.0)
+  let u.4: unit = prim evv_set(w.3)
+  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
+b1:
+  let st.6: tobj poly = prim ev_last_state(ev.0)
+  let u.25: unit = drop ev.0
+  tail yields apply ret.1(x.2, st.6)
+b2:
+  let u.8: unit = drop x.2
+  let k.9: tobj poly = prim yield_cont_take()
+  let c.10: tobj poly = prim yield_finish()
+  let st.11: tobj poly = prim ev_last_state(ev.0)
+  let h.26: rev = prim ev_retire(ev.0)
+  let k.12: tobj poly = closure resume$(h.26, ret.1, k.9)
+  tail yields apply c.10(k.12, st.11)
+b3:
+  let u.14: unit = drop ret.1
+  let u.15: unit = drop x.2
+  let c.16: tobj poly = prim yield_finish()
+  let st.17: tobj poly = prim ev_last_state(ev.0)
+  let u.27: unit = drop ev.0
+  tail yields apply c.16(st.17)
+b4:
+  let u.19: unit = drop x.2
+  let st.20: tobj poly = prim ev_last_state(ev.0)
+  let k.21: tobj poly = prim yield_cont_take()
+  let h.28: rev = prim ev_retire(ev.0)
+  let k.22: tobj poly = closure rewind$(h.28, ret.1, st.20, k.21)
+  let u.23: unit = prim yield_cont_set(k.22)
+  let d.24: obj poly = prim dummy()
+  return d.24
+}
+yields fn resume$(h.0: rev, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: ev lin = prim ev_renew(h.0, s.4)
+  decref h.0
+  let w.6: evv = prim evv_get()
+  let w.7: evv = prim evv_enter(w.6, e.5)
+  let u.8: unit = prim evv_set(w.7)
+  let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
+  tail call prompt$(e.5, ret.1, x.9)
+}
+yields fn rewind$(h.0: rev, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(h.0, ret.1, k.3, v.4, s.2)
+}
+fn return$(r.0: tobj, s.1: unit) -> tobj {
+  return r.0
+}
+";
+
+/// `main`が関数`leaky`で`try_panic`を呼び、handlerが戻った後に出力するプログラム。
+fn through_leaky(effects: &str, leaky: &str) -> String {
+    format!(
+        "\
+effect Prelude.Panic {{ never panicked(obj) -> never }}
+{effects}fn main() -> unit {{
+  let c.0: tobj = box 0
+  let r.1: tobj = call try_panic(&leaky, c.0)
+  decref r.1
+  let s.2: obj = const \"after\"
+  let u.3: unit = extern Prelude.println(s.2)
+  return u.3
+}}
+{leaky}{TRY_PANIC}"
+    )
+}
+
+/// verifierが拒む関数のフレームは、中断が通っても何も手放さない (docs/spec/vm.mdの「巻き戻しの表」)。中断は正しい
+/// 呼ぶ側のhandlerに着地し、フレームが所有していた文字列がrunのリークになる。
+#[test]
+fn an_abort_through_a_refused_frame_releases_nothing() {
+    let text = through_leaky(
+        "",
+        "\
+fn leaky(p.0: unit) -> tobj {
+  let s.1: obj = extern \"Prelude.Show Int.show\"(7)
+  let r.2: tobj = call boom(())
+  return r.2
+}
+",
+    );
+    assert_eq!(
+        eml_lir::verify(&parse(&text)).map_err(|error| error.to_string()),
+        Err("`s.1` is still owned at the end of the function in `leaky`".to_string())
+    );
+    assert_eq!(
+        run_unverified(&text),
+        (
+            "after\n".to_string(),
+            Err(RuntimeError::Leak(vec![("String".to_string(), 1)]))
+        )
+    );
+}
+
+/// 拒まれる関数の印のある`apply`を通っても同じである。中断はその着地の地点を通り、その行は着地の印を持ち、
+/// 何も手放さない。リークは、文字列と、フレームのevidenceとそれが届く物体 (5つの`Data`の物体) である。
+#[test]
+fn an_abort_through_a_marked_apply_of_a_refused_frame_releases_nothing() {
+    let text = through_leaky(
+        "effect Land { land(unit) -> tobj }\n",
+        "\
+yields fn leaky(p.0: unit) -> tobj {
+  let s.1: obj = extern \"Prelude.Show Int.show\"(7)
+  let w.2: evv = prim evv_get()
+  let ev.3: ev lin = evidence Land((), w.2) [&land$entry]
+  let x.4: tobj poly = yields apply &boom(()) prompt ev.3
+  tail call prompt$(ev.3, &return$, x.4)
+}
+internal clause Land.land fn land$entry(e.0: cev, u.1: unit) -> tobj {
+  decref e.0
+  return ()
+}
+",
+    );
+    assert_eq!(
+        eml_lir::verify(&parse(&text)).map_err(|error| error.to_string()),
+        Err("`s.1` is still owned at the end of the function in `leaky`".to_string())
+    );
+    assert_eq!(
+        run_unverified(&text),
+        (
+            "after\n".to_string(),
+            Err(RuntimeError::Leak(vec![
+                ("Data".to_string(), 5),
+                ("String".to_string(), 1)
+            ]))
+        )
+    );
 }
 
 #[test]

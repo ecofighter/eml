@@ -1,10 +1,10 @@
-//! 実行の制御。セッションに1つあり、CLI と、どの worker のヒープも `Arc` で同じものを見る。実行を止める理由の語と、
-//! セッションのヒープが OS から取ったページのバイト数と、上限と、検査モードの論理的な worker ID の表を持つ
-//! (docs/spec/object-model.md の「実行の制御」「論理的な worker ID」)。
+//! 実行の制御。セッションに1つあり、CLIと、どのworkerのヒープも`Arc`で同じものを見る。実行を止める理由の語と、
+//! セッションのヒープがOSから取ったページのバイト数と、上限を持つ (docs/spec/object-model.mdの「実行の制御」)。
+//! 検査モードの論理的なworker IDの表 (`Owners`) は`Control`でなく、その表で数えるヒープのものである
+//! (docs/spec/object-model.mdの「論理的なworker ID」)。
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::ptr;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
@@ -63,7 +63,6 @@ pub struct Control {
     signals: AtomicU32,
     watched: AtomicU32,
     limits: Limits,
-    workers: WorkerIds,
     pages: PageMap,
     /// ページの表の登録の証が、どの `Control` のものかを見分ける番号。
     // 仕様だけが読む
@@ -71,9 +70,9 @@ pub struct Control {
     id: u64,
 }
 
-/// 検査モードの論理的な worker ID の表 (docs/spec/object-model.md の「論理的な worker ID」)。`Control` に置き、同じ
-/// `Control` のどのヒープも同じ表で数える。回復だけが消し、run ごとには消さない。
-// 中身は Verus に見せない (信頼の一覧の T15)。数は証明の対象にせず、`Control::check_owned` が数え直して確かめる
+/// 検査モードの論理的なworker IDの表 (docs/spec/object-model.mdの「論理的なworker ID」)。表で数えるヒープとそのハンドル
+/// (`Owners`) のもので、どのコードも表を空にしない。
+// 中身はVerusに見せない (信頼の一覧のT15)。数は証明の対象にせず、`Owners::check`が数え直して確かめる
 #[verifier::external_body]
 pub(crate) struct WorkerIds {
     /// まだ出していない最小の ID。0 は基の ID なので 1 から始める。
@@ -192,25 +191,22 @@ fn fresh_control_id() -> u64 {
 /// 何も持たない写しのまま触れない。
 #[verifier::external_body]
 pub(crate) struct IdCounts {
-    control: Option<Arc<Control>>,
+    table: Option<Arc<WorkerIds>>,
     chunks: Vec<Arc<Chunk>>,
+}
+
+/// 検査モードの所有者の表のハンドル (docs/spec/object-model.mdの「論理的なworker ID」)。1つのrunかセッションの
+/// ヒープは1つのハンドルで作る。表は、ヒープかハンドルが持つかぎり生きる。速いモードのヒープのハンドルは表を持たない。
+// 中身はVerusに見せない (信頼の一覧のT15)
+#[verifier::external_body]
+pub struct Owners {
+    table: Option<Arc<WorkerIds>>,
 }
 
 impl PageMap {
     #[verifier::external_body]
     pub(crate) fn empty_map() -> PageMap {
         PageMap { top: OnceLock::new() }
-    }
-}
-
-impl WorkerIds {
-    #[verifier::external_body]
-    pub(crate) fn empty_table() -> WorkerIds {
-        WorkerIds {
-            next: AtomicU32::new(1),
-            free: Mutex::new(Vec::new()),
-            chunks: Mutex::new(Vec::new()),
-        }
     }
 }
 
@@ -221,13 +217,25 @@ impl IdCounts {
     /// 置き場が使う。
     #[verifier::external_body]
     pub(crate) fn detached() -> IdCounts {
-        IdCounts { control: None, chunks: Vec::new() }
+        IdCounts { table: None, chunks: Vec::new() }
     }
 
-    /// `control` の表の写し。基の ID 0 を使っている ID にする。
+    /// 自分だけの新しい表の写し。基のID 0を使っているIDにする。
     #[verifier::external_body]
-    pub(crate) fn for_control(control: &Arc<Control>) -> IdCounts {
-        let mut counts = IdCounts { control: Some(Arc::clone(control)), chunks: Vec::new() };
+    pub(crate) fn alone() -> IdCounts {
+        IdCounts::of(&Owners::new())
+    }
+
+    /// `owners`の表の写し。基のID 0を使っているIDにする。
+    ///
+    /// # Panics
+    /// `owners`が表を持たないとき、つまり速いモードのヒープのハンドルのとき。
+    #[verifier::external_body]
+    pub(crate) fn of(owners: &Owners) -> IdCounts {
+        let table = owners.table.as_ref().expect(
+            "an owner handle of a fast heap for a checked heap",
+        );
+        let mut counts = IdCounts { table: Some(Arc::clone(table)), chunks: Vec::new() };
         counts.enter_id(0);
         counts
     }
@@ -235,8 +243,7 @@ impl IdCounts {
     /// `id` を使っている ID にする。まだ出していない ID からも退いた ID からも外し、数の塊を `id` まで伸ばす。
     #[verifier::external_body]
     pub(crate) fn enter_id(&mut self, id: u32) {
-        if let Some(control) = &self.control {
-            let ids = &control.workers;
+        if let Some(ids) = &self.table {
             let mut free = lock(&ids.free);
             ids.next.fetch_max(id.saturating_add(1), Ordering::Relaxed);
             if let Some(i) = free.iter().position(|f| *f == id) {
@@ -254,8 +261,8 @@ impl IdCounts {
     pub(crate) fn count_id(&mut self, id: u32, up: bool) {
         let (c, i) = (id as usize / CHUNK_IDS, id as usize % CHUNK_IDS);
         if c >= self.chunks.len() {
-            match &self.control {
-                Some(control) => self.chunks = lock(&control.workers.chunks).clone(),
+            match &self.table {
+                Some(ids) => self.chunks = lock(&ids.chunks).clone(),
                 None => return,
             }
             if c >= self.chunks.len() {
@@ -273,8 +280,7 @@ impl IdCounts {
     /// 最後に退いた ID か、なければまだ出していない最小の ID を出す。ID が `u32` の上限に届いていれば `None` を返す。
     #[verifier::external_body]
     pub(crate) fn fork_id(&mut self) -> Option<u32> {
-        let control = self.control.as_ref()?;
-        let ids = &control.workers;
+        let ids = self.table.as_ref()?;
         let mut free = lock(&ids.free);
         let id = match free.pop() {
             Some(id) => id,
@@ -301,8 +307,7 @@ impl IdCounts {
     /// (docs/spec/object-model.md の「論理的な worker ID」)。
     #[verifier::external_body]
     pub(crate) fn retire_id(&self, id: u32) -> Option<u64> {
-        let control = self.control.as_ref()?;
-        let ids = &control.workers;
+        let ids = self.table.as_ref()?;
         let mut free = lock(&ids.free);
         if id == 0 || id >= ids.next.load(Ordering::Relaxed) || free.contains(&id) {
             return None;
@@ -312,23 +317,6 @@ impl IdCounts {
             free.push(id);
         }
         Some(live)
-    }
-
-    /// 表を消す。数をすべて 0 にし、出した ID と退いた ID を忘れる。回復が写す前に呼ぶ
-    /// (docs/spec/object-model.md の「回復」)。
-    #[verifier::external_body]
-    pub(crate) fn reset_ids(&self) {
-        if let Some(control) = &self.control {
-            let ids = &control.workers;
-            let mut free = lock(&ids.free);
-            free.clear();
-            ids.next.store(1, Ordering::Relaxed);
-            for chunk in lock(&ids.chunks).iter() {
-                for n in chunk.iter() {
-                    n.store(0, Ordering::Relaxed);
-                }
-            }
-        }
     }
 }
 
@@ -369,7 +357,6 @@ impl Control {
             signals: AtomicU32::new(0),
             watched: AtomicU32::new(0),
             limits,
-            workers: WorkerIds::empty_table(),
             pages: PageMap::empty_map(),
             id: fresh_control_id(),
         }
@@ -700,6 +687,14 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl WorkerIds {
+    fn empty_table() -> WorkerIds {
+        WorkerIds {
+            next: AtomicU32::new(1),
+            free: Mutex::new(Vec::new()),
+            chunks: Mutex::new(Vec::new()),
+        }
+    }
+
     /// 数の塊を `id` まで伸ばし、塊の一覧の写しを返す。
     fn grow(&self, id: u32) -> Vec<Arc<Chunk>> {
         let mut chunks = lock(&self.chunks);
@@ -721,30 +716,63 @@ impl WorkerIds {
 impl IdCounts {
     /// ID `id` の、rc が正の生きている物体の数。
     pub(crate) fn owned_by(&self, id: u32) -> u64 {
-        self.control
-            .as_ref()
-            .map_or(0, |control| control.workers.live(id))
+        self.table.as_ref().map_or(0, |ids| ids.live(id))
+    }
+
+    /// この写しの表のハンドル。
+    pub(crate) fn owners(&self) -> Owners {
+        Owners {
+            table: self.table.clone(),
+        }
     }
 }
 
-impl Control {
-    /// ID ごとの数を、`heaps` のページの rc が正の生きている物体の所有者から数え直して確かめる。食い違う ID のうち最小の
-    /// ものを `OwnedMiscount` で返す。速いモードでは何もしない (docs/spec/object-model.md の「論理的な worker ID」)。
+impl Clone for Owners {
+    fn clone(&self) -> Owners {
+        Owners {
+            table: self.table.clone(),
+        }
+    }
+}
+
+impl Default for Owners {
+    fn default() -> Owners {
+        Owners::new()
+    }
+}
+
+impl Owners {
+    /// 新しい空の表のハンドル。
+    pub fn new() -> Owners {
+        Owners {
+            table: Some(Arc::new(WorkerIds::empty_table())),
+        }
+    }
+
+    /// IDごとの数を、`heaps`のページのrcが正の生きている物体の所有者から数え直して確かめる。食い違うIDのうち最小の
+    /// ものを`OwnedMiscount`で返す。速いモードでは何もしない (docs/spec/object-model.mdの「論理的なworker ID」)。
     ///
-    /// 数え直す前に、この `Control` のすべてのヒープを渡し、どのヒープもほかのスレッドからの解放を取り込み終えていて、
+    /// 数え直す前に、この表のすべてのヒープを渡し、どのヒープもほかのスレッドからの解放を取り込み終えていて、
     /// 呼んでいる間どのスレッドもヒープに触れないこと。この関数は取り込めないので、検査モードでは、受けて取り込んで
-    /// いない解放の残るヒープがあれば `NotQuiescent` を返す。
+    /// いない解放の残るヒープがあれば`NotQuiescent`を返す。
     ///
     /// # Panics
-    /// ほかの `Control` のヒープを渡したとき。
-    pub fn check_owned<M: Mode>(&self, heaps: &[&Heap<M>]) -> Result<(), HeapError> {
-        assert!(
-            heaps.iter().all(|heap| ptr::eq(&**heap.control(), self)),
-            "check_owned over a heap of another Control"
-        );
+    /// ほかの表のヒープを渡したとき。検査モードで、このハンドルが表を持たないとき、つまり速いモードのヒープの
+    /// ハンドルのとき。
+    pub fn check<M: Mode>(&self, heaps: &[&Heap<M>]) -> Result<(), HeapError> {
         if !M::CHECKED {
             return Ok(());
         }
+        let ids = self
+            .table
+            .as_ref()
+            .expect("an owner check on the handle of a fast heap");
+        assert!(
+            heaps
+                .iter()
+                .all(|heap| heap.owners().table.is_some_and(|t| Arc::ptr_eq(&t, ids))),
+            "an owner check over a heap of another table"
+        );
         if heaps.iter().any(|heap| heap.remote_pending()) {
             return Err(HeapError::NotQuiescent);
         }
@@ -754,7 +782,7 @@ impl Control {
                 *counted.entry(owner).or_default() += 1;
             }
         }
-        let chunks = lock(&self.workers.chunks);
+        let chunks = lock(&ids.chunks);
         let table = chunks.len() * CHUNK_IDS;
         let in_table = (0..table).find(|&i| {
             chunks[i / CHUNK_IDS][i % CHUNK_IDS].load(Ordering::Relaxed)

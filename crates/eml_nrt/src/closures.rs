@@ -1,7 +1,7 @@
 //! 関数の値のエントリ (docs/spec/native.md の「関数の値」)。
 #![allow(unsafe_code)]
 
-use eml_rt::{Ctx, Fast, Heap, HeapError, Kind, Word, layout};
+use eml_rt::{Ctx, Heap, HeapError, Kind, Mode, Word, layout};
 use eml_sched::error::RunFault;
 
 use crate::Raise;
@@ -27,10 +27,10 @@ crate::entries! {
     /// - `eml_nrt_safepoint`と同じ
     /// - `callee`はこのヒープか付けた塊の生きている関数の値で、`argv`は`m`個の語を読める。`m`は1以上である
     /// - 呼ぶ側は`callee`と各引数の参照を1つずつ持ち、それらはPAPの鎖へ移る。呼ぶ側はその後、これらの語を手放さない
-    pub shim fn eml_nrt_pap(ctx, callee: obj, argv: ptr, m: i64) -> obj {
+    pub shim[Service] fn eml_nrt_pap(ctx, callee: obj, argv: ptr, m: i64) -> obj {
         debug_assert!(m >= 1, "a partial application has no argument");
         let m = m as usize;
-        let not_a_function = |ctx: &mut Ctx<Fast>| {
+        let not_a_function = |ctx: &mut Ctx<M>| {
             // SAFETY: 呼ぶ側の約束
             unsafe { worker::record(ctx, NOT_A_FUNCTION, None) }
         };
@@ -50,7 +50,7 @@ crate::entries! {
         // 鎖の残りの数は`n - m..n`である。作り始める前にどのアダプタもあることを確かめるので、断るときに作りかけの鎖は
         // ない
         // SAFETY: 呼ぶ側の約束
-        let adapter = |ctx: &mut Ctx<Fast>, rest: usize| unsafe { worker::of(ctx) }.pap(rest as u32);
+        let adapter = |ctx: &mut Ctx<M>, rest: usize| unsafe { worker::of(ctx) }.pap(rest as u32);
         if (n - m..n).any(|rest| adapter(ctx, rest).is_none()) {
             return Err(not_a_function(ctx));
         }
@@ -73,8 +73,8 @@ crate::entries! {
 ///
 /// # Safety
 /// `rest`は16ビットに収まる。`callee`と`arg`は生きている語で、その参照はPAPの欄へ移る。
-unsafe fn build(
-    heap: &mut Heap<Fast>,
+unsafe fn build<M: Mode>(
+    heap: &mut Heap<M>,
     rest: usize,
     lin: bool,
     adapter: *const u8,

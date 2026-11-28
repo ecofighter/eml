@@ -7,6 +7,7 @@ use cranelift_frontend::FunctionBuilder;
 use cranelift_module::Module;
 use eml_lir::Repr;
 
+use super::audit;
 use super::function::FnLower;
 use crate::mem;
 
@@ -22,7 +23,7 @@ impl Step {
     pub(super) fn slow(self) -> &'static str {
         match self {
             Step::Dup => "eml_rt_dup_slow",
-            Step::Decref => "eml_rt_decref",
+            Step::Decref => "eml_rt_decref_slow",
         }
     }
 }
@@ -40,7 +41,11 @@ impl<M: Module> FnLower<'_, '_, M> {
 
     fn counted(&mut self, w: Value, repr: Repr, step: Step) {
         let slow = self.func_ref(self.imports.entry(step.slow()));
-        counted(&mut self.b, self.ctx, slow, w, repr, step);
+        let audit = self
+            .imports
+            .checked
+            .then(|| self.func_ref(self.imports.entry(audit::rc_entry(step))));
+        counted(&mut self.b, self.ctx, slow, audit, w, repr, step);
     }
 }
 
@@ -50,6 +55,7 @@ pub(super) fn counted(
     b: &mut FunctionBuilder,
     ctx: Value,
     slow: FuncRef,
+    audit: Option<FuncRef>,
     w: Value,
     repr: Repr,
     step: Step,
@@ -73,6 +79,7 @@ pub(super) fn counted(
         Repr::Obj | Repr::Ev | Repr::Cev | Repr::Rev => {}
         _ => unreachable!("only reference counted words are counted"),
     }
+    audit::call_before(b, ctx, audit, w);
     let rc = mem::load_rc(b, w);
     let is_local = local(b, rc);
     b.ins().brif(is_local, fast, &[], other, &[]);

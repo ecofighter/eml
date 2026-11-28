@@ -5,19 +5,20 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cranelift_jit::JITModule;
+use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Module, ModuleError};
 use eml_cabi::Linked;
 use eml_extern::ExternEffect;
 use eml_lir::{OpRet, Program, Repr, Trusted};
 use eml_nrt::image::{
-    DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
-    DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow, Slice,
-    Start, Str,
+    CodeRow, DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
+    DATUM_SIG, DATUM_STRING, DatumRow, FnRow, Image, MaskRow, NO_EFFECT, Options, PapRow, SiteRow,
+    Slice, Start, Str,
 };
+use eml_nrt::mode::{Checked, Engine, Fast};
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
-use crate::abi::jit_builder;
+use crate::abi::{EntrySig, SigWords, jit_builder};
 use crate::lower::consts::Datum;
 use crate::lower::{self, names};
 use crate::thunk::define_thunk;
@@ -116,21 +117,43 @@ struct Tables {
     _datum_rows: Vec<DatumRow>,
     _masks: Vec<Vec<MaskRow>>,
     _paps: Vec<PapRow>,
+    _entries: Vec<CodeRow>,
     image: Image,
 }
 
 impl Tables {
     /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードと待つ引数の数を持つ。`number`はプログラムの
-    /// エフェクトの添字をマシンの番号にする。`raise_effects`は`Prelude.Panic`と`Prelude.IO`のマシンの番号か`NO_EFFECT`
-    /// である。
+    /// エフェクトの添字をマシンの番号にする。`entries`は、クロージャのエントリごとに、そのコードと署名を持つ。検査モードで
+    /// だけ`Some`で、速いモードでは`None`である。`raise_effects`は`Prelude.Panic`と`Prelude.IO`のマシンの番号か
+    /// `NO_EFFECT`である。
     fn new(
         functions: Vec<Function>,
         files: Vec<String>,
         data: Vec<(Datum, *mut u64, Static)>,
         paps: Vec<PapRow>,
+        entries: Option<Vec<(*const u8, EntrySig)>>,
         number: impl Fn(u32) -> u16,
         raise_effects: (u32, u32),
     ) -> Tables {
+        // `Image.entries`の行と`w:`のslotは1つの表から語を取るので、呼び出しの所と、そこが呼びうるエントリは同じ語を見る
+        let mut words = SigWords::default();
+        let entries: Vec<CodeRow> = match &entries {
+            // `rest`個の引数を待つPAPのアダプタは`rest`個の引数の一様な署名を持ち、`sig_word`はその語を`rest`と書くので、
+            // 鍵は要らない
+            Some(closures) => closures
+                .iter()
+                .map(|(code, sig)| CodeRow {
+                    code: *code,
+                    sig: words.word(sig),
+                })
+                .chain(paps.iter().map(|pap| CodeRow {
+                    code: pap.code,
+                    sig: u64::from(pap.rest),
+                }))
+                .collect(),
+            None => Vec::new(),
+        };
+
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
         let mut rows: Vec<FnRow> = functions
             .iter()
@@ -171,6 +194,7 @@ impl Tables {
                     }
                     Datum::Effect(effect) => (DATUM_EFFECT, u64::from(number(*effect)), ""),
                     Datum::Mask(_) => (DATUM_MASK, 0, ""),
+                    Datum::Sig(entry) => (DATUM_SIG, words.word(entry), ""),
                     Datum::Keep(_) => unreachable!("the loader never writes a keep datum"),
                 };
                 DatumRow {
@@ -188,6 +212,7 @@ impl Tables {
             files: Slice::new(&file_rows),
             data: Slice::new(&datum_rows),
             paps: Slice::new(&paps),
+            entries: Slice::new(&entries),
             panic_effect: raise_effects.0,
             io_effect: raise_effects.1,
         };
@@ -200,6 +225,7 @@ impl Tables {
             _datum_rows: datum_rows,
             _masks: masks,
             _paps: paps,
+            _entries: entries,
             image,
         }
     }
@@ -257,11 +283,12 @@ impl NativeMachine {
 
     /// `program`のすべての関数をコンパイルする。マシンは1回だけ読み込むので、2回目の呼び出しは、1回目が失敗していても
     /// `LoadError::Loaded`を返す。`load`は`program`を信頼する。その約束は`Trusted`を作った側が負う
-    /// (docs/spec/lir.mdの「エンジンの約束」)。ネイティブのコードは実行時に何も確かめない (docs/spec/native.mdの「関数の形」)。
-    /// どのビルドも、この約束のうちverifierが確かめる部分を確かめ、破れていればpanicする。`unsupported`が断る形は、
-    /// 下ろしの中でpanicする。`linked`はプログラムのCの関数をつないだ結果で、その宣言がプログラムの表と違えば、何も
-    /// 作らずに`LoadError::LinkMismatch`を返す。
+    /// (docs/spec/lir.mdの「エンジンの約束」)。速いモードのネイティブのコードは実行時に何も確かめず、検査モードのコードは
+    /// 監査で確かめる (docs/spec/native.mdの「関数の形」「検査モード」)。巻き戻しの表は`Trusted`のものを使う。`Trusted`は、
+    /// すでにverifierを通ったものか、P6の下で作ったものである。`unsupported`が断る形は、下ろしの中でpanicする。`linked`は
+    /// プログラムのCの関数をつないだ結果で、その宣言がプログラムの表と違えば、何も作らずに`LoadError::LinkMismatch`を返す。
     pub fn load(&mut self, program: &Trusted, linked: &Linked) -> Result<Loaded, LoadError> {
+        let checked = self.checked();
         if std::mem::replace(&mut self.asked, true) {
             return Err(LoadError::Loaded);
         }
@@ -269,11 +296,6 @@ impl NativeMachine {
         if !linked.fits(&program.c_functions, &program.c_handles) {
             return Err(LoadError::LinkMismatch);
         }
-        // プログラムを信頼するコード (エントリの形、エフェクトの番号、下ろし) より前に確かめる
-        let unwinds = match eml_lir::unwind::verified(program) {
-            Ok(unwinds) => unwinds,
-            Err(error) => panic!("internal error: invalid LIR at the native load: {error}"),
-        };
         let entry = program.function(program.entry);
         if lower::rets(entry) != [Kind::I64] {
             return Err(LoadError::Entry {
@@ -287,8 +309,10 @@ impl NativeMachine {
                 .or_insert_with(|| effect_number(next));
         }
         let mut builder = jit_builder().map_err(|error| LoadError::Module(error.to_string()))?;
-        for entry in eml_nrt::entries() {
-            builder.symbol(entry.symbol, (entry.address)());
+        if checked {
+            register_entries::<Checked>(&mut builder);
+        } else {
+            register_entries::<Fast>(&mut builder);
         }
         // `fits`が成り立ったので、`Linked`の約束により、どの呼ぶ先もそのCの関数の宣言の記号を解決した関数で、どのdtorも
         // そのハンドルの型の宣言のdtorである。生成したコードは、それらを記号の名前でだけ名指す
@@ -302,7 +326,8 @@ impl NativeMachine {
             }
         }
         let module = self.module.insert(JITModule::new(builder));
-        let defined = lower::program(module, program, unwinds, self.keep_clif)
+        let lowering = lower::Lowering { checked };
+        let defined = lower::program(module, program, self.keep_clif, lowering)
             .and_then(|defined| Ok(module.finalize_definitions().map(|()| defined)?));
         let lowered = match defined {
             Ok(lowered) => lowered,
@@ -346,13 +371,19 @@ impl NativeMachine {
             });
         }
         let mut statics = HashMap::with_capacity(lowered.closures.len());
-        for (closure, arity, defined) in lowered.closures {
+        let mut entries = Vec::new();
+        for (closure, arity, sig, defined) in lowered.closures {
             let code = module.get_finalized_function(defined.id);
+            if let Some(sig) = sig {
+                entries.push((code, sig));
+            }
+            let name =
+                names::closure_entry(closure.captures, &program.function(closure.function).name);
+            if let Some(clif) = defined.clif {
+                self.clif.insert(name.clone(), clif);
+            }
             self.symbols.push(Symbol {
-                name: names::closure_entry(
-                    closure.captures,
-                    &program.function(closure.function).name,
-                ),
+                name,
                 address: code,
                 size: defined.size,
             });
@@ -373,6 +404,9 @@ impl NativeMachine {
         let mut paps = Vec::with_capacity(lowered.paps.len());
         for (rest, defined) in lowered.paps {
             let code = module.get_finalized_function(defined.id);
+            if let Some(clif) = defined.clif {
+                self.clif.insert(names::pap(rest), clif);
+            }
             self.symbols.push(Symbol {
                 name: names::pap(rest),
                 address: code,
@@ -412,6 +446,7 @@ impl NativeMachine {
             program.files.clone(),
             data,
             paps,
+            checked.then_some(entries),
             number,
             raise_effects,
         ));
@@ -422,7 +457,9 @@ impl NativeMachine {
     }
 
     /// 読み込んだプログラムの入口を実行する。入口は引数を取らない。ほかのマシンが返した`loaded`は、何も実行せずに
-    /// 内部の誤りで断る。
+    /// 内部の誤りで断る。検査モードでは、前のrunがどう終わっても、次のrunは0から数える。runはどれも自分の所有者の
+    /// 表で数えるためである (docs/spec/native.mdの「実行の始めと終わり」)。runが立てたままにした止めるビットは、呼ぶ側が
+    /// 下ろす (`Control::clear`)。
     pub fn run(&mut self, loaded: Loaded, options: Options) -> Result<Finished, RuntimeError> {
         let (thunk, code, results, counted) = self.prepare(loaded)?;
         let mut argv = vec![0u64; results];
@@ -532,8 +569,8 @@ impl NativeMachine {
         Ok((thunk, code))
     }
 
-    /// 読み込んだ関数`name`、または補助の関数`eml$apply$<m>`か`eml$raise`の、コンパイルの前のCLIF。`new_with_clif`で
-    /// 作ったマシンだけが持つ。
+    /// 読み込んだ関数`name`、または補助の関数`eml$apply$<m>`、`eml$raise`、関数の値のエントリ`c<k>:<f>`、PAPのアダプタ
+    /// `eml$pap$<r>`の、コンパイルの前のCLIF。`new_with_clif`で作ったマシンだけが持つ。
     #[doc(hidden)]
     pub fn clif(&self, name: &str) -> Option<&str> {
         self.clif.get(name).map(String::as_str)
@@ -634,18 +671,34 @@ impl NativeMachine {
         // SAFETY: `image`の表は`self`のもので、呼び出しの間生きていて変わらない。どの`Str`も`String`から作る。どの
         // データのslotも、moduleが値ごとに1つ定義した8バイトにそろえた書ける語で、領域はマシンが終わるまで返さない。
         // ここを呼ぶ`run`と`call`は`&mut self`を取るので、同じslotを使うrunは重ならない。`thunk`は`code`の関数の
-        // 種類の並びのthunkである。その関数は`load`に渡した`Trusted`のプログラムからコンパイルしたもので、どのビルドの
-        // `load`もverifierを通してある (P1)。`run`は入口を空の`evv`で動かし、`call`は呼び手がR-5で、空の`evv`と
+        // 種類の並びのthunkである。その関数は`load`に渡した`Trusted`のプログラムからコンパイルしたもので、その前提は
+        // `Trusted`を作った側が約束する (`Trusted::new`はverifierを通したうえでP1、`Trusted::unverified`はP6。
+        // docs/spec/lir.mdの「エンジンの約束」)。`run`は入口を空の`evv`で動かし、`call`は呼び手がR-5で、空の`evv`と
         // 渡した引数で関数が前提を満たすことを約束する。`argv`はその関数の引数と結果ごとにslotを持ち、引数を入れてある
         unsafe {
-            eml_nrt::run::run(
-                &tables.image,
-                &start,
-                &self.config,
-                self.host.clone(),
-                options,
-            )
+            if self.checked() {
+                run_in::<Checked>(
+                    &tables.image,
+                    &start,
+                    &self.config,
+                    self.host.clone(),
+                    options,
+                )
+            } else {
+                run_in::<Fast>(
+                    &tables.image,
+                    &start,
+                    &self.config,
+                    self.host.clone(),
+                    options,
+                )
+            }
         }
+    }
+
+    /// 検査モードか。マシンの`RunConfig`から読むこの1つの印が、下ろし方、エントリの表、runを選ぶ。
+    fn checked(&self) -> bool {
+        self.config.debug_heap
     }
 }
 
@@ -657,6 +710,28 @@ impl Drop for NativeMachine {
             // thunkとコードのアドレスだけで、それを通して呼ぶことも読むことも`unsafe`を要する
             unsafe { module.free_memory() };
         }
+    }
+}
+
+/// モード`M`での`eml_nrt::run::run`。`M`はマシンの下ろし方のモードである。
+///
+/// # Safety
+/// `eml_nrt::run::run`と同じ。
+unsafe fn run_in<M: Engine>(
+    image: &Image,
+    start: &Start,
+    config: &RunConfig,
+    host: HostRef,
+    options: Options,
+) -> Result<Finished, RuntimeError> {
+    // SAFETY: 呼ぶ側の約束
+    unsafe { eml_nrt::run::run::<M>(image, start, config, host, options) }
+}
+
+/// `builder`に、モード`M`のどのエントリのアドレスも渡す。`M`は、マシンの下ろし方とrunのモードである。
+fn register_entries<M: Engine>(builder: &mut JITBuilder) {
+    for entry in eml_nrt::entries::<M>() {
+        builder.symbol(entry.symbol, (entry.address)());
     }
 }
 

@@ -1,4 +1,4 @@
-//! エントリのマクロと記述子の行 (docs/spec/native.md の「記述子の表」、「包みの本体」)。
+//! エントリのマクロと記述子の行 (docs/spec/native.mdの「記述子の表」、「包みの本体」)。
 #![allow(unsafe_code)]
 
 /// エントリの引数と結果の種類。
@@ -16,6 +16,40 @@ pub struct Entry {
     /// `ctx`の後の引数。
     pub params: &'static [Kind],
     pub result: Option<Kind>,
+    /// どんな仕事のエントリか。ツールが読み、生成したコードは読まない。
+    pub class: Class,
+}
+
+/// エントリの仕事の種類。番号と名前は、ツールが書くファイルが持つので変えない (docs/spec/native.mdの「記述子の表」)。
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Class {
+    Alloc = 0,
+    Free = 1,
+    RcSlow = 2,
+    Share = 3,
+    Reuse = 4,
+    Audit = 5,
+    Row = 6,
+    Task = 7,
+    Service = 8,
+}
+
+impl Class {
+    /// 変種の名前。
+    pub const fn name(self) -> &'static str {
+        match self {
+            Class::Alloc => "Alloc",
+            Class::Free => "Free",
+            Class::RcSlow => "RcSlow",
+            Class::Share => "Share",
+            Class::Reuse => "Reuse",
+            Class::Audit => "Audit",
+            Class::Row => "Row",
+            Class::Task => "Task",
+            Class::Service => "Service",
+        }
+    }
 }
 
 #[doc(hidden)]
@@ -75,7 +109,7 @@ macro_rules! __kind {
 /// バイト)。Rustの型は`*const Word`なので、それを通して読む語はprovenanceを保ち、ほかのものを読むエントリはキャストする。
 /// 引数の`dtor`は
 /// ハンドルの型のdtorかなしで、Rustの型は`Option<eml_rows::ffi::Dtor>`である。関数ポインタの`Option`はポインタと同じ
-/// ABIを持ち、nullが`None`なので、語はキャストなしにABIだけで関数ポインタになる (docs/spec/native.md の「エントリのABI」)。
+/// ABIを持ち、nullが`None`なので、語はキャストなしにABIだけで関数ポインタになる (docs/spec/native.mdの「エントリのABI」)。
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __ty {
@@ -155,28 +189,28 @@ macro_rules! __result {
     };
 }
 
-/// 1つのエントリの関数。`shim`の本体の規則はここにだけ書く (docs/spec/native.md の「包みの本体」)。
+/// 1つのエントリの関数。`shim`の本体の規則はここにだけ書く (docs/spec/native.mdの「包みの本体」)。
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __entry {
     (plain [$(#[$m:meta])*] $v:vis $name:ident $ctx:ident ($($p:ident : $t:tt),*) ($($r:tt)?) $body:block) => {
         $(#[$m])*
         #[allow(clippy::missing_safety_doc)]
-        $v unsafe extern "C" fn $name(
-            $ctx: *mut $crate::__rt::Ctx<$crate::__rt::Fast>
+        $v unsafe extern "C" fn $name<M: $crate::__rt::Mode>(
+            $ctx: *mut $crate::__rt::Ctx<M>
             $(, $p: $crate::__ty!($t))*
         ) $(-> $crate::__ty!($r))? $body
     };
     (shim [$(#[$m:meta])*] $v:vis $name:ident $ctx:ident ($($p:ident : $t:tt),*) ($($r:tt)?) $body:block) => {
         $(#[$m])*
         #[allow(clippy::missing_safety_doc)]
-        $v unsafe extern "C" fn $name(
-            ctx: *mut $crate::__rt::Ctx<$crate::__rt::Fast>
+        $v unsafe extern "C" fn $name<M: $crate::__rt::Mode>(
+            ctx: *mut $crate::__rt::Ctx<M>
             $(, $p: $crate::__ty!($t))*
         ) $(-> $crate::__ty!($r))? {
             let outcome = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
                 // SAFETY: 呼ぶ側は、このworkerの生きている`Ctx`を渡す。この借用は閉包の中で終わる
-                let $ctx: &mut $crate::__rt::Ctx<$crate::__rt::Fast> = unsafe { &mut *ctx };
+                let $ctx: &mut $crate::__rt::Ctx<M> = unsafe { &mut *ctx };
                 $body
             }));
             match outcome {
@@ -184,7 +218,7 @@ macro_rules! __entry {
                 Ok(Err(error)) => {
                     // SAFETY: 上と同じ。借用は`park`の間だけである
                     let fatal = $crate::Raise::park(error, unsafe { &mut *ctx });
-                    // SAFETY: この枠は落とすものを持たない (docs/spec/native.md の「`eml_fatal`」)
+                    // SAFETY: この枠は落とすものを持たない (docs/spec/native.mdの「`eml_fatal`」)
                     unsafe { $crate::eml_fatal(ctx, fatal.code as i64, fatal.site as i64) }
                 }
                 Err(payload) => {
@@ -198,32 +232,40 @@ macro_rules! __entry {
 }
 
 /// エントリの関数と記述子の表を一緒に宣言する。宣言が1つなので、関数と、生成したコードが作る呼び出しの型が食い違わない
-/// (docs/spec/native.md の「記述子の表」)。結果の`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、
+/// (docs/spec/native.mdの「記述子の表」)。結果の`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、
 /// 安定版のRustでは`R`に`!`を書けないためである。`const NAME = "接頭辞";`の形では、記号は接頭辞に関数の識別子を
 /// 続けたものになり、`const NAME;`の形では識別子そのものになる。
+/// 関数はモード`M`について総称で、本体は型引数`M`を名指してよい。表は関数`NAME::<M>()`である。どのエントリも`shim[Alloc]`の
+/// ように、形の後に`class`を書く。
 #[macro_export]
 macro_rules! entries {
     (
         $(#[$tm:meta])* $tv:vis const $table:ident = $prefix:literal;
         $(
             $(#[$m:meta])*
-            $v:vis $form:ident fn $name:ident($ctx:ident $(, $p:ident : $t:tt)* $(,)?) $(-> $r:tt)? $body:block
+            $v:vis $form:ident [$class:ident] fn $name:ident($ctx:ident $(, $p:ident : $t:tt)* $(,)?) $(-> $r:tt)? $body:block
         )*
     ) => {
         $(
             $crate::__entry! { $form [$(#[$m])*] $v $name $ctx ($($p: $t),*) ($($r)?) $body }
         )*
         $(#[$tm])*
-        $tv const $table: &[$crate::Entry] = &[
-            $(
-                $crate::Entry {
-                    symbol: concat!($prefix, stringify!($name)),
-                    address: || $name as *const u8,
-                    params: &[$($crate::__kind!($t)),*],
-                    result: $crate::__result!($($r)?),
-                },
-            )*
-        ];
+        #[allow(non_snake_case)]
+        $tv fn $table<M: $crate::__rt::Mode>() -> &'static [$crate::Entry] {
+            const {
+                &[
+                    $(
+                        $crate::Entry {
+                            symbol: concat!($prefix, stringify!($name)),
+                            address: || $name::<M> as *const u8,
+                            params: &[$($crate::__kind!($t)),*],
+                            result: $crate::__result!($($r)?),
+                            class: $crate::Class::$class,
+                        },
+                    )*
+                ]
+            }
+        }
     };
     ($(#[$tm:meta])* $tv:vis const $table:ident; $($rest:tt)*) => {
         $crate::entries! { $(#[$tm])* $tv const $table = ""; $($rest)* }
@@ -238,8 +280,8 @@ mod tests {
     use eml_extern::CInt;
     use eml_rows::ffi::{Dtor, Raise};
     use eml_rt::{
-        ArithFault, Buffering, Control, Ctx, Fast, Fault, HostRef, Kind as ObjectKind, Limits,
-        StdHost, Word, layout,
+        ArithFault, Buffering, Checked, Control, Ctx, Fast, Fault, HostRef, Kind as ObjectKind,
+        Limits, StdHost, Word, layout,
     };
 
     use crate::{Fatal, Kind};
@@ -247,30 +289,30 @@ mod tests {
     crate::entries! {
         const SAMPLE;
 
-        plain fn eml_t_plain(ctx, a: i64, b: f64) -> f64 {
+        plain[Service] fn eml_t_plain(ctx, a: i64, b: f64) -> f64 {
             // SAFETY: テストは生きている`Ctx`を渡す
             let last = unsafe { (*ctx).runtime() }.addr();
             a as f64 + b + last as f64
         }
 
-        shim fn eml_t_shim(ctx, a: i64) -> i64 {
+        shim[Service] fn eml_t_shim(ctx, a: i64) -> i64 {
             ctx.set_runtime(std::ptr::without_provenance_mut(a as usize));
             Ok::<i64, Fatal>(a + 1)
         }
 
         #[allow(non_snake_case)]
-        shim fn eml_t_Named(ctx, a: obj, b: float, c: enum) -> int {
+        shim[Service] fn eml_t_Named(ctx, a: obj, b: float, c: enum) -> int {
             ctx.set_runtime(std::ptr::without_provenance_mut(a.bits()));
             Ok::<i64, Fatal>(a.bits() as i64 + b as i64 + c)
         }
 
         #[allow(non_snake_case)]
-        shim fn eml_t_Never(ctx, a: tobj) -> never {
+        shim[Service] fn eml_t_Never(ctx, a: tobj) -> never {
             ctx.set_runtime(std::ptr::without_provenance_mut(a.bits()));
             Ok::<(), Fatal>(())
         }
 
-        shim fn eml_t_unit(ctx, a: i64) {
+        shim[Service] fn eml_t_unit(ctx, a: i64) {
             ctx.set_runtime(std::ptr::without_provenance_mut(a as usize));
             Ok::<(), Fatal>(())
         }
@@ -300,7 +342,7 @@ mod tests {
             assert_eq!(eml_t_plain(raw, 1, 0.5), 7.5);
         }
         ctx.set_runtime(std::ptr::null_mut());
-        let rows: Vec<_> = SAMPLE
+        let rows: Vec<_> = SAMPLE::<Fast>()
             .iter()
             .map(|e| (e.symbol, e.params, e.result))
             .collect();
@@ -514,6 +556,221 @@ mod tests {
         }
     }
 
+    fn checked_ctx() -> Box<Ctx<Checked>> {
+        let host = StdHost::new(
+            Box::new(std::io::sink()),
+            Box::new(std::io::sink()),
+            std::path::PathBuf::new(),
+            Buffering::Block,
+        );
+        let control = Arc::new(Control::new(Limits::default()));
+        Box::new(Ctx::new(control, HostRef::new(Arc::new(host))))
+    }
+
+    #[test]
+    fn every_entry_has_its_class() {
+        use crate::Class;
+        let named: [(&[&str], Class); 4] = [
+            (
+                &[
+                    "eml_rt_alloc_data",
+                    "eml_rt_alloc_int",
+                    "eml_rt_alloc_float",
+                ],
+                Class::Alloc,
+            ),
+            (&["eml_rt_free_block", "eml_rt_release"], Class::Free),
+            (
+                &[
+                    "eml_rt_dup_slow",
+                    "eml_rt_decref_slow",
+                    "eml_rt_decref",
+                    "eml_rt_is_last",
+                ],
+                Class::RcSlow,
+            ),
+            (
+                &[
+                    "eml_rt_con_at",
+                    "eml_rt_drop_token",
+                    "eml_rt_into_token",
+                    "eml_rt_reuse_in_place",
+                ],
+                Class::Reuse,
+            ),
+        ];
+        let symbols: Vec<&str> = crate::entries::<Fast>().map(|e| e.symbol).collect();
+        for (names, _) in named {
+            for name in names {
+                assert!(symbols.contains(name), "{name} is not an entry");
+            }
+        }
+        let audits = symbols.iter().filter(|s| s.starts_with("eml_rt_audit_"));
+        assert_eq!(audits.count(), 12);
+        for entry in crate::entries::<Fast>() {
+            let s = entry.symbol;
+            let expected = if s.starts_with("eml_x_") {
+                Class::Row
+            } else if s.starts_with("eml_rt_audit_") {
+                Class::Audit
+            } else {
+                named
+                    .iter()
+                    .find(|(names, _)| names.contains(&s))
+                    .map_or(Class::Service, |&(_, class)| class)
+            };
+            assert_eq!(entry.class, expected, "{s}");
+        }
+    }
+
+    #[test]
+    fn the_classes_have_fixed_numbers_and_names() {
+        use crate::Class;
+        let classes = [
+            (Class::Alloc, 0, "Alloc"),
+            (Class::Free, 1, "Free"),
+            (Class::RcSlow, 2, "RcSlow"),
+            (Class::Share, 3, "Share"),
+            (Class::Reuse, 4, "Reuse"),
+            (Class::Audit, 5, "Audit"),
+            (Class::Row, 6, "Row"),
+            (Class::Task, 7, "Task"),
+            (Class::Service, 8, "Service"),
+        ];
+        for (class, number, name) in classes {
+            assert_eq!((class as u8, class.name()), (number, name));
+        }
+    }
+
+    #[test]
+    fn the_two_tables_describe_the_same_entries() {
+        let fast: Vec<_> = crate::entries::<Fast>().collect();
+        let checked: Vec<_> = crate::entries::<Checked>().collect();
+        assert_eq!(fast.len(), checked.len());
+        for (f, c) in fast.iter().zip(&checked) {
+            assert_eq!(
+                (f.symbol, f.params, f.result, f.class),
+                (c.symbol, c.params, c.result, c.class)
+            );
+        }
+        // 同じ本体でも、2つのモードの関数は別のアドレスにある
+        assert!(
+            fast.iter()
+                .zip(&checked)
+                .any(|(f, c)| (f.address)() != (c.address)())
+        );
+    }
+
+    #[test]
+    fn heap_audit_dup_and_dup_slow_count_once() {
+        use crate::heap::{
+            eml_rt_alloc_data, eml_rt_audit_dup, eml_rt_decref, eml_rt_dup_slow, eml_rt_is_last,
+        };
+        let mut ctx = checked_ctx();
+        let c: *mut Ctx<Checked> = &mut *ctx;
+        // SAFETY: `c`はこのテストが持つ`Ctx`で、`c`だけを通す。物体はこのテストの持つ1つだけで、数えた参照の数だけ手放す
+        unsafe {
+            let w = eml_rt_alloc_data(c, 0, 0, 1, 0);
+            eml_rt_audit_dup(c, w);
+            eml_rt_dup_slow(c, w);
+            assert_eq!((*c).heap().stats().rc_increments, 1);
+            assert_eq!(eml_rt_is_last(c, w), 0);
+            eml_rt_decref(c, w);
+            assert_eq!(eml_rt_is_last(c, w), 1);
+            eml_rt_decref(c, w);
+            assert!((*c).leaks().is_empty());
+        }
+    }
+
+    #[test]
+    fn heap_audit_decref_and_decref_slow_free_the_last_reference() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_audit_decref, eml_rt_decref_slow};
+        let mut ctx = checked_ctx();
+        let c: *mut Ctx<Checked> = &mut *ctx;
+        // SAFETY: 上と同じ。子の参照は親の欄へ移る
+        unsafe {
+            let outer = eml_rt_alloc_data(c, 0, 1, 0, 0);
+            let inner = eml_rt_alloc_data(c, 1, 0, 0, 0);
+            (*c).heap_mut().set_field(outer, 0, inner).unwrap();
+            eml_rt_audit_decref(c, outer);
+            eml_rt_decref_slow(c, outer);
+            assert_eq!((*c).heap().stats().rc_decrements, 2);
+            assert!((*c).leaks().is_empty());
+        }
+    }
+
+    #[test]
+    fn heap_a_token_goes_through_into_token_and_reuse_in_place() {
+        use crate::heap::{
+            eml_rt_alloc_data, eml_rt_decref, eml_rt_into_token, eml_rt_reuse_in_place,
+        };
+        let mut ctx = checked_ctx();
+        let c: *mut Ctx<Checked> = &mut *ctx;
+        // SAFETY: 上と同じ。箱は一意で、トークンを作った後は箱の語を使わない
+        unsafe {
+            let w = eml_rt_alloc_data(c, 1, 1, 0, 0);
+            let token = eml_rt_into_token(c, w);
+            let again = eml_rt_reuse_in_place(c, token, 1, 1, 0);
+            assert_eq!(again, w);
+            let meta = (*c).heap().meta(again).unwrap();
+            assert_eq!(
+                (meta.kind(), meta.tag(), meta.scan()),
+                (ObjectKind::Data, 1, 1)
+            );
+            eml_rt_decref(c, again);
+            assert!((*c).leaks().is_empty());
+        }
+    }
+
+    /// `rows`を`entries`に持つimageのworkerを`ctx.runtime`の後ろに置いて`f`を呼ぶ (`with_paps`と同じ約束)。
+    fn with_entries<M: eml_rt::Mode, R>(
+        ctx: *mut Ctx<M>,
+        rows: &[crate::image::CodeRow],
+        f: impl FnOnce() -> R,
+    ) -> R {
+        use crate::image::Slice;
+        let image = crate::image::Image {
+            entries: Slice::new(rows),
+            ..image_with(&[])
+        };
+        // SAFETY: `image`の表は`rows`と空の表で、workerより長く生きる
+        let mut worker = unsafe { crate::worker::Worker::new(&image) };
+        // SAFETY: テストは生きている`Ctx`を渡す
+        unsafe { (*ctx).set_runtime((&raw mut worker).cast()) };
+        let r = f();
+        // SAFETY: 上と同じ
+        unsafe { (*ctx).set_runtime(std::ptr::null_mut()) };
+        r
+    }
+
+    #[test]
+    fn heap_audit_code_passes_an_entry_of_the_image_with_its_signature() {
+        use crate::heap::eml_rt_audit_code;
+        use crate::image::{CODE_OF_TAG, CodeRow};
+        let mut ctx = checked_ctx();
+        let c: *mut Ctx<Checked> = &mut *ctx;
+        let rows = [CodeRow {
+            code: CODE.as_ptr(),
+            sig: 2,
+        }];
+        with_entries(c, &rows, || {
+            // SAFETY: 上と同じ。クロージャは2つの引数を待つ (タグ2) ので、署名の語は2である。エントリのworkerを置いてある
+            unsafe {
+                let w = (*c).heap_mut().alloc_data(2, 1, 0, false);
+                (*c).heap_mut()
+                    .set_field(
+                        w,
+                        layout::data_first(1, false),
+                        crate::closures::code_word(CODE.as_ptr()),
+                    )
+                    .unwrap();
+                eml_rt_audit_code(c, w, CODE_OF_TAG);
+                eml_rt_audit_code(c, w, 2);
+                (*c).heap_mut().decref(w).unwrap();
+            }
+        });
+    }
+
     /// 書けない出力。
     struct Broken;
 
@@ -529,7 +786,7 @@ mod tests {
 
     /// `run`がエントリの間に置くのと同じ、関数のないworkerの構造体を`ctx.runtime`の後ろに置いて`f`を呼ぶ。workerは`f`の
     /// 間ずっと生きていて、置いている間は`f`に渡すポインタからだけ触れるので、workerの構造体を使うエントリの前提を満たす
-    /// (docs/spec/native.md の「実行の始めと終わり」)。`enter`を通らないのでMiriでも流せる。
+    /// (docs/spec/native.mdの「実行の始めと終わり」)。`enter`を通らないのでMiriでも流せる。
     fn with_worker<R>(ctx: *mut Ctx<Fast>, f: impl FnOnce(*mut crate::worker::Worker) -> R) -> R {
         with_paps(ctx, &[], f)
     }
@@ -560,6 +817,7 @@ mod tests {
             files: Slice::new(&[]),
             data: Slice::new(&[]),
             paps: Slice::new(paps),
+            entries: Slice::new(&[]),
             panic_effect: NO_EFFECT,
             io_effect: NO_EFFECT,
         }
@@ -568,7 +826,7 @@ mod tests {
     /// エントリのコードの代わり。中身は読まず、アドレスだけを使う。
     static CODE: [u8; 2] = [0; 2];
 
-    /// 引数を`arity`個待つクロージャ。コードの語は`CODE`である (docs/spec/native.md の「関数の値」)。
+    /// 引数を`arity`個待つクロージャ。コードの語は`CODE`である (docs/spec/native.mdの「関数の値」)。
     ///
     /// # Safety
     /// `c`は生きている`Ctx`である。
@@ -697,20 +955,27 @@ mod tests {
         }
     }
 
-    /// 致命的な誤りの道を通るので、Miriでは流さない (docs/implementation/testing.md の「`eml_nrt`の検証」)。
+    /// 致命的な誤りの道を通るので、Miriでは流さない (docs/implementation/testing.mdの「`eml_nrt`の検証」)。
     #[cfg(not(miri))]
     mod fatal {
-        use eml_rt::{Ctx, Fast, Fault, HeapError, Kind as ObjectKind, Meta, Word, layout};
+        use eml_rt::{
+            Checked, Ctx, Fast, Fault, HeapError, Kind as ObjectKind, Meta, Word, layout,
+        };
         use eml_sched::error::{RunFault, RuntimeError};
 
-        use super::{closure, ctx, image_with};
+        use super::{CODE, checked_ctx, closure, ctx, image_with};
         use crate::closures::eml_nrt_pap;
         use crate::enter::{FATAL_FAULT, FATAL_RECORDED, Fatal, enter};
-        use crate::image::PapRow;
+        use crate::image::{CodeRow, Image, PapRow, Slice};
         use crate::worker::{NATIVE_CODE, Worker};
 
         /// `argv`の語`[callee, m, a_1..]`で`eml_nrt_pap`を呼ぶ代役のthunk。
-        unsafe extern "C" fn call_pap(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+        unsafe extern "C" fn call_pap(
+            ctx: *mut std::ffi::c_void,
+            _entry: *const u8,
+            argv: *mut u64,
+        ) {
+            let ctx = ctx.cast::<Ctx<Fast>>();
             let words = argv.cast::<Word>();
             // SAFETY: `enter`は生きている`Ctx`を渡し、`argv`はテストの語を指す。エントリは戻らない
             unsafe {
@@ -830,10 +1095,11 @@ mod tests {
 
         /// 65535を効果の番号にする`ev_new`の呼び出しの代役のthunk。
         unsafe extern "C" fn new_with_the_reserved_number(
-            ctx: *mut Ctx<Fast>,
+            ctx: *mut std::ffi::c_void,
             _entry: *const u8,
             argv: *mut u64,
         ) {
+            let ctx = ctx.cast::<Ctx<Fast>>();
             // SAFETY: `enter`は生きている`Ctx`を渡す。エントリは戻らない
             unsafe {
                 let words = argv.cast::<Word>();
@@ -864,6 +1130,196 @@ mod tests {
             );
             assert_eq!(ctx.take_fault(), Some(Fault::Heap(HeapError::BadEvidence)));
         }
+
+        /// `call_audit`が呼ぶ監査の選び方。`argv`の0番の語である。
+        const DUP: usize = 0;
+        const DECREF: usize = 1;
+        const UNIQUE: usize = 2;
+        const FIELD: usize = 3;
+        const BOX_INT: usize = 4;
+        const BOX_FLOAT: usize = 5;
+        const CODE_OF_THE_TAG: usize = 6;
+        const DATA: usize = 7;
+
+        /// `argv`の語`[選び方, w, a, b]`で監査のエントリを呼ぶ代役のthunk。検査モードの`Ctx`を渡される。
+        unsafe extern "C" fn call_audit(
+            ctx: *mut std::ffi::c_void,
+            _entry: *const u8,
+            argv: *mut u64,
+        ) {
+            use crate::heap::{
+                eml_rt_audit_box, eml_rt_audit_code, eml_rt_audit_data, eml_rt_audit_decref,
+                eml_rt_audit_dup, eml_rt_audit_field, eml_rt_audit_unique,
+            };
+            use crate::worker::DATA_UNPACK;
+            let ctx = ctx.cast::<Ctx<Checked>>();
+            let words = argv.cast::<Word>();
+            // SAFETY: `enter`は生きている`Ctx`を渡し、`argv`はテストの4つの語を指す。エントリは致命的な誤りの道を通る
+            unsafe {
+                let (which, w) = ((*words).bits(), *words.add(1));
+                let (a, b) = ((*words.add(2)).bits() as i64, (*words.add(3)).bits() as i64);
+                match which {
+                    DUP => eml_rt_audit_dup(ctx, w),
+                    DECREF => eml_rt_audit_decref(ctx, w),
+                    UNIQUE => eml_rt_audit_unique(ctx, w),
+                    FIELD => eml_rt_audit_field(ctx, w, a),
+                    BOX_INT => eml_rt_audit_box(ctx, w, 0),
+                    BOX_FLOAT => eml_rt_audit_box(ctx, w, 1),
+                    CODE_OF_THE_TAG => eml_rt_audit_code(ctx, w, crate::image::CODE_OF_TAG),
+                    DATA => eml_rt_audit_data(ctx, w, a, b, DATA_UNPACK),
+                    _ => unreachable!("the test names no such audit"),
+                }
+            }
+        }
+
+        /// 検査モードの`Ctx`で、`entries`を持つimageのworkerを置き、`build`が作る語について監査`which`を`a`、`b`で呼ぶ。
+        /// 致命的な符号と、置いた`Fault`と、workerの誤りを返す。
+        fn audit(
+            entries: &[CodeRow],
+            build: impl FnOnce(*mut Ctx<Checked>) -> Word,
+            which: usize,
+            (a, b): (usize, usize),
+        ) -> (Result<(), Fatal>, Option<Fault>, Option<RuntimeError>) {
+            let mut ctx = checked_ctx();
+            let raw: *mut Ctx<Checked> = &mut *ctx;
+            let image = Image {
+                entries: Slice::new(entries),
+                ..image_with(&[])
+            };
+            // SAFETY: `image`の表は`entries`と空の表で、workerより長く生きる
+            let mut worker = unsafe { Worker::new(&image) };
+            ctx.set_runtime((&raw mut worker).cast());
+            let mut argv = [
+                Word::from_bits(which),
+                build(raw),
+                Word::from_bits(a),
+                Word::from_bits(b),
+            ];
+            // SAFETY: `runtime`は`run`と同じく、`enter`の間だけ生きているworkerの構造体を指す。`ctx`と`worker`への参照を
+            // エントリをまたいで持たない。エントリは致命的な誤りの道を通るので、`enter`の中で呼ぶ
+            let entered =
+                unsafe { enter(raw, call_audit, std::ptr::null(), argv.as_mut_ptr().cast()) };
+            ctx.set_runtime(std::ptr::null_mut());
+            (entered, ctx.take_fault(), worker.error)
+        }
+
+        const REFUSED: Result<(), Fatal> = Err(Fatal {
+            code: FATAL_FAULT,
+            site: 0,
+        });
+
+        /// 参照を1つ持つ、子のない`Data`の物体。
+        fn data(c: *mut Ctx<Checked>) -> Word {
+            // SAFETY: `c`は`audit`が渡す生きている`Ctx`である
+            unsafe { (*c).heap_mut().alloc_data(0, 0, 0, false) }
+        }
+
+        #[test]
+        fn a_failing_audit_ends_the_run() {
+            let (entered, fault, _) = audit(&[], data, FIELD, (99, 0));
+            assert_eq!(entered, REFUSED);
+            assert_eq!(fault, Some(Fault::Heap(HeapError::OutOfBounds)));
+        }
+
+        #[test]
+        fn a_data_audit_reports_the_internal_error() {
+            let (entered, fault, error) = audit(&[], data, DATA, (9, 1));
+            assert_eq!(
+                entered,
+                Err(Fatal {
+                    code: FATAL_RECORDED,
+                    site: 0
+                })
+            );
+            assert_eq!(fault, None);
+            assert_eq!(
+                error,
+                Some(RuntimeError::Fault {
+                    fault: RunFault::Internal(
+                        "an unpack names a tag and number of fields the value does not have"
+                    ),
+                    function: NATIVE_CODE.to_string(),
+                    at: None,
+                })
+            );
+        }
+
+        #[test]
+        fn a_code_audit_refuses_a_word_that_is_no_entry() {
+            let rows = |sig| {
+                [CodeRow {
+                    code: CODE.as_ptr(),
+                    sig,
+                }]
+            };
+            // 即値の語が、imageのどのエントリでもない
+            let not_listed = |c: *mut Ctx<Checked>| {
+                // SAFETY: `c`は`audit`が渡す生きている`Ctx`である。新しい物体の走査する語を、ほかの操作の前に書く
+                unsafe {
+                    let w = (*c).heap_mut().alloc_data(1, 1, 0, false);
+                    (*c).heap_mut()
+                        .set_field(w, layout::data_first(1, false), Word::imm(5))
+                        .unwrap();
+                    w
+                }
+            };
+            // 語はエントリだが、署名の語が値のタグと違う
+            let closure_of = |tag| {
+                move |c: *mut Ctx<Checked>| {
+                    // SAFETY: 上と同じ
+                    unsafe {
+                        let w = (*c).heap_mut().alloc_data(tag, 1, 0, false);
+                        (*c).heap_mut()
+                            .set_field(
+                                w,
+                                layout::data_first(1, false),
+                                crate::closures::code_word(CODE.as_ptr()),
+                            )
+                            .unwrap();
+                        w
+                    }
+                }
+            };
+            for (entries, build) in [
+                (
+                    &rows(1)[..],
+                    Box::new(not_listed) as Box<dyn FnOnce(_) -> Word>,
+                ),
+                (&rows(2)[..], Box::new(closure_of(1))),
+                // タグ0の値は、署名の語が0のエントリがあっても断る
+                (&rows(0)[..], Box::new(closure_of(0))),
+            ] {
+                let (entered, fault, _) = audit(entries, build, CODE_OF_THE_TAG, (0, 0));
+                assert_eq!(entered, REFUSED);
+                assert_eq!(fault, Some(Fault::Heap(HeapError::WrongKind)));
+            }
+        }
+
+        #[test]
+        fn an_audit_of_a_word_that_is_not_a_pointer_ends_the_run() {
+            for which in [DUP, DECREF, UNIQUE] {
+                let (entered, fault, _) = audit(&[], |_| Word::imm(5), which, (0, 0));
+                assert_eq!(entered, REFUSED, "audit {which}");
+                assert_eq!(
+                    fault,
+                    Some(Fault::Heap(HeapError::WrongKind)),
+                    "audit {which}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_box_audit_refuses_a_word_that_is_neither_an_immediate_nor_a_pointer() {
+            for which in [BOX_INT, BOX_FLOAT] {
+                let (entered, fault, _) = audit(&[], |_| Word::from_bits(0), which, (0, 0));
+                assert_eq!(entered, REFUSED, "audit {which}");
+                assert_eq!(
+                    fault,
+                    Some(Fault::Heap(HeapError::WrongKind)),
+                    "audit {which}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -887,7 +1343,7 @@ mod tests {
                 (format!("eml_x_{row:?}"), params, result)
             })
             .collect();
-        let entries: Vec<_> = crate::rows::ROWS
+        let entries: Vec<_> = crate::rows::ROWS::<Fast>()
             .iter()
             .map(|e| (e.symbol.to_string(), e.params.to_vec(), e.result))
             .collect();
@@ -1257,7 +1713,7 @@ mod tests {
 
     #[test]
     fn entries_take_a_dtor_kind() {
-        let entry = crate::entries()
+        let entry = crate::entries::<Fast>()
             .find(|e| e.symbol == "eml_x_c_handle_new")
             .expect("the entry");
         assert_eq!(
@@ -1271,7 +1727,7 @@ mod tests {
 
     #[test]
     fn the_table_has_only_named_prefixes() {
-        for entry in crate::entries() {
+        for entry in crate::entries::<Fast>() {
             let s = entry.symbol;
             assert!(
                 ["eml_rt_", "eml_x_", "eml_nrt_"]
@@ -1281,14 +1737,14 @@ mod tests {
                 "{s}"
             );
         }
-        let mut names: Vec<_> = crate::entries().map(|e| e.symbol).collect();
+        let mut names: Vec<_> = crate::entries::<Fast>().map(|e| e.symbol).collect();
         let all = names.len();
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), all);
     }
 
-    /// `eml_rt_release`の状態ごとのテスト (docs/spec/native.md の「ヒープのエントリ」)。
+    /// `eml_rt_release`の状態ごとのテスト (docs/spec/native.mdの「ヒープのエントリ」)。
     mod release {
         use std::sync::Mutex;
 

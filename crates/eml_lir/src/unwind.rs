@@ -1,11 +1,11 @@
-//! 巻き戻しの地点 (docs/spec/lir.md の「巻き戻しの地点」)。VM のコード生成が、
-//! 関数ごとの巻き戻しの表をここから作る。所有は verifier の所有の段の走査で求める。生きている変数がすべて所有されて
-//! いるとは限らず、借りたフィールドが呼び出しをまたぐことがあるためである (docs/spec/lir.md の「所有を取る時点」)。
-//! 走査を2つ持たないように、verifier の走査が地点ごとの所有を書き留める。
+//! 巻き戻しの地点 (docs/spec/lir.mdの「巻き戻しの地点」)。`Trusted`が関数ごとの巻き戻しの表をここで作り、
+//! エンジンはそれを`Trusted`から読む。所有はverifierの所有の段の走査で求める。生きている変数がすべて所有されているとは
+//! 限らず、借りたフィールドが呼び出しをまたぐことがあるためである (docs/spec/lir.mdの「所有を取る時点」)。走査を2つ
+//! 持たないように、verifierの走査が地点ごとの所有を書き留める。
 
 use eml_extern::CFunction;
 
-use crate::{BlockId, FnIdx, Prim, Program, Rhs, Stmt, VarId, VerifyError, verify};
+use crate::{BlockId, LirFn, Prim, Program, Rhs, Stmt, VarId, VerifyError, verify};
 
 /// 巻き戻しの地点。中断がこの命令の中を通ると、フレームは `owned` の参照と `tokens` を手放すか、`landing` に着地する。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,37 +37,41 @@ pub struct Unwinds {
 /// 関数ごとの巻き戻しの表。`FnIdx`の番号で引く。地点は、すべての関数の末尾でない呼び出し、末尾でない`apply`と
 /// `clause`、`Pure`でないextern (誤りが`try_io`か`try_panic`まで巻き戻す)、`prim yield_abort`である。呼ばれる側が
 /// 中断するかは問わない。関数を1つずつ確かめ、プログラム全体の規則は
-/// 確かめない。所有の段で拒まれた関数は表の代わりにその誤りを返し、ほかの関数は表を返す。verifierを通さないIRの
-/// 地点を見るテストと、VMの確かめない読み込み (feature `testing`) のためである。`wanted`でない関数は求めずに`None`に
-/// する。プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り直さないためである。
-pub fn points(
-    program: &Program,
-    wanted: impl Fn(FnIdx) -> bool,
-) -> Vec<Option<Result<Unwinds, VerifyError>>> {
-    verify::unwind_points(program, wanted)
+/// 確かめない。所有の段で拒まれた関数は表の代わりにその誤りを返し、ほかの関数は表を返す。
+/// `Trusted::unverified`が使う。プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り直さないためである。
+pub(crate) fn points(program: &Program) -> Vec<Result<Unwinds, VerifyError>> {
+    verify::unwind_points(program)
 }
 
 /// プログラム全体を所有の段で確かめ、関数ごとの巻き戻しの表を`program.functions`の順に返す。
 /// `eml_lir::verify`が拒むプログラムは、表の代わりにその誤りを返す。検査と表の記録は関数ごとに1回の走査で行う
 /// (docs/spec/lir.mdの「verifier」)。
-pub fn verified(program: &Program) -> Result<Vec<Unwinds>, VerifyError> {
-    verify::verified(program, |_| true).map(|unwinds| {
-        unwinds
-            .into_iter()
-            .map(|table| table.expect("every function is walked"))
-            .collect()
-    })
+pub(crate) fn verified(program: &Program) -> Result<Vec<Unwinds>, VerifyError> {
+    verify::verified(program)
 }
 
-/// `verified`と同じくプログラム全体を所有の段で確かめるが、たどるのは`walked`の関数だけで、その表を
-/// `program.functions`の欄に返す (ほかの欄は`None`)。プログラム全体の規則は、関数どうしを結ぶうえに走査を要らない
-/// ので、すべての関数に当てる。外した関数は、同じ名前で前の確かめの走査を通っていなければならない。VMの追記は、
-/// これですでにある関数の走査を省く (docs/spec/vm.mdの「追記」)。
-pub fn verified_for(
-    program: &Program,
-    walked: impl Fn(FnIdx) -> bool,
-) -> Result<Vec<Option<Unwinds>>, VerifyError> {
-    verify::verified(program, walked)
+/// 所有の段の走査が拒む関数の表。エントリの行は空で、巻き戻しの地点ごとに、何も手放さず文の着地の印を持つ行を
+/// 持つ。中断がそういう関数のフレームを通っても、フレームは何も手放さない。これはいつも記憶の安全を守り、フレームが
+/// 持っていたものは手放されずに残る (docs/spec/lir.mdの「巻き戻しの地点」)。
+pub(crate) fn unowned(function: &LirFn, c: &[CFunction]) -> Unwinds {
+    let mut points = Vec::new();
+    for (index, block) in function.blocks.iter().enumerate() {
+        for (at, stmt) in block.stmts.iter().enumerate() {
+            if let Some((_, landing)) = point(stmt, c) {
+                points.push(UnwindPoint {
+                    block: BlockId(index as u32),
+                    stmt: at,
+                    owned: Vec::new(),
+                    tokens: Vec::new(),
+                    landing,
+                });
+            }
+        }
+    }
+    Unwinds {
+        entry: Vec::new(),
+        points,
+    }
 }
 
 /// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。複数の値を返す呼び出しは、葉をすべて束縛する

@@ -182,7 +182,6 @@ fn run_inputs(inputs: &[&str]) -> (String, Vec<Result<(), String>>) {
             let mut results = Vec::new();
             for input in inputs {
                 let program = trusted(&format!("{LAYOUT}{input}{READERS}"));
-                eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
                 // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
                 let loaded = unsafe { machine.extend(&program, &eml_vm::Linked::default()) }
                     .unwrap_or_else(|error| panic!("{error:?}"));

@@ -13,7 +13,7 @@ use eml_nrt::image::mask_bytes;
 use super::apply::{ClosureEntries, ClosureEntry};
 use super::function::FnLower;
 use super::names;
-use crate::abi::Built;
+use crate::abi::{Built, EntrySig};
 use crate::mem;
 
 /// 中身で表したデータの物1つ。`Keep`のほかは読み込み時の値である。
@@ -32,6 +32,8 @@ pub enum Datum {
     Effect(u32),
     /// `evv_mask`の項目。LIRの順で、エフェクトは`Program.effects`の添字である。
     Mask(Vec<MaskItem>),
+    /// `sig_word`が書けないエントリの署名に、ホストが与える語 (docs/spec/native.mdの「`Image`」)。
+    Sig(EntrySig),
     /// `release`の走査する語ごとの`keep`のバイト。残す語は1、ほかは0である (docs/spec/native.mdの「データ」)。
     Keep(Vec<bool>),
 }
@@ -47,6 +49,7 @@ impl Datum {
             Datum::EmptyMutArray => names::EMPTY_MUT_ARRAY.to_string(),
             Datum::Effect(effect) => names::effect(&effect_text(&program.effects, *effect)),
             Datum::Mask(items) => names::mask(&mask_text(&program.effects, items)),
+            Datum::Sig(sig) => names::sig(sig),
             Datum::Keep(keep) => names::keep(keep),
         }
     }

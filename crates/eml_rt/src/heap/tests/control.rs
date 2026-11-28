@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::host::host;
 use crate::control::stop_reason;
-use crate::{Control, Ctx, Fast, Heap, Limits, Mode, Stop};
+use crate::{Control, Ctx, Fast, Heap, Limits, Mode, Owners, Stop};
 
 const PAGE_BYTES: usize = 0x1_0000;
 
@@ -261,7 +261,7 @@ fn three_workers() -> (Arc<Control>, Vec<Ctx<Fast>>) {
         ..Limits::default()
     }));
     let ctxs = (0..3)
-        .map(|k| Ctx::for_worker(control.clone(), host(&Arc::default()), k))
+        .map(|k| Ctx::for_worker(control.clone(), &Owners::new(), host(&Arc::default()), k))
         .collect();
     (control, ctxs)
 }
@@ -270,7 +270,7 @@ fn three_workers() -> (Arc<Control>, Vec<Ctx<Fast>>) {
 #[test]
 fn control_keeps_a_word_for_the_main_worker() {
     let (control, _) = three_workers();
-    let main = Ctx::<Fast>::for_worker(control.clone(), host(&Arc::default()), 3);
+    let main = Ctx::<Fast>::for_worker(control.clone(), &Owners::new(), host(&Arc::default()), 3);
     control.end_run();
     assert_eq!(control.worker_bits(3), Control::END);
     assert_eq!(main.poll(0), Err(Stop::Ended));

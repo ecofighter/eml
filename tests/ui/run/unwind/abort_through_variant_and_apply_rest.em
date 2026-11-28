@@ -1,3 +1,4 @@
+-- native-stats: skip (an over-application with two remaining arguments builds a partial application natively)
 -- `try_panic` が、一様な変種のフレームと、一様な語を預けた `ApplyRest` のフレームの下で起きた `panic` を捕まえる。
 -- `apply3` の適用 `g n 7 2.5` は、引数を1つ取る関数の値に3つの引数を渡すので、余った `7` と `2.5` を一様な語
 -- (`2.5` は箱) にして `ApplyRest` のフレームに預ける。巻き戻しはフレームを外し、預けた語を参照として手放す。

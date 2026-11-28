@@ -193,16 +193,144 @@ fn no_thread_locals() {
     }
 }
 
+/// `#[cfg(test)]`の項目 (属性の付いた`mod`、`fn`、`use`など) を除いた、テストでないコード。属性のすぐ後の`;`か、対応する
+/// `{}`までを除くので、ファイルの途中にあるテストのmodule (`lib.rs`の`mod trust;`) の後ろも走査する。
+fn outside_tests(source: &Source) -> String {
+    let code = &source.code;
+    let mut out = String::new();
+    let mut at = 0;
+    while let Some(found) = ["#[cfg(test)]", "#[cfg(all(test"]
+        .iter()
+        .filter_map(|attribute| code[at..].find(attribute).map(|n| at + n))
+        .min()
+    {
+        out.push_str(&code[at..found]);
+        let rest = &code[found..];
+        let end = match rest.find([';', '{']) {
+            Some(n) if rest.as_bytes()[n] == b';' => n + 1,
+            Some(n) => {
+                let mut depth = 0;
+                rest[n..]
+                    .char_indices()
+                    .find_map(|(k, c)| {
+                        depth += i32::from(c == '{') - i32::from(c == '}');
+                        (depth == 0).then_some(n + k + 1)
+                    })
+                    .expect("the braces of a test item close")
+            }
+            None => rest.len(),
+        };
+        at = found + end;
+    }
+    out.push_str(&code[at..]);
+    out
+}
+
 #[test]
-fn checked_mode_is_not_named() {
-    for (crate_, sources, doc) in [("eml_native", native(), NATIVE), ("eml_nrt", nrt(), NRT)] {
+fn checked_mode_is_named_only_where_the_mode_is_chosen() {
+    // crateごとに、テストでないコードで`Checked`を名指してよいファイル
+    for (crate_, sources, allowed, doc) in [
+        ("eml_native", native(), &["jit.rs"][..], NATIVE),
+        ("eml_nrt", nrt(), &["mode.rs"][..], NRT),
+    ] {
         assert!(count(&code_of("eml_rt", "src/mode.rs"), "Checked", true) > 0);
-        let found = files_with(&sources, "Checked", true);
-        assert!(
-            found.is_empty(),
-            "{crate_} names Checked in {found:?} ({doc})"
+        let found: Vec<&str> = sources
+            .iter()
+            .filter(|source| count(&outside_tests(source), "Checked", true) > 0)
+            .map(|source| source.path.as_str())
+            .collect();
+        assert_eq!(
+            found, allowed,
+            "{crate_} names Checked outside tests in {found:?} ({doc})"
         );
     }
+}
+
+#[test]
+fn every_inline_access_has_its_audit() {
+    // `mem.rs`の9つの物体の補助。どれかを名指すmoduleはヒープの物体へのインラインの読み書きを出し、検査モードの下ろし方は
+    // `lower/audit.rs`を通してそれぞれの前に監査を置く (docs/spec/native.mdの「検査モード」)
+    let helpers = [
+        "load_rc",
+        "store_rc",
+        "load_field",
+        "store_field",
+        "load_meta",
+        "load_tag",
+        "closure_code",
+        "load_box",
+        "is_big_int",
+    ];
+    let sources = native();
+    let names_helper = |source: &Source| {
+        helpers
+            .iter()
+            .any(|helper| count(&source.code, &format!("mem::{helper}"), true) > 0)
+    };
+    let accessing: Vec<&str> = sources
+        .iter()
+        .filter(|source| source.path.starts_with("lower/") && names_helper(source))
+        .map(|source| source.path.as_str())
+        .collect();
+    assert_eq!(
+        accessing,
+        [
+            "lower/apply.rs",
+            "lower/data.rs",
+            "lower/rc.rs",
+            "lower/unwind.rs"
+        ],
+        "the modules of lower/ that access heap objects inline ({NATIVE})"
+    );
+    let unaudited: Vec<&str> = sources
+        .iter()
+        .filter(|source| accessing.contains(&source.path.as_str()))
+        .filter(|source| {
+            ["audit::", "self.audit(", "self.count("]
+                .iter()
+                .all(|call| count(&source.code, call, false) == 0)
+        })
+        .map(|source| source.path.as_str())
+        .collect();
+    assert!(
+        unaudited.is_empty(),
+        "{unaudited:?} access heap objects inline without an audit ({NATIVE})"
+    );
+    let audit = sources
+        .iter()
+        .find(|source| source.path == "lower/audit.rs")
+        .expect("lower/audit.rs exists");
+    assert!(
+        !names_helper(audit),
+        "lower/audit.rs emits audits and no inline access ({NATIVE})"
+    );
+}
+
+#[test]
+fn the_slow_count_entries_are_named_only_by_step_slow() {
+    // 記号は文字列で書くので、文字列も見る
+    let sources = native();
+    let found: Vec<(&str, &str, usize)> = ["eml_rt_dup_slow", "eml_rt_decref_slow"]
+        .into_iter()
+        .flat_map(|symbol| {
+            sources.iter().map(move |source| {
+                (
+                    source.path.as_str(),
+                    symbol,
+                    count(&source.code_and_strings, symbol, true),
+                )
+            })
+        })
+        .filter(|&(_, _, n)| n > 0)
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("lower/rc.rs", "eml_rt_dup_slow", 1),
+            ("lower/rc.rs", "eml_rt_decref_slow", 1)
+        ],
+        "the slow count entries are named once each, by Step::slow in lower/rc.rs ({NATIVE})"
+    );
 }
 
 #[test]

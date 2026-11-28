@@ -979,13 +979,12 @@ fn recovery_tells_own_blocks_from_region_blocks<M: Mode>() {
 // T14: 別のスレッドからの解放 (docs/spec/object-model.md の「別のスレッドからの解放」)。どのテストも、受け手の
 // ヒープを作ったスレッドから別のスレッドへ動かして使い、`RemoteSink` の番地がヒープを動かしても変わらないことを通す
 
-/// 共有の Control を持つヒープを2つ作る。
+/// 1つの`Control`のヒープを、1つの所有者の表で2つ作る。
 fn two_heaps<M: Mode>(limits: Limits) -> (Heap<M>, Heap<M>) {
     let control = Arc::new(Control::new(limits));
-    (
-        Heap::with_control(control.clone()),
-        Heap::with_control(control),
-    )
+    let a = Heap::with_control(control);
+    let b = Heap::with_owners(a.control().clone(), &a.owners());
+    (a, b)
 }
 
 /// 長さ `n` の共有のリスト。
@@ -1601,15 +1600,15 @@ fn a_lin_part_on_another_heaps_pages_is_walked() {
     assert_eq!(mortal(&mut b), 0);
 }
 
-// (f) 検査モードで、ほかのヒープのページの語を受ける。B のスレッドが ID `id` で確保した物体を A のスレッドが空け、
-// ID ごとの数は表の上で合う。A の共有の物体の子が B のページの共有の文字列でも、生存の列挙は通る。取り込む前の
-// `check_owned` は断る。落としたヒープのページとほかの `Control` のページを指す語は、メモリに触れずに断る
+// (f) 検査モードで、ほかのヒープのページの語を受ける。BのスレッドがID`id`で確保した物体をAのスレッドが空け、
+// IDごとの数は表の上で合う。Aの共有の物体の子がBのページの共有の文字列でも、生存の列挙は通る。取り込む前の
+// `Owners::check`は断る。落としたヒープのページとほかの`Control`のページを指す語は、メモリに触れずに断る
 #[test]
 fn checked_words_cross_heaps_and_unknown_pages_are_refused() {
     let control = Arc::new(Control::new(Limits::default()));
     let mut a = Heap::<Checked>::with_control(control.clone());
     let id = a.fork_worker();
-    let b = Heap::<Checked>::with_control(control.clone());
+    let b = Heap::<Checked>::with_owners(control.clone(), &a.owners());
     let (mut b, xs, s) = std::thread::spawn(move || {
         let mut b = b;
         let s = b.alloc_string("on b");
@@ -1633,9 +1632,9 @@ fn checked_words_cross_heaps_and_unknown_pages_are_refused() {
     }
     assert_eq!(a.owned_by(id), 0);
     assert_eq!(a.stats().remote_frees, 3);
-    assert_eq!(control.check_owned(&[&a, &b]), Err(HeapError::NotQuiescent));
+    assert_eq!(a.owners().check(&[&a, &b]), Err(HeapError::NotQuiescent));
     b.reclaim();
-    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
+    assert_eq!(a.owners().check(&[&a, &b]), Ok(()));
     assert_eq!(a.check_invariants(), Ok(()));
     assert_eq!(a.retire_worker(id), Ok(()));
     // 落としたヒープのページを指す語。落とした後は、同じ `Control` のどのヒープもページを取らない。取ると、同じ
@@ -3040,7 +3039,19 @@ fn a_pinned_page_outlives_recovery<M: Mode>() {
     assert_eq!(mortal(&mut ctx), 0);
 }
 
+/// 監査と本体で手放したリストの最後の参照は、全部のノードを解放する。
+fn an_audited_last_decref_frees_the_chain<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let xs = list(&mut heap, 5);
+    unsafe {
+        heap.audit_decref(xs).unwrap();
+        heap.decref_body(xs).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
 both_modes!(
+    an_audited_last_decref_frees_the_chain,
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
     dropping_a_heap_returns_every_page,
@@ -3127,3 +3138,21 @@ both_modes!(
     a_pinned_frozen_page_outlives_its_chunk,
     a_pinned_page_outlives_recovery,
 );
+
+/// ヒープを落とす途中で破棄処理がpanicすると、落とす歩みが止まる。ヒープの数は表と一緒に消えるので、同じ`Control`
+/// の後のヒープは0から数える。
+#[test]
+fn a_finalizer_that_panics_in_a_drop_leaves_no_count() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut heap = Heap::<Checked>::with_control(Arc::clone(&control));
+    let panics = Arc::new(AtomicUsize::new(0));
+    let _first = heap.alloc_foreign(Panicker(panics.clone()), false);
+    let _rest = list(&mut heap, 5);
+    assert_eq!(heap.owned_by(0), 6);
+    let result = catch_unwind(AssertUnwindSafe(move || drop(heap)));
+    assert!(result.is_err());
+    assert_eq!(panics.load(Ordering::Relaxed), 1);
+    let mut next = Heap::<Checked>::with_control(control);
+    assert_eq!(next.owned_by(0), 0);
+    assert_eq!(super::check_all(&mut next), Ok(()));
+}

@@ -7,10 +7,12 @@ use eml_nrt::image::{
     Census, DATUM_BIG_INT, DATUM_EFFECT, DATUM_FLOAT, DATUM_MASK, DATUM_STRING, DatumRow, FnRow,
     Image, MaskRow, NO_EFFECT, NO_FILE, Options, SiteRow, Slice, Start, Str, mask_bytes,
 };
+use eml_nrt::mode::Checked;
 use eml_nrt::run::{LIMIT_HEADROOM_BYTES, STACK_HARD_MARGIN, run};
-use eml_nrt::worker::park_panic;
-use eml_nrt::{Finished, HostRef, RunConfig, RunFault, RuntimeError, Thunk};
-use eml_rt::{Buffering, Ctx, Fast, Kind, MaskItem, StdHost, Word, layout};
+use eml_nrt::worker::{COUNT_BOXES, COUNT_REUSES, COUNT_UNBOXES, COUNT_UNWOUND_FRAMES, park_panic};
+use eml_nrt::{Finished, HostRef, RunConfig, RunFault, RuntimeError, Thunk, entries};
+use eml_rt::{Buffering, Ctx, Fast, Kind, MaskItem, Mode, StdHost, Word, layout};
+use eml_sched::config::RunStats;
 
 use crate::regs::{deepest_frame, stack_pointer};
 
@@ -29,6 +31,7 @@ fn empty() -> Image {
         files: Slice::new(&[]),
         data: Slice::new(&[]),
         paps: Slice::new(&[]),
+        entries: Slice::new(&[]),
         panic_effect: NO_EFFECT,
         io_effect: NO_EFFECT,
     }
@@ -56,7 +59,7 @@ fn run_with(
         result_rc,
     };
     // SAFETY: `image`の表はこの呼び出しの間生きていて、代役のthunkは`argv`の中だけを読み書きする
-    unsafe { run(image, &start, &RunConfig::default(), host(), options) }
+    unsafe { run::<eml_rt::Fast>(image, &start, &RunConfig::default(), host(), options) }
 }
 
 fn native_fault(fault: RunFault) -> RuntimeError {
@@ -68,7 +71,8 @@ fn native_fault(fault: RunFault) -> RuntimeError {
 }
 
 /// 数える物体を1つ作り、`argv[0]`に結果として置く。
-unsafe extern "C" fn make_data(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+unsafe extern "C" fn make_data(ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
+    let ctx = ctx.cast::<Ctx<Fast>>();
     unsafe {
         let w = (*ctx).heap_mut().alloc_data(0, 0, 0, false);
         argv.cast::<Word>().write(w);
@@ -84,8 +88,115 @@ fn returns_and_finishes() {
     assert_eq!(finished.workers, 0);
 }
 
+/// 検査モードで`thunk`を入口にして`image`を走らせる。
+fn run_checked(thunk: Thunk, argv: &mut [u64], result_rc: bool) -> Result<Finished, RuntimeError> {
+    let start = Start {
+        thunk,
+        entry: std::ptr::null(),
+        argv: argv.as_mut_ptr(),
+        result_rc,
+    };
+    // SAFETY: `image`の表はこの呼び出しの間生きていて、代役のthunkは`argv`の中だけを読み書きする
+    unsafe {
+        run::<Checked>(
+            &empty(),
+            &start,
+            &RunConfig::default(),
+            host(),
+            Options::default(),
+        )
+    }
+}
+
+/// 数える物体を1つ作り、`argv[0]`に結果として置く。どちらのモードでも走る。
+unsafe extern "C" fn make_data_in<M: Mode>(
+    ctx: *mut std::ffi::c_void,
+    _entry: *const u8,
+    argv: *mut u64,
+) {
+    let ctx = ctx.cast::<Ctx<M>>();
+    // SAFETY: `make_data`と同じ
+    unsafe {
+        let w = (*ctx).heap_mut().alloc_data(0, 0, 0, false);
+        argv.cast::<Word>().write(w);
+    }
+}
+
+/// 結果を手放さない検査モードの実行は、漏れを数えて断る。
+#[test]
+fn a_checked_run_reports_a_leak() {
+    let error = run_checked(make_data_in::<Checked>, &mut [0], false).unwrap_err();
+    assert_eq!(error, RuntimeError::Leak(vec![("Data".to_string(), 1)]));
+}
+
+/// `eml_rt_audit_count`で、数えごとに別の回数 (`COUNT_BOXES`は2回、`COUNT_UNBOXES`は3回、`COUNT_UNWOUND_FRAMES`は4回、
+/// `COUNT_REUSES`は5回) 数え、物体を1つ作って手放す。
+unsafe extern "C" fn count_each_differently(
+    ctx: *mut std::ffi::c_void,
+    _entry: *const u8,
+    _argv: *mut u64,
+) {
+    let ctx = ctx.cast::<Ctx<Checked>>();
+    let entry = entries::<Checked>()
+        .find(|entry| entry.symbol == "eml_rt_audit_count")
+        .expect("the entry");
+    // SAFETY: 記述子の行は、その関数のアドレスと、`ctx`と`which`を取る型を持つ
+    let count = unsafe {
+        std::mem::transmute::<*const u8, unsafe extern "C" fn(*mut Ctx<Checked>, i64)>((entry
+            .address)(
+        ))
+    };
+    // SAFETY: 代役は`run`の`enter`の中で呼ばれ、`ctx.runtime()`はそのrunの`Worker`を指す。物体の参照は1つで、ここで手放す
+    unsafe {
+        for (which, times) in [
+            (COUNT_BOXES, 2),
+            (COUNT_UNBOXES, 3),
+            (COUNT_UNWOUND_FRAMES, 4),
+            (COUNT_REUSES, 5),
+        ] {
+            for _ in 0..times {
+                count(ctx, which);
+            }
+        }
+        let w = (*ctx).heap_mut().alloc_data(0, 0, 0, false);
+        (*ctx).heap_mut().decref(w).unwrap();
+    }
+}
+
+/// 何もしない。
+unsafe extern "C" fn nothing(_ctx: *mut std::ffi::c_void, _entry: *const u8, _argv: *mut u64) {}
+
+#[test]
+fn a_checked_run_returns_the_counters() {
+    // 走らせるだけで作る物体 (ダミーなど) があるので、何もしない実行との差を見る
+    let base = run_checked(nothing, &mut [0], false).unwrap().stats;
+    let stats = run_checked(count_each_differently, &mut [0], false)
+        .unwrap()
+        .stats;
+    assert_eq!(
+        (
+            stats.boxes,
+            stats.unboxes,
+            stats.unwound_frames,
+            stats.reuses
+        ),
+        (2, 3, 4, 5)
+    );
+    assert_eq!(stats.allocations, base.allocations + 1);
+    assert_eq!(stats.rc_decrements, base.rc_decrements + 1);
+}
+
+/// 速いモードの実行は何も数えない。
+#[test]
+fn a_fast_run_counts_nothing() {
+    let mut argv = [0u64];
+    let finished = run_with(&empty(), make_data, &mut argv, true, options(Census::Check)).unwrap();
+    assert_eq!(finished.stats, RunStats::default());
+}
+
 /// 自分のスタックポインタと`stack_limit`を`argv`に書く。
-unsafe extern "C" fn note_stack(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+unsafe extern "C" fn note_stack(ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
+    let ctx = ctx.cast::<Ctx<Fast>>();
     let frame = stack_pointer();
     unsafe {
         *argv = frame as u64;
@@ -117,7 +228,12 @@ fn the_stack_limit_is_three_mebibytes_above_the_base() {
     assert_eq!(STACK_HARD_MARGIN + LIMIT_HEADROOM_BYTES, 3 << 20);
 }
 
-unsafe extern "C" fn panic_and_return(ctx: *mut Ctx<Fast>, _entry: *const u8, _argv: *mut u64) {
+unsafe extern "C" fn panic_and_return(
+    ctx: *mut std::ffi::c_void,
+    _entry: *const u8,
+    _argv: *mut u64,
+) {
+    let ctx = ctx.cast::<Ctx<Fast>>();
     // SAFETY: 代役は`run`の`enter`の中で呼ばれ、`ctx.runtime()`はそのrunの`Worker`を指す
     unsafe { park_panic(&mut *ctx, Word::UNIT) }
 }
@@ -139,7 +255,12 @@ fn a_parked_panic_left_at_the_end_is_reported() {
 }
 
 /// `exit`の終了コードを置かずに中断を始めて戻る。
-unsafe extern "C" fn abort_without_exit(ctx: *mut Ctx<Fast>, _entry: *const u8, _argv: *mut u64) {
+unsafe extern "C" fn abort_without_exit(
+    ctx: *mut std::ffi::c_void,
+    _entry: *const u8,
+    _argv: *mut u64,
+) {
+    let ctx = ctx.cast::<Ctx<Fast>>();
     unsafe { (*ctx).exit_abort() }.unwrap();
 }
 
@@ -172,7 +293,8 @@ fn the_census_reports_a_counted_object() {
 
 /// 3つのslotの物体を確かめる。文字列、大きい`int`、`float`の中身と、どれも不死であることの4つを、合っていれば1として
 /// `argv[0..4]`に書く。
-unsafe extern "C" fn read_slots(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+unsafe extern "C" fn read_slots(ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
+    let ctx = ctx.cast::<Ctx<Fast>>();
     unsafe {
         let slots = argv.cast::<*const Word>().read();
         let word = |i: usize| *slots.add(i);
@@ -288,7 +410,7 @@ fn data_slots_hold_immortal_objects() {
 }
 
 /// 32 MiBのフレームを再帰し、降りた深さを`argv[0]`に書く。
-unsafe extern "C" fn recurse(_ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+unsafe extern "C" fn recurse(_ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
     let top = stack_pointer();
     let deepest = deepest_frame((32 << 20) / 4096);
     unsafe { *argv = (top - deepest) as u64 };
@@ -318,7 +440,7 @@ mod fatal {
         const SAMPLE;
 
         /// コードのアドレス`function` (0ならなし) と地点`site` (負ならなし) で、誤りを記録する。
-        shim fn eml_t_record(ctx, function: i64, site: i64) -> i64 {
+        shim[Service] fn eml_t_record(ctx, function: i64, site: i64) -> i64 {
             let site = (site >= 0).then_some(site as u32);
             let at = (function != 0).then_some(At { function: function as usize, site });
             // SAFETY: このエントリは`run`の`enter`の中でだけ呼ぶ
@@ -326,12 +448,12 @@ mod fatal {
             Err::<i64, Fatal>(fatal)
         }
 
-        shim fn eml_t_heap_error(ctx) -> i64 {
+        shim[Service] fn eml_t_heap_error(ctx) -> i64 {
             let _ = ctx;
             Err::<i64, HeapError>(HeapError::StaleToken)
         }
 
-        shim fn eml_t_panic(ctx) -> i64 {
+        shim[Service] fn eml_t_panic(ctx) -> i64 {
             let _ = ctx;
             if std::hint::black_box(true) {
                 panic!("an entry panicked on purpose");
@@ -340,15 +462,30 @@ mod fatal {
         }
     }
 
-    unsafe extern "C" fn call_record(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn call_record(
+        ctx: *mut std::ffi::c_void,
+        _entry: *const u8,
+        argv: *mut u64,
+    ) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe { eml_t_record(ctx, *argv as i64, *argv.add(1) as i64) };
     }
 
-    unsafe extern "C" fn call_heap_error(ctx: *mut Ctx<Fast>, _entry: *const u8, _argv: *mut u64) {
+    unsafe extern "C" fn call_heap_error(
+        ctx: *mut std::ffi::c_void,
+        _entry: *const u8,
+        _argv: *mut u64,
+    ) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe { eml_t_heap_error(ctx) };
     }
 
-    unsafe extern "C" fn call_panic(ctx: *mut Ctx<Fast>, _entry: *const u8, _argv: *mut u64) {
+    unsafe extern "C" fn call_panic(
+        ctx: *mut std::ffi::c_void,
+        _entry: *const u8,
+        _argv: *mut u64,
+    ) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe { eml_t_panic(ctx) };
     }
 

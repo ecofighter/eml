@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use eml_cli::{
@@ -201,7 +202,8 @@ fn stub_park(path: &Path) -> eml_sched::park::ParkFactory {
 /// `Control::clear`でしか下りないので、実行ごとに新しい`Control`を持つ設定を作る。使い回すと、前の実行で立ったビットで
 /// 次の実行がすぐ止まる。`marks`はファイルの先頭の印で、シグナルの予定と深さと確保量の上限をどのrunにも同じように当てる
 /// (docs/implementation/testing.mdの「UI テスト」)。
-/// `engine`はVMかネイティブかを選ぶ。ネイティブの実行はどれも`eml_test_support::execute_native`を通り、成功した実行はcensusで終わる。
+/// `engine`はVMかネイティブかを選ぶ。ネイティブの実行はどれも`eml_test_support::execute_native`を通る。成功した速いモードの
+/// 実行はcensusで、成功した検査モードの実行は検査モードの終わりの検査で終わる。
 #[expect(
     clippy::too_many_arguments,
     reason = "each run of a file sets the engine, the mode, the policy and the workers"
@@ -275,9 +277,10 @@ fn execute_in(
     }
 }
 
-/// 検査モードの結果をスナップショットと比べた後で、同じプログラムを別の設定で流した結果 `other` が、同じ出力、
-/// 同じ標準エラー、同じファイル、同じ終わり方になることを確かめる。`label` は別の設定の名前で、食い違ったときの文言に
-/// 入る。`compare_stats` なら、スケジュールによらない `RunStats` も比べる。速いモードは仕事の回数を数えないので比べない。
+/// 検査モードの結果をスナップショットと比べた後で、同じプログラムを別の設定で流した結果`other`が、同じ出力、
+/// 同じ標準エラー、同じファイル、同じ終わり方になることを確かめる。`label`は別の設定の名前で、食い違ったときの文言に
+/// 入る。`compare_stats`が`Nothing`でなければ、それが残す`RunStats`の欄も比べる。速いモードは仕事の回数を数えないので
+/// 比べない。
 fn assert_agrees(suffix: &str, label: &str, other: &Ran, checked: &Ran, compare_stats: Compare) {
     assert_eq!(
         other.stdout, checked.stdout,
@@ -542,13 +545,14 @@ fn compares_stats(checked: &Ran, other: &Ran) -> Compare {
     }
 }
 
-/// seed の run と比べる `RunStats` の欄。
+/// 別の設定のrunと比べる`RunStats`の欄。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Compare {
     Nothing,
     ScheduleIndependent,
     ChannelIndependent,
     DriverIndependent,
+    EngineIndependent,
 }
 
 impl Compare {
@@ -558,6 +562,7 @@ impl Compare {
             Compare::ScheduleIndependent => eml_test_support::schedule_independent(stats),
             Compare::ChannelIndependent => eml_test_support::channel_independent(stats),
             Compare::DriverIndependent => eml_test_support::driver_independent(stats),
+            Compare::EngineIndependent => eml_test_support::engine_independent(stats),
         }
     }
 }
@@ -825,10 +830,20 @@ fn std_rows(program: &eml_lir::Program) -> impl Iterator<Item = Extern> + '_ {
         })
 }
 
-/// `run_native`と`run_fail_native`の本体。受け入れた各ファイルをVMの速いモードとネイティブで流し、2つの実行が
-/// 同じになることを確かめる。`run-fail`のファイルは、先にVMの検査モードで流す。その実行が検査モードだけが見つける
-/// 誤りを報告したら、VM自身の誤りなので、ネイティブでは流さない (docs/implementation/testing.mdの「ネイティブで流す」)。
-fn native_entries(name: &str, top: &str) {
+/// ネイティブのテストが受け入れたファイル。パス、先頭の印、分類のパス、プログラム、入力のファイルを置くディレクトリである。
+struct NativeFile<'a> {
+    path: &'a Path,
+    marks: &'a Marks,
+    suffix: String,
+    program: eml_lir::Trusted,
+    root: PathBuf,
+}
+
+/// 「ネイティブで流す」の手順1から3で、ネイティブのコードがどのファイルを流すかを決める唯一の所である。`native: skip`の
+/// 印のファイルと、`eml_native::unsupported`が断るファイルを除き、受け入れた`run-fail`のファイルがWindowsの印を持たない
+/// ことを求める。このOSで流せる受け入れた各ファイルで`body`を呼び、受け入れないファイルも含めて数えた結果を返す
+/// (docs/implementation/testing.mdの「ネイティブで流す」)。
+fn for_each_native_file(top: &str, body: impl Fn(&NativeFile) + Sync) -> NativeTally {
     let run_fail = top == "run-fail";
     let marked = marked_files(&ui_root().join(top), "em", true);
     let tally = Mutex::new(NativeTally::default());
@@ -836,13 +851,22 @@ fn native_entries(name: &str, top: &str) {
         let Entry::Test(suffix) = classify(path, top) else {
             return;
         };
+        // ネイティブのコードが流さないファイルは、native-statsの印を持てない。そこでも印が理由より長く残らないためである
+        let not_run = || {
+            assert!(
+                !marks.native_stats_skip,
+                "{suffix}: the native-stats mark needs a file native code runs"
+            );
+        };
         if marks.native_skip {
+            not_run();
             tally.lock().unwrap().skipped += 1;
             return;
         }
         let (program, root, _) = compile(path, &suffix);
         let forms = eml_native::unsupported(&program);
         if let Some(first) = forms.first() {
+            not_run();
             *tally
                 .lock()
                 .unwrap()
@@ -865,52 +889,115 @@ fn native_entries(name: &str, top: &str) {
         if cfg!(windows) && marks.windows_skip {
             return;
         }
-        if run_fail {
-            let checked = execute_in(
-                &program,
-                path,
-                &root,
-                marks,
-                true,
-                Sched::Sequential,
+        body(&NativeFile {
+            path,
+            marks,
+            suffix,
+            program,
+            root,
+        });
+    });
+    tally.into_inner().unwrap()
+}
+
+/// `run_native`と`run_fail_native`の本体。受け入れるファイルは`for_each_native_file`が決める。受け入れた各ファイルを
+/// VMの速いモードとネイティブで流し、2つの実行が同じになることを確かめる。`run-fail`のファイルは、先にVMの検査モードで
+/// 流す。その実行が検査モードだけが見つける誤りを報告したら、VM自身の誤りなので、ネイティブでは流さない
+/// (docs/implementation/testing.mdの「ネイティブで流す」)。
+fn native_entries(name: &str, top: &str) {
+    let run_fail = top == "run-fail";
+    let checked_only = AtomicUsize::new(0);
+    let mut tally = for_each_native_file(top, |file| {
+        let run = |debug_heap, sched, engine| {
+            execute_in(
+                &file.program,
+                file.path,
+                &file.root,
+                file.marks,
+                debug_heap,
+                sched,
                 1,
-                Engine::Vm,
-            );
+                engine,
+            )
+        };
+        if run_fail {
+            let checked = run(true, Sched::Sequential, Engine::Vm);
             let Err(error) = &checked.result else {
                 panic!("expected a runtime error");
             };
             if !fast_mode_reports(error) {
-                tally.lock().unwrap().checked_only += 1;
+                checked_only.fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
-        let fast = execute_in(
-            &program,
-            path,
-            &root,
-            marks,
-            false,
-            Sched::Normal,
-            1,
-            Engine::Vm,
+        let fast = run(false, Sched::Normal, Engine::Vm);
+        let native = run(false, Sched::Normal, Engine::Native);
+        assert_agrees(
+            &file.suffix,
+            "native code",
+            &native,
+            &fast,
+            Compare::Nothing,
         );
-        let native = execute_in(
-            &program,
-            path,
-            &root,
-            marks,
-            false,
-            Sched::Normal,
-            1,
-            Engine::Native,
-        );
-        assert_agrees(&suffix, "native code", &native, &fast, Compare::Nothing);
     });
+    tally.checked_only = checked_only.into_inner();
     // 一部のファイルだけを流したときの数は、スナップショットの数と合わない
     if std::env::var_os("EML_UI_FILTER").is_none() {
-        let counts = tally.into_inner().unwrap().render(run_fail);
-        insta::assert_snapshot!(name, counts);
+        insta::assert_snapshot!(name, tally.render(run_fail));
     }
+}
+
+/// `run_native_checked`と`run_fail_native_checked`の本体 (手順6)。受け入れた各ファイルを、もう1回、VMとネイティブの
+/// 検査モードで、1つのworkerと`Sched::Sequential`で流す (docs/implementation/testing.mdの「ネイティブで流す」)。
+fn native_checked_entries(top: &str) {
+    let run_fail = top == "run-fail";
+    for_each_native_file(top, |file| {
+        assert_checked_native_agrees(file, run_fail, Sched::Sequential, 1);
+    });
+}
+
+/// `file`をVMとネイティブの検査モードで`sched`と`workers`で流し、2つの実行の標準出力、標準エラー、書いたファイル、結果、
+/// `peak_stack`のほかのどの数も同じことを確かめる。`run-fail`のファイルはVMで失敗しなければならない。検査モードの
+/// ネイティブのコードは監査するので、VMの実行が検査モードだけが見つける誤りで終わるファイルも比べる。
+/// `native-stats: skip`の印のファイルは数を除いて比べ、その数は違わなければならない。だから印は理由より長く残らない
+/// (docs/implementation/testing.mdの「ネイティブで流す」)。方針とworkerの数を引数にするのは、より多くのworkerのrunを
+/// 繰り返しで足せるようにするためである。
+fn assert_checked_native_agrees(file: &NativeFile, run_fail: bool, sched: Sched, workers: usize) {
+    let run = |engine| {
+        execute_in(
+            &file.program,
+            file.path,
+            &file.root,
+            file.marks,
+            true,
+            sched,
+            workers,
+            engine,
+        )
+    };
+    let vm = run(Engine::Vm);
+    if run_fail && vm.result.is_ok() {
+        panic!("expected a runtime error");
+    }
+    let native = run(Engine::Native);
+    let suffix = &file.suffix;
+    let label = "checked native code";
+    if !file.marks.native_stats_skip {
+        assert_agrees(suffix, label, &native, &vm, Compare::EngineIndependent);
+        return;
+    }
+    assert_agrees(suffix, label, &native, &vm, Compare::Nothing);
+    let counters = |ran: &Ran| {
+        let finished = ran
+            .finished
+            .unwrap_or_else(|| panic!("{suffix}: a file with the native-stats mark must finish"));
+        eml_test_support::engine_independent(finished.stats)
+    };
+    assert_ne!(
+        counters(&native),
+        counters(&vm),
+        "{suffix}: the native-stats mark is stale"
+    );
 }
 
 #[test]
@@ -921,6 +1008,16 @@ fn run_native() {
 #[test]
 fn run_fail_native() {
     native_entries("run_fail_native", "run-fail");
+}
+
+#[test]
+fn run_native_checked() {
+    native_checked_entries("run");
+}
+
+#[test]
+fn run_fail_native_checked() {
+    native_checked_entries("run-fail");
 }
 
 #[test]
@@ -1293,6 +1390,7 @@ fn the_workers_mark_needs_a_reason() {
             max_bytes: None,
             gui_stub: false,
             native_skip: false,
+            native_stats_skip: false,
         })
     );
 }
@@ -1470,6 +1568,7 @@ fn signal_marks_are_parsed_in_order() {
             max_bytes: None,
             gui_stub: false,
             native_skip: false,
+            native_stats_skip: false,
         })
     );
 }
@@ -1782,6 +1881,134 @@ fn a_native_mark_is_read() {
 #[should_panic(expected = "x.repl: native marks are not supported here")]
 fn a_native_mark_outside_a_run_entry_panics() {
     marks_of("x.repl", "# native: skip (x)\n> 1\n", "#", false);
+}
+
+/// 数`stats`で終わったrun。
+fn finished_with(stats: RunStats) -> Ran {
+    Ran {
+        stdout: String::new(),
+        stderr: String::new(),
+        written: String::new(),
+        result: Ok(None),
+        finished: Some(Finished {
+            stats,
+            exit: None,
+            preemptions: 0,
+            workers: 0,
+            placed: 0,
+            placed_tasks: 0,
+            pinned_tasks: 0,
+            placed_jobs: 0,
+            holds_raised: 0,
+            holds_lowered: 0,
+        }),
+    }
+}
+
+/// 2つの実行系の検査モードのrunで違う数は、失敗である。
+#[test]
+#[should_panic(expected = "x.em: checked native code did other work")]
+fn a_stats_difference_between_the_engines_fails() {
+    let native = finished_with(RunStats {
+        boxes: 3,
+        ..RunStats::default()
+    });
+    let vm = finished_with(RunStats {
+        boxes: 4,
+        ..RunStats::default()
+    });
+    assert_agrees(
+        "x.em",
+        "checked native code",
+        &native,
+        &vm,
+        Compare::EngineIndependent,
+    );
+}
+
+/// 2つの実行系の検査モードのrunは、`peak_stack`のほかのどの数でも比べる。
+#[test]
+fn native_stats_are_compared_without_peak_stack() {
+    let stats = RunStats {
+        evidence_steps: 1,
+        yields: 2,
+        yield_frames: 3,
+        unwound_frames: 4,
+        string_bytes_copied: 5,
+        rc_increments: 6,
+        rc_decrements: 7,
+        boxes: 8,
+        unboxes: 9,
+        allocations: 10,
+        reuses: 11,
+        peak_objects: 12,
+        peak_stack: 13,
+        tasks: 14,
+        parks: 15,
+        dropped_failures: 16,
+        cancels: 17,
+        timers: 18,
+        shared_objects: 19,
+        channel_ops: 20,
+        channel_waits: 21,
+        channels_swept: 22,
+        completions: 23,
+    };
+    let native = finished_with(RunStats {
+        peak_stack: 0,
+        ..stats
+    });
+    assert_agrees(
+        "x.em",
+        "checked native code",
+        &native,
+        &finished_with(stats),
+        Compare::EngineIndependent,
+    );
+    let kept = Compare::EngineIndependent.kept(stats);
+    for ((name, kept), (_, value)) in kept.fields().into_iter().zip(stats.fields()) {
+        let expected = if name == "peak_stack" { 0 } else { value };
+        assert_eq!(kept, expected, "{name}");
+    }
+}
+
+/// `-- native-stats: skip (<理由>)`は、2つの実行系を検査モードで比べるとき、ファイルの数を比べない印である。理由が要り、
+/// `run`と`run-fail`のエントリのほかでは断る (docs/implementation/testing.mdの「ネイティブで流す」)。
+#[test]
+fn a_native_stats_mark_is_read() {
+    let marks = leading_marks(
+        "-- native-stats: skip (an over-application)\n-- windows: skip (x)\nmain () = ()\n",
+        "--",
+    )
+    .unwrap();
+    assert!(marks.native_stats_skip && marks.windows_skip && !marks.native_skip);
+    assert!(
+        !leading_marks("-- native: skip (x)\n", "--")
+            .unwrap()
+            .native_stats_skip
+    );
+    for wrong in [
+        "-- native-stats: skip",
+        "-- native-stats: skip ()",
+        "-- native-stats: run (x)",
+        "-- native-stats:skip (x)",
+    ] {
+        assert_eq!(
+            leading_marks(wrong, "--"),
+            Err(format!(
+                "the native-stats mark is `-- native-stats: skip (<reason>)`, not `{wrong}`"
+            )),
+            "{wrong}"
+        );
+    }
+    let refused = std::panic::catch_unwind(|| {
+        marks_of("x.repl", "# native-stats: skip (x)\n> 1\n", "#", false)
+    })
+    .expect_err("a transcript has no native-stats mark");
+    assert_eq!(
+        refused.downcast_ref::<String>().map(String::as_str),
+        Some("x.repl: native-stats marks are not supported here")
+    );
 }
 
 /// 流すworkerの数とseedのrunは`par/`と`async/`だけなので、`gui/`は検査モードと速いモードだけで流す。

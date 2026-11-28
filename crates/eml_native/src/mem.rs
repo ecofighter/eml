@@ -174,6 +174,11 @@ fn field_offset(scanned: u32, position: u32) -> i32 {
         .expect("a field offset fits in 32 bits")
 }
 
+/// その欄の、ペイロードでの物理の添字。`Heap::field`と`Heap::raw`が取る形である。
+pub fn field_index(scanned: u32, position: u32) -> usize {
+    layout::data_first(scanned as usize, false) + position as usize
+}
+
 /// `Data`の物体`obj`の欄を型`ty`で読む。
 pub fn load_field(
     b: &mut FunctionBuilder,

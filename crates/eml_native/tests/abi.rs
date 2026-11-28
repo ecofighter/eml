@@ -16,12 +16,12 @@ use eml_rt::{Buffering, Control, Ctx, Fast, HostRef, Limits, StdHost};
 eml_nrt::entries! {
     const ECHO;
 
-    plain fn eml_t_echo_none_i(ctx) -> i64 {
+    plain[Service] fn eml_t_echo_none_i(ctx) -> i64 {
         let _ = ctx;
         -10
     }
 
-    plain fn eml_t_echo_iii(ctx, a: i64, b: i64, c: i64) {
+    plain[Service] fn eml_t_echo_iii(ctx, a: i64, b: i64, c: i64) {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
             *out = a as u64;
@@ -30,7 +30,7 @@ eml_nrt::entries! {
         }
     }
 
-    plain fn eml_t_echo_ii(ctx, a: i64, b: i64) {
+    plain[Service] fn eml_t_echo_ii(ctx, a: i64, b: i64) {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
             *out = a as u64;
@@ -38,7 +38,7 @@ eml_nrt::entries! {
         }
     }
 
-    plain fn eml_t_echo_ii_i(ctx, a: i64, b: i64) -> i64 {
+    plain[Service] fn eml_t_echo_ii_i(ctx, a: i64, b: i64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
             *out = a as u64;
@@ -47,7 +47,7 @@ eml_nrt::entries! {
         -2
     }
 
-    plain fn eml_t_echo_iii_i(ctx, a: i64, b: i64, c: i64) -> i64 {
+    plain[Service] fn eml_t_echo_iii_i(ctx, a: i64, b: i64, c: i64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
             *out = a as u64;
@@ -57,36 +57,36 @@ eml_nrt::entries! {
         -3
     }
 
-    plain fn eml_t_echo_i(ctx, a: i64) {
+    plain[Service] fn eml_t_echo_i(ctx, a: i64) {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe { *out = a as u64 };
     }
 
-    plain fn eml_t_echo_i_i(ctx, a: i64) -> i64 {
+    plain[Service] fn eml_t_echo_i_i(ctx, a: i64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe { *out = a as u64 };
         -1
     }
 
-    plain fn eml_t_echo_f_i(ctx, a: f64) -> i64 {
+    plain[Service] fn eml_t_echo_f_i(ctx, a: f64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe { *out = a.to_bits() };
         -1
     }
 
-    plain fn eml_t_echo_f_f(ctx, a: f64) -> f64 {
+    plain[Service] fn eml_t_echo_f_f(ctx, a: f64) -> f64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe { *out = a.to_bits() };
         -1.5
     }
 
-    plain fn eml_t_echo_i_f(ctx, a: i64) -> f64 {
+    plain[Service] fn eml_t_echo_i_f(ctx, a: i64) -> f64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe { *out = a as u64 };
         -1.25
     }
 
-    plain fn eml_t_echo_if_i(ctx, a: i64, b: f64) -> i64 {
+    plain[Service] fn eml_t_echo_if_i(ctx, a: i64, b: f64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
             *out = a as u64;
@@ -95,7 +95,7 @@ eml_nrt::entries! {
         -3
     }
 
-    plain fn eml_t_echo_ii_f(ctx, a: i64, b: i64) -> f64 {
+    plain[Service] fn eml_t_echo_ii_f(ctx, a: i64, b: i64) -> f64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
             *out = a as u64;
@@ -104,7 +104,7 @@ eml_nrt::entries! {
         -2.25
     }
 
-    plain fn eml_t_echo_iif_i(ctx, a: i64, b: i64, c: f64) -> i64 {
+    plain[Service] fn eml_t_echo_iif_i(ctx, a: i64, b: i64, c: f64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
             *out = a as u64;
@@ -114,7 +114,7 @@ eml_nrt::entries! {
         -3
     }
 
-    plain fn eml_t_echo_ff_i(ctx, a: f64, b: f64) -> i64 {
+    plain[Service] fn eml_t_echo_ff_i(ctx, a: f64, b: f64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
             *out = a.to_bits();
@@ -123,7 +123,7 @@ eml_nrt::entries! {
         -2
     }
 
-    plain fn eml_t_echo_ff_f(ctx, a: f64, b: f64) -> f64 {
+    plain[Service] fn eml_t_echo_ff_f(ctx, a: f64, b: f64) -> f64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe {
             *out = a.to_bits();
@@ -132,14 +132,14 @@ eml_nrt::entries! {
         -2.5
     }
 
-    plain fn eml_t_echo_iiii(ctx, a: i64, b: i64, c: i64, d: i64) {
+    plain[Service] fn eml_t_echo_iiii(ctx, a: i64, b: i64, c: i64, d: i64) {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         for (i, v) in [a, b, c, d].into_iter().enumerate() {
             unsafe { *out.add(i) = v as u64 };
         }
     }
 
-    plain fn eml_t_echo_iiii_i(ctx, a: i64, b: i64, c: i64, d: i64) -> i64 {
+    plain[Service] fn eml_t_echo_iiii_i(ctx, a: i64, b: i64, c: i64, d: i64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         for (i, v) in [a, b, c, d].into_iter().enumerate() {
             unsafe { *out.add(i) = v as u64 };
@@ -147,7 +147,7 @@ eml_nrt::entries! {
         -4
     }
 
-    plain fn eml_t_echo_iiiii_i(ctx, a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
+    plain[Service] fn eml_t_echo_iiiii_i(ctx, a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         for (i, v) in [a, b, c, d, e].into_iter().enumerate() {
             unsafe { *out.add(i) = v as u64 };
@@ -155,13 +155,13 @@ eml_nrt::entries! {
         -5
     }
 
-    plain fn eml_t_echo_obj_tobj(ctx, a: obj) -> tobj {
+    plain[Service] fn eml_t_echo_obj_tobj(ctx, a: obj) -> tobj {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         unsafe { *out = a.bits() as u64 };
         eml_rt::Word::imm(-7)
     }
 
-    plain fn eml_t_echo6(ctx, a: i64, b: f64, c: i64, d: f64, e: i64, f: f64) -> f64 {
+    plain[Service] fn eml_t_echo6(ctx, a: i64, b: f64, c: i64, d: f64, e: i64, f: f64) -> f64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         for (i, bits) in [a as u64, b.to_bits(), c as u64, d.to_bits(), e as u64, f.to_bits()]
             .into_iter()
@@ -172,7 +172,7 @@ eml_nrt::entries! {
         -6.5
     }
 
-    plain fn eml_t_echo9(
+    plain[Service] fn eml_t_echo9(
         ctx, a: f64, b: i64, c: f64, d: i64, e: f64, f: i64, g: f64, h: i64, i: f64,
     ) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
@@ -188,7 +188,7 @@ eml_nrt::entries! {
         -9
     }
 
-    plain fn eml_t_echo18(
+    plain[Service] fn eml_t_echo18(
         ctx, a: i64, b: f64, c: i64, d: f64, e: i64, f: f64, g: i64, h: f64, i: i64, j: f64, k: i64,
         l: f64, m: i64, n: f64, o: i64, p: f64, q: i64, r: f64,
     ) -> f64 {
@@ -220,7 +220,7 @@ fn ctx() -> Box<Ctx<Fast>> {
 
 fn module() -> JITModule {
     let mut builder = jit_builder().unwrap();
-    for entry in eml_nrt::entries().chain(ECHO) {
+    for entry in eml_nrt::entries::<eml_nrt::mode::Fast>().chain(ECHO::<eml_nrt::mode::Fast>()) {
         builder.symbol(entry.symbol, (entry.address)());
     }
     JITModule::new(builder)
@@ -283,9 +283,10 @@ fn run(ctx: &mut Ctx<Fast>, m: &JITModule, thunk_id: FuncId, entry: FuncId, argv
 /// 記述子から作った呼び出しが、macroで宣言したRustのエントリに引数を1つずつ渡し、結果を受け取る。
 #[test]
 fn mixed_int_and_float_arguments_reach_an_entry() {
-    for entry in eml_nrt::entries() {
+    for entry in eml_nrt::entries::<eml_nrt::mode::Fast>() {
         assert!(
-            ECHO.iter()
+            ECHO::<eml_nrt::mode::Fast>()
+                .iter()
                 .any(|echo| echo.params == entry.params && echo.result == entry.result),
             "no echo entry has the kinds of {}",
             entry.symbol
@@ -293,7 +294,7 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
     }
     let mut m = module();
     let mut callers = Vec::new();
-    for entry in ECHO {
+    for entry in ECHO::<eml_nrt::mode::Fast>() {
         let rets: Vec<Kind> = entry.result.into_iter().collect();
         let callee = declare_import(&mut m, Import::Entry(entry)).unwrap();
         let name = format!("call${}", entry.symbol);
@@ -663,7 +664,7 @@ mod fatal {
     #[test]
     fn a_fatal_cuts_through_tail_frames() {
         let mut m = module();
-        let fatal_entry: &Entry = eml_nrt::entries()
+        let fatal_entry: &Entry = eml_nrt::entries::<eml_nrt::mode::Fast>()
             .find(|e| e.symbol == "eml_fatal")
             .unwrap();
         let fatal = declare_import(&mut m, Import::Entry(fatal_entry)).unwrap();

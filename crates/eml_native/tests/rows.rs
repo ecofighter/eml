@@ -27,7 +27,7 @@ fn the_rows_are_partitioned() {
     let (mut inline, mut called, mut par, mut task) = (0, 0, 0, 0);
     for &row in Extern::ALL {
         let symbol = format!("eml_x_{row:?}");
-        let entry = eml_nrt::entries().find(|e| e.symbol == symbol);
+        let entry = eml_nrt::entries::<eml_nrt::mode::Fast>().find(|e| e.symbol == symbol);
         if row.is_async() || row == Extern::Par {
             assert_eq!(lowering(row), None, "{row:?}");
             assert!(entry.is_none(), "{symbol}");
@@ -62,7 +62,7 @@ fn the_rows_are_partitioned() {
         );
     }
     assert_eq!((inline, called, par, task), (45, 189, 1, 101));
-    let rows = eml_nrt::entries()
+    let rows = eml_nrt::entries::<eml_nrt::mode::Fast>()
         .filter(|e| e.symbol.starts_with("eml_x_") && !e.symbol.starts_with("eml_x_c_"))
         .count();
     assert_eq!(rows, 234);
@@ -474,12 +474,7 @@ fn entry$main() -> unit {
 }
 ";
         let program = program(text);
-        let points = eml_lir::unwind::points(&program, |_| true);
-        let f = points[0]
-            .as_ref()
-            .expect("every function is wanted")
-            .as_ref()
-            .unwrap_or_else(|error| panic!("{error}"));
+        let f = &program.unwinds()[0];
         // 掛け算は`f`の入口のブロックの2つ目の文で、その地点は`s.1`を持つ
         let multiply = f
             .points

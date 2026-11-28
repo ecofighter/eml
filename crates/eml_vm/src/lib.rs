@@ -118,9 +118,9 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// 入力をまたいで`CodeBase`と`Ctx`を持つ実行の状態 (docs/spec/vm.mdの「追記」)。`load`と`extend`でプログラムを読み込み、
 /// `run`でエントリの関数を実行する。モードごとの確かめは、作るときに`Machine<Fast>::new`と`Machine<Checked>::new`が
-/// 決める。渡す`Control`を同時に使う`Machine`は1つだけにする。IDの表と数が`Control`にあるためである
-/// (docs/spec/object-model.mdの「実行の制御」)。2つの`Machine`が1つの`Control`を同時に使っても、狂うのは止める語、
-/// 確保量の数、検査モードの確かめだけで、安全の約束ではない (docs/spec/lir.mdの「エンジンの約束」)。
+/// 決める。渡す`Control`を同時に使う`Machine`は1つだけにする。止める語と終わりの欄が`Control`にあるためである
+/// (docs/spec/object-model.mdの「実行の制御」)。2つの`Machine`が1つの`Control`を同時に使っても、狂うのは止める語と
+/// 確保量の数だけで、安全の約束ではない (docs/spec/lir.mdの「エンジンの約束」)。
 pub struct Machine<M: Mode> {
     /// 時計と待ち。`with_driver` が渡すか、最初の run が `clock` と方針の seed から作り、run の間は `Scheduler` に
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
@@ -338,23 +338,6 @@ impl<M: Mode> Machine<M> {
         self.refuse_after_panic();
         // SAFETY: 呼ぶ側がP2を約束する
         let entry = unsafe { self.code.extend(program, linked) }?;
-        Ok(self.loaded(entry))
-    }
-
-    /// verifierを通さずにプログラムを追記する。ほかは`extend`と同じである (`CodeBase::load_unverified`)。
-    ///
-    /// # Safety
-    ///
-    /// `CodeBase::load_unverified`と同じである。
-    #[cfg(feature = "testing")]
-    pub unsafe fn load_unverified(
-        &mut self,
-        program: &Program,
-        linked: &Linked,
-    ) -> Result<Loaded, CompileError> {
-        self.refuse_after_panic();
-        // SAFETY: 呼ぶ側が`CodeBase::load_unverified`の約束を引き継ぐ
-        let entry = unsafe { self.code.load_unverified(program, linked) }?;
         Ok(self.loaded(entry))
     }
 
@@ -962,7 +945,12 @@ fn run_scheduled<M: Mode, P: Policy>(
     // メインのworkerの`Ctx`はworker 0を作る前に作る。検査モードでは作るときにページを1枚取り、確保量に数えるので、
     // その課金がプログラムの確保とどう前後するかをスレッドの速さで決めないためである。決定的な方針では確保量の上限に
     // 当たる安全点が確保量だけで決まる (docs/spec/vm.mdの「メインのworker」「タスクとスケジュール」)
-    let main_ctx = code.worker_ctx(Arc::clone(&control), start.host.clone(), run.main());
+    let main_ctx = code.worker_ctx(
+        Arc::clone(&control),
+        &ctx.heap().owners(),
+        start.host.clone(),
+        run.main(),
+    );
     let (worker_ctx, worker_task, worker_counts) = (&mut *ctx, &mut *task, &mut *counts);
     let (joined, main) = thread::scope(|scope| {
         // 呼んだスレッドの panic でも `END` を立ててすべての worker を起こし、scope が worker 0 を join できるようにする
@@ -1205,6 +1193,7 @@ fn entry_body<M: Mode, P: Policy>(
                     &sched.policy,
                     &sched.run,
                     &sched.watcher.control,
+                    &ctx.heap().owners(),
                     &sched.cells,
                     &host,
                     max_depth,
@@ -1564,22 +1553,6 @@ impl AnyMachine {
         }
     }
 
-    /// # Safety
-    ///
-    /// `CodeBase::load_unverified`と同じである。
-    #[cfg(feature = "testing")]
-    pub unsafe fn load_unverified(
-        &mut self,
-        program: &Program,
-        linked: &Linked,
-    ) -> Result<Loaded, CompileError> {
-        // SAFETY: 呼ぶ側が`CodeBase::load_unverified`の約束を引き継ぐ
-        match self {
-            AnyMachine::Fast(machine) => unsafe { machine.load_unverified(program, linked) },
-            AnyMachine::Checked(machine) => unsafe { machine.load_unverified(program, linked) },
-        }
-    }
-
     pub fn run(&mut self, loaded: Loaded) -> Result<Finished, RuntimeError> {
         match self {
             AnyMachine::Fast(machine) => machine.run(loaded),
@@ -1644,7 +1617,7 @@ fn check_heaps(ctx: &mut Ctx<Checked>, others: &mut [Ctx<Checked>]) -> Result<()
     let heaps: Vec<_> = std::iter::once(ctx.heap())
         .chain(others.iter().map(Ctx::heap))
         .collect();
-    ctx.heap().control().check_owned(&heaps)
+    ctx.heap().owners().check(&heaps)
 }
 
 /// 検査モードの `at_run_end`。成功した run の後のほかの worker のヒープには、生きている物体が残らない。根を持つ
@@ -1668,18 +1641,10 @@ fn check_leaks(ctx: &mut Ctx<Checked>) -> Result<(), RuntimeError> {
 }
 
 /// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。REPLは`Machine::load`の誤りをこれで報告する。
-/// verifierの誤りは破った規則を残す。配置の規則の誤りは関数を名指さないので、エントリの関数の名前を付ける。
+/// 配置の規則の誤りは関数を名指さないので、エントリの関数の名前を付ける。
 pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
     let entry = || program.function(program.entry).name.clone();
     let (fault, function) = match error {
-        CompileError::Invalid(error) => {
-            let function = if program.functions.iter().any(|f| f.name == error.function) {
-                error.function
-            } else {
-                entry()
-            };
-            (RunFault::Invalid(error.message), function)
-        }
         CompileError::Freeze(_) => (RunFault::Internal(error.what()), entry()),
         CompileError::TooManySlots { ref function }
         | CompileError::Mismatch { ref function }
@@ -1699,5 +1664,5 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
 pub(crate) fn trusted(text: &str) -> Trusted {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
     // SAFETY: テストの手書きLIRの約束はテストが負う。テストは検査モードでも動かして確かめる
-    unsafe { Trusted::new(program) }
+    unsafe { Trusted::new(program) }.unwrap_or_else(|error| panic!("{error}"))
 }

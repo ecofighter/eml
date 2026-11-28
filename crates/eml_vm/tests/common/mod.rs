@@ -5,9 +5,8 @@ use std::sync::Arc;
 use eml_lir::{Program, Trusted};
 use eml_rt::{Control, Fast, Limits};
 use eml_sched::config::RunStats;
-use eml_sched::config::{Finished, Seat};
 use eml_test_support::execute;
-use eml_vm::{AnyMachine, CodeBase, CompileError, RunConfig, RuntimeError, disassemble};
+use eml_vm::{CodeBase, CompileError, RuntimeError, disassemble};
 
 pub fn parse(text: &str) -> Program {
     eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"))
@@ -19,7 +18,20 @@ pub fn trusted(text: &str) -> Trusted {
 
 pub fn trust(program: Program) -> Trusted {
     // SAFETY: 手書きのLIRの約束はテストが負う。テストは検査モードでも動かして確かめる
-    unsafe { Trusted::new(program) }
+    unsafe { Trusted::new(program) }.unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// verifierが拒むIRを`Trusted::unverified`で包む。使うのは、拒まれるIRの上でVM自身の見張りか検査モードを確かめる
+/// テストだけである (docs/implementation/testing.mdの「`eml_vm` のテスト」)。
+pub fn unverified(text: &str) -> Trusted {
+    let program = parse(text);
+    assert!(
+        eml_lir::verify(&program).is_err(),
+        "the verifier accepts this program; use `run_lir`"
+    );
+    // SAFETY: テストは、わざと入れる誤りのほかは実行の前提を守る。その誤りはどれも、VMの見張りか検査モードが
+    // 報告するか、物体を手放さずに残すだけである (P6)
+    unsafe { Trusted::unverified(program) }
 }
 
 /// プログラム全体を、上限のない `Control` を持つ速いモードの新しい `CodeBase` に変換する。逆アセンブラのテストのため。
@@ -27,12 +39,6 @@ pub fn compile(program: &Trusted) -> Result<CodeBase<Fast>, CompileError> {
     let mut code = CodeBase::new(Arc::new(Control::new(Limits::default())));
     code.load(program, &eml_vm::Linked::default())?;
     Ok(code)
-}
-
-pub fn verified(text: &str) -> Trusted {
-    let program = parse(text);
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-    trust(program)
 }
 
 /// 手書きの LIR を verifier に通し、検査モードで実行する。通ったときは速いモードでも実行し、出力が同じことを確かめる。
@@ -45,7 +51,7 @@ pub fn run_lir(text: &str) -> (String, Result<(), RuntimeError>) {
 
 /// `run_lir` と同じく実行し、検査モードの `RunStats` を返す。
 pub fn run_lir_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
-    run_both(&verified(text))
+    run_both(&trusted(text))
 }
 
 /// 構造体を持つ手書きの LIR を、box の挿入から reuse までのパスに通して verifier にかける。構造体はまだソースから
@@ -53,7 +59,6 @@ pub fn run_lir_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
 pub fn lowered(text: &str) -> Trusted {
     let mut program = parse(text);
     eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
     trust(program)
 }
 
@@ -80,37 +85,18 @@ fn run_both(program: &Trusted) -> (String, Result<RunStats, RuntimeError>) {
     (out, result)
 }
 
-/// verifierが拒むIRを、`execute_unverified`で検査モードだけで実行する。
+/// verifierが拒むIRを`unverified`で読み込み、検査モードだけで実行する。
 pub fn run_unverified(text: &str) -> (String, Result<(), RuntimeError>) {
-    let (out, result) = execute_unverified(
-        &parse(text),
+    let (out, result) = execute(
+        &unverified(text),
         &eml_vm::RunConfig::default().with_debug_heap(true),
     );
     (out, result.map(|_| ()))
 }
 
-/// 確かめない読み込みでプログラムを読み込み、`eml_vm::execute`と同じ手順で実行する。使うのは、verifierが拒むIRの上で
-/// VM自身の見張りか検査モードを確かめるテストだけである (docs/implementation/testing.mdの「`eml_vm` のテスト」)。
-pub fn execute_unverified(
-    program: &Program,
-    config: &RunConfig,
-) -> (String, Result<Finished, RuntimeError>) {
-    let config = config.clone().with_seat(Seat::Separate);
-    let (host, out) = eml_vm::capture_host(Default::default());
-    let mut machine = AnyMachine::new(&config, host);
-    let mut run = || {
-        // SAFETY: 呼ぶテストは、わざと起こす誤りのほかは実行の前提を守り、VMの見張りと検査モードだけを守りとする
-        let loaded = unsafe { machine.load_unverified(program, &eml_vm::Linked::default()) }
-            .map_err(|error| eml_vm::compile_error(program, error))?;
-        machine.run(loaded)
-    };
-    let result = run().and_then(|finished| machine.close().map(|()| finished));
-    (out.contents(), result)
-}
-
 /// verifierを通したLIRの逆アセンブル。
 pub fn disasm(text: &str) -> String {
-    disasm_program(&verified(text))
+    disasm_program(&trusted(text))
 }
 
 fn disasm_program(program: &Trusted) -> String {
@@ -122,7 +108,7 @@ fn disasm_program(program: &Trusted) -> String {
 /// セッションの根に触れるコードは、REPLと同じ合わせたrunでしか動かないためである (docs/spec/vm.mdの
 /// 「誤り、止めること、終わり」)。
 pub fn run_lir_merged(text: &str) -> (String, Result<(), RuntimeError>) {
-    let program = verified(text);
+    let program = trusted(text);
     let (out, result) = run_merged(&program, true);
     if result.is_ok() {
         let (fast_out, fast) = run_merged(&program, false);

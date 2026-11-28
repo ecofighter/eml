@@ -8,7 +8,12 @@ use eml_lir::{
     Atom, BlockId, Case, CasePattern, Ctor, LayoutCtor, LirFn, Mark, Repr, Reuse, Shape, Term,
     VarId,
 };
+use eml_nrt::worker::{
+    COUNT_BOXES, COUNT_REUSES, COUNT_UNBOXES, DATA_RELEASE, DATA_STRUCT_UNBOX, DATA_SWITCH,
+    DATA_UNPACK,
+};
 
+use super::audit::Audit;
 use super::consts::Datum;
 use super::function::FnLower;
 use super::kind;
@@ -97,8 +102,15 @@ impl<M: Module> FnLower<'_, '_, M> {
         let new = self.alloc_con(&head, &shape, &values);
         self.b.ins().jump(done, &[BlockArg::Value(new)]);
         self.b.switch_to_block(reused);
+        self.count(COUNT_REUSES);
         let at = if reuse.in_place {
-            mem::box_of_token(&mut self.b, tok)
+            if self.imports.checked {
+                let [tag, scanned, _, lin] = head;
+                self.call_entry("eml_rt_reuse_in_place", &[tok, tag, scanned, lin])
+                    .expect("`eml_rt_reuse_in_place` returns its word")
+            } else {
+                mem::box_of_token(&mut self.b, tok)
+            }
         } else {
             let [tag, scanned, raw, lin] = head;
             self.call_entry("eml_rt_con_at", &[tok, tag, scanned, raw, lin])
@@ -106,7 +118,7 @@ impl<M: Module> FnLower<'_, '_, M> {
         };
         for ((&value, &position), &skip) in values.iter().zip(&shape.positions).zip(&reuse.skip) {
             if !skip {
-                mem::store_field(&mut self.b, at, shape.scanned, position, value);
+                self.store(at, shape.scanned, position, value);
             }
         }
         self.b.ins().jump(done, &[BlockArg::Value(at)]);
@@ -125,9 +137,28 @@ impl<M: Module> FnLower<'_, '_, M> {
             .call_entry("eml_rt_alloc_data", head)
             .expect("an allocation returns its word");
         for (&value, &position) in values.iter().zip(&shape.positions) {
-            mem::store_field(&mut self.b, w, shape.scanned, position, value);
+            self.store(w, shape.scanned, position, value);
         }
         w
+    }
+
+    /// 監査の後に、欄を1つ書く。
+    fn store(&mut self, obj: Value, scanned: u32, position: u32, value: Value) {
+        self.audit(
+            obj,
+            Audit::Store {
+                scanned,
+                position,
+                value,
+            },
+        );
+        mem::store_field(&mut self.b, obj, scanned, position, value);
+    }
+
+    /// 監査の後に、欄を1つ読む。
+    fn load(&mut self, obj: Value, scanned: u32, position: u32, ty: Type) -> Value {
+        self.audit(obj, Audit::Load { scanned, position });
+        mem::load_field(&mut self.b, obj, scanned, position, ty)
     }
 
     /// `release value ctor(fields)`。`token`があれば、tokenを作る形である。`value`の参照を1つ手放し、名前を書いた欄が
@@ -149,6 +180,7 @@ impl<M: Module> FnLower<'_, '_, M> {
         if unboxed {
             let dummy = self.cold_block();
             let object = self.b.create_block();
+            self.audit(x, Audit::Header);
             let is_dummy = mem::is_big_int(&mut self.b, x);
             self.b.ins().brif(is_dummy, dummy, &[], object, &[]);
             self.b.switch_to_block(dummy);
@@ -171,6 +203,15 @@ impl<M: Module> FnLower<'_, '_, M> {
             .filter(|(_, repr)| repr.is_rc())
             .map(|((&field, &position), &repr)| (field, position, repr))
             .collect();
+        self.audit(
+            x,
+            Audit::Data {
+                tag: ctor.tag,
+                scanned: shape.scanned,
+                what: DATA_RELEASE,
+            },
+        );
+        self.audit(x, Audit::Unique);
         let rc = mem::load_rc(&mut self.b, x);
         let unique = mem::is_one_ref(&mut self.b, rc);
         let owned = self.b.create_block();
@@ -184,7 +225,12 @@ impl<M: Module> FnLower<'_, '_, M> {
                 self.b.ins().jump(done, &[]);
             }
             Some(_) => {
-                let tok = mem::token_of_box(&mut self.b, x);
+                let tok = if self.imports.checked {
+                    self.call_entry("eml_rt_into_token", &[x])
+                        .expect("`eml_rt_into_token` returns its word")
+                } else {
+                    mem::token_of_box(&mut self.b, x)
+                };
                 self.b.ins().jump(done, &[BlockArg::Value(tok)]);
             }
         }
@@ -210,7 +256,7 @@ impl<M: Module> FnLower<'_, '_, M> {
     fn drop_unkept(&mut self, x: Value, scanned: u32, children: &[(Option<VarId>, u32, Repr)]) {
         for &(field, position, repr) in children {
             if field.is_none() {
-                let child = mem::load_field(&mut self.b, x, scanned, position, types::I64);
+                let child = self.load(x, scanned, position, types::I64);
                 self.decref(child, repr);
             }
         }
@@ -255,6 +301,7 @@ impl<M: Module> FnLower<'_, '_, M> {
         for &ty in &types {
             self.b.append_block_param(done, ty);
         }
+        self.audit(w, Audit::Header);
         let is_dummy = mem::is_big_int(&mut self.b, w);
         self.b.ins().brif(is_dummy, dummy, &[], object, &[]);
         self.b.switch_to_block(dummy);
@@ -273,11 +320,19 @@ impl<M: Module> FnLower<'_, '_, M> {
             .collect();
         self.b.ins().jump(done, &placeholders);
         self.b.switch_to_block(object);
+        self.audit(
+            w,
+            Audit::Data {
+                tag: ctor.tag,
+                scanned: shape.scanned,
+                what: DATA_STRUCT_UNBOX,
+            },
+        );
         let loaded: Vec<BlockArg> = leaves
             .iter()
             .zip(&types)
             .map(|(&(_, position, _), &ty)| {
-                BlockArg::Value(mem::load_field(&mut self.b, w, shape.scanned, position, ty))
+                BlockArg::Value(self.load(w, shape.scanned, position, ty))
             })
             .collect();
         self.b.ins().jump(done, &loaded);
@@ -289,25 +344,33 @@ impl<M: Module> FnLower<'_, '_, M> {
     }
 
     /// `ctor`の物体`value`の欄を`fields`に束縛する。欄は物体から借りるので、数は変えない。
-    fn bind_fields(&mut self, value: VarId, ctor: Ctor, fields: &[VarId]) {
+    fn bind_fields(&mut self, value: VarId, ctor: Ctor, fields: &[VarId], what: i64) {
         let shape = self.layout_ctor(ctor).shape();
         let w = self.var(value);
+        self.audit(
+            w,
+            Audit::Data {
+                tag: ctor.tag,
+                scanned: shape.scanned,
+                what,
+            },
+        );
         for (&field, &position) in fields.iter().zip(&shape.positions) {
             let ty = clif(kind(self.function.repr(field)));
-            let loaded = mem::load_field(&mut self.b, w, shape.scanned, position, ty);
+            let loaded = self.load(w, shape.scanned, position, ty);
             self.bind(field, loaded);
         }
     }
 
     /// `unpack value ctor(fields)`。
     pub(super) fn unpack(&mut self, value: VarId, ctor: Ctor, fields: &[VarId]) {
-        self.bind_fields(value, ctor, fields);
+        self.bind_fields(value, ctor, fields, DATA_UNPACK);
     }
 
     /// ブロック`block`が欄のあるcaseの行き先なら、その欄を読む。
     pub(super) fn case_fields(&mut self, block: BlockId) {
         if let Some(case) = self.cases[block.0 as usize] {
-            self.bind_fields(case.scrutinee, case.ctor, case.fields);
+            self.bind_fields(case.scrutinee, case.ctor, case.fields, DATA_SWITCH);
         }
     }
 
@@ -321,6 +384,7 @@ impl<M: Module> FnLower<'_, '_, M> {
     /// `let var = box atom`。箱の種類はオペランドのReprで決まる。即値に収まる`int`、`enum`、タグは即値の語で、
     /// 定数の大きい`int`と`float`は読み込み時の値の記号から読む。
     pub(super) fn boxed(&mut self, var: VarId, atom: Atom) {
+        self.count(COUNT_BOXES);
         let w = match atom {
             Atom::Int(n) if mem::fits_imm(n) => self.b.ins().iconst(types::I64, mem::imm_bits(n)),
             Atom::Int(n) => self.datum_word(Datum::BigInt(n), types::I64),
@@ -372,13 +436,18 @@ impl<M: Module> FnLower<'_, '_, M> {
             unreachable!("an unbox of a constant does not pass the verifier")
         };
         let w = self.var(boxed);
+        self.count(COUNT_UNBOXES);
         let value = match self.function.repr(var) {
-            Repr::Float => mem::load_box(&mut self.b, w, types::F64),
+            Repr::Float => {
+                self.audit(w, Audit::Boxed { float: true });
+                mem::load_box(&mut self.b, w, types::F64)
+            }
             Repr::Int | Repr::Enum => {
                 let (object, done) = self.on_immediate(w, types::I64);
                 let small = mem::imm_value(&mut self.b, w);
                 self.b.ins().jump(done, &[BlockArg::Value(small)]);
                 self.b.switch_to_block(object);
+                self.audit(w, Audit::Boxed { float: false });
                 let big = mem::load_box(&mut self.b, w, types::I64);
                 self.b.ins().jump(done, &[BlockArg::Value(big)]);
                 self.b.switch_to_block(done);
@@ -457,13 +526,17 @@ impl<M: Module> FnLower<'_, '_, M> {
         let w = self.var(var);
         match self.function.repr(var) {
             Repr::Enum => self.b.ins().ireduce(types::I32, w),
-            Repr::Obj => mem::load_tag(&mut self.b, w),
+            Repr::Obj => {
+                self.audit(w, Audit::Header);
+                mem::load_tag(&mut self.b, w)
+            }
             Repr::TObj => {
                 let (object, done) = self.on_immediate(w, types::I32);
                 let small = mem::imm_value(&mut self.b, w);
                 let small = self.b.ins().ireduce(types::I32, small);
                 self.b.ins().jump(done, &[BlockArg::Value(small)]);
                 self.b.switch_to_block(object);
+                self.audit(w, Audit::Header);
                 let tag = mem::load_tag(&mut self.b, w);
                 self.b.ins().jump(done, &[BlockArg::Value(tag)]);
                 self.b.switch_to_block(done);

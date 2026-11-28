@@ -294,6 +294,7 @@ impl Session {
 }
 
 /// エンジンに渡すLIRを作るただ1つの関数。`Trusted::new`を呼ぶのはここだけにする。
+/// verifierが拒むプログラムはコンパイラの誤りなので、どのビルドでもpanicする。
 ///
 /// # Safety
 ///
@@ -305,6 +306,7 @@ pub(crate) unsafe fn lower_trusted(input: eml_core_ir::Input) -> eml_lir::Truste
     // SAFETY: 呼ぶ側がこの関数の約束を守り、LIRはコンパイラ自身のパイプラインが作る。verifierが確かめられない
     // 「実行の前提」はこのパイプラインが守る (docs/spec/lir.mdの「エンジンの約束」)
     unsafe { eml_lir::Trusted::new(program) }
+        .unwrap_or_else(|error| panic!("internal error: invalid LIR: {error}"))
 }
 
 /// 断る形の言い方。
@@ -327,7 +329,7 @@ pub enum Engine {
     Native,
 }
 
-/// `program`を`engine`で1回流す。ネイティブは既定の`Options`に塞ぎのフックを足して流し、`RunStats`は数えない。
+/// `program`を`engine`で1回流す。ネイティブは既定の`Options`に塞ぎのフックを足して流す。
 #[cfg(feature = "run")]
 pub fn execute_on(
     engine: Engine,

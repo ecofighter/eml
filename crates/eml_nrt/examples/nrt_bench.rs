@@ -8,18 +8,18 @@ use eml_rt::{Buffering, Control, Ctx, Fast, HostRef, Limits, StdHost};
 eml_nrt::entries! {
     const BENCH;
 
-    plain fn eml_t_plain(ctx, a: i64) -> i64 {
+    plain[Service] fn eml_t_plain(ctx, a: i64) -> i64 {
         let _ = ctx;
         a + 1
     }
 
-    shim fn eml_t_shim(ctx, a: i64) -> i64 {
+    shim[Service] fn eml_t_shim(ctx, a: i64) -> i64 {
         let _ = ctx;
         Ok::<i64, Fatal>(a + 1)
     }
 }
 
-unsafe extern "C" fn add_one(_ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+unsafe extern "C" fn add_one(_ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
     unsafe { *argv += 1 };
 }
 
@@ -36,8 +36,8 @@ fn main() {
         HostRef::new(Arc::new(host)),
     ));
     let raw: *mut Ctx<Fast> = &mut *ctx;
-    let plain = black_box(BENCH[0].address)();
-    let shim = black_box(BENCH[1].address)();
+    let plain = black_box(BENCH::<eml_rt::Fast>()[0].address)();
+    let shim = black_box(BENCH::<eml_rt::Fast>()[1].address)();
     type F = unsafe extern "C" fn(*mut Ctx<Fast>, i64) -> i64;
     let mut x = 0i64;
     match case.as_str() {

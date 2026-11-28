@@ -39,7 +39,7 @@ use crate::alloc::FREE_META;
 use crate::alloc::{PagePin, Pages, page_of, pin_page, too_large};
 #[cfg(verus_only)]
 use crate::alloc::{page_base, region_cap, region_ptr};
-use crate::control::{Control, IdCounts};
+use crate::control::{Control, IdCounts, Owners};
 use crate::error::HeapError;
 use crate::foreign;
 #[cfg(verus_keep_ghost)]
@@ -176,10 +176,10 @@ pub struct Heap<M: Mode> {
     // なったためである (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     region: ManuallyDrop<Option<Arc<Frozen<M>>>>,
     worker: u32,
-    /// 検査モードの、`Control` の ID の表の写し (docs/spec/object-model.md の「論理的な worker ID」)。速いモードでは
+    /// 検査モードの、このヒープの所有者の表の写し (docs/spec/object-model.mdの「論理的なworker ID」)。速いモードでは
     /// 何も持たない写しのまま触れない。
-    // 数は証明の対象にせず、`Control::check_owned` が数え直して確かめる。数の誤りは診断の誤りで、メモリの安全には
-    // 関わらないので、モデルを広げる費用に見合わないためである
+    // 数は証明の対象にせず、`Owners::check`が数え直して確かめる。数の誤りは診断の誤りで、メモリの安全には関わらないので、
+    // モデルを広げる費用に見合わないためである
     owned: IdCounts,
     /// 検査モードの構築中の物体のブロックの番地。なければ 0 で、速いモードではいつも 0 である。
     // 検査モードの前置きの状態は構築中と生存を分けないので、`set_field` と `set_raw` が、構築中でない rc 0 以下の物体
@@ -690,7 +690,8 @@ impl<M: Mode> Heap<M> {
         Self::with_control(Control::unbounded())
     }
 
-    /// `new` と同じ空のヒープで、ページをセッションの `control` に数える。
+    /// `new`と同じ空のヒープで、ページをセッションの`control`に数える。検査モードでは、自分だけの新しい所有者の表で
+    /// 数える。
     pub fn with_control(control: Arc<Control>) -> (r: Heap<M>)
         ensures
             r.wf(),
@@ -701,10 +702,45 @@ impl<M: Mode> Heap<M> {
             r.unused(),
     {
         let owned = if M::CHECKED {
-            IdCounts::for_control(&control)
+            IdCounts::alone()
         } else {
             IdCounts::detached()
         };
+        Self::counting(control, owned)
+    }
+
+    /// `with_control`と同じ空のヒープで、検査モードでは`owners`の表で数える。物体がヒープの間を移るので、実行系は1つの
+    /// runかセッションのヒープを1つのハンドルで作る (docs/spec/object-model.mdの「論理的なworker ID」)。
+    ///
+    /// # Panics
+    /// 検査モードで、`owners`が表を持たないとき、つまり速いモードのヒープのハンドルのとき。
+    pub fn with_owners(control: Arc<Control>, owners: &Owners) -> (r: Heap<M>)
+        ensures
+            r.wf(),
+            r.consistent(),
+            r.settled(),
+            r.region_spec() is None,
+            r.worker_spec() == 0,
+            r.unused(),
+    {
+        let owned = if M::CHECKED {
+            IdCounts::of(owners)
+        } else {
+            IdCounts::detached()
+        };
+        Self::counting(control, owned)
+    }
+
+    /// `with_control`と`with_owners`の本体。所有者の表の写しが`owned`である空のヒープ。
+    fn counting(control: Arc<Control>, owned: IdCounts) -> (r: Heap<M>)
+        ensures
+            r.wf(),
+            r.consistent(),
+            r.settled(),
+            r.region_spec() is None,
+            r.worker_spec() == 0,
+            r.unused(),
+    {
         let mut heap = Heap {
             core: Self::empty_core(control),
             region: ManuallyDrop::new(None),
@@ -857,9 +893,8 @@ impl<M: Mode> Heap<M> {
         &&& self.core.env@.region matches Some(s) ==> s@ == other.core.env@.region->0@
     }
 
-    /// 同じ `Control`、worker、付けた塊を持つ空のヒープ。回復が写し先にする
-    /// (docs/spec/object-model.md の「回復」)。検査モードでは、先に `Control` の ID の表を消す。写した物体を新しい表で
-    /// 数え、捨てるヒープの物体の数を残さないためである。
+    /// 同じ`Control`、worker、付けた塊を持つ空のヒープ。回復が写し先にする (docs/spec/object-model.mdの「回復」)。
+    /// 検査モードでは新しい所有者の表で数えるので、写した物体はその表で数え、捨てるヒープの数は古い表に残る。
     pub(crate) fn fresh(&self) -> (r: Heap<M>)
         requires
             self.wf(),
@@ -871,9 +906,6 @@ impl<M: Mode> Heap<M> {
             r.worker_spec() == self.worker_spec(),
             r.same_region(*self),
     {
-        if M::CHECKED {
-            self.owned.reset_ids();
-        }
         let mut r = Heap::with_control(self.control().clone());
         r.set_worker(self.worker);
         if let Some(a) = &*self.region {
@@ -2423,6 +2455,141 @@ impl<M: Mode> Heap<M> {
         r
     }
 
+    /// モデルが合っていた (`dup_ok`) ヒープ`pre`で、`audit_dup`が`w`に`Ok`を返して残したヒープである。
+    /// 検査モードの不死の物体なら、監査が`dup`の全部を済ませている。ほかは、構築中の物体を生きている物体に
+    /// しただけで、数はまだ書き換えていない。`dup_body`は、この状態から、`dup`が`pre`から進む状態に進む。
+    pub closed spec fn dup_halfway(&self, pre: Heap<M>, w: Word) -> bool {
+        &&& self.dummy == pre.dummy
+        &&& self.region == pre.region
+        &&& self.worker == pre.worker
+        &&& self.tokens == pre.tokens
+        &&& self.consistent()
+        &&& if M::CHECKED && w.is_ptr_spec() && pre.rc_value(w) == 0 {
+            &&& self.rc_value(w) == 0
+            &&& self.evolved(pre, w, 1)
+            &&& self.bumped(pre, w)
+        } else {
+            &&& self.dup_ok(w)
+            &&& self.core == pre.core.settled_view()
+        }
+    }
+
+    /// `dup`の監査 (docs/spec/object-model.mdの「核の操作」)。構築中の物体を生きている物体にし、
+    /// 検査モードでは`w`そのものに対する`dup`の確かめを全部行って`rc_increments`を数える。
+    /// 不死の物体では外に出ている参照の数も増やし、これが`dup`のその物体への仕事のすべてである。
+    /// 速いモードでは生きている物体にするだけである。
+    ///
+    /// # Safety
+    /// `dup`と同じ。
+    pub unsafe fn audit_dup(&mut self, w: Word) -> (r: Result<(), HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).wf(),
+            final(self).settled(),
+            final(self).values_moved(*old(self)),
+            final(self).same_tokens(*old(self)),
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok && *final(self) == old(self).settled_heap(),
+            M::CHECKED ==> (r is Ok <==> old(self).dup_passes(w)),
+            M::CHECKED && r is Ok ==> final(self).dup_passes(w),
+            old(self).dup_ok(w) ==> r is Ok && final(self).dup_halfway(*old(self), w),
+    {
+        let ghost c = self.dup_ok(w);
+        proof {
+            self.core.lemma_kept_live_settled();
+        }
+        self.settle();
+        proof {
+            self.core.lemma_values_refl();
+        }
+        if !M::CHECKED || !w.is_ptr() {
+            return Ok(());
+        }
+        let h = self.header_of(w);
+        let ghost mid = *self;
+        proof {
+            if c {
+                self.core.lemma_readable(w);
+            }
+        }
+        let counted = self.dup_audit(h, Ghost(w), Ghost(c))?;
+        if counted {
+            self.stats.rc_increments = self.stats.rc_increments.wrapping_add(1);
+        }
+        proof {
+            self.core.lemma_kept_live_trans(mid.core, old(self).core);
+            if c && mid.core.rc_of(h@.addr) == 0 {
+                self.lemma_evolved_settled(*old(self), mid, w, 1);
+            }
+        }
+        Ok(())
+    }
+
+    /// `audit_dup`の後の`dup`の本体。rcを動かす段だけを行い、確かめも数え上げもしない。
+    /// 検査モードの不死の物体は、監査が済ませたので触れない。速いモードでは`dup`そのものである。
+    ///
+    /// # Safety
+    /// `dup`と同じ。検査モードでは、呼ぶ側が直前に`w`で`audit_dup`を呼んで`Ok`を得ていて、
+    /// その後にヒープの操作を挟んでいない。
+    pub unsafe fn dup_body(&mut self, w: Word) -> (r: Result<(), HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            old(self).word_in(w),
+            M::CHECKED ==> old(self).settled() && old(self).dup_passes(w),
+            !M::CHECKED ==> old(self).dup_ok(w),
+        ensures
+            final(self).wf(),
+            r is Ok,
+            final(self).settled(),
+            final(self).same_tokens(*old(self)),
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            M::CHECKED ==> final(self).dup_passes(w),
+            M::CHECKED && !(w.is_ptr_spec() && old(self).rc_value(w) != 0) ==> *final(self) == *old(
+                self,
+            ),
+            forall|pre: Heap<M>| #[trigger]
+                old(self).dup_halfway(pre, w) ==> final(self).consistent() && final(self).evolved(
+                    pre,
+                    w,
+                    1,
+                ) && final(self).bumped(pre, w),
+    {
+        let ghost c = self.dup_ok(w);
+        if !M::CHECKED {
+            return unsafe { self.dup(w) };
+        }
+        proof {
+            self.core.lemma_values_refl();
+            self.core.lemma_kept_live_refl();
+        }
+        if !w.is_ptr() {
+            proof {
+                self.core.lemma_evolved_self(w.bits_spec());
+                if c && self.core.dom().contains(w.bits_spec()) {
+                    self.core.lemma_at(w.bits_spec());
+                    crate::word::lemma_aligned_is_ptr(w.bits_spec());
+                }
+            }
+            return Ok(());
+        }
+        let h = self.header_of(w);
+        proof {
+            if c {
+                self.core.lemma_readable(w);
+            }
+        }
+        self.dup_step(h, Ghost(w), Ghost(c));
+        Ok(())
+    }
+
     /// `dup` の遅い道。共有、不死、張り付いた数と、検査モードの仕事を受け持つ。
     #[cold]
     #[inline(never)]
@@ -2455,11 +2622,69 @@ impl<M: Mode> Heap<M> {
                 old(self).dup_passes(v) ==> final(self).dup_passes(v),
     {
         proof {
-            self.lemma_checks_pass(w);
             self.core.lemma_values_refl();
             self.core.lemma_kept_live_refl();
         }
+        let counted = self.dup_audit(h, Ghost(w), Ghost(c))?;
+        self.dup_step(h, Ghost(w), Ghost(c));
+        if counted {
+            self.stats.rc_increments = self.stats.rc_increments.wrapping_add(1);
+        }
+        Ok(())
+    }
+
+    /// `dup`の監査。検査モードの確かめと、不死の物体 (rcが0) では操作の全部を行う。
+    #[inline(always)]
+    fn dup_audit(&mut self, h: *mut Header, Ghost(w): Ghost<Word>, Ghost(c): Ghost<bool>) -> (r:
+        Result<bool, HeapError>)
+        requires
+            old(self).word_in(w),
+            w.is_ptr_spec() && w.bits_spec() == h@.addr,
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).core.has(h@.addr),
+            h == old(self).core.block(h@.addr),
+            !M::CHECKED ==> c,
+            c ==> old(self).consistent() && old(self).core.state(h@.addr) == BlockState::Live
+                && !old(self).core.lin(h@.addr) && old(self).owned(w),
+        ensures
+            r is Err ==> *final(self) == *old(self),
+            !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
+            c ==> r is Ok,
+            M::CHECKED && old(self).dup_passes(w) ==> r is Ok,
+            M::CHECKED && r is Ok ==> old(self).dup_passes(w) && old(self).core.perm(
+                h@.addr,
+            ).prefix is Some,
+            !(M::CHECKED && old(self).core.rc_of(h@.addr) == 0) ==> *final(self) == *old(self),
+            final(self).stats == old(self).stats,
+            final(self).core.rc_of(h@.addr) == old(self).core.rc_of(h@.addr),
+            M::CHECKED && old(self).core.rc_of(h@.addr) == 0 && r is Ok ==> {
+                &&& final(self).core.values_changed(old(self).core)
+                &&& final(self).dummy == old(self).dummy
+                &&& final(self).region == old(self).region
+                &&& final(self).worker == old(self).worker
+                &&& final(self).wf()
+                &&& final(self).same_tokens(*old(self))
+                &&& (c ==> final(self).consistent() && final(self).evolved(*old(self), w, 1)
+                    && final(self).bumped(*old(self), w))
+                &&& final(self).core.kept_live(old(self).core)
+                &&& forall|v: Word| #[trigger] old(self).dup_passes(v) ==> final(self).dup_passes(v)
+            },
+    {
+        proof {
+            self.lemma_checks_pass(w);
+            self.core.lemma_values_refl();
+            self.core.lemma_kept_live_refl();
+            reveal(Core::building_wf);
+        }
         let counted = self.checked_dup(h)?;
+        if !M::CHECKED {
+            return Ok(false);
+        }
+        let n = self.core.rc_get(h);
+        if n != 0 {
+            return Ok(counted);
+        }
         let ghost s0 = self.core;
         proof {
             s0.lemma_shape(h@.addr);
@@ -2469,20 +2694,11 @@ impl<M: Mode> Heap<M> {
                 }
                 s0.lemma_frame_refl();
             }
-            if M::CHECKED {
-                reveal(Core::building_wf);
-                assert(s0.state(h@.addr) == BlockState::Live);
-            }
+            assert(s0.state(h@.addr) == BlockState::Live);
+            s0.lemma_code_state(h@.addr);
             if !s0.dom().contains(h@.addr) {
-                // 塊の物体は rc 0 なので、書き込む道に進むのはこのヒープの物体だけである
                 s0.lemma_region_at(h@.addr);
             }
-        }
-        let n = self.core.rc_get(h);
-        match rc::dup_step(n) {
-            DupStep::Store(m) => self.core.rc_put(h, m),
-            DupStep::Shared => self.core.rc_up_shared(h),
-            DupStep::Skip => {},
         }
         let ghost mid = self.core;
         self.core.count_ghost(
@@ -2496,7 +2712,6 @@ impl<M: Mode> Heap<M> {
         proof {
             self.core.lemma_values_rc(mid, s0, h@.addr);
             self.core.lemma_kept_live_at(s0, h@.addr);
-            // rc を動かしても、rc が正の物体の前置き (持ち主) は変わらない
             assert forall|v: Word| #[trigger] old(self).dup_passes(v) implies self.dup_passes(
                 v,
             ) by {
@@ -2505,18 +2720,13 @@ impl<M: Mode> Heap<M> {
                     assert(self.core.perms@[b] == s0.perms@[b]);
                 }
             }
-        }
-        if counted {
-            self.stats.rc_increments = self.stats.rc_increments.wrapping_add(1);
-        }
-        proof {
             if c {
                 self.lemma_after_step(*old(self), s0, h@.addr, w, 1);
             } else {
                 self.lemma_published_safe(*old(self));
             }
         }
-        if M::CHECKED && n == 0 && counted {
+        if counted {
             let ghost mid = *self;
             self.count_immortal(h, true);
             proof {
@@ -2536,7 +2746,97 @@ impl<M: Mode> Heap<M> {
                 }
             }
         }
-        Ok(())
+        Ok(counted)
+    }
+
+    /// `dup`の本体。rcを動かす段である。検査モードの不死の物体は、監査が済ませている。
+    #[inline(always)]
+    fn dup_step(&mut self, h: *mut Header, Ghost(w): Ghost<Word>, Ghost(c): Ghost<bool>)
+        requires
+            old(self).word_in(w),
+            w.is_ptr_spec() && w.bits_spec() == h@.addr,
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).core.has(h@.addr),
+            h == old(self).core.block(h@.addr),
+            !M::CHECKED ==> c,
+            c ==> old(self).consistent() && old(self).core.state(h@.addr) == BlockState::Live
+                && !old(self).core.lin(h@.addr) && old(self).owned(w),
+            M::CHECKED ==> old(self).dup_passes(w),
+        ensures
+            M::CHECKED && old(self).core.rc_of(h@.addr) == 0 ==> *final(self) == *old(self),
+            final(self).stats == old(self).stats,
+            !(M::CHECKED && old(self).core.rc_of(h@.addr) == 0) ==> {
+                &&& final(self).core.values_changed(old(self).core)
+                &&& final(self).dummy == old(self).dummy
+                &&& final(self).region == old(self).region
+                &&& final(self).worker == old(self).worker
+                &&& final(self).wf()
+                &&& final(self).same_tokens(*old(self))
+                &&& (c ==> final(self).consistent() && final(self).evolved(*old(self), w, 1)
+                    && final(self).bumped(*old(self), w))
+                &&& final(self).core.kept_live(old(self).core)
+                &&& forall|v: Word| #[trigger] old(self).dup_passes(v) ==> final(self).dup_passes(v)
+            },
+    {
+        let n = self.core.rc_get(h);
+        if M::CHECKED && n == 0 {
+            return;
+        }
+        let ghost s0 = self.core;
+        proof {
+            self.lemma_checks_pass(w);
+            self.core.lemma_values_refl();
+            self.core.lemma_kept_live_refl();
+            s0.lemma_shape(h@.addr);
+            if c {
+                if s0.dom().contains(h@.addr) {
+                    s0.lemma_at(h@.addr);
+                }
+                s0.lemma_frame_refl();
+            }
+            if M::CHECKED {
+                reveal(Core::building_wf);
+                assert(s0.state(h@.addr) == BlockState::Live);
+                s0.lemma_code_state(h@.addr);
+            }
+            if !s0.dom().contains(h@.addr) {
+                // 塊の物体はrcが0なので、書き込む道に進むのはこのヒープの物体だけである
+                s0.lemma_region_at(h@.addr);
+            }
+        }
+        match rc::dup_step(n) {
+            DupStep::Store(m) => self.core.rc_put(h, m),
+            DupStep::Shared => self.core.rc_up_shared(h),
+            DupStep::Skip => {},
+        }
+        let ghost mid = self.core;
+        self.core.count_ghost(
+            Ghost(s0),
+            Ghost(h@.addr),
+            Ghost(true),
+            Ghost(None),
+            Ghost(c),
+            Ghost(false),
+        );
+        proof {
+            self.core.lemma_values_rc(mid, s0, h@.addr);
+            self.core.lemma_kept_live_at(s0, h@.addr);
+            // rcを動かしても、rcが正の物体の前置き (持ち主) は変わらない
+            assert forall|v: Word| #[trigger] old(self).dup_passes(v) implies self.dup_passes(
+                v,
+            ) by {
+                let b = v.bits_spec();
+                if v.is_ptr_spec() && s0.dom().contains(b) && b != h@.addr {
+                    assert(self.core.perms@[b] == s0.perms@[b]);
+                }
+            }
+            if c {
+                self.lemma_after_step(*old(self), s0, h@.addr, w, 1);
+            } else {
+                self.lemma_published_safe(*old(self));
+            }
+        }
     }
 
     /// 参照を1つ手放す。LIR の `decref` と `drop` は、どちらもこれで実行する (docs/spec/object-model.md の「核の操作」)。
@@ -2722,7 +3022,228 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// 参照を1つ手放し、最後の参照なら真を返す。箱はまだ空けない。`edge` は、解放の連鎖が手放す親の辺である。`c` は、
+    /// モデルが合っていた (`decref_ok`) ヒープ`pre`で、`audit_decref`が`w`に`Ok`を返して残したヒープである。
+    /// 形は`dup_halfway`と同じである。`decref_body`は、この状態から、`decref`が`pre`から進む状態に進む。
+    pub closed spec fn decref_halfway(&self, pre: Heap<M>, w: Word) -> bool {
+        &&& self.dummy == pre.dummy
+        &&& self.region == pre.region
+        &&& self.worker == pre.worker
+        &&& self.consistent()
+        &&& if M::CHECKED && w.is_ptr_spec() && pre.rc_value(w) == 0 {
+            &&& self.rc_value(w) == 0
+            &&& self.evolved(pre, w, -1)
+        } else {
+            &&& self.decref_ok(w)
+            &&& self.core == pre.core.settled_view()
+        }
+    }
+
+    /// 検査モードの`audit_decref`の確かめが通る。構築中の物体を生きている物体にした後で、`w`の物体は生きていて、
+    /// 不死なら外に出ている参照が残り、共有なら`lin`ビットを持たず、局所なら持ち主が今のworkerである。
+    /// `decref`が`w`そのものに行う確かめと同じである。
+    pub closed spec fn audit_decref_passes(&self, w: Word) -> bool {
+        let h = w.bits_spec();
+        w.is_ptr_spec() ==> self.core.has(h) && self.settled_heap().decref_passes(h)
+    }
+
+    /// `audit_decref`が`w`で通った。物体は生きていて、共有の物体は`lin`ビットを持たず、
+    /// 局所の物体は今のworkerのものである。
+    pub closed spec fn decref_audited(&self, w: Word) -> bool {
+        let h = w.bits_spec();
+        w.is_ptr_spec() ==> self.core.has(h) && self.core.state(h) == BlockState::Live
+            && self.release_ready(h)
+    }
+
+    /// `decref`の監査 (docs/spec/object-model.mdの「核の操作」)。構築中の物体を生きている物体にし、
+    /// 検査モードでは`w`そのものに対する`decref`の確かめを全部行って`rc_decrements`を数える。
+    /// 不死の物体では外に出ている参照の数も下げ、これが`decref`のその物体への仕事のすべてである。
+    /// 速いモードでは生きている物体にするだけである。
+    ///
+    /// # Safety
+    /// `decref`と同じ。
+    pub unsafe fn audit_decref(&mut self, w: Word) -> (r: Result<(), HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).wf(),
+            final(self).settled(),
+            final(self).same_tokens(*old(self)),
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok && *final(self) == old(self).settled_heap(),
+            M::CHECKED ==> (r is Ok <==> old(self).audit_decref_passes(w)),
+            M::CHECKED && r is Ok ==> final(self).decref_audited(w),
+            old(self).decref_ok(w) ==> r is Ok || chain_err(r),
+            old(self).decref_ok(w) && r is Ok ==> final(self).decref_halfway(*old(self), w),
+    {
+        let ghost c = self.decref_ok(w);
+        proof {
+            self.core.lemma_kept_live_settled();
+        }
+        self.settle();
+        if !M::CHECKED || !w.is_ptr() {
+            proof {
+                if c {
+                    self.core.lemma_evolved_self(w.bits_spec());
+                }
+            }
+            return Ok(());
+        }
+        let h = self.header_of(w);
+        let ghost mid = *self;
+        proof {
+            reveal(Core::building_wf);
+            if c {
+                self.core.lemma_readable(w);
+                mid.core.lemma_frame_refl();
+            }
+        }
+        let counted = self.release_audit(h, Ghost(None), Ghost(c))?;
+        if counted {
+            self.stats.rc_decrements = self.stats.rc_decrements.wrapping_add(1);
+        }
+        proof {
+            self.core.lemma_kept_live_trans(mid.core, old(self).core);
+            self.lemma_safe_frame(mid);
+            if c && mid.core.rc_of(h@.addr) == 0 {
+                self.lemma_after_step(mid, mid.core, h@.addr, w, -1);
+                self.lemma_evolved_settled(*old(self), mid, w, -1);
+            }
+        }
+        Ok(())
+    }
+
+    /// `audit_decref`の後の`decref`の本体。rcを動かす段と、最後の参照だったときの物体の解放、
+    /// 子へのふつうの検査つきの`decref`を行い、`w`そのものには確かめも数え上げもしない。
+    /// 検査モードの不死の物体は、監査が済ませたので触れない。速いモードでは`decref`そのものである。
+    ///
+    /// # Safety
+    /// `decref`と同じ。検査モードでは、呼ぶ側が直前に`w`で`audit_decref`を呼んで`Ok`を得ていて、
+    /// その後にヒープの操作を挟んでいない。
+    pub unsafe fn decref_body(&mut self, w: Word) -> (r: Result<(), HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            old(self).word_in(w),
+            M::CHECKED ==> old(self).settled() && old(self).decref_audited(w),
+            !M::CHECKED ==> old(self).decref_ok(w),
+        ensures
+            final(self).wf(),
+            final(self).settled(),
+            final(self).same_tokens(*old(self)),
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            !M::CHECKED ==> r is Ok,
+            M::CHECKED && !(w.is_ptr_spec() && old(self).rc_value(w) != 0) ==> r is Ok,
+            M::CHECKED && !(w.is_ptr_spec() && old(self).rc_value(w) != 0) ==> *final(self) == *old(
+                self,
+            ),
+            forall|pre: Heap<M>| #[trigger]
+                old(self).decref_halfway(pre, w) ==> (r is Ok || chain_err(r)) && (r is Ok
+                    ==> final(self).consistent() && final(self).evolved(pre, w, -1)),
+    {
+        let ghost c = self.decref_ok(w);
+        if !M::CHECKED {
+            return unsafe { self.decref(w) };
+        }
+        proof {
+            self.core.lemma_kept_live_refl();
+        }
+        if !w.is_ptr() {
+            proof {
+                self.core.lemma_evolved_self(w.bits_spec());
+            }
+            return Ok(());
+        }
+        let h = self.header_of(w);
+        let ghost s0 = self.core;
+        proof {
+            if c {
+                self.core.lemma_readable(w);
+                s0.lemma_frame_refl();
+            }
+        }
+        let last = self.release_step(h, Ghost(None), Ghost(c));
+        if last {
+            let ghost s1 = self.core;
+            let r = self.free_chain(h, Ghost(c));
+            proof {
+                self.core.lemma_kept_live_trans(s1, s0);
+                self.core.lemma_same_words(s1);
+                if c && r is Ok {
+                    self.lemma_after_chain(*old(self), s0, s1, h@.addr, w);
+                }
+                self.lemma_safe_frame(*old(self));
+            }
+            r
+        } else {
+            proof {
+                if c && s0.rc_of(h@.addr) != 0 {
+                    self.lemma_after_step(*old(self), s0, h@.addr, w, -1);
+                }
+                self.lemma_safe_frame(*old(self));
+            }
+            Ok(())
+        }
+    }
+
+    /// `checked_decref`の確かめは、不死の物体の外に出ている参照の数を除いて成り立つ。
+    /// その数は監査がすでに下げている。
+    closed spec fn release_ready(&self, h: usize) -> bool {
+        let p = self.core.perm(h);
+        let rc = self.core.rc_of(h);
+        &&& self.core.state(h) == BlockState::Live || self.core.state(h) == BlockState::Building
+        &&& p.prefix is Some
+        &&& rc < 0 ==> !self.core.lin(h)
+        &&& rc > 0 ==> p_owner(p) == self.worker
+    }
+
+    /// 参照を1つ手放し終えた後の約束 (`Ok(last)`のときの`release_ref`の事後条件)。
+    closed spec fn release_done(
+        &self,
+        old: Heap<M>,
+        h: *mut Header,
+        edge: Option<Pos>,
+        c: bool,
+        last: bool,
+    ) -> bool {
+        &&& self.building == old.building
+        &&& self.core.pages == old.core.pages
+        &&& self.core.model@.tokens == old.core.model@.tokens
+        &&& self.tokens == old.tokens
+        &&& (c ==> self.core.full())
+        &&& (M::CHECKED ==> self.core.safe_wf())
+        &&& self.core.env == old.core.env
+        &&& self.dummy == old.dummy
+        &&& self.region == old.region
+        &&& self.worker == old.worker
+        &&& (c ==> self.core.released(old.core, h@.addr, edge, last))
+        &&& self.core.dom() == old.core.dom()
+        &&& (forall|b: usize| b != h@.addr ==> #[trigger] self.core.perms@[b] == old.core.perms@[b])
+        &&& (forall|b: usize| b != h@.addr ==> #[trigger] self.core.state(b) == old.core.state(b))
+        &&& (forall|w: Word| #[trigger] self.core.word_ok(w) == old.core.word_ok(w))
+        &&& self.core.model@.building == old.core.model@.building
+        &&& self.core.active() == old.core.active()
+        &&& old.core.state(h@.addr) == BlockState::Live
+        &&& self.core.state(h@.addr) == if last {
+            BlockState::Dying
+        } else {
+            BlockState::Live
+        }
+        &&& self.core.perm(h@.addr).meta == old.core.perm(h@.addr).meta
+        &&& self.core.perm(h@.addr).slots == old.core.perm(h@.addr).slots
+        &&& self.core.perm(h@.addr).text == old.core.perm(h@.addr).text
+        &&& self.core.kept_live(old.core)
+        &&& (M::CHECKED && old.decref_twice_passes(h@.addr) ==> !last && self.decref_passes(
+            h@.addr,
+        ))
+    }
+
+    /// 参照を1つ手放し、最後の参照なら真を返す。箱はまだ空けない。`edge`は、解放の連鎖が手放す親の辺である。`c`は、
     /// モデルが合っていてモデルの前提を守った道である。
     fn release_ref(
         &mut self,
@@ -2790,7 +3311,150 @@ impl<M: Mode> Heap<M> {
                 HeapError,
             >(false) && final(self).decref_passes(h@.addr),
     {
+        let ghost stepped = c && !(M::CHECKED && self.core.rc_of(h@.addr) == 0);
+        let counted = self.release_audit(h, Ghost(edge), Ghost(c))?;
+        let last = self.release_step(h, Ghost(edge), Ghost(stepped));
+        if counted {
+            self.stats.rc_decrements = self.stats.rc_decrements.wrapping_add(1);
+        }
+        Ok(last)
+    }
+
+    /// 参照を1つ手放す監査。検査モードの確かめと、不死の物体 (rcが0) ではその段の全部を行う。
+    #[inline(always)]
+    fn release_audit(
+        &mut self,
+        h: *mut Header,
+        Ghost(edge): Ghost<Option<Pos>>,
+        Ghost(c): Ghost<bool>,
+    ) -> (r: Result<bool, HeapError>)
+        requires
+            !M::CHECKED ==> c,
+            c ==> old(self).core.full(),
+            M::CHECKED ==> old(self).core.safe_wf(),
+            old(self).core.checked() == M::CHECKED,
+            old(self).core.has(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.model@.building is None,
+            c ==> old(self).core.state(h@.addr) == BlockState::Live,
+            old(self).region_tied(),
+            c ==> (edge matches Some(e) ==> old(self).core.model@.edges.dom().contains(e) && old(
+                self,
+            ).core.model@.edges[e] == h@.addr && old(self).core.state(e.0) == BlockState::Dying),
+            c ==> (edge is None && old(self).core.rc_of(h@.addr) != 0 ==> old(self).core.ext(
+                h@.addr,
+            ) >= 1),
+        ensures
+            c ==> r is Ok || chain_err(r),
+            !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
+            r is Err ==> *final(self) == *old(self),
+            M::CHECKED ==> (r is Ok <==> old(self).decref_passes(h@.addr)),
+            M::CHECKED && r is Ok ==> final(self).release_ready(h@.addr),
+            final(self).core.rc_of(h@.addr) == old(self).core.rc_of(h@.addr),
+            !(M::CHECKED && old(self).core.rc_of(h@.addr) == 0) ==> *final(self) == *old(self),
+            final(self).stats == old(self).stats,
+            M::CHECKED && old(self).core.rc_of(h@.addr) == 0 && r is Ok
+                ==> final(self).release_done(*old(self), h, edge, c, false),
+    {
         let counted = self.checked_decref(h)?;
+        if !M::CHECKED {
+            return Ok(false);
+        }
+        let n = self.core.rc_get(h);
+        if n != 0 {
+            return Ok(counted);
+        }
+        let ghost s0 = self.core;
+        proof {
+            s0.lemma_shape(h@.addr);
+            if c {
+                if s0.dom().contains(h@.addr) {
+                    s0.lemma_at(h@.addr);
+                }
+            }
+            reveal(Core::building_wf);
+            assert(s0.state(h@.addr) == BlockState::Live);
+            s0.lemma_code_state(h@.addr);
+            if !s0.dom().contains(h@.addr) {
+                s0.lemma_region_at(h@.addr);
+            }
+            if c {
+                let rc = s0.rc_of(h@.addr);
+                let o = Obj { rc, count: s0.model@.refs[h@.addr], stuck: s0.model@.stuck[h@.addr] };
+                assert(false == (rc != 0 && decref_next(o).freed));
+            }
+        }
+        self.core.count_ghost(
+            Ghost(s0),
+            Ghost(h@.addr),
+            Ghost(false),
+            Ghost(edge),
+            Ghost(c),
+            Ghost(false),
+        );
+        let ghost s1 = self.core;
+        if counted {
+            self.count_immortal(h, false);
+            proof {
+                if c {
+                    self.core.lemma_recounted_released(s1, s0, h@.addr, edge);
+                }
+            }
+        }
+        proof {
+            assert(self.core.model == s1.model);
+            assert forall|b: usize| b != h@.addr implies #[trigger] self.core.state(b) == s0.state(
+                b,
+            ) by {
+                assert(s1.state(b) == s0.state(b));
+            }
+            assert(self.core.active() =~= s0.active());
+            self.core.lemma_kept_live_at(s0, h@.addr);
+        }
+        Ok(counted)
+    }
+
+    /// 参照を1つ手放す本体。rcを動かす段である。検査モードの不死の物体は、監査が済ませている。
+    #[inline(always)]
+    fn release_step(
+        &mut self,
+        h: *mut Header,
+        Ghost(edge): Ghost<Option<Pos>>,
+        Ghost(c): Ghost<bool>,
+    ) -> (last: bool)
+        requires
+            !M::CHECKED ==> c,
+            c ==> old(self).core.full(),
+            M::CHECKED ==> old(self).core.safe_wf(),
+            old(self).core.checked() == M::CHECKED,
+            old(self).core.has(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.model@.building is None,
+            c ==> old(self).core.state(h@.addr) == BlockState::Live,
+            old(self).region_tied(),
+            c ==> (edge matches Some(e) ==> old(self).core.model@.edges.dom().contains(e) && old(
+                self,
+            ).core.model@.edges[e] == h@.addr && old(self).core.state(e.0) == BlockState::Dying),
+            c ==> (edge is None && old(self).core.rc_of(h@.addr) != 0 ==> old(self).core.ext(
+                h@.addr,
+            ) >= 1),
+            M::CHECKED ==> old(self).release_ready(h@.addr),
+        ensures
+            final(self).stats == old(self).stats,
+            M::CHECKED && old(self).core.rc_of(h@.addr) == 0 ==> *final(self) == *old(self)
+                && !last,
+            !(M::CHECKED && old(self).core.rc_of(h@.addr) == 0) ==> final(self).release_done(
+                *old(self),
+                h,
+                edge,
+                c,
+                last,
+            ),
+    {
+        let n = self.core.rc_get(h);
+        if M::CHECKED && n == 0 {
+            return false;
+        }
         let ghost s0 = self.core;
         proof {
             s0.lemma_shape(h@.addr);
@@ -2814,7 +3478,6 @@ impl<M: Mode> Heap<M> {
         } else {
             0
         };
-        let n = self.core.rc_get(h);
         let last = match rc::decref_step(n) {
             DecrefStep::Store(m) => {
                 self.core.rc_put(h, m);
@@ -2848,14 +3511,6 @@ impl<M: Mode> Heap<M> {
             Ghost(last),
         );
         let ghost s1 = self.core;
-        if M::CHECKED && n == 0 && counted {
-            self.count_immortal(h, false);
-            proof {
-                if c {
-                    self.core.lemma_recounted_released(s1, s0, h@.addr, edge);
-                }
-            }
-        }
         proof {
             assert(self.core.model == s1.model);
             assert forall|b: usize| b != h@.addr implies #[trigger] self.core.state(b) == s0.state(
@@ -2866,10 +3521,7 @@ impl<M: Mode> Heap<M> {
             assert(self.core.active() =~= s0.active());
             self.core.lemma_kept_live_at(s0, h@.addr);
         }
-        if counted {
-            self.stats.rc_decrements = self.stats.rc_decrements.wrapping_add(1);
-        }
-        Ok(last)
+        last
     }
 
     /// 最後の参照を失った `root` を空け、それで最後の参照を失った物体を続けて空ける。
@@ -3507,6 +4159,15 @@ impl<M: Mode> Heap<M> {
         &&& self.core.scanned(h, i)
     }
 
+    /// 検査モードの`set_field`と`set_raw`が、書く物体に行う確かめが通る。物体は読めて、ほかのスレッドが読めず
+    /// (`unshared`)、局所の物体は持ち主が今のworkerである。
+    pub closed spec fn store_passes(&self, w: Word) -> bool {
+        let h = w.bits_spec();
+        &&& self.readable(w)
+        &&& self.unshared(w)
+        &&& self.core.rc_of(h) > 0 ==> p_owner(self.core.perm(h)) == self.worker
+    }
+
     pub closed spec fn tag_of(&self, w: Word) -> u16 {
         bits_tag(self.core.meta_bits(w.bits_spec()))
     }
@@ -3620,6 +4281,14 @@ impl<M: Mode> Heap<M> {
         Ok(())
     }
 
+    /// `is_unique`と`is_last`の確かめが通った。物体は読めて、局所の物体は今のworkerのものである。
+    pub closed spec fn unique_passes(&self, w: Word) -> bool {
+        let h = w.bits_spec();
+        w.is_ptr_spec() ==> self.readable(w) && (self.core.rc_of(h) > 0 ==> p_owner(
+            self.core.perm(h),
+        ) == self.worker)
+    }
+
     /// rc が 1 か。reuse とその場の書き換えに使う。共有、不死、張り付いた数は、この比較でみな偽になる。
     ///
     /// # Safety
@@ -3632,6 +4301,7 @@ impl<M: Mode> Heap<M> {
         ensures
             r matches Ok(u) ==> u == (w.is_ptr_spec() && self.rc_value(w) == 1),
             self.consistent() && self.settleable() && self.readable(w) && self.owned(w) ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> self.unique_passes(w)),
     {
         if !w.is_ptr() {
             return Ok(false);
@@ -3639,6 +4309,9 @@ impl<M: Mode> Heap<M> {
         let h = self.header_of(w);
         proof {
             self.lemma_checks_pass(w);
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
+            }
         }
         self.checked_live(h)?;
         let rc = self.core.rc_get(h);
@@ -3659,6 +4332,7 @@ impl<M: Mode> Heap<M> {
             r matches Ok(l) ==> l == (w.is_ptr_spec() && (self.rc_value(w) == 1 || self.rc_value(w)
                 == -1)),
             self.consistent() && self.settleable() && self.readable(w) && self.owned(w) ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> self.unique_passes(w)),
     {
         if !w.is_ptr() {
             return Ok(false);
@@ -3666,6 +4340,9 @@ impl<M: Mode> Heap<M> {
         let h = self.header_of(w);
         proof {
             self.lemma_checks_pass(w);
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
+            }
         }
         self.checked_live(h)?;
         let last = self.core.rc_last(h);
@@ -3770,6 +4447,8 @@ impl<M: Mode> Heap<M> {
                 == BlockState::Building,
         ensures
             r is Ok ==> self.unshared(w),
+            r is Ok ==> (self.core.rc_of(h@.addr) > 0 ==> p_owner(self.core.perm(h@.addr))
+                == self.worker),
             self.consistent() && self.writable(w) && self.owned(w) ==> r is Ok,
             self.core.rc_of(h@.addr) > 0 && p_owner(self.core.perm(h@.addr)) == self.worker
                 ==> r is Ok,
@@ -3865,7 +4544,7 @@ impl<M: Mode> Heap<M> {
             ) ==> r is Ok,
             r matches Ok(v) ==> (self.consistent() && self.settleable() && self.readable(w)
                 ==> self.readable(v)),
-            M::CHECKED && self.readable(w) && self.scanned_at(w, i as int) ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> self.readable(w) && self.scanned_at(w, i as int)),
     {
         let h = self.header_of(w);
         proof {
@@ -3924,7 +4603,20 @@ impl<M: Mode> Heap<M> {
             ).scanned_at(w, i as int) && old(self).owned(w) ==> r is Ok && final(self).consistent(),
             M::CHECKED && old(self).set_passes(w, i as int) ==> r is Ok,
             M::CHECKED && old(self).immortal_set_passes(w, i as int) ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> old(self).store_passes(w) && old(self).scanned_at(
+                w,
+                i as int,
+            )),
+            M::CHECKED && r is Ok ==> final(self).store_passes(w) && final(self).scanned_at(
+                w,
+                i as int,
+            ),
     {
+        proof {
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
+            }
+        }
         let h = self.header_of(w);
         let ghost c = self.consistent() && self.writable(w) && self.holds(v) && self.scanned_at(
             w,
@@ -3998,11 +4690,15 @@ impl<M: Mode> Heap<M> {
             r matches Ok(x) ==> x == self.word_at(w, i as int).bits_spec() as u64,
             self.consistent() && self.settleable() && self.readable(w) && self.raw_at(w, i as int)
                 ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> self.readable(w) && self.raw_at(w, i as int)),
     {
         let h = self.header_of(w);
         proof {
             if self.consistent() && self.settleable() && self.readable(w) {
                 self.core.lemma_readable(w);
+            }
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
             }
         }
         self.checked_live(h)?;
@@ -4031,7 +4727,20 @@ impl<M: Mode> Heap<M> {
             old(self).consistent() && old(self).writable(w) && old(self).raw_at(w, i as int) && old(
                 self,
             ).owned(w) ==> r is Ok && final(self).consistent(),
+            M::CHECKED ==> (r is Ok <==> old(self).store_passes(w) && old(self).raw_at(
+                w,
+                i as int,
+            )),
+            M::CHECKED && r is Ok ==> final(self).store_passes(w) && final(self).raw_at(
+                w,
+                i as int,
+            ),
     {
+        proof {
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
+            }
+        }
         let h = self.header_of(w);
         let ghost c = self.consistent() && self.writable(w) && self.raw_at(w, i as int)
             && self.owned(w);
@@ -4114,11 +4823,15 @@ impl<M: Mode> Heap<M> {
                 ==> r is Ok,
             r matches Ok(v) ==> (self.consistent() && self.settleable() && self.readable(w)
                 ==> self.readable(v)),
+            M::CHECKED ==> (r is Ok <==> self.readable(w) && i < self.count_of(w)),
     {
         let h = self.header_of(w);
         proof {
             if self.consistent() && self.settleable() && self.readable(w) {
                 self.core.lemma_readable(w);
+            }
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
             }
         }
         self.checked_live(h)?;
@@ -4432,6 +5145,8 @@ impl<M: Mode> Heap<M> {
             r matches Ok(n) ==> n == self.int_value(w),
             self.consistent() && self.settleable() && self.readable(w) && (w.is_ptr_spec()
                 ==> self.kind_of(w) == Kind::BigInt) ==> r is Ok,
+            M::CHECKED && w.is_ptr_spec() ==> (r is Ok <==> self.readable(w) && self.kind_of(w)
+                == Kind::BigInt),
     {
         if w.is_imm() {
             return Ok(w.imm_value());
@@ -4440,6 +5155,9 @@ impl<M: Mode> Heap<M> {
         proof {
             if self.consistent() && self.settleable() && self.readable(w) {
                 self.core.lemma_readable(w);
+            }
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
             }
         }
         self.checked_live(h)?;
@@ -4475,11 +5193,17 @@ impl<M: Mode> Heap<M> {
             r matches Ok(b) ==> b == self.float_bits(w),
             self.consistent() && self.settleable() && self.readable(w) && (self.kind_of(w)
                 == Kind::Float || w == self.dummy_word()) ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> self.readable(w) && (self.kind_of(w) == Kind::Float
+                || self.kind_of(w) == Kind::BigInt && w.bits_spec()
+                == self.dummy_word().bits_spec())),
     {
         let h = self.header_of(w);
         proof {
             if self.consistent() && self.settleable() && self.readable(w) {
                 self.core.lemma_readable(w);
+            }
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
             }
         }
         self.checked_live(h)?;

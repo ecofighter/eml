@@ -184,7 +184,6 @@ fn spin_two(p.0: unit) -> tobj {
 /// 出力を比べる。逐次の検査モードの出力と結果を返す。
 fn run_par_lir(text: &str, max_depth: usize) -> (String, Result<Finished, RuntimeError>) {
     let program = trusted(text);
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}\n{text}"));
     run_par_program(&program, max_depth)
 }
 

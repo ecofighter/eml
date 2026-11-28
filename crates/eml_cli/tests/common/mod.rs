@@ -133,6 +133,9 @@ pub struct Marks {
     pub gui_stub: bool,
     /// ネイティブで流さない。理由は`docs/spec/native.md`の「VMとの違い」の項目を名指す (docs/implementation/testing.mdの「ネイティブで流す」)。
     pub native_skip: bool,
+    /// 2つの実行系を検査モードで比べるとき、このファイルの数を比べない。理由は`docs/spec/native.md`の「VMとの違い」の項目を
+    /// 名指す (docs/implementation/testing.mdの「ネイティブで流す」)。
+    pub native_stats_skip: bool,
 }
 
 /// テストのエントリか。分類の直下のファイルか、ディレクトリのテストの `main.<extension>` である。ディレクトリの
@@ -147,8 +150,9 @@ pub fn is_entry(root: &Path, path: &Path, extension: &str) -> bool {
             .is_some_and(|name| name.to_string_lossy() == format!("main.{extension}"))
 }
 
-/// `leading_marks`の誤りと、許さない場所のシグナルの印とworkerの印と時計の印と深さの印と確保量の印とGUIの印とネイティブの印でpanicする。`shown`は
-/// 文言に出すファイルの名前である。この7つの印を許すのは、`run_entry`が真のとき (`run/`と`run-fail/`のエントリ) だけである。
+/// `leading_marks`の誤りと、許さない場所のシグナルの印とworkerの印と時計の印と深さの印と確保量の印とGUIの印とネイティブの印と
+/// ネイティブの数の印でpanicする。`shown`は文言に出すファイルの名前である。この8つの印を許すのは、`run_entry`が真のとき
+/// (`run/`と`run-fail/`のエントリ) だけである。
 pub fn marks_of(shown: &str, text: &str, leader: &str, run_entry: bool) -> Marks {
     let marks = leading_marks(text, leader).unwrap_or_else(|message| panic!("{shown}: {message}"));
     if !run_entry && !marks.signals.is_empty() {
@@ -172,11 +176,15 @@ pub fn marks_of(shown: &str, text: &str, leader: &str, run_entry: bool) -> Marks
     if !run_entry && marks.native_skip {
         panic!("{shown}: native marks are not supported here");
     }
+    if !run_entry && marks.native_stats_skip {
+        panic!("{shown}: native-stats marks are not supported here");
+    }
     marks
 }
 
 /// 先頭の印の行を読む。印の行は、shebang の行があればその後ろから続く、`<leader> windows:`、`<leader> signal:`、
-/// `<leader> workers:`、`<leader> clock:`、`<leader> max-depth:`、`<leader> max-bytes:`、`<leader> gui:`、`<leader> native:`で始まる行の並びで、8種類をどの順に混ぜてもよい。
+/// `<leader> workers:`、`<leader> clock:`、`<leader> max-depth:`、`<leader> max-bytes:`、`<leader> gui:`、`<leader> native:`、
+/// `<leader> native-stats:`で始まる行の並びで、9種類をどの順に混ぜてもよい。
 /// 深さの印と確保量の印は1つずつしか書けない。後ろの印が黙って前の印を上書きしないよう、重ねて書くと誤りにする。
 /// shebang は1行目にしか書けないので、印はその後ろに置く。
 pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
@@ -210,6 +218,8 @@ pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
             marks.gui_stub |= gui_stub(line, leader)?;
         } else if starts(line, " native:") {
             marks.native_skip |= native_skip(line, leader)?;
+        } else if starts(line, " native-stats:") {
+            marks.native_stats_skip |= native_stats_skip(line, leader)?;
         } else {
             break;
         }
@@ -252,6 +262,14 @@ pub fn gui_stub(line: &str, leader: &str) -> Result<bool, String> {
 pub fn native_skip(line: &str, leader: &str) -> Result<bool, String> {
     reason_mark(line, leader, "native", "skip").ok_or_else(|| {
         format!("the native mark is `{leader} native: skip (<reason>)`, not `{line}`")
+    })
+}
+
+/// 先頭の印の行の1つが`<leader> native-stats: skip (<理由>)`なら、2つの実行系を検査モードで比べるとき、ファイルの数を比べない
+/// (docs/implementation/testing.mdの「ネイティブで流す」)。綴りの誤りは`windows_skip`と同じく誤りにする。
+pub fn native_stats_skip(line: &str, leader: &str) -> Result<bool, String> {
+    reason_mark(line, leader, "native-stats", "skip").ok_or_else(|| {
+        format!("the native-stats mark is `{leader} native-stats: skip (<reason>)`, not `{line}`")
     })
 }
 

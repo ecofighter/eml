@@ -1,11 +1,10 @@
 //! LIR のテキストで書いた LIR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/lir.md)。
 //! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
-use eml_lir::unwind::verified_for;
-use eml_lir::{FnIdx, VarId, verify_borrowed};
 use eml_lir::{
     Prim, Program, Rhs, Stmt, parse, verify, verify_flattened, verify_lowered, verify_scopes,
 };
+use eml_lir::{VarId, verify_borrowed};
 
 use crate::common::ENTRY;
 
@@ -3755,7 +3754,7 @@ b2:
 }
 
 #[test]
-fn a_landing_enters_a_bad_function_at_every_level_and_unwalked() {
+fn a_landing_enters_a_bad_function_at_every_level() {
     let bad = "  let s.5: int = prim yield_status(ev.0)
   switch s.5 { 0 -> b1, _ -> b2 }
 b1:
@@ -3780,19 +3779,6 @@ b2:
         assert_eq!(level(&before_perceus(&good)), Ok(()));
         assert_eq!(level(&before_perceus(bad)), Err(message.to_string()));
     }
-    // 呼ぶ相手をたどらない`verified_for` (VMの追記で、すでに読んだ`prompt$`) でも、要約の形で拒む
-    let program = read(&landing_on("", "", bad));
-    let f = program
-        .functions
-        .iter()
-        .position(|function| function.name == "f")
-        .expect("`f` is in the program");
-    assert_eq!(
-        verified_for(&program, |FnIdx(index)| index as usize == f)
-            .map(drop)
-            .map_err(|error| error.to_string()),
-        Err(message.to_string())
-    );
 }
 
 #[test]

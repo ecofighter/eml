@@ -104,11 +104,14 @@ pub const DATUM_FN: u32 = 3;
 pub const DATUM_EMPTY_MUT_ARRAY: u32 = 4;
 pub const DATUM_EFFECT: u32 = 5;
 pub const DATUM_MASK: u32 = 6;
+/// `sig_word`が書けないエントリの署名に、imageが与える署名の語の読み込み時の値。runは`bits`をそのままslotに書く
+/// (docs/spec/native.mdの「`Image`」)。
+pub const DATUM_SIG: u32 = 7;
 
-/// 読み込み時の値1つ。種類、中身 (大きい`int`と`float`とエフェクトの番号は`bits`、文字列は`text`、静的なクロージャは
-/// `bits`の引数の数と`code`のエントリのコード、マスクは`items`) と、runが埋めるデータのslotである。runは、ヒープの
-/// 種類のslotには物体の語を、エフェクトのslotには番号そのものを、マスクのslotには項目を`MaskItem`として書く。マスクの
-/// slotは`mask_bytes(items.len)`バイトで、ほかのslotは1語である。
+/// 読み込み時の値1つ。種類、中身 (大きい`int`と`float`とエフェクトの番号と署名の語は`bits`、文字列は`text`、静的な
+/// クロージャは`bits`の引数の数と`code`のエントリのコード、マスクは`items`) と、runが埋めるデータのslotである。runは、
+/// ヒープの種類のslotには物体の語を、エフェクトのslotには番号そのものを、署名の語のslotには語そのものを、マスクの
+/// slotには項目を`MaskItem`として書く。マスクのslotは`mask_bytes(items.len)`バイトで、ほかのslotは1語である。
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct DatumRow {
@@ -145,6 +148,46 @@ pub struct PapRow {
     pub code: *const u8,
 }
 
+/// 関数の値1つのエントリのコード。クロージャのエントリ`c<k>:<f>`かPAPのアダプタと、その署名の語である。語は`sig_word`の
+/// ものか、`sig_word`が書けない署名では、下の16ビットがすべて1で上のビットも立つ、imageだけの語である。後者は、同じ
+/// 署名の`DATUM_SIG`の行の`bits`に等しい (docs/spec/native.mdの「`Image`」)。
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CodeRow {
+    pub code: *const u8,
+    pub sig: u64,
+}
+
+/// `eml_rt_audit_code`の`expect`の語のうち、値自身のタグが待つ引数の数の一様な署名を求めるもの。
+pub const CODE_OF_TAG: i64 = -1;
+
+/// エントリの署名`tail (ctx, clo, params..) -> ret`の語。`params`の数に、`F64`の結果ならビット16を、`F64`の引数`i`ならビット
+/// `17 + i`を足したものである。引数`n`個の一様な署名は語`n`になる。添字47以降の引数が`F64`のとき、引数が65535個より
+/// 多いとき、引数が65535個でそのどれかか結果が`F64`のときは`None`である。
+pub fn sig_word(params: &[crate::Kind], ret: crate::Kind) -> Option<u64> {
+    let mut word = u64::try_from(params.len())
+        .ok()
+        .filter(|&n| n <= u64::from(u16::MAX))?;
+    if word == u64::from(u16::MAX) {
+        // 引数が65535個なら数が下の16ビットをすべて使うので、語を持つのは一様な署名だけで、その語はタグ65535の語0xFFFFである
+        let uniform =
+            ret == crate::Kind::I64 && params.iter().all(|&kind| kind == crate::Kind::I64);
+        return uniform.then_some(word);
+    }
+    if ret == crate::Kind::F64 {
+        word |= 1 << 16;
+    }
+    for (i, &kind) in params.iter().enumerate() {
+        if kind == crate::Kind::F64 {
+            if i > 46 {
+                return None;
+            }
+            word |= 1 << (17 + i);
+        }
+    }
+    Some(word)
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Image {
@@ -152,6 +195,8 @@ pub struct Image {
     pub files: Slice<Str>,
     pub data: Slice<DatumRow>,
     pub paps: Slice<PapRow>,
+    /// このimageの関数の値が持ちうるエントリのコードすべて。検査モードのマシンが埋め、速いモードのマシンは空のままにする。
+    pub entries: Slice<CodeRow>,
     /// 組み込みの`Panic`と`IO`のマシンの番号。プログラムのエフェクトの表になければ`NO_EFFECT`である。
     pub panic_effect: u32,
     pub io_effect: u32,
@@ -163,8 +208,8 @@ pub const NO_EFFECT: u32 = u32::MAX;
 // SAFETY: 安全なAPIはどれも`Image`のポインタの先を読み書きしない。読み書きするのは`unsafe fn`の`run`だけで、呼ぶ側が
 // 待っている間に、workerのスレッドから読む。workerが書くのは`DatumRow.slot`を通してだけで、書くのはrunごとに、その
 // runの最初のエントリの前である。1つの`Image`のrunは重ならない (`run`の約束で、JITのホストの`run`と`call`は
-// `&mut self`を取る) ので、書く間にslotを読むコードはない。書く大きさは、ヒープの種類とエフェクトでは1語、マスクでは
-// `mask_bytes(items.len)`バイトである。ほかはどれも読むだけである。コードはslotとその指す定数を同期なしに読むので、
+// `&mut self`を取る) ので、書く間にslotを読むコードはない。書く大きさは、ヒープの種類とエフェクトと署名の語では1語、
+// マスクでは`mask_bytes(items.len)`バイトである。ほかはどれも読むだけである。コードはslotとその指す定数を同期なしに読むので、
 // runのコードを動かすどのworkerのヒープも、コードを動かす前にそのrunの塊を付ける
 unsafe impl Sync for Image {}
 
@@ -240,3 +285,49 @@ pub const RAISE_IO: i64 = 1;
 /// (docs/spec/native.md の「ヒープのエントリ」)。
 pub const ARITH_DIVISION_BY_ZERO: i64 = 0;
 pub const ARITH_INTEGER_OVERFLOW: i64 = 1;
+
+#[cfg(test)]
+mod tests {
+    use super::sig_word;
+    use crate::Kind::{F64, I64};
+
+    #[test]
+    fn the_signature_word_tells_signatures_apart() {
+        // 引数`n`個の一様な署名は語`n`である
+        assert_eq!(sig_word(&[], I64), Some(0));
+        assert_eq!(sig_word(&[I64, I64, I64], I64), Some(3));
+        // `F64`の結果と、`F64`の引数のそれぞれが、別のビットを立てる
+        assert_eq!(sig_word(&[I64, I64], F64), Some(2 | 1 << 16));
+        assert_eq!(sig_word(&[F64, I64], I64), Some(2 | 1 << 17));
+        assert_eq!(sig_word(&[I64, F64], I64), Some(2 | 1 << 18));
+        let mut words = [
+            sig_word(&[I64], I64),
+            sig_word(&[I64], F64),
+            sig_word(&[F64], I64),
+            sig_word(&[I64, I64], I64),
+        ];
+        words.sort_unstable();
+        assert!(words.windows(2).all(|pair| pair[0] != pair[1]));
+        // 添字46までの`F64`の引数は語に収まり、47からは収まらない
+        let mut params = vec![I64; 47];
+        params[46] = F64;
+        assert_eq!(sig_word(&params, I64), Some(47 | 1 << 63));
+        params.push(I64);
+        params[47] = F64;
+        assert_eq!(sig_word(&params, I64), None);
+    }
+
+    #[test]
+    fn the_uniform_signature_of_65535_parameters_has_a_word() {
+        // 数が下の16ビットをすべて使う。語を持つのは一様な署名だけで、その語はタグ65535に等しい。同じ長さのほかの署名は
+        // 語を持たない
+        let mut params = vec![I64; 65535];
+        assert_eq!(sig_word(&params, I64), Some(0xFFFF));
+        assert_eq!(sig_word(&params, F64), None);
+        params[0] = F64;
+        assert_eq!(sig_word(&params, I64), None);
+        params[0] = I64;
+        params.push(I64);
+        assert_eq!(sig_word(&params, I64), None);
+    }
+}

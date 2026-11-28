@@ -5,17 +5,18 @@
 use std::panic::resume_unwind;
 use std::sync::{Arc, mpsc};
 
-use eml_rt::{Control, Ctx, Fast, HostRef, Word};
-use eml_sched::config::{Finished, RunConfig, RunStats};
+use eml_rt::{Control, Ctx, HostRef, Mode, Word};
+use eml_sched::config::{Finished, RunConfig};
+
+use crate::mode::Engine;
 use eml_sched::error::{RunFault, RuntimeError};
 
 use crate::arch;
-use crate::census::census;
 use crate::constants::{self, Datum};
 use crate::enter::{FATAL_FAULT, FATAL_PANICKED, FATAL_RECORDED, Fatal, detached, enter};
 use crate::image::{
-    Census, DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
-    DATUM_STRING, DatumRow, Image, Options, Start,
+    DATUM_BIG_INT, DATUM_EFFECT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_MASK,
+    DATUM_SIG, DATUM_STRING, DatumRow, Image, Options, Start,
 };
 use crate::worker::{NATIVE_CODE, Worker};
 
@@ -25,8 +26,11 @@ pub const WORKER_STACK: usize = 1 << 30;
 pub const STACK_HARD_MARGIN: usize = 1 << 20;
 /// `hard`から、ふつうに動くときの上限`real`までのバイト数。VMの余白の2^18語をバイトにしたものである。
 pub const LIMIT_HEADROOM_BYTES: usize = 2 << 20;
-/// runの唯一のworkerの番号。止める語もこの番号のものを読む。
+/// runの唯一のworkerの番号。止める語もこの番号のものを読む。検査モードでは、その`Ctx`のヒープは自分の所有者の表を
+/// 持つので、同じ`Control`の前のrunが何を残しても、runは0から数える (docs/spec/native.mdの「実行の始めと終わり」)。
 pub(crate) const WORKER: usize = 0;
+// `on_worker`はrunの`Ctx`を`Ctx::new`で作り、`Ctx::new`はworker 0の止める語を読む
+const _: () = assert!(WORKER == 0);
 
 fn fault(fault: RunFault) -> RuntimeError {
     RuntimeError::Fault {
@@ -42,11 +46,12 @@ fn fault(fault: RunFault) -> RuntimeError {
 /// `image`の表は呼び出しの間生きていて変わらず、どの`Str`もUTF-8を持つ。どの`DatumRow.slot`も、ほかの誰も使わない
 /// 書ける領域で、8にそろい、`DATUM_MASK`の行では`mask_bytes(items.len)`バイト、ほかの行では1語である。`DATUM_MASK`の
 /// 行の`items`は、生きている行を指す。呼び出しは、同じ`image`のほかのrunと重ならない。
+/// `start.thunk`と、それが呼ぶエントリ (`entries::<M>()`) は、どれもモード`M`のものである。
 /// `start.thunk`を`start.entry`と`start.argv`で呼ぶことは、`image`のためにコンパイルしたemlのコードへの正しい呼び出しで
 /// あるか、そのコードの規則を守る代役を走らせる。代役は`ctx`をworkerのスレッドの上でだけ使い、emlのコードかエントリの
 /// 呼び出しをまたいでそれへの参照を持たない。panicで巻き戻らない。`eml_fatal`で終わりうる呼び出しをまたいで、デストラクタを
 /// 持つ値を生かしておかない。emlのコードが残しうる状態の`ctx`で戻る。`start.argv`は引数と結果の場所を持つ。
-pub unsafe fn run(
+pub unsafe fn run<M: Engine>(
     image: &Image,
     start: &Start,
     config: &RunConfig,
@@ -70,7 +75,7 @@ pub unsafe fn run(
                     )));
                 }
                 // SAFETY: 呼ぶ側の約束
-                unsafe { on_worker(image, start, control, host, options) }
+                unsafe { on_worker::<M>(image, start, control, host, options) }
             })
             .map_err(|_| fault(RunFault::Internal("the worker thread cannot be started")))?;
         let mut parts = Some((open, worker));
@@ -94,7 +99,7 @@ pub unsafe fn run(
 
 /// # Safety
 /// `run`と同じ。
-unsafe fn on_worker(
+unsafe fn on_worker<M: Engine>(
     image: &Image,
     start: &Start,
     control: &Arc<Control>,
@@ -102,7 +107,7 @@ unsafe fn on_worker(
     options: Options,
 ) -> Result<Finished, RuntimeError> {
     let top = arch::stack_pointer();
-    let mut ctx = Ctx::<Fast>::for_worker(Arc::clone(control), host, WORKER);
+    let mut ctx = Ctx::<M>::new(Arc::clone(control), host);
     // スタックポインタから予約の大きさを引いた値は、本当の`base`より、この関数の上にあるフレームの分だけ低いことが
     // ある。その差は余白に収まる。上限を置くのはここの1回だけである (docs/spec/native.md の「安全点」)
     let base = top.saturating_sub(options.stack);
@@ -137,12 +142,12 @@ unsafe fn on_worker(
 /// runの最初のエントリの前に走る。1つの`Image`のrunは重ならない (`run`の約束) ので、書く間にslotを読むコードはない。
 /// コードはslotと定数を同期なしに読むので、ネイティブのどのworkerのヒープも、コードを動かす前にそのrunでここが作る塊を
 /// 付ける。
-unsafe fn fill_data(
-    ctx: &mut Ctx<Fast>,
+unsafe fn fill_data<M: Mode>(
+    ctx: &mut Ctx<M>,
     control: &Arc<Control>,
     data: &[DatumRow],
 ) -> Result<(), RuntimeError> {
-    let raw = |row: &&DatumRow| matches!(row.kind, DATUM_EFFECT | DATUM_MASK);
+    let raw = |row: &&DatumRow| matches!(row.kind, DATUM_EFFECT | DATUM_SIG | DATUM_MASK);
     let data_of = |row: &&DatumRow| match row.kind {
         // SAFETY: 呼ぶ側の約束
         DATUM_STRING => Ok(Datum::String(unsafe { row.text.as_str() })),
@@ -173,7 +178,7 @@ unsafe fn fill_data(
         unsafe { row.slot.cast::<Word>().write(w) };
     }
     for row in data.iter().filter(raw) {
-        // SAFETY: 呼ぶ側の約束。行の種類は`DATUM_EFFECT`か`DATUM_MASK`である
+        // SAFETY: 呼ぶ側の約束。行の種類は`DATUM_EFFECT`、`DATUM_SIG`、`DATUM_MASK`のどれかである
         unsafe { constants::write_raw(row) };
     }
     Ok(())
@@ -184,8 +189,8 @@ unsafe fn fill_data(
 ///
 /// # Safety
 /// `start.argv[0]`はエントリの結果を持つ。
-unsafe fn finish(
-    ctx: &mut Ctx<Fast>,
+unsafe fn finish<M: Engine>(
+    ctx: &mut Ctx<M>,
     worker: &mut Worker,
     start: &Start,
     options: Options,
@@ -230,14 +235,9 @@ unsafe fn finish(
             "a fault is left parked at the end",
         )));
     }
-    if options.census == Census::Check {
-        let left = census(ctx);
-        if !left.is_empty() {
-            return Err(RuntimeError::Leak(left));
-        }
-    }
+    M::end(ctx, options.census)?;
     Ok(Finished {
-        stats: RunStats::default(),
+        stats: M::stats(ctx, worker),
         exit: ctx.heap().control().exit_code(),
         preemptions: 0,
         workers: 0,
@@ -251,7 +251,7 @@ unsafe fn finish(
 }
 
 /// `eml_fatal`で切ったrunの誤り。符号が決める場所から読む (docs/spec/native.md の「`eml_fatal`」)。
-fn fatal_error(ctx: &mut Ctx<Fast>, worker: &mut Worker, fatal: Fatal) -> RuntimeError {
+fn fatal_error<M: Mode>(ctx: &mut Ctx<M>, worker: &mut Worker, fatal: Fatal) -> RuntimeError {
     match fatal.code {
         FATAL_RECORDED => worker
             .error

@@ -11,7 +11,7 @@ use eml_sched::error::RunFault;
 use eml_vm::{AnyMachine, RunConfig, RuntimeError, capture_host, execute};
 
 fn run_both(text: &str) -> String {
-    let program = crate::common::verified(text);
+    let program = crate::common::trusted(text);
     run_program(&program, Sched::Sequential)
 }
 
@@ -186,7 +186,7 @@ fn second() -> unit {
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
         for text in [first, second] {
-            let program = crate::common::verified(text);
+            let program = crate::common::trusted(text);
             // SAFETY: P2: 前に読み込んだプログラムと名前が同じ関数は同じコードで、根は書いた型のまま読む。debugのビルドは比べて確かめる
             let loaded = unsafe { machine.extend(&program, &eml_vm::Linked::default()) }
                 .unwrap_or_else(|error| panic!("{error:?}"));
@@ -210,7 +210,7 @@ fn shown() -> obj {
   return t.2
 }
 ";
-    let program = crate::common::verified(text);
+    let program = crate::common::trusted(text);
     for debug_heap in [true, false] {
         let (host, _) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
@@ -253,7 +253,7 @@ fn bottom(n.0: int) -> unit {
   return z.1
 }
 ";
-    let program = crate::common::verified(text);
+    let program = crate::common::trusted(text);
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
@@ -481,7 +481,7 @@ fn spin_one(p.0: unit) -> tobj {
   return n.2
 }
 ";
-    let program = crate::common::verified(text);
+    let program = crate::common::trusted(text);
     let (out, preemptions) = run_counting_preemptions(&program, Sched::Seeded(1));
     assert_eq!(out, "1\n6\n5\n5\n");
     // スケジュールがずれて横取りが起きなくなると、横取りの切り替えを Miri で通らなくなる
@@ -512,7 +512,7 @@ fn main() -> unit {
 /// 外の引数で、C の関数を呼ばずに `Panic` を上げる。捕まえる handler がないので実行時エラーになる。
 #[test]
 fn a_c_call_passes_scalars_in_both_modes() {
-    let program = crate::common::verified(C_SCALARS);
+    let program = crate::common::trusted(C_SCALARS);
     let linked = crate::common::c::linked(&program, &crate::common::c::calls(), &[]);
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
@@ -617,7 +617,7 @@ fn value(n.0: int) -> int {
   return v.2
 }
 ";
-    let program = crate::common::verified(text);
+    let program = crate::common::trusted(text);
     let linked = crate::common::c::linked(
         &program,
         &crate::common::c::calls(),

@@ -27,7 +27,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::evv_get`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn evv_get(ctx) -> evv {
+    pub(crate) shim[Service] fn evv_get(ctx) -> evv {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.evv_get() }
     }
@@ -36,7 +36,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::evv_set`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn evv_set(ctx, l: evv) {
+    pub(crate) shim[Service] fn evv_set(ctx, l: evv) {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.evv_set(l) }
     }
@@ -45,7 +45,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::evv_enter`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn evv_enter(ctx, l: evv, e: ev) -> evv {
+    pub(crate) shim[Service] fn evv_enter(ctx, l: evv, e: ev) -> evv {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.evv_enter(l, e) }
     }
@@ -55,7 +55,7 @@ crate::entries! {
     /// # Safety
     /// `Ctx::evv_mask`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。加えて、`items`は
     /// 生きている`MaskItem`を`n`個並べた領域の先頭で、`n`個の項目はこの呼び出しの間変わらない。
-    pub(crate) shim fn evv_mask(ctx, items: ptr, n: i64, w: evv) -> evv {
+    pub(crate) shim[Service] fn evv_mask(ctx, items: ptr, n: i64, w: evv) -> evv {
         let n = usize::try_from(n).map_err(|_| HeapError::BadEvidence)?;
         // SAFETY: 呼ぶ側の約束。生成したコードは`MaskItem`と同じ並びの行を、8に揃えた領域に置く
         let items = unsafe { std::slice::from_raw_parts(items.cast::<MaskItem>(), n) };
@@ -68,7 +68,7 @@ crate::entries! {
     /// # Safety
     /// `Ctx::ev_new`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。`effect`が65535以上の番号なら
     /// 参照を手放さずに致命的な誤りで終わる。
-    pub(crate) shim fn ev_new(ctx, effect: i64, n_ops: i64, state: tobj, outer: evv) -> ev {
+    pub(crate) shim[Service] fn ev_new(ctx, effect: i64, n_ops: i64, state: tobj, outer: evv) -> ev {
         let effect = effect_number(effect)?;
         let n_ops = operation_index(n_ops)?;
         // SAFETY: 呼ぶ側の約束
@@ -79,7 +79,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_set_clause`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_set_clause(ctx, ev: ev, op: i64, c: tobj) {
+    pub(crate) shim[Service] fn ev_set_clause(ctx, ev: ev, op: i64, c: tobj) {
         let op = operation_index(op)?;
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_set_clause(ev, op, c) }
@@ -89,7 +89,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_renew`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_renew(ctx, ev: rev, state: tobj) -> ev {
+    pub(crate) shim[Service] fn ev_renew(ctx, ev: rev, state: tobj) -> ev {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_renew(ev, state) }
     }
@@ -99,7 +99,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_retire`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_retire(ctx, ev: ev) -> rev {
+    pub(crate) shim[Service] fn ev_retire(ctx, ev: ev) -> rev {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_retire(ev) }
     }
@@ -109,7 +109,7 @@ crate::entries! {
     /// # Safety
     /// `Ctx::ev_lookup`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。`effect`が65535以上の
     /// 番号なら致命的な誤りで終わる。
-    pub(crate) shim fn ev_lookup(ctx, effect: i64) -> obj {
+    pub(crate) shim[Service] fn ev_lookup(ctx, effect: i64) -> obj {
         let effect = effect_number(effect)?;
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_lookup(effect) }
@@ -119,7 +119,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_clause`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_clause(ctx, ev: obj, op: i64) -> tobj {
+    pub(crate) shim[Service] fn ev_clause(ctx, ev: obj, op: i64) -> tobj {
         let op = operation_index(op)?;
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_clause(ev, op) }
@@ -129,7 +129,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_evv`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_evv(ctx, ev: cev) -> evv {
+    pub(crate) shim[Service] fn ev_evv(ctx, ev: cev) -> evv {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_evv(ev) }
     }
@@ -138,7 +138,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_take_evv`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_take_evv(ctx, ev: ev) -> evv {
+    pub(crate) shim[Service] fn ev_take_evv(ctx, ev: ev) -> evv {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_take_evv(ev) }
     }
@@ -147,7 +147,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_take_state`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_take_state(ctx, ev: cev) -> tobj {
+    pub(crate) shim[Service] fn ev_take_state(ctx, ev: cev) -> tobj {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_take_state(ev) }
     }
@@ -156,7 +156,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_take_state`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_last_state(ctx, ev: ev) -> tobj {
+    pub(crate) shim[Service] fn ev_last_state(ctx, ev: ev) -> tobj {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_take_state(ev) }
     }
@@ -165,7 +165,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::ev_set_state`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn ev_set_state(ctx, ev: cev, s: tobj) {
+    pub(crate) shim[Service] fn ev_set_state(ctx, ev: cev, s: tobj) {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.ev_set_state(ev, s) }
     }
@@ -174,7 +174,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::yield_to`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn yield_to(ctx, ev: cev, clause: tobj, k: tobj) {
+    pub(crate) shim[Service] fn yield_to(ctx, ev: cev, clause: tobj, k: tobj) {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.yield_to(ev, clause, k) }
     }
@@ -183,7 +183,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::yield_abort`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn yield_abort(ctx, ev: cev, clause: tobj) {
+    pub(crate) shim[Service] fn yield_abort(ctx, ev: cev, clause: tobj) {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.yield_abort(ev, clause) }
     }
@@ -192,7 +192,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `ctx`はこのworkerの生きている`Ctx`である。
-    pub(crate) shim fn yield_cont_take(ctx) -> tobj {
+    pub(crate) shim[Service] fn yield_cont_take(ctx) -> tobj {
         ctx.yield_cont_take()
     }
 
@@ -200,7 +200,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::yield_cont_set`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn yield_cont_set(ctx, k: tobj) {
+    pub(crate) shim[Service] fn yield_cont_set(ctx, k: tobj) {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.yield_cont_set(k) }
     }
@@ -209,7 +209,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `Ctx::yield_finish`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。
-    pub(crate) shim fn yield_finish(ctx) -> tobj {
+    pub(crate) shim[Service] fn yield_finish(ctx) -> tobj {
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.yield_finish() }
     }
@@ -218,7 +218,7 @@ crate::entries! {
     ///
     /// # Safety
     /// `ctx`はこのworkerの生きている`Ctx`である。
-    pub(crate) shim fn dummy(ctx) -> obj {
+    pub(crate) shim[Service] fn dummy(ctx) -> obj {
         Ok::<Word, HeapError>(ctx.heap().dummy())
     }
 
@@ -227,7 +227,7 @@ crate::entries! {
     /// # Safety
     /// `Ctx::root_get`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。空の根や表の外の根は
     /// 致命的な誤りで終わる。
-    pub(crate) shim fn root_get(ctx, index: i64) -> tobj {
+    pub(crate) shim[Service] fn root_get(ctx, index: i64) -> tobj {
         let index = root_index(index)?;
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.root_get(index) }
@@ -238,7 +238,7 @@ crate::entries! {
     /// # Safety
     /// `Ctx::root_set`の前提を守っている (docs/spec/object-model.mdの「基本操作の契約」)。置いてある根への書き込みは
     /// 致命的な誤りで終わる。
-    pub(crate) shim fn root_set(ctx, index: i64, w: tobj) {
+    pub(crate) shim[Service] fn root_set(ctx, index: i64, w: tobj) {
         let index = root_index(index)?;
         // SAFETY: 呼ぶ側の約束
         unsafe { ctx.root_set(index, w) }

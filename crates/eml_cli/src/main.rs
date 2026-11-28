@@ -47,8 +47,8 @@ enum Command {
         /// The backend that `Std.Gui` opens windows with: `native`, or `stub`, which opens nothing and sends one close request to each window it shows (default: `EML_GUI`, else native)
         #[arg(long, value_name = "native|stub", value_parser = parse_gui)]
         gui: Option<GuiChoice>,
-        /// Compile to machine code and run it on one worker, in place of the VM (not with `--debug-heap`, `--stats` or `--gui`)
-        #[arg(long, conflicts_with_all = ["debug_heap", "stats", "gui"])]
+        /// Compile to machine code and run it on one worker, in place of the VM (not with `--gui`)
+        #[arg(long, conflicts_with_all = ["gui"])]
         native: bool,
         file: PathBuf,
     },

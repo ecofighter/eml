@@ -11,15 +11,17 @@ use eml_lir::{
     VarId,
 };
 use eml_nrt::Kind;
-use eml_nrt::image::ACTION_CONTINUE;
+use eml_nrt::image::{ACTION_CONTINUE, CODE_OF_TAG};
+use eml_nrt::worker::COUNT_UNWOUND_FRAMES;
 
+use super::audit::{Audit, Expect, Glue};
 use super::consts::Datum;
 use super::effects::step_entry;
 use super::function::FnLower;
 use super::rc::{self, Step};
 use super::unwind::{self, After, Point};
 use super::{Callees, Imports, kind, names};
-use crate::abi::{clause_signature, clif, closure_entry_signature, tail_signature};
+use crate::abi::{EntrySig, clause_signature, clif, closure_entry_signature, tail_signature};
 use crate::mem;
 
 /// 引数`args`個の一様な関数の値のシグネチャ`tail (ctx, clo, args x I64) -> I64`。関数の値への呼び出しとエントリは、
@@ -195,6 +197,7 @@ pub(super) fn define_closure_entry<M: Module>(
     b.switch_to_block(entry);
     let params = b.block_params(entry).to_vec();
     let (ctx, clo) = (params[0], params[1]);
+    let mut glue = Glue::new(imports, ctx);
     let function = callees.program.function(closure.function);
     let captures = closure.captures as usize;
     let mut args = vec![ctx];
@@ -206,13 +209,18 @@ pub(super) fn define_closure_entry<M: Module>(
             .zip(&shape.positions[1..])
             .map(|(&repr, &position)| {
                 let ty = clif(kind(repr));
+                let load = Audit::Load {
+                    scanned: shape.scanned,
+                    position,
+                };
+                glue.emit(&mut b, module, clo, load);
                 (
                     mem::load_field(&mut b, clo, shape.scanned, position, ty),
                     repr,
                 )
             })
             .collect();
-        release_box(&mut b, module, imports, ctx, clo, &loaded);
+        release_box(&mut b, module, &mut glue, clo, &loaded);
         args.extend(loaded.iter().map(|&(value, _)| value));
     }
     args.extend_from_slice(&params[2..]);
@@ -228,23 +236,22 @@ pub(super) fn define_closure_entry<M: Module>(
 fn release_box<M: Module>(
     b: &mut FunctionBuilder,
     module: &mut M,
-    imports: &Imports,
-    ctx: Value,
+    glue: &mut Glue,
     clo: Value,
     loaded: &[(Value, Repr)],
 ) {
-    let mut entry_ref = |b: &mut FunctionBuilder, symbol: &str| {
-        module.declare_func_in_func(imports.entry(symbol), b.func)
-    };
-    let is_last = entry_ref(b, "eml_rt_is_last");
-    let free_block = entry_ref(b, "eml_rt_free_block");
-    let dup = entry_ref(b, Step::Dup.slow());
-    let decref = entry_ref(b, Step::Decref.slow());
+    let ctx = glue.ctx;
+    let is_last = glue.entry(b, module, "eml_rt_is_last");
+    let free_block = glue.entry(b, module, "eml_rt_free_block");
+    let dup = glue.entry(b, module, Step::Dup.slow());
+    let decref = glue.entry(b, module, Step::Decref.slow());
+    let audits = glue.rc_refs(b, module);
     let last = b.create_block();
     let ask = b.create_block();
     b.set_cold_block(ask);
     let shared = b.create_block();
     let go = b.create_block();
+    glue.emit(b, module, clo, Audit::Unique);
     let rc = mem::load_rc(b, clo);
     let unique = mem::is_one_ref(b, rc);
     b.ins().brif(unique, last, &[], ask, &[]);
@@ -258,10 +265,18 @@ fn release_box<M: Module>(
     b.switch_to_block(shared);
     for &(value, repr) in loaded {
         if repr.is_rc() {
-            rc::counted(b, ctx, dup, value, repr, Step::Dup);
+            rc::counted(b, ctx, dup, audits.map(|a| a.0), value, repr, Step::Dup);
         }
     }
-    rc::counted(b, ctx, decref, clo, Repr::Obj, Step::Decref);
+    rc::counted(
+        b,
+        ctx,
+        decref,
+        audits.map(|a| a.1),
+        clo,
+        Repr::Obj,
+        Step::Decref,
+    );
     b.ins().jump(go, &[]);
     b.switch_to_block(go);
 }
@@ -290,15 +305,25 @@ pub(super) fn define_pap_adapter<M: Module>(
     b.switch_to_block(entry);
     let params = b.block_params(entry).to_vec();
     let (ctx, pap) = (params[0], params[1]);
+    let mut glue = Glue::new(imports, ctx);
     // `eml_nrt_pap`は即値の`callee`を断るので、`callee`はいつも物体である。引数は一様な語で、即値でありうる
     let loaded = [(1, Repr::Obj), (2, Repr::TObj)].map(|(position, repr)| {
+        let load = Audit::Load {
+            scanned: PAP_SCANNED,
+            position,
+        };
+        glue.emit(&mut b, module, pap, load);
         (
             mem::load_field(&mut b, pap, PAP_SCANNED, position, types::I64),
             repr,
         )
     });
-    release_box(&mut b, module, imports, ctx, pap, &loaded);
+    release_box(&mut b, module, &mut glue, pap, &loaded);
     let callee = loaded[0].0;
+    let expect = Audit::Code {
+        expect: Expect::Word(i64::from(rest) + 1),
+    };
+    glue.emit(&mut b, module, callee, expect);
     let meta = mem::load_meta(&mut b, callee);
     let mut args = vec![loaded[1].0];
     args.extend_from_slice(&params[2..]);
@@ -325,6 +350,11 @@ pub(super) fn define_apply<M: Module>(
     b.switch_to_block(entry);
     let params = b.block_params(entry).to_vec();
     let (ctx, clo, values) = (params[0], params[1], &params[2..]);
+    let mut glue = Glue::new(imports, ctx);
+    let of_tag = Audit::Code {
+        expect: Expect::Word(CODE_OF_TAG),
+    };
+    glue.emit(&mut b, module, clo, of_tag);
     let meta = mem::load_meta(&mut b, clo);
     let n = mem::meta_tag(&mut b, meta);
     let exact = b.create_block();
@@ -395,6 +425,7 @@ pub(super) fn define_apply<M: Module>(
         // (docs/spec/native.md の「関数の値」)
         let (cleanup, hot) = unwind::if_aborting(&mut b, ctx, &[]);
         b.switch_to_block(cleanup);
+        glue.count(&mut b, module, COUNT_UNWOUND_FRAMES);
         let decref = module.declare_func_in_func(imports.entry("eml_rt_decref"), b.func);
         b.ins().call(decref, &[ctx, last]);
         let placeholder = b.ins().iconst(types::I64, mem::UNIT);
@@ -555,6 +586,16 @@ impl<M: Module> FnLower<'_, '_, M> {
             .expect("`ev_clause` returns the entry");
         let mut values = vec![ev];
         values.extend(self.atoms(args, operation.params.iter().copied()));
+        if self.imports.checked {
+            // 操作の署名の語。`sig_word`の語は定数で、それが書けない署名では、ホストが読み込みのときに埋めるその署名の
+            // データの記号`w:`の語である。コードは署名だけで決まる
+            let sig = EntrySig::clause(program, *effect, *op);
+            let expect = match sig.written() {
+                Some(word) => Expect::Word(word as i64),
+                None => Expect::Loaded(self.datum_word(Datum::Sig(sig), types::I64)),
+            };
+            self.audit(clo, Audit::Code { expect });
+        }
         let meta = mem::load_meta(&mut self.b, clo);
         if operation.ret == OpRet::Never {
             call_closure_code(&mut self.b, self.ctx, clo, meta, sig, &values, false);
@@ -565,14 +606,7 @@ impl<M: Module> FnLower<'_, '_, M> {
                     self.fill_cleanup(cleanup, &Point::from(point));
                 }
                 // 末尾の位置ではフレームは何も持たない
-                None => self.fill_cleanup(
-                    cleanup,
-                    &Point {
-                        owned: &[],
-                        tokens: &[],
-                        landing: None,
-                    },
-                ),
+                None => self.fill_tail_cleanup(cleanup),
             }
             self.b.switch_to_block(hot);
             self.b.ins().trap(TrapCode::unwrap_user(1));
@@ -627,6 +661,12 @@ impl<M: Module> FnLower<'_, '_, M> {
         let clo = self.atom(callee, Repr::TObj);
         let mut values = vec![self.ctx, clo];
         values.extend(args.iter().map(|&atom| self.atom(atom, Repr::TObj)));
+        self.audit(
+            clo,
+            Audit::Code {
+                expect: Expect::Word(CODE_OF_TAG),
+            },
+        );
         let meta = mem::load_meta(&mut self.b, clo);
         let n = mem::meta_tag(&mut self.b, meta);
         let exact = self.b.create_block();

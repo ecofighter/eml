@@ -1,24 +1,21 @@
-//! 巻き戻しの点 (`eml_lir::unwind::points`)。入力は所有の段の verifier を通る、Perceus の後の LIR のテキストである
-//! (docs/spec/vm.md の「巻き戻しの表」)。
+//! 巻き戻しの点 (`Trusted::unwinds()`)。入力は所有の段のverifierを通る、Perceusの後のLIRのテキストである
+//! (docs/spec/vm.mdの「巻き戻しの表」)。
 
-use eml_lir::unwind::{UnwindPoint, Unwinds, points, verified_for};
-use eml_lir::{BlockId, FnIdx, VarId, parse, verify};
+use eml_lir::unwind::{UnwindPoint, Unwinds};
+use eml_lir::{BlockId, Trusted, VarId, parse};
 
 /// `name` の関数の巻き戻しの表。入力が所有の段の verifier を通ることも確かめる。
 fn unwinds_of(text: &str, name: &str) -> Unwinds {
     let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
-    if let Err(error) = verify(&program) {
-        panic!("the input must verify: {error}\n{text}");
-    }
-    let index = program
+    // SAFETY: プログラムは実行しない。テストは表だけを読む
+    let trusted = unsafe { Trusted::new(program) }
+        .unwrap_or_else(|error| panic!("the input must verify: {error}\n{text}"));
+    let index = trusted
         .functions
         .iter()
         .position(|function| function.name == name)
         .unwrap_or_else(|| panic!("no `{name}`"));
-    points(&program, |_| true)
-        .swap_remove(index)
-        .expect("every function is wanted")
-        .unwrap_or_else(|error| panic!("{error}"))
+    trusted.unwinds()[index].clone()
 }
 
 /// `name` の関数の巻き戻しの地点。
@@ -208,64 +205,27 @@ fn f(k.2: obj) -> obj {
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
 }
 
-/// 所有の段のverifierが拒む関数は、地点の代わりにその誤りを返す。VMは、確かめない読み込みでだけ、その関数を表の
-/// ない関数として読む。
+/// 所有の段のverifierが拒む関数は、自分の表を持たない。`Trusted::new`はその誤りでプログラムを断り、
+/// `Trusted::unverified`はその関数に何も手放さない表を与える。
 #[test]
-fn unverified_lir_has_no_points() {
-    let program = parse("fn f(a.0: obj) -> unit {\n  return ()\n}\n")
-        .unwrap_or_else(|error| panic!("{error}"));
-    let error = points(&program, |_| true)
-        .swap_remove(0)
-        .expect("every function is wanted")
-        .unwrap_err();
+fn a_refused_function_has_a_table_that_releases_nothing() {
+    let text = "fn f(a.0: obj) -> unit {\n  return ()\n}\n";
+    let read = || parse(text).unwrap_or_else(|error| panic!("{error}"));
+    // SAFETY: プログラムは実行しない。テストは誤りと表だけを読む
+    let error = unsafe { Trusted::new(read()) }.unwrap_err();
     assert_eq!(
         error.to_string(),
         "`a.0` is still owned at the end of the function in `f`"
     );
-}
-
-/// `verified_for`は`walked`の関数だけをたどり、その表を`program.functions`の欄に返す。外した関数の本体の誤りは
-/// 見ない (docs/spec/lir.mdの「verifier」)。
-#[test]
-fn verified_for_walks_only_the_selected_functions() {
-    let program = parse(
-        "fn f(a.0: obj) -> unit {\n  return ()\n}\nfn g(a.0: obj) -> unit {\n  decref a.0\n  return ()\n}\n",
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
+    // SAFETY: プログラムは実行しない。テストは誤りと表だけを読む
+    let trusted = unsafe { Trusted::unverified(read()) };
     assert_eq!(
-        verified_for(&program, |FnIdx(i)| i == 1),
-        Ok(vec![
-            None,
-            Some(Unwinds {
-                entry: vec![(VarId(0), 1)],
-                points: Vec::new(),
-            }),
-        ])
+        trusted.unwinds(),
+        [Unwinds {
+            entry: Vec::new(),
+            points: Vec::new(),
+        }]
     );
-    assert_eq!(
-        verified_for(&program, |_| true).map_err(|error| error.to_string()),
-        Err("`a.0` is still owned at the end of the function in `f`".to_string())
-    );
-}
-
-/// `verified_for`は、たどらない関数にもプログラム全体の規則を当てる。`g`の引数のReprは操作と違う。
-#[test]
-fn verified_for_applies_the_program_rules_to_every_function() {
-    let program = parse(
-        "\
-effect E { op(unit) -> unit }
-fn main() -> unit {
-  return ()
-}
-internal clause E.op fn g(e.0: cev, x.1: float) -> unit {
-  decref e.0
-  return ()
-}
-",
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
-    let error = verified_for(&program, |FnIdx(i)| i == 0).unwrap_err();
-    assert_eq!(error.function, "g", "{error}");
 }
 
 #[test]

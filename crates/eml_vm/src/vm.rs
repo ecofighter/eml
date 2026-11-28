@@ -4106,8 +4106,8 @@ fn f(p.0: unit) -> unit {
 }
 ";
 
-    /// どの関数も、先頭の位置にエントリの行を持つ。RCの対象の引数を持たない関数の行は空である。確かめない読み込みは、
-    /// verifierの拒む関数も空のエントリの行で読む (docs/spec/vm.mdの「巻き戻しの表」)。
+    /// どの関数も、先頭の位置にエントリの行を持つ。RCの対象の引数を持たない関数の行は空である。`Trusted::unverified`は、
+    /// verifierの拒む関数にも空のエントリの行を与える (docs/spec/vm.mdの「巻き戻しの表」)。
     #[test]
     fn every_function_has_an_entry_row_at_its_start() {
         let entry_row = |code: &CodeBase<eml_rt::Checked>, name: &str| {
@@ -4147,7 +4147,8 @@ fn leaks(a.0: obj) -> unit {
         let mut code =
             CodeBase::<eml_rt::Checked>::new(Arc::new(Control::new(eml_rt::Limits::default())));
         // SAFETY: `leaks`の漏れはわざと置いた誤りで、実行すれば検査モードのリークの検査が止める。ここでは読み込むだけである
-        unsafe { code.load_unverified(&program, &crate::Linked::default()) }.unwrap();
+        let program = unsafe { eml_lir::Trusted::unverified(program) };
+        code.load(&program, &crate::Linked::default()).unwrap();
         assert_eq!(entry_row(&code, "leaks"), vec![]);
     }
 

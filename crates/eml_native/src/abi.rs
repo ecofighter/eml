@@ -1,4 +1,6 @@
 //! コード生成器のシグネチャとCraneliftのフラグ (docs/spec/native.md の「`eml_enter`」)。
+use std::collections::HashMap;
+
 use cranelift_codegen::ir::{AbiParam, Signature, types};
 use cranelift_codegen::isa::{CallConv, OwnedTargetIsa};
 use cranelift_codegen::settings::{self, Configurable};
@@ -102,6 +104,64 @@ pub fn clause_signature(program: &Program, effect: u32, op: u32) -> Signature {
     tail_signature(&params, &[ret])
 }
 
+/// 関数の値のエントリの署名`tail (ctx, clo, params..) -> ret`。クロージャの後の引数の種類と、ただ1つの結果の種類である。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EntrySig {
+    pub params: Vec<Kind>,
+    pub ret: Kind,
+}
+
+impl EntrySig {
+    /// `captures`個を捕まえた`function`のクロージャのエントリの署名。
+    pub fn closure_entry(function: &LirFn, captures: usize) -> EntrySig {
+        let [ret] = lower::rets(function)[..] else {
+            panic!("a function value's entry returns one value")
+        };
+        EntrySig {
+            params: lower::params(function)[captures..].to_vec(),
+            ret,
+        }
+    }
+
+    /// `effect`の`op`の節の呼び出しの署名。
+    pub fn clause(program: &Program, effect: u32, op: u32) -> EntrySig {
+        let operation = &program.effects[effect as usize].operations[op as usize];
+        let mut params = vec![Kind::I64];
+        params.extend(operation.params.iter().map(|&repr| lower::kind(repr)));
+        let ret = match operation.ret {
+            OpRet::Repr(repr) => lower::kind(repr),
+            OpRet::Never => Kind::I64,
+        };
+        EntrySig { params, ret }
+    }
+
+    /// `sig_word`がこの署名に書く語。書けなければ`None`。
+    pub fn written(&self) -> Option<u64> {
+        eml_nrt::image::sig_word(&self.params, self.ret)
+    }
+}
+
+/// 1つのimageの署名の語 (`CodeRow.sig`とデータの記号`w:`のslot)。ホストが読み込みのときに作る。`sig_word`が書ける
+/// 署名はその語を持つ。ほかの署名は、このimageだけの語`0xFFFF | (k + 1) << 16`を持つ。`k`は、そのような異なる署名を
+/// ホストが出会った順に数えたものである。`sig_word`の書く語は、下の16ビットが`0xFFFF`より小さいか、ちょうど`0xFFFF`で
+/// 上のビットを持たない。タグは`0xFFFF`以下なので、このimageだけの語は、`sig_word`の書く語ともタグとも等しくない。0でも
+/// `CODE_OF_TAG`でもない。
+#[derive(Default)]
+pub struct SigWords {
+    wide: HashMap<EntrySig, u64>,
+}
+
+impl SigWords {
+    /// このimageでの`sig`の語。
+    pub fn word(&mut self, sig: &EntrySig) -> u64 {
+        if let Some(word) = sig.written() {
+            return word;
+        }
+        let next = self.wide.len() as u64 + 1;
+        *self.wide.entry(sig.clone()).or_insert(0xFFFF | next << 16)
+    }
+}
+
 /// エントリのシグネチャ。記述子だけから作る (docs/spec/native.md の「記述子の表」)。
 pub fn entry_signature(entry: &Entry, call_conv: CallConv) -> Signature {
     let mut sig = Signature::new(call_conv);
@@ -137,4 +197,28 @@ pub fn declare_import<M: Module>(module: &mut M, import: Import<'_>) -> Built<Fu
         }
     };
     Ok(module.declare_function(&name, Linkage::Import, &sig)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use eml_nrt::Kind::{self, F64, I64};
+
+    use super::{EntrySig, SigWords};
+
+    #[test]
+    fn a_wide_signature_gets_an_image_local_word() {
+        // `sig_word`が書ける署名はその語を保つ。添字47以降に`float`を持つ署名は、このimageだけの語を持ち、どこで使っても
+        // 同じ語である
+        let sig = |params: &[Kind], ret| EntrySig {
+            params: params.to_vec(),
+            ret,
+        };
+        let mut words = SigWords::default();
+        assert_eq!(words.word(&sig(&[I64, I64], I64)), 2);
+        let mut wide = vec![I64; 48];
+        wide[47] = F64;
+        assert_eq!(words.word(&sig(&wide, I64)), 0xFFFF | 1 << 16);
+        assert_eq!(words.word(&sig(&wide, F64)), 0xFFFF | 2 << 16);
+        assert_eq!(words.word(&sig(&wide, I64)), 0xFFFF | 1 << 16);
+    }
 }

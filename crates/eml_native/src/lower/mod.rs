@@ -2,6 +2,7 @@
 //! それらのどれも名指せる。クロージャのエントリは、データの記号と同じく本体が初めて使うときに宣言し、本体の後で定義する。
 //! PAPのアダプタはコードが名指さず、`Image.paps`だけが指すので、最後に宣言して定義する (docs/spec/native.md の「関数の形」)。
 mod apply;
+mod audit;
 mod c;
 mod call;
 pub mod consts;
@@ -22,14 +23,13 @@ use cranelift_codegen::ir::{
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{DataId, FuncId, Linkage, Module};
-use eml_lir::unwind::Unwinds;
-use eml_lir::{FnIdx, LirFn, Program, Repr};
+use eml_lir::{FnIdx, LirFn, Program, Repr, Trusted};
 use eml_nrt::Kind;
 use eml_nrt::image::SiteRow;
 
 use self::apply::{ClosureEntries, ClosureEntry};
 use self::consts::{Data, Datum};
-use crate::abi::{self, Built, Import, declare_import, tail_signature};
+use crate::abi::{self, Built, EntrySig, Import, declare_import, tail_signature};
 
 pub struct Defined {
     pub id: FuncId,
@@ -44,8 +44,9 @@ pub struct Defined {
 pub struct Lowered {
     pub functions: Vec<Defined>,
     pub raise: Defined,
-    /// クロージャのエントリ`c<k>:<f>`と、その値の待つ引数の数。最初に使った順である。
-    pub closures: Vec<(ClosureEntry, u16, Defined)>,
+    /// クロージャのエントリ`c<k>:<f>`と、その値の待つ引数の数と、エントリの署名 (`abi::EntrySig`。検査モードの下ろし方で
+    /// だけ作る。語はホストが読み込みのときに決める)。最初に使った順である。
+    pub closures: Vec<(ClosureEntry, u16, Option<EntrySig>, Defined)>,
     /// `eml$apply$<m>`。添字が`m - 1`である。
     pub applies: Vec<Defined>,
     /// PAPのアダプタ`eml$pap$<r>`と、その`r`。
@@ -56,6 +57,8 @@ pub struct Lowered {
 
 /// 下ろしたコードが名指す、プログラムの関数でない関数。コードは名前と形だけで決まる。
 struct Imports {
+    /// 検査モードの下ろし方か。監査を出す (docs/spec/native.mdの「検査モード」)。
+    checked: bool,
     entries: HashMap<&'static str, FuncId>,
     raise: FuncId,
     /// `eml$apply$<m>`。添字が`m - 1`である。
@@ -126,17 +129,27 @@ pub fn signature_of(function: &LirFn) -> Signature {
     tail_signature(&params(function), &rets(function))
 }
 
-/// `unwinds`は、`eml_lir::unwind::verified`が`program`について返した表である。
+/// プログラムの下ろし方。下ろし方の選択肢はここの欄にするので、足してもシグネチャは変わらない。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Lowering {
+    /// 検査モードの下ろし方か。ヒープの物体へのインラインの読み書きの前に監査を置く
+    /// (docs/spec/native.mdの「検査モード」)。
+    pub checked: bool,
+}
+
+/// 巻き戻しの表は`Trusted`のものを使う (docs/spec/native.mdの「巻き戻しの地点」)。
 pub fn program<M: Module>(
     module: &mut M,
-    program: &Program,
-    unwinds: Vec<Unwinds>,
+    trusted: &Trusted,
     keep_clif: bool,
+    lowering: Lowering,
 ) -> Built<Lowered> {
+    let program: &Program = trusted;
     // エントリと`eml$raise`は、プログラムの関数より前に決まった順で宣言する。どの本体もそれらを名指せ、その番号は
-    // プログラムによらない
+    // プログラムによらない。2つのモードの行は記号と種類が同じ (`eml_nrt`の単体テストが固定する) なので、速いモードの表の
+    // 宣言は検査モードのコードにも使える
     let mut entries = HashMap::new();
-    for entry in eml_nrt::entries() {
+    for entry in eml_nrt::entries::<eml_nrt::mode::Fast>() {
         entries.insert(entry.symbol, declare_import(module, Import::Entry(entry))?);
     }
     let raise =
@@ -161,6 +174,7 @@ pub fn program<M: Module>(
         });
     }
     let imports = Imports {
+        checked: lowering.checked,
         entries,
         raise,
         applies,
@@ -181,7 +195,12 @@ pub fn program<M: Module>(
     let mut data = Data::default();
     let mut closure_entries = ClosureEntries::default();
     let callees = Callees { program, ids };
-    for ((function, &id), unwinds) in program.functions.iter().zip(&callees.ids).zip(unwinds) {
+    for ((function, &id), unwinds) in program
+        .functions
+        .iter()
+        .zip(&callees.ids)
+        .zip(trusted.unwinds())
+    {
         ctx.func.signature = signature_of(function);
         ctx.func.name = UserFuncName::testcase(names::function(&function.name));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
@@ -194,7 +213,7 @@ pub fn program<M: Module>(
             &callees,
             id,
             function,
-            &unwinds,
+            unwinds,
         );
         functions.push(define(module, &mut ctx, id, keep_clif, sites)?);
     }
@@ -229,7 +248,10 @@ pub fn program<M: Module>(
         closures.push((
             closure,
             args,
-            define(module, &mut ctx, id, false, Vec::new())?,
+            lowering
+                .checked
+                .then(|| EntrySig::closure_entry(function, closure.captures as usize)),
+            define(module, &mut ctx, id, keep_clif, Vec::new())?,
         ));
     }
     let mut applies = Vec::with_capacity(imports.applies.len());
@@ -250,7 +272,7 @@ pub fn program<M: Module>(
         ctx.func.name = UserFuncName::testcase(name);
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
         apply::define_pap_adapter(b, module, &imports, rest);
-        paps.push((rest, define(module, &mut ctx, id, false, Vec::new())?));
+        paps.push((rest, define(module, &mut ctx, id, keep_clif, Vec::new())?));
     }
     let data = data.define(module)?;
     Ok(Lowered {

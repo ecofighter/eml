@@ -75,7 +75,7 @@ macro_rules! entries {
         entries!(@table [pub(crate)] ROWS "eml_x_" [eml_rows::rows] [
             /// 終了コードをworkerの構造体に置き、`exit`の中断を始めて戻る。生成したコードは、戻った後で巻き戻しへ分岐する。
             #[allow(non_snake_case)]
-            pub(crate) shim fn Exit(ctx, code: int) -> never {
+            pub(crate) shim[Row] fn Exit(ctx, code: int) -> never {
                 // SAFETY: 行のエントリは、`ctx.runtime()`が生きている`Worker`を指し、呼び出しの間ほかの誰もそれに触れない
                 // ときだけ呼ぶ (docs/spec/native.md の「実行の始めと終わり」)
                 let worker = unsafe { worker::of(ctx) };
@@ -89,7 +89,7 @@ macro_rules! entries {
             /// メッセージをworkerの構造体に置いて戻る。`message`の参照はworkerの構造体へ移るので、生成したコードは
             /// 呼び出しの後でこれを手放さない。
             #[allow(non_snake_case)]
-            pub(crate) shim fn Panic(ctx, message: obj) -> never {
+            pub(crate) shim[Row] fn Panic(ctx, message: obj) -> never {
                 // SAFETY: 行のエントリは、`ctx.runtime()`が生きている`Worker`を指し、呼び出しの間ほかの誰もそれに触れない
                 // ときだけ呼ぶ (docs/spec/native.md の「実行の始めと終わり」)。
                 // 生成したコードは、生きている文字列の参照を1つ渡し、その後この語を使わない。失敗を置いたままでは呼ばない
@@ -115,7 +115,7 @@ macro_rules! entries {
 
             $(
                 #[allow(non_snake_case)]
-                $vis shim fn $variant(ctx $(, $arg: $kind)*) -> $ret {
+                $vis shim[Row] fn $variant(ctx $(, $arg: $kind)*) -> $ret {
                     // SAFETY: 生成したコードは、行の関数が求めるとおりの語を渡す (docs/spec/lir.md の「extern の借用」)
                     match unsafe { row_fn!($path $first)(ctx $(, $arg)*) } {
                         Ok(value) => entry_ok!($ret, value),
@@ -169,14 +169,15 @@ mod fatal {
         }
     );
 
-    unsafe extern "C" fn call_row(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn call_row(ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         // SAFETY: `enter`は生きている`Ctx`を渡し、`argv`はテストの語を指す。エントリは戻らない
         unsafe { *argv = IntShow(ctx, 5).bits() as u64 };
     }
 
     #[test]
     fn a_row_error_of_the_internal_class_is_recorded() {
-        assert_eq!(TEST_ROWS.len(), 1);
+        assert_eq!(TEST_ROWS::<Fast>().len(), 1);
         let host = StdHost::new(
             Box::new(std::io::sink()),
             Box::new(std::io::sink()),
@@ -190,6 +191,7 @@ mod fatal {
             files: Slice::new(&[]),
             data: Slice::new(&[]),
             paps: Slice::new(&[]),
+            entries: Slice::new(&[]),
             panic_effect: NO_EFFECT,
             io_effect: NO_EFFECT,
         };

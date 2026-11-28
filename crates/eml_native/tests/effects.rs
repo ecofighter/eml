@@ -7,7 +7,7 @@ use eml_rt::{Ctx, Fast, Fault, HeapError, Word};
 
 use crate::common::native::{
     Visit, Visits, agree, agree_source, call_visited, call_visited_at, clif, machine, native,
-    program, trust, visit, visit_each,
+    program, visit, visit_each,
 };
 
 /// 即値の数。`evv_mask`は項目の列とその長さ、`root_get`と`root_set`は番号である。
@@ -28,7 +28,7 @@ fn every_prim_entry_is_named_after_its_prim() {
     const NO_ENTRY: [&str; 3] = ["yielding", "yield_status", "empty_mut_array"];
     for prim in Prim::KINDS {
         let symbol = format!("eml_rt_{}", prim.name());
-        let entry = eml_nrt::entries().find(|e| e.symbol == symbol);
+        let entry = eml_nrt::entries::<eml_nrt::mode::Fast>().find(|e| e.symbol == symbol);
         if NO_ENTRY.contains(&prim.name()) {
             assert!(entry.is_none(), "{symbol}");
             continue;
@@ -44,7 +44,7 @@ fn every_prim_entry_is_named_after_its_prim() {
     }
     for step in Step::ALL {
         let symbol = format!("eml_rt_{}", step.name());
-        let entry = eml_nrt::entries()
+        let entry = eml_nrt::entries::<eml_nrt::mode::Fast>()
             .find(|e| e.symbol == symbol)
             .unwrap_or_else(|| panic!("no entry {symbol}"));
         assert_eq!(entry.params.len(), step.operands(), "{symbol}");
@@ -849,84 +849,14 @@ fn fail() -> float {
     ));
 }
 
-/// verifierを通さずに読んだ`text`のプログラムを読み込み、`load`のpanicの文を返す。
-fn load_panic(text: &str) -> String {
-    let program = trust(eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}")));
-    let linked = eml_test_support::link(&program);
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut machine = machine();
-        let _ = machine.load(&program, &linked);
-    }))
-    .expect_err("the load panics");
-    match panic.downcast::<String>() {
-        Ok(message) => *message,
-        Err(panic) => panic
-            .downcast::<&str>()
-            .map(|message| message.to_string())
-            .unwrap_or_default(),
-    }
-}
-
-/// 末尾の節の呼び出しで、操作の結果が呼ぶ側の結果と違うものは、どのビルドでも読み込みで断る。読み込みはどのビルドでも
-/// verifierを走らせるので、そこで断る。互換のReprは同じKindを持つので、シグネチャの結果についての下ろしの`assert`が
-/// 先に働くことはなく、2つ目の守りとして残る (docs/spec/lir.mdの「verifier」)。
-#[test]
-fn release_check_a_tail_clause_result_mismatch_panics() {
-    let message = load_panic(&format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  return ()
-}}
-fn f() -> float {{
-  tail clause Counter.get(())
-}}
-"
-    ));
-    let expected = "invalid LIR at the native load";
-    assert!(message.contains(expected), "{message}");
-}
-
-/// 引数が操作のものと違う節の関数は、どのビルドでも読み込みのverifierが断る。クロージャのエントリを定義する繰り返しの
-/// `assert`は2つ目の守りとして残る。
-#[test]
-fn release_check_a_clause_entry_signature_mismatch_panics() {
-    let message = load_panic(&format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  let w.0: evv = prim evv_get()
-  let e.1: ev lin = evidence Counter((), w.0) [&g, &p]
-  let u.4: unit = drop e.1
-  return ()
-}}
-internal clause Counter.get fn g(e.0: cev, x.1: float) -> tobj {{
-  decref e.0
-  return ()
-}}
-internal clause Counter.put fn p(e.0: cev, x.1: tobj) -> unit {{
-  decref e.0
-  decref x.1
-  return ()
-}}
-"
-    ));
-    let expected = "invalid LIR at the native load";
-    assert!(message.contains(expected), "{message}");
-}
-
 /// `agree_source`と同じだが、先にコンパイルしたプログラムが着地の印を持つ巻き戻しの地点を持つことを確かめる。optimizeは
 /// 本体と節を丸ごと見えるhandlerを消すので、そうなればテストは着地について何も確かめなくなるためである。
 fn agree_landing(source: &str) {
     let program = eml_test_support::lir(source);
-    let lands = eml_lir::unwind::points(&program, |_| true)
-        .into_iter()
-        .flatten()
-        .any(|unwinds| {
-            unwinds
-                .unwrap_or_else(|error| panic!("{error}"))
-                .points
-                .iter()
-                .any(|point| point.landing.is_some())
-        });
+    let lands = program
+        .unwinds()
+        .iter()
+        .any(|unwinds| unwinds.points.iter().any(|point| point.landing.is_some()));
     assert!(lands, "the compiled program has a landing point");
     agree_source(source);
 }
@@ -1087,20 +1017,14 @@ fn f3(x.0: obj) -> int {{
 {FAIL_ABORTS}{PROMPT}"
     );
     let program = program(&text);
-    let points = eml_lir::unwind::points(&program, |_| true);
+    let points = program.unwinds();
     let points_of = |name: &str| {
         let index = program
             .functions
             .iter()
             .position(|function| function.name == name)
             .unwrap_or_else(|| panic!("no function `{name}`"));
-        points[index]
-            .as_ref()
-            .expect("every function is wanted")
-            .as_ref()
-            .unwrap_or_else(|error| panic!("{error}"))
-            .points
-            .clone()
+        points[index].points.clone()
     };
     for name in ["f1", "f2", "f3"] {
         assert!(
@@ -1360,51 +1284,4 @@ yields fn in_tail(u.0: tobj) -> tobj {{
     );
     agree(&text);
     assert_eq!(native(&text), ("in place\ntail\n".to_string(), Ok(None)));
-}
-
-/// 着地の印を持つ`apply`の後には`prompt$`の呼び出しが続かなければならない。`abort`のバイトだけを確かめる呼び出しの
-/// 後のコードはこれに頼るので、どのビルドでも読み込みのverifierが断る。下ろしの`assert`は2つ目の守りとして残る
-/// (docs/spec/native.mdの「巻き戻しの地点」)。
-#[test]
-fn release_check_a_marked_apply_not_followed_by_prompt_panics() {
-    let message = load_panic(&format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  return ()
-}}
-yields fn g(u.0: tobj) -> tobj {{
-  return u.0
-}}
-fn f(w.2: evv) -> tobj {{
-  let ev.0: ev lin = evidence Counter((), w.2) [&get$entry, &put$entry]
-  let x.1: tobj = yields apply &g(()) prompt ev.0
-  let u.5: unit = drop ev.0
-  return x.1
-}}
-{COUNTER_ENTRIES}"
-    ));
-    let rule = "the apply with the prompt marker `ev.0` is not followed by `prompt$`";
-    let expected = format!("invalid LIR at the native load: {rule} in `f`");
-    assert!(message.contains(&expected), "{message}");
-}
-
-/// 読み込みは、関数ごとの検査だけでなく、プログラムの全体にかかる規則 (`clause`の印の関数のABI) もどのビルドでも
-/// 断る (docs/spec/lir.mdの「verifier」)。
-#[test]
-fn release_check_a_program_level_rule_is_refused() {
-    let message = load_panic(&format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  return ()
-}}
-internal clause Counter.get fn g(e.0: cev, x.1: float) -> tobj {{
-  decref e.0
-  return ()
-}}
-"
-    ));
-    assert!(
-        message.contains("invalid LIR at the native load"),
-        "{message}"
-    );
 }

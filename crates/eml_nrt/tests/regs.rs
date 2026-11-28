@@ -8,7 +8,11 @@ mod imp {
 
     /// 呼ばれる側が保存するレジスタをすべて壊してから`eml_fatal(ctx, 7, 9)`へ飛ぶthunk。
     #[unsafe(naked)]
-    pub unsafe extern "C" fn clobber_thunk(ctx: *mut Ctx<Fast>, entry: *const u8, argv: *mut u64) {
+    pub unsafe extern "C" fn clobber_thunk(
+        ctx: *mut std::ffi::c_void,
+        entry: *const u8,
+        argv: *mut u64,
+    ) {
         core::arch::naked_asm!(
             "mov x19, #-1", "mov x20, #-1", "mov x21, #-1", "mov x22, #-1", "mov x23, #-1",
             "mov x24, #-1", "mov x25, #-1", "mov x26, #-1", "mov x27, #-1", "mov x28, #-1",
@@ -18,7 +22,7 @@ mod imp {
             "mov x1, #7",
             "mov x2, #9",
             "b {fatal}",
-            fatal = sym eml_nrt::eml_fatal,
+            fatal = sym eml_nrt::eml_fatal::<eml_rt::Fast>,
         )
     }
 
@@ -79,7 +83,11 @@ mod imp {
     }
     /// 自分のフレームポインタのレジスタを4つ目の引数にして`walk_frames`へ飛ぶthunk。
     #[unsafe(naked)]
-    pub unsafe extern "C" fn fp_thunk(ctx: *mut Ctx<Fast>, entry: *const u8, argv: *mut u64) {
+    pub unsafe extern "C" fn fp_thunk(
+        ctx: *mut std::ffi::c_void,
+        entry: *const u8,
+        argv: *mut u64,
+    ) {
         core::arch::naked_asm!("mov x3, x29", "b {walk}", walk = sym crate::stub::walk_frames)
     }
 
@@ -102,13 +110,17 @@ mod imp {
 
     /// 呼ばれる側が保存するレジスタをすべて壊してから`eml_fatal(ctx, 7, 9)`へ飛ぶthunk。
     #[unsafe(naked)]
-    pub unsafe extern "C" fn clobber_thunk(ctx: *mut Ctx<Fast>, entry: *const u8, argv: *mut u64) {
+    pub unsafe extern "C" fn clobber_thunk(
+        ctx: *mut std::ffi::c_void,
+        entry: *const u8,
+        argv: *mut u64,
+    ) {
         core::arch::naked_asm!(
             "mov rbx, -1", "mov rbp, -1", "mov r12, -1", "mov r13, -1", "mov r14, -1", "mov r15, -1",
             "mov esi, 7",
             "mov edx, 9",
             "jmp {fatal}",
-            fatal = sym eml_nrt::eml_fatal,
+            fatal = sym eml_nrt::eml_fatal::<eml_rt::Fast>,
         )
     }
 
@@ -144,7 +156,11 @@ mod imp {
     }
     /// 自分のフレームポインタのレジスタを4つ目の引数にして`walk_frames`へ飛ぶthunk。
     #[unsafe(naked)]
-    pub unsafe extern "C" fn fp_thunk(ctx: *mut Ctx<Fast>, entry: *const u8, argv: *mut u64) {
+    pub unsafe extern "C" fn fp_thunk(
+        ctx: *mut std::ffi::c_void,
+        entry: *const u8,
+        argv: *mut u64,
+    ) {
         core::arch::naked_asm!("mov rcx, rbp", "jmp {walk}", walk = sym crate::stub::walk_frames)
     }
 
@@ -167,14 +183,18 @@ mod imp {
 
     /// 呼ばれる側が保存するレジスタをすべて壊してから`eml_fatal(ctx, 7, 9)`へ飛ぶthunk。
     #[unsafe(naked)]
-    pub unsafe extern "C" fn clobber_thunk(ctx: *mut Ctx<Fast>, entry: *const u8, argv: *mut u64) {
+    pub unsafe extern "C" fn clobber_thunk(
+        ctx: *mut std::ffi::c_void,
+        entry: *const u8,
+        argv: *mut u64,
+    ) {
         core::arch::naked_asm!(
             "mov rbx, -1", "mov rbp, -1", "mov rdi, -1", "mov rsi, -1", "mov r12, -1", "mov r13, -1", "mov r14, -1", "mov r15, -1",
             "pcmpeqd xmm6, xmm6", "pcmpeqd xmm7, xmm7", "pcmpeqd xmm8, xmm8", "pcmpeqd xmm9, xmm9", "pcmpeqd xmm10, xmm10", "pcmpeqd xmm11, xmm11", "pcmpeqd xmm12, xmm12", "pcmpeqd xmm13, xmm13", "pcmpeqd xmm14, xmm14", "pcmpeqd xmm15, xmm15",
             "mov edx, 7",
             "mov r8d, 9",
             "jmp {fatal}",
-            fatal = sym eml_nrt::eml_fatal,
+            fatal = sym eml_nrt::eml_fatal::<eml_rt::Fast>,
         )
     }
 
@@ -226,7 +246,11 @@ mod imp {
     }
     /// 自分のフレームポインタのレジスタを4つ目の引数にして`walk_frames`へ飛ぶthunk。
     #[unsafe(naked)]
-    pub unsafe extern "C" fn fp_thunk(ctx: *mut Ctx<Fast>, entry: *const u8, argv: *mut u64) {
+    pub unsafe extern "C" fn fp_thunk(
+        ctx: *mut std::ffi::c_void,
+        entry: *const u8,
+        argv: *mut u64,
+    ) {
         core::arch::naked_asm!("mov r9, rbp", "jmp {walk}", walk = sym crate::stub::walk_frames)
     }
 

@@ -438,7 +438,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - 飛んでいるyieldは、巻き戻しの地点 (下の「巻き戻しの地点」) を通らない。yieldしうる呼び出し ([Core IR](core-ir.md)の「yield の地点」、`reuse::may_yield`) はyieldを飛ばしたまま戻り、フレームは`prim yielding()`の確認まで、確認のない呼び出しでは`return`まで走る ([Core IR](core-ir.md)の「yield の確認のない呼び出しの後」)
 - そのような呼び出しの後、確認までに、ブロックは巻き戻しの地点も`prim yield_to`も持たない。確認はブロックの最後の文で、ブロックは`switch y { 0 -> .., _ -> .. }`で終わり、遅い経路は巻き戻しの地点も`prim yield_to`も持たずに`return`で終わる。確認のない呼び出しの後には、巻き戻しの地点でも`prim yield_to`でもない文だけが続き、ブロックは`return`で終わる
 - 呼び出しと確認の間にあるのは、結果の変換とRCの命令である (下の「ダミーの値」)。RCの命令は物体を解放しうるが、ファイナライザは文脈を取らないので、失敗もyieldも始めない
-- verifierはこれを6つの段のすべてで確かめるので、どちらの読み込みも、これを破るプログラムを拒む。着地が入る関数の印 (上の「着地の印」) のほかは、`yields`の印が誤っていることは確かめない (下の「実行の前提」)
+- verifierはこれを6つの段のすべてで確かめるので、`Trusted::new`は、これを破るプログラムを断る。着地が入る関数の印 (上の「着地の印」) のほかは、`yields`の印が誤っていることは確かめない (下の「実行の前提」)
 
 ### エントリの関数の印
 
@@ -733,13 +733,13 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数vが見えること、vのReprが`ev`であること、vが呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not ev ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
   - 印のほかの検査の後に、印の付いた呼び出しに`prompt$`が続くことを確かめる (上の「着地の印」。`` the apply with the prompt marker `ev.1` is not followed by `prompt$` ``)
-  - 次に、その呼び出しが入る関数の形と`yields`の印を確かめる (上の「着地の印」)。形は関数ごとの要約が持ち、verifierはプログラムのすべての関数についてそれを求める。そのためこの検査は呼ぶ相手の本体を読まず、`verified_for`がたどらない相手にも当たる (`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` ``、`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it neither runs `prim yield_finish` nor returns ``、`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it returns without `prim yield_finish`, and it is not marked `yields` ``)
+  - 次に、その呼び出しが入る関数の形と`yields`の印を確かめる (上の「着地の印」)。形は関数ごとの要約が持ち、verifierはプログラムのすべての関数についてそれを求める。そのためこの検査は呼ぶ相手の本体を読まない (`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but it runs an unwind point or `prim yield_to` before `prim yield_finish` ``、`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it neither runs `prim yield_finish` nor returns ``、`` `prompt$` is entered at the apply with the prompt marker `ev.1`, but a path of it returns without `prim yield_finish`, and it is not marked `yields` ``)
 - yieldしうる呼び出し (上の「yieldの確認までの間」) の検査は、6つの段のすべてで走る。印の付いた`apply`は着地の印の検査に任せ、続く`prompt$`の呼び出しは、`yields`の関数の中のyieldしうる呼び出しとして、この検査を受ける。文言は次の4つである
   - `` `g` may yield, but an unwind point or `prim yield_to` follows it before `prim yielding()` ``
   - `` `g` may yield, but its block ends with neither `prim yielding()` nor `return` ``
   - `` the `prim yielding()` after `g` is not the last statement of a block that ends with a `switch` on it with the case `0` and a default ``
   - `` the slow path after `g` runs an unwind point or `prim yield_to`, or does not return ``
-- 所有の段の走査は、関数のエントリと巻き戻しの地点ごとの所有を書き留める。所有を求める走査を、verifierと巻き戻しの表で2つ持たないためである。`eml_lir::unwind::verified(program)`は、プログラム全体の検査と同じ1回の走査で、すべての関数の表を`program.functions`の順に返す。`eml_lir::unwind::verified_for(program, walked)`は同じ検査をするが、たどるのは`walked`の関数だけで、プログラム全体の規則 (`clause`の印の関数のABI、値の参照など) はすべての関数に当て、`walked`の関数の表だけを返す。外した関数は、前の確かめが同じ名前でたどっていなければならず、そのコードが同じであることは呼ぶ側の約束である ([VM](vm.md)の「追記」)。VMの読み込みは、これですでにある関数をたどり直さない ([VM](vm.md)の「追記」)。`eml_lir::unwind::points(program, wanted)`はプログラム全体の規則を確かめず、関数ごとに表か誤りを返す。verifierを通らないIRの地点を見るテストと、VMの確かめない読み込み (下の「実行の前提」) が使う
+- 所有の段の走査は、関数のエントリと巻き戻しの地点ごとの所有を書き留める。所有を求める走査を、verifierと巻き戻しの表で2つ持たないためである。crateの中だけの`eml_lir::unwind::verified(program)`は、プログラム全体の検査と同じ1回の走査で、すべての関数の表を`program.functions`の順に返し、`Trusted::new`がこれを呼ぶ (下の「エンジンの約束」)。crateの中だけの`eml_lir::unwind::points(program)`はプログラム全体の規則を確かめず、関数ごとに表か誤りを返し、`Trusted::unverified`が使う。テストは表を`Trusted::unwinds()`から読む
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)
 - 境界の検査は、R7とR8の検査のうち、`jump`、`return`、`box`、`unbox`を除くものである。直接の呼び出しの引数と結果、`closure`の引数、`apply`の呼ばれる値と引数と結果 (`tobj`と比べる)、`par`の子 (`tobj`と比べる) と結果 (`obj`)、`clause`と`prim`のオペランドと結果、`evidence`の状態と外側のリストと捕獲と束縛、`clause`の印の関数の引数と`ret`が操作の表と互換であること、宣言したReprが`tobj`のフィールドである。`tail`の結果は、呼び出し元の`rets`とReprと印を比べる。translateとEPの出力は、boxの挿入より前には境界に合わないので、Core IRのverifierとLIRのエントリの段は境界を見ない
 - 所有は、どの経路でも、関数のエントリと束縛で得た参照と、`dup` と `release` で増やした参照が、消費と `decref` と `release` でちょうど使い切られることを確かめる。経路ごとに持つのは、RC の対象の変数ごとの所有の数だけである。`return` と `tail` の時点では、所有が残らない
@@ -837,7 +837,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `evidence`のエフェクトがエフェクトの表にあり (``an evidence names effect 7, which is not in the effect table``)、エントリの数が操作の数と同じである (``an evidence of `State` has 1 entries, but the effect has 2 operations``)。各エントリは、その位置の操作の`clause`の印を持ち、`cev`を受ける関数である (``entry 0 of an evidence of `State` is `g`, which is not a clause``、``entry 0 of an evidence of `State` is `g`, a clause of `Counter.get` ``)。各エントリは、節が捕獲する数 (関数の引数の数 - 1 - 操作の引数の数) と同じ数の値をちょうど捕獲する (``entry 0 of an evidence of `State` gives `g` 2 captures, but the clause captures 1``)。節の呼び出しは、読んだクロージャを確かめずに操作のシグネチャで呼ぶので、エントリに入るものをevidenceを作る所で決める
   - 境界の段では、束縛は`ev`で、状態は`tobj`に、外側のリストは`evv`に渡り、各捕獲はエントリの関数の対応する引数と`unr`に渡る
   - これらの規則と、節の呼び出しが自分の操作のエントリを読むことで、節の呼び出しが呼ぶクロージャは、evidenceを作った命令がその操作のエントリにしたものになり、そのコードは操作のシグネチャを持つ。下のevidenceの役の規則で`evv`はevidenceだけを持つ
-  - どちらの読み込みも、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムを断る。ネイティブの読み込みは`eml_lir::unwind::verified`でプログラム全体をたどってpanicする。VMの読み込みは`eml_lir::unwind::verified_for`で、プログラム全体の規則をすべての関数に当て、変換する関数 (debugのビルドではすべての関数) だけをたどり、`CompileError::Invalid`を返す。すでにある関数を飛ばすのは、名前が同じ関数は同じコードであるという約束による ([VM](vm.md)の「追記」)
+  - `Trusted::new`は、どのビルドでもプログラムを所有の段のverifierで確かめ、verifierが拒むプログラムを断る。エンジンの読み込みは確かめ直さない (下の「エンジンの約束」)
   - `clause`の印の関数は、値として参照されず (`&g`、`closure g(..)`。`` `g` is a clause of `E.op`, but it is used as a function value ``)、直接も呼ばれない。名指すのは`evidence`のエントリだけである。印のエフェクトと操作が表にあり、捕獲の後にevidenceと操作の引数を受ける
 - evidenceの役の検査は次のとおりである。Core IRのEPの段と、LIRの6つの段のすべてで走る
   - 文脈のReprの変数は、関数かブロックの引数か、`evidence`か、そのReprを返す行の基本操作が束縛する。呼び出し、戻らない束縛、複数の値の`let`、フィールドはどれも束縛しない (`` `e.3` is ev, but it is not bound by a primitive that returns ev ``)
@@ -927,12 +927,13 @@ LIRを実行する[VM](vm.md)とネイティブのコードは、次の意味に
 - `faults` でない extern、prim、末尾の呼び出し (`tail call`、`tail apply`、`tail clause`) は地点にならない。末尾の呼び出しはフレームを呼ばれる側に渡すので、その位置に止まるフレームがない
 - 地点でないものは、関数の中で中断が始まらない。中断が通るフレームは、いつも地点の命令の直後で止まっているか、関数のエントリで止まっている
 - 関数ごとにエントリの行を1つ持つ。エントリの行は、関数に入った直後に所有している値を並べる。エントリのフレームは、貸された引数を除くRCの表現を持つ引数をすべて所有し、借りたフィールドもtokenも着地の印も持たない。そのため行は、所有しているRCの表現を持つ引数を数1で、`VarId`の昇順に並べるだけである。貸された引数は呼んだ側が生かしておき、呼んだ側の行が手放す
-- `eml_lir::unwind::verified`、`verified_for`、`points`は、関数ごとに`Unwinds { entry, points }`を`FnIdx`の番号で返す。`entry`がエントリの行、`points`が地点で、ブロックの順、文の順に並ぶ。所有は、所有の段の走査 (上の「verifier」) が、ブロック0の最初の文の前と各地点で書き留める ([VM](vm.md)の「巻き戻しの表」)
+- `eml_lir::unwind::verified`と`points`は、関数ごとに`Unwinds { entry, points }`を`FnIdx`の番号で返す。`entry`がエントリの行、`points`が地点で、ブロックの順、文の順に並ぶ。所有は、所有の段の走査 (上の「verifier」) が、ブロック0の最初の文の前と各地点で書き留める ([VM](vm.md)の「巻き戻しの表」)
+- エンジンは表を`Trusted::unwinds()`から読む。`Trusted::unverified`が作った`Trusted`では、所有の段の走査が拒む関数は、空のエントリの行と、地点ごとに、所有する変数もtokenも持たず文の着地の印を持つ行を持つ。そういう関数のフレームを中断が通っても、何も手放さない。これはいつも記憶の安全を守り、フレームが持っていたものは手放されずに残る。成功で終わるrunでは、検査モードがそれをリークとして報告する
 - 名前が同じ関数の表は、REPL のどの入力で作っても同じになる。表は関数のコードだけで決まり、ほかの関数に依存しない。名前が同じ関数は同じコードなので ([VM](vm.md) の「追記」)、表も同じになる
 
 ## 実行の前提
 
-プログラムは読み込みを通ってだけエンジンに届き、読み込みは最後の段のverifierが拒むプログラムを断る (上の「verifier」。例外は下の`eml_vm`のテストだけの確かめない読み込みである)。verifierは、所有、Repr、印、evidenceの役、すべてのevidenceのエントリ、yieldしうる呼び出しから確認までの間、着地が入る関数の形と`yields`の印を確かめる。VMの速いモードとネイティブのコードは、渡されたプログラムについて、verifierが確かめられない次のことをなお前提にする。
+プログラムは`Trusted`としてだけエンジンに届き (下の「エンジンの約束」)、`Trusted::new`は最後の段のverifierが拒むプログラムを断る (上の「verifier」)。verifierは、所有、Repr、印、evidenceの役、すべてのevidenceのエントリ、yieldしうる呼び出しから確認までの間、着地が入る関数の形と`yields`の印を確かめる。VMの速いモードとネイティブのコードは、渡されたプログラムについて、verifierが確かめられない次のことをなお前提にする。
 
 - どの`obj`と`tobj`の値も、作ったときの配置で読み、手放す。evidenceの状態もこれに含まれ、最後に入れた値として読む (取り出した後の状態は`()`である)
 - 実行時に`Lin`である値に付いた`poly`や`unr`の印は確かめない
@@ -946,13 +947,13 @@ LIRを実行する[VM](vm.md)とネイティブのコードは、次の意味に
 
 verifierは命令ごとに所有、Repr、印を確かめるが、値を作ったときの配置を追わず、`poly`の印が指す物体のKindも確かめられない (上の「Kind の印の検査」)。externの引数は、Reprと印でしか比べない。そのため、verifierを通ることは、verifierが確かめる規則を保証するが、上の前提は保証しない。
 
-エンジンのエントリが受け取る約束と、残りの前提を約束するのが誰かは、次の「エンジンの約束」にある。読み込みは、どのビルドでもverifierが確かめることを確かめ、verifierが拒むプログラムを断る (上の「verifier」)。verifierが拒むIRを読み込めるのは`eml_vm`のテストだけで、開発だけのfeature `testing`の後ろにある確かめない読み込み (`unsafe fn load_unverified`) を使う ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)。コードを持つ`Machine`に追記するときの約束は、次の「エンジンの約束」のP2である。
+エンジンのエントリが受け取る約束と、残りの前提を約束するのが誰かは、次の「エンジンの約束」にある。`Trusted::new`は、どのビルドでもverifierが確かめることを確かめ、verifierが拒むプログラムを断る (上の「verifier」)。verifierが拒むIRは、「エンジンの約束」のP6の下で`unsafe fn Trusted::unverified`を通ってだけエンジンに届き、それを作るのはテストだけである ([テスト戦略](../implementation/testing.md)の「`eml_vm` のテスト」)。コードを持つ`Machine`に追記するときの約束は、次の「エンジンの約束」のP2である。
 
 ## エンジンの約束
 
-エンジンはプログラムを`eml_lir::Trusted`としてだけ受け取る。`Trusted`は`Program`を包み、作る道は`unsafe fn Trusted::new`だけである。この関数の約束 (P1) は、渡す`Program`が上の「実行の前提」のうちverifierが確かめられない前提をすべて満たすことである。`Trusted`は中の`Program`を書き換える道を持たない。テストの外で`Trusted`を作るのは`eml_cli`だけで (`Session`とREPLが、1つの関数を通して作る)、検査を通ったプログラムから自分のパイプラインで作ったLIRだけを包む ([アーキテクチャ](../implementation/architecture.md)の「CLI と lib API」)。テストは手書きのLIRを包み、まず検査モードで実行する。
+エンジンはプログラムを`eml_lir::Trusted`としてだけ受け取る。`Trusted`は`Program`をその関数ごとの巻き戻しの表 (「巻き戻しの地点」) と一緒に包み、構築子は`unsafe fn Trusted::new`と`unsafe fn Trusted::unverified`の2つである。`Trusted::new`は、どのビルドでも所有の段のverifierを走らせてその走査の表を持ち、verifierが拒むプログラムにはその`VerifyError`を返す。その約束 (P1) は、渡す`Program`が上の「実行の前提」のうちverifierが確かめられない前提をすべて満たすことである。`Trusted`は中の`Program`を書き換える道を持たない。テストの外で`Trusted`を作るのは`eml_cli`だけで (`Session`とREPLが、1つの関数を通して作る)、検査を通ったプログラムから自分のパイプラインで作ったLIRだけを包む ([アーキテクチャ](../implementation/architecture.md)の「CLI と lib API」)。`eml_cli`は、断られることをコンパイラの内部の誤りとしてpanicする。テストは手書きのLIRを包み、まず検査モードで実行する。
 
-VMのエントリ (`eml_vm::execute`、`Machine`、`AnyMachine`、`CodeBase`の`load`と`extend`) は`&Trusted`を取る。verifierを通さない読み込み (`load_unverified`) は`&Program`を取り、`Trusted`を作らない。
+VMのエントリ (`eml_vm::execute`、`Machine`、`AnyMachine`、`CodeBase`の`load`と`extend`) は`&Trusted`を取る。
 
 ネイティブのエントリ (`eml_native::execute`、`NativeMachine::load`) も`&Trusted`を取る。`eml_native::unsupported`はプログラムを調べるだけで読み込まないので、`&Program`を取る。
 
@@ -962,14 +963,15 @@ VMのエントリ (`eml_vm::execute`、`Machine`、`AnyMachine`、`CodeBase`の`
 - P3: 呼ぶ側の約束ではない。`run`と`run_shown`は、同じマシンの`load`か`extend`が返した`Loaded`を受け取る。`Loaded`は欄を隠してマシンの印を持ち、マシンはどのビルドでも、ほかのマシンの`Loaded`を内部の誤りで断る。ネイティブのマシンも同じである ([ネイティブの実行系](native.md)の「関数の形」)
 - P4: VMのマシンの`unsafe fn run_shown` (`Machine`、`AnyMachine`) に渡す`Loaded`のエントリの関数が結果をRCのReprで返すなら、その結果は文字列である。速いモードは、確かめずに結果を文字列として写す。結果がRCのReprでないエントリは約束に入らず、`run_shown`はどのビルドでも、実行する前に内部の誤りで断る
 - P5: `unsafe fn Session::load_with_std`は標準ライブラリを差し替える。差し替えた標準ライブラリのどの`extern`の宣言も、組み込みの表の行が前提にする型を持つ。埋め込んだ標準ライブラリはテストが表と結び付けるが、差し替えたものを確かめるものはない (上の「実行の前提」の最後の項目)
-- R-2: 呼ぶ側の約束ではない。`load`か`extend`が表を書き始めた後 (Cの表を比べた後) に返す誤りは、マシンを使えなくする。その後の`load`、`extend`、`run`、`run_shown`は、どのビルドでもpanicする。何も書く前に返す誤り (`Invalid`、`MultiValueEntry`、Cの表の`Mismatch`) の後は、マシンを使い続けてよい
+- P6: `unsafe fn Trusted::unverified`は、verifierを走らせずにプログラムを包む。プログラムは、呼ぶ側がわざと入れた違反を除き、verifierが確かめる規則を含めて「実行の前提」をすべて満たす。わざと入れた違反はどれも、値を読み込むエンジンとモードが、操作がそれに頼る前に報告するもの ([オブジェクトモデル](object-model.md)の「報告する誤り」の誤りと、エンジンの内部の誤り) か、物体を手放さずに残すだけのものである。所有の段の走査を通る関数はその表を持ち、走査が拒む関数は、空のエントリの行と、巻き戻しの地点ごとに何も手放さず文の着地の印を持つ行を持つ。そのため、そのフレームを中断が通ると、フレームが持っていたものは手放されずに残る (「巻き戻しの地点」)。呼ぶのはテストだけである
+- R-2: 呼ぶ側の約束ではない。`load`か`extend`が表を書き始めた後 (Cの表を比べた後) に返す誤りは、マシンを使えなくする。その後の`load`、`extend`、`run`、`run_shown`は、どのビルドでもpanicする。何も書く前に返す誤り (`MultiValueEntry`、Cの表の`Mismatch`) の後は、マシンを使い続けてよい
 - R-3: `unsafe fn Machine::with_driver`は、VMが作っていないdriverをVMに渡す。driverは自分がしたことだけを報告する。`Op::Read`の完了`Ok(Done::Size(n))`は、driverがその前に`buf.ptr()`から`n`バイトを書いたことを表し、`n`は`buf.cap()`以下である。`Submit::Pending`で受け付けた鍵には、完了を高々1つ返す。driverが貸されたbufferを読み書きするのは、それを貸した`submit`からその操作の完了までの間だけで、`Submit::Done`の後、完了の後、`pending()`を0にした`quiesce`の後、落とされた後には触れない。driverは、bufferもその写しも、その間の外で使うものに渡さない。`Op::Write`のbufferも、完了の後はプログラムに戻るためである ([VM](vm.md)の「時計と driver」)。ほかのエントリはdriverを自分で作る
 - R-5: コード生成器のテストのための`unsafe fn NativeMachine::call`は、読み込んだ関数を、空の`evv`を持つ新しいrunの先頭で動かす。関数は、空の`evv`と渡した引数で入っても「実行の前提」を満たす。引数はスカラーだが、型の範囲の外の`enum`はコンパイルした`switch`のコードに届き、`clause`は関数が自分で入れないevidenceを見つけない。`entry_of`は`unsafe`の関数ポインタを返し、その呼び出しも同じ約束を負う
 - R-7: `eml_sched::cells`の`Ctx`を取る公開の関数は、1つの約束の下の`unsafe fn`で、その約束はモジュールの文書の「呼ぶ側の約束」(C1からC4) である。例外はfeature `testing`の`test_ctx`と`stream_on`で、物体を作るだけなので安全である。`ctx`は呼ぶworker自身の`Ctx`で、`Ctx::heap_mut`の契約の下で使う。`here.me`と`here.host`は呼ぶworkerの番号で、引数の`worker`と呼ぶタスクを名指すセルは呼ぶタスクのものであり、速いモードでは`ctx`のyieldの状態の語は即値か不死の物体である。引数の語と引数の中の語は、どれも関数が名指すReprと種類を持つ。登録表とそれに伴う値は、約束を守る呼ぶ側だけが動かしてきたので、中の語と継続はどれも生きていて、完了はどれもその鍵へのdriver自身の完了である。`driver`はrunの`RunClock`が作ったものか、`with_driver`を通して来たものである (R-3)。driverに出した操作が貸す記憶については、呼ぶ側は呼び出しの後も`RawBuf::new`の約束を守る。登録表の操作を渡したどのdriverも、`pending()`を0にした`quiesce`から戻るか落とされるまで、記録のbufferかストリームを持つヒープを落とさず、回復もせず、`sweep_all`を呼ばない。語を置くか返すだけの関数は安全なままにする。その語を読む関数は、どれも`unsafe`の関数だからである。置いた`Op`を返す`Registry::take_queued`は`pub(crate)`である
 - R-8: driverに貸す記憶`eml_rt::RawBuf`は、欄をcrateの外から隠し、`unsafe fn RawBuf::new`だけが作る。その約束は次のとおりである。`cap == 0`なら番地は任意で、使わない。そうでなければ、`ptr`は`cap`バイトを指し、そのバイトは、その値か写しか一部で始めたどの操作も終わるまで (`Submit::Done`、完了の取り出し、`pending()`を0にした`quiesce`、driverを落とすこと)、確保されたまま動かない。それまで、driverのほかには何もそのバイトを書かず、`Read`のバイトはほかの何も読まず、`Write`のバイトは初期化されている。呼ぶ側は値をdriverにだけ渡す。`IoDriver::submit`を通すか、driverの中ではそのdriver自身のbackendに渡す。`head`と`tail`は元の範囲の中を指すので、安全なコードは貸された記憶の外の番地を作れない。`IoDriver::submit`は安全なままで、`eml_io`のdriverが読み書きするのは、出された`RawBuf`が貸す記憶だけである ([VM](vm.md)の「時計と driver」)
 - R-9: 呼ぶ側の約束ではない。`eml_rows`、`eml_nrt`、`eml_cabi`の安全な公開の項目と、`eml_vm`が再び公開する項目は、未定義の振る舞いに届かない。実行時の記憶を名指すものは、物体を作るか、語か番地を置くか返すか、`Ctx`の欄を読むだけで、`crates/eml_cli/tests/surface.rs`がそれぞれを理由とともに並べる ([アーキテクチャ](../implementation/architecture.md)の「公開の面と`unsafe`」)
 - R-15: 呼ぶ側の約束ではない。`eml_gui`のQtのbackendは、どのビルドでも、`QApplication`が生きている間は作るのを断り (`NotAvailable`)、Qtに渡す長さをどれもQtのウィジェットが取る範囲に収め、使っているidと形の違うidを断る。WinUIのbackendは、どのビルドでも、XAMLの`Application`が動いていない間は、ウィジェットを作る呼び出しと値を変える呼び出し (`create_window`、`create`、`add_item`、`set`) を断り、測る、置く、見せる呼び出しは知らないウィジェットと同じに扱う。`destroy`は確かめない。ループの前にはウィジェットがなく、ループの後はWinUIを呼ばずに参照を手放すだけだからである。2つ目のAppKitかWinUIのbackendはtoolkitのシングルトンを共有して置き換えないので、どちらにも`QApplication`のような約束はない ([アーキテクチャ](../implementation/architecture.md)の「`eml_gui`の内部」)
-- R-16: `eml_rt`の`unsafe fn Heap::share`は、送り手のスレッドが値を公開する前に、そこから届く物体を共有にする。その約束は時点の規則も持つ。`share`を呼んでから、ほかのどのスレッドも共有にした物体の参照を手放し、その解放を終えるまで、持ち主はそのヒープでページを歩く操作 (`live_objects`、`check_invariants`、`leaks`、`freeze`、`recover`、`Control::check_owned`) を呼ばず、ヒープを落とさない。`Control`のどのヒープを検査モードで歩くのも、その`Control`のヒープの物体をどのスレッドも書かない間だけである。ページを歩く操作は安全な関数のままで、スレッドをまたぐ`share`が約束を負う ([オブジェクトモデル](object-model.md)の「別のスレッドからの解放」)
+- R-16: `eml_rt`の`unsafe fn Heap::share`は、送り手のスレッドが値を公開する前に、そこから届く物体を共有にする。その約束は時点の規則も持つ。`share`を呼んでから、ほかのどのスレッドも共有にした物体の参照を手放し、その解放を終えるまで、持ち主はそのヒープでページを歩く操作 (`live_objects`、`check_invariants`、`leaks`、`freeze`、`recover`、`Owners::check`) を呼ばず、ヒープを落とさない。`Control`のどのヒープを検査モードで歩くのも、その`Control`のヒープの物体をどのスレッドも書かない間だけである。ページを歩く操作は安全な関数のままで、スレッドをまたぐ`share`が約束を負う ([オブジェクトモデル](object-model.md)の「別のスレッドからの解放」)
 
 次のものは安全の約束ではない。破っても、未定義の振る舞いでなく、誤った結果、panic、止まったままのrunになる。それぞれのdocコメントが振る舞いを書く。
 

@@ -20,7 +20,8 @@ fn ctx() -> Box<Ctx<Fast>> {
     Box::new(Ctx::new(control, HostRef::new(Arc::new(host))))
 }
 
-unsafe extern "C" fn add_one(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+unsafe extern "C" fn add_one(ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
+    let ctx = ctx.cast::<Ctx<Fast>>();
     unsafe {
         assert!(!(*ctx).jmp().is_null());
         *argv += 1;
@@ -108,7 +109,8 @@ mod fatal {
         unsafe { dive(ctx, n - 1) + std::hint::black_box(1) }
     }
 
-    unsafe extern "C" fn dive_thunk(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn dive_thunk(ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe {
             *argv = dive(ctx, *argv);
         }
@@ -131,7 +133,8 @@ mod fatal {
         );
     }
 
-    unsafe extern "C" fn nest(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn nest(ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe {
             let outer = (*ctx).jmp().cast::<JmpBuf>();
             let mut inner = [3u64];
@@ -148,7 +151,8 @@ mod fatal {
         }
     }
 
-    unsafe extern "C" fn link_thunk(ctx: *mut Ctx<Fast>, entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn link_thunk(ctx: *mut std::ffi::c_void, entry: *const u8, argv: *mut u64) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe {
             let me = (*ctx).jmp().cast::<JmpBuf>();
             assert_eq!((*me).prev.cast::<u8>().cast_const(), entry);
@@ -206,7 +210,7 @@ mod fatal {
     eml_nrt::entries! {
         const SHIMS;
 
-        shim fn eml_t_checked(ctx, x: i64) -> i64 {
+        shim[Service] fn eml_t_checked(ctx, x: i64) -> i64 {
             let _ = ctx.stack_limit();
             if x == 1 {
                 return Err(Fatal { code: 21, site: 4 });
@@ -218,7 +222,8 @@ mod fatal {
         }
     }
 
-    unsafe extern "C" fn shim_thunk(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn shim_thunk(ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe {
             *argv = eml_t_checked(ctx, *argv as i64) as u64;
         }
@@ -226,7 +231,7 @@ mod fatal {
 
     #[test]
     fn a_shim_cuts_to_enter_on_an_error_and_on_a_panic() {
-        assert_eq!(SHIMS[0].symbol, "eml_t_checked");
+        assert_eq!(SHIMS::<Fast>()[0].symbol, "eml_t_checked");
         let mut ctx = ctx();
         let mut argv = [5u64];
         assert_eq!(
@@ -258,7 +263,7 @@ mod fatal {
     eml_nrt::entries! {
         const HEAP_SHIMS;
 
-        shim fn eml_t_heap(ctx, x: i64) -> i64 {
+        shim[Service] fn eml_t_heap(ctx, x: i64) -> i64 {
             let _ = ctx.stack_limit();
             if x == 0 {
                 return Err(eml_rt::HeapError::StaleToken);
@@ -267,7 +272,8 @@ mod fatal {
         }
     }
 
-    unsafe extern "C" fn heap_thunk(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+    unsafe extern "C" fn heap_thunk(ctx: *mut std::ffi::c_void, _entry: *const u8, argv: *mut u64) {
+        let ctx = ctx.cast::<Ctx<Fast>>();
         unsafe {
             *argv = eml_t_heap(ctx, *argv as i64) as u64;
         }
@@ -275,7 +281,7 @@ mod fatal {
 
     #[test]
     fn a_heap_error_is_parked_before_the_cut() {
-        assert_eq!(HEAP_SHIMS.len(), 1);
+        assert_eq!(HEAP_SHIMS::<Fast>().len(), 1);
         let mut ctx = ctx();
         let mut argv = [0u64];
         assert_eq!(
