@@ -738,6 +738,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "eml_steps"
+version = "0.1.0"
+dependencies = [
+ "vstd",
+]
+
+[[package]]
 name = "eml_syntax"
 version = "0.1.0"
 dependencies = [

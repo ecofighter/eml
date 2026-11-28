@@ -206,6 +206,21 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `eml_vm`の`counters.rs`の単体テスト (`counters::`) も、同じ2つの設定で流す (`cargo miri test -p eml_vm --lib -- counters::`)。`Counter`の表の塊を複数のスレッドから作って読み書きするテストを含む。
 - `eml_sched`の`cells.rs`の単体テストのうち、名前が`a_read`か`a_write`で始まるものも、同じ2つの設定で流す (`cargo miri test -p eml_sched --lib -- cells::a_read cells::a_write`)。選ぶのは名前の頭なので、この2つの頭は、読みの記録が空きを貸す道と書きの記録が`Bytes`の中身を貸す道を確かめるテストにだけ付ける。数は決めない。空きが足りないbufferの中身を新しい物体へ写して貸す所 (`lend_read_room`) と、行の読みがストリームの`Vec<u8>`の空きを貸す所 (`lend_line_room`) と、貸した空きに書かれたバイトを確定する所と、ストリームのbufferの残りを読みのbufferに写す所 (`serve_rest`) をMiriで通すのは、この`a_read`のテストだけである。行の読みを含むもの (`a_read_line_*`と`a_read_after_a_read_line_*`) では、stubのdriverの代わりにテストが貸した位置へ書き、貸し、書き、確定の一周を通す。`a_write`のテストは、参照が2つある`Bytes`を写さずに貸してstubのdriverが貸された記憶を読む所と、保留の書きの間にもう1つの参照で`Bytes.set`、`push`、`append`、`truncate`をしても写しになり、同じ物体への読みが空きを貸さず、driverが完了のときに読む中身が変わらないことを、両方のモードで通す。`miri.rs`の実行はテストのdriverの上でI/Oの操作を出さない。手で書いたLIRは`Std.Async`のエントリを持たず、`Std.Net`の行は`Async`の行なので、書きの貸しも`miri.rs`でなく`cells.rs`で確かめる
 
+## `eml_steps`の検証
+
+`eml_steps` ([アーキテクチャ](architecture.md)の「`eml_steps`の内部」) は、Verus、単体テスト、信頼の検査で確かめる。証明は各操作の結果をすべて約束する。`Open`の操作は仕様が名指す仕事をそのまま返し、一覧をちょうどその仕事の分だけ変える。`limit::hit`はその仕様`hit_spec`に等しい。単体テストは規則の読み方を固定する例で、全域であることと仕様の節は証明が受け持つ。
+
+`src/trust.rs`は、`src/`のファイルがすべて一覧に載っていること、`verus!`の外のコードが`use`とmoduleの宣言だけであること、テストでないコードに`unsafe`がなく、Verusに確かめさせない項目を表す語もないことを確かめる。crateが信頼するのはVerusとvstdそのものだけである。
+
+`cargo verus verify -p eml_rt`と同じく、`cargo verus verify -p eml_steps`は0 errorsのほかに警告もtriggerの注記も出さない。`verus!`の中は`verusfmt --verus-only`で、外は`cargo fmt`で整える。Verusの書き方から出るclippyの警告は、`lib.rs`の頭で理由を書いて`allow`する。
+
+```sh
+cargo verus verify -p eml_steps                                            # Verusの証明
+verusfmt --verus-only --check $(git ls-files 'crates/eml_steps/src/*.rs')   # verus!の中の書式
+cargo test -p eml_steps                                                    # 単体テストと信頼の検査
+cargo clippy -p eml_steps --all-targets -- -D warnings
+```
+
 ## `eml_io` の検証
 
 `eml_io` の本物の driver は OS を呼ぶので、`eml_rt` の Verus と Miri では確かめられない。CI の各 OS の普通のテストに加えて、次のもので確かめる。
@@ -815,7 +830,7 @@ Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-App
 - `gui-native`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUIの手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKit、Qt、WinUIのbackendはテストの中では作れない。WindowsではWindows App SDKのファイルなしに組み、`eml_gui`のbootstrapのテストは、runnerにruntimeがなければ文言がMicrosoftの配布のページを示すことを確かめ、あれば`skipped: the Windows App SDK 2 runtime is installed`と書いて通る。Windowsでは、この行をログに出すため、別の段でこのテストだけを`--no-capture`でもう1度流す。全体の実行には`--no-capture`を付けない。nextestがテストを1つずつ流すようになるからである。Linuxでは、Qt 6の入ったdevShell `.#base`を通して流す。rustcはx86_64のLinuxで既定に自分のLLDでリンクし、nixのldのラッパーを通らないので、Qtとlibstdc++へのRUNPATHが付かない。そこでdevShellと`nix build`は`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Clinker-features=-lld`でラッパーのldに戻し、ラッパーがRUNPATHを付ける
 - `nix-build`: Linux (ubuntu-24.04) で`nix build -L`を流す。パッケージは`eml_cli`を`gui-native`を足したreleaseで組み、組み立ての中でテストを流す (「nix build の中で流さないテスト」)。10分を超えるので、ほかのジョブと並べて自分のジョブで流す。`-L`は組み立ての出力をログに出す。続けて、`result/bin/.eml-wrapped`が`libQt6Widgets.so.6`に動的にリンクすること (`readelf -d`) と、`result`に`libQt6*`、`*.dll`、`*.msix`のファイルがないことを確かめる
 - `fmt`: Linux で `cargo fmt --check` を流す
-- `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
+- `verus`: Linuxで、ふだんのdevShellを通して`cargo verus verify -p eml_rt`と`cargo verus verify -p eml_steps`と、2つのcrateのverusfmtの検査を流す
 - `licenses`: Linuxで、devShell `.#base`を通して`nix/third-party-licenses.sh --check`を流し、コミットした`THIRD-PARTY-LICENSES.md`が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md)の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
 - `miri`: Linuxで、MiriのdevShellを通して流す。借用の規則ごとにジョブを2つ立てて並べる。`eml_vm`の組は`eml_vm`の`miri::`とlibの`counters::`を、`rest`の組は`trusted::`、`eml_sched`の`cells::a_read`と`cells::a_write`、`eml_io`の`driver::tests::`、`eml_nrt`の`entries::`、`census::`、`constants::`を続けて流す。`miri::`が1つで最も長い段なので、ほかの段と分ける
 - `asan`: x86_64のLinux、aarch64のLinux、aarch64のmacOSのそれぞれで、`eml_io`のテスト、`eml_clink`のテスト、`fatal::`を除いた`eml_native`と`eml_nrt`のテストと`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`をAddressSanitizerの下で流す (下の「AddressSanitizer」)
@@ -905,6 +920,8 @@ nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_nrt --lib -- entries:: census:: constants::   # eml_nrtのエントリのマクロ、census、読み込み時の値のMiri (同上。eml_nrtの検証)
 cargo verus verify -p eml_rt                                                                # Verus の証明
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')                         # eml_rt の verus! の中の書式
+cargo verus verify -p eml_steps                                                             # eml_stepsのVerusの証明
+verusfmt --verus-only --check $(git ls-files 'crates/eml_steps/src/*.rs')                      # eml_stepsのverus!の中の書式
 bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でないfeature (なし、types、core、run (tlsなし)。eml_test_supportはhirも。eml_io、eml_rows、eml_vm、eml_nrtは--all-targetsでtlsなし、eml_rowsは--features tlsでも。eml_schedは--all-targetsでtestingなし)
 ```

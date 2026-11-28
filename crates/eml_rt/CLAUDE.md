@@ -1,6 +1,7 @@
 # eml_rt
 
 The runtime core under the VM, verified with Verus. Its specification is docs/spec/object-model.md; how it is checked is docs/implementation/testing.md の「`eml_rt` の検証」.
+`eml_steps` has its own rule in docs/implementation/architecture.mdの「`eml_steps`の内部」.
 
 - A change to `eml_rt` must pass `cargo verus verify -p eml_rt` and `verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')` besides the tests (`cargo nextest run` or `cargo test`), `cargo clippy --all-targets -- -D warnings` and `cargo fmt`, and the bench gate `bench/rt-gate.sh <the commit before the change>` on a clean tree (macOS; docs/implementation/benchmarks.md の「命令の数の測り方」). `verusfmt` formats inside `verus!`, `cargo fmt` the rest.
 - All code is inside `verus!` except the safe glue that docs/spec/object-model.md の「`unsafe` の核」 lists. What Verus does not check is the named trust list T0-T18 in the same section, pinned by `src/trust.rs`: a new FFI boundary adds a row there and a Miri test in `src/heap/tests/trusted.rs`.

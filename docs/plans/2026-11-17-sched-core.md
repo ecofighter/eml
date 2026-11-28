@@ -48,7 +48,7 @@
 - One cargo, test, Verus, Miri or bench process on the machine at a time (`ps` before starting). `.em` programs are not run in this stage.
 - `command ls` (bare `ls` can hang), `git --no-pager`, `--no-ext-diff`, GNU `sed`; quote every glob.
 - Durable notes: `/Users/arakaki/Projects/eml/.git/nc-keep/sc/` (created by SC-1): `log.md` (one line per unit and checkpoint), `SC-<n>-brief.md`, `SC-<n>-review.md`, `cp-<x>.md`, `proto/` (the consumer prototype's patch). Nothing the stage needs later lives only in a scratchpad.
-- Known item of the base: the three load-dependent `eml_cli` interrupt tests of 7.3.1 item 2; reported to the user at SC-1.
+- Known item of the base: the load-dependent child-process waits of `eml_cli`'s `cli::` and `terminal::` tests (7.3.1 item 2); reported to the user at SC-1.
 
 ## 5. Decisions
 
@@ -466,7 +466,7 @@ Docs only (section 8): runtime.md read end to end against the code and the ledge
 #### 7.3.1 G (every unit, after `git add -A`)
 
 1. `cargo test -p eml_sched -p eml_steps -q` -> exit 0.
-2. `cargo test --workspace -q` -> exit 0 (every unit: each adds a module to an existing `lib.rs` or `tests/main.rs`). Known item of the base: under this command the three `eml_cli` tests `cli::an_interrupt_stops_a_sleeping_program_with_130`, `cli::repeated_interrupts_end_a_program_waiting_in_a_read_with_130`, `terminal::interrupts::an_interrupt_stops_a_repl_input_and_the_session_continues` can fail with `the program did not start within 10s` while the directory tests load the machine. If the run's only failures are among these three with that message, run `cargo nextest run -p eml_cli --test integration -E 'test(/^cli::/) | test(/^terminal::interrupts::/)'` once, alone on the machine: all passing meets this item, and the unit's log line records which test failed under load. Any other failure, another message, or a failure of the nextest run stops the unit. This is not a retry of a test of this stage: no test of `eml_sched` or `eml_steps` may be re-run to pass.
+2. `cargo test --workspace -q` -> exit 0 (every unit: each adds a module to an existing `lib.rs` or `tests/main.rs`). Known item of the base: under this command a test of `eml_cli`'s integration binary in the modules `cli::` or `terminal::` can fail in its wait for a child process, with a message of the form `the program did not <...> within 10s` from the helper `kill_after_deadline` (`crates/eml_cli/tests/cli.rs`, line 362 at the base; seen so far: start, stop, end), while the directory tests load the machine. If every failure of the run is such a test with such a message, run `cargo nextest run -p eml_cli --test integration -E 'test(/^cli::/) | test(/^terminal::/)'` once, alone on the machine: all passing meets this item, and the unit's log line names each test that failed under load. Anything else stops the unit: a failure in another crate or module, another message, a failure of that nextest run, or the same test failing under load in three units in a row (then the user is told before going on). No test of `eml_sched` or `eml_steps` is ever re-run to pass, and no test this stage adds may wait on a child process or a wall-clock limit.
 3. `cargo clippy --all-targets -- -D warnings` and `cargo clippy -p eml_sched --all-targets -- -D warnings` -> exit 0; `cargo fmt --check` -> exit 0.
 4. `bash nix/crate-graph.sh --check` -> exit 0.
 5. `cargo nextest run -p eml_cli --test integration -E 'test(/^surface::/) | test(/^citations::/)'` passes.

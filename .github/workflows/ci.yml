@@ -218,10 +218,13 @@ jobs:
       - name: cargo verus verify -p eml_rt
         id: verify
         run: nix develop -c cargo verus verify -p eml_rt
+      - name: cargo verus verify -p eml_steps
+        if: ${{ !cancelled() && steps.verify.outcome != 'skipped' }}
+        run: nix develop -c cargo verus verify -p eml_steps
       - name: verusfmt --check
         if: ${{ !cancelled() && steps.verify.outcome != 'skipped' }}
         run: |
-          mapfile -t files < <(git ls-files 'crates/eml_rt/src/*.rs')
+          mapfile -t files < <(git ls-files 'crates/eml_rt/src/*.rs' 'crates/eml_steps/src/*.rs')
           nix develop -c verusfmt --verus-only --check "${files[@]}"
 
   # eml と一緒に配る THIRD-PARTY-LICENSES.md が、Cargo.lock と about.toml から生成した結果と同じことを確かめる。

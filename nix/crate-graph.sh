@@ -24,6 +24,7 @@ eml_nrt: eml_extern eml_rows eml_rt eml_sched
 eml_rows: eml_cabi eml_extern eml_gui eml_rt eml_sched eml_tls
 eml_rt:
 eml_sched: eml_io eml_rt
+eml_steps:
 eml_syntax: eml_diagnostics
 eml_test_support: eml_cli eml_clink eml_core_ir eml_diagnostics eml_hir eml_lir eml_native eml_nrt eml_rt eml_sched eml_syntax eml_types eml_vm
 eml_tls:
@@ -201,6 +202,8 @@ expect_tree 0 '^eml_vm v' "eml_native reaches eml_vm" -p eml_native -e normal
 expect_tree 0 '^eml_rt v' "eml_lir reaches eml_rt" -p eml_lir -e normal
 expect_tree 0 '^(eml_extern|eml_rows|eml_cabi|eml_tls|eml_gui|cranelift[a-z-]*|eml_lir|eml_vm|eml_nrt|eml_native) v' \
   "eml_sched reaches a crate above it" -p eml_sched -e normal
+# eml_stepsはworkspaceのcrateに届かない。木に出るeml_の行は自分の1行だけである
+expect_tree 1 '^eml_[a-z_]+ v' "eml_steps reaches a workspace crate" -p eml_steps -e normal
 expect_tree 0 '^(cc|cmake|cxx-build|bindgen|nasm|pkg-config) v' "the runtime closure needs a C toolchain" -p eml_nrt -e normal,build
 expect_tree 0 "$TOOL" "the runtime closure holds a compiler, an engine or a tool" -p eml_nrt -e normal
 expect_tree 0 "$TOOL" "the Tls runtime closure holds a compiler, an engine or a tool" -p eml_nrt -e normal --features eml_rows/tls
