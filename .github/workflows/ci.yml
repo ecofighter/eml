@@ -69,11 +69,6 @@ jobs:
       - name: cargo nextest run --profile timing -j 1
         if: ${{ matrix.os == 'ubuntu-24.04' && !cancelled() && steps.test.outcome != 'skipped' }}
         run: cargo nextest run --profile timing -j 1 --failure-output immediate-final
-      # eml_stepsの網羅のexplorerは、CIが`#[ignore]`のテストを流す唯一の行で、x86_64のLinuxだけで流す
-      # (docs/implementation/testing.mdの「CI」)
-      - name: cargo nextest run of the exhaustive explorer
-        if: ${{ matrix.os == 'ubuntu-24.04' && !cancelled() && steps.test.outcome != 'skipped' }}
-        run: cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)'
       # テストが落ちても lint の結果は見たいので、前の手順が済んでいれば流す
       - name: cargo clippy --all-targets
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
@@ -138,6 +133,36 @@ jobs:
           grep -q 'objc2 v' "$RUNNER_TEMP/gui-native-tree.txt"
           grep -q 'windows-collections v' "$RUNNER_TEMP/gui-native-tree.txt"
           grep -q 'qt-build-utils v' "$RUNNER_TEMP/gui-native-tree.txt"
+
+  # eml_stepsの網羅のexplorerは、CIが`#[ignore]`のテストを流す唯一の行で、x86_64のLinuxで自分のジョブとして、
+  # 同じコマンドを2つの分割に分けて流す (docs/implementation/testing.mdの「CI」)
+  explore:
+    name: explore (${{ matrix.partition }}/2)
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rustupはrust-toolchain.tomlのバージョンを入れる。runnerのstableのままでないことをバージョンの比べで確かめる
+      - name: Install the pinned toolchain
+        run: |
+          rustup toolchain install
+          rustc -V
+          test "$(rustc -V | cut -d' ' -f2)" = "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-nextest@0.9.146
+          fallback: none
+      - name: cargo nextest run of the exhaustive explorer
+        run: cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)' --partition count:${{ matrix.partition }}/2
 
   # nativeのGUIのbackendを組み、stubのテストを流す。画面を開くテストはない (docs/implementation/testing.mdの「CI」)
   gui-native:
