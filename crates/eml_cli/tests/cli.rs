@@ -325,9 +325,140 @@ main () =
   println text
 ";
 
-/// テストが止まらずに CI を待たせないための締め切り。
+/// 止まりの見張りが子を殺すまでの時間。止まったテストが自分のメッセージで終わるためだけのもので、どのテストもこれで
+/// 時間を測らない。nextestがテストを殺す60秒 (`.config/nextest.toml`) より短いので、メッセージはCIのログにも届く。
+/// 負荷の下でこれらのテストのどの待ちにかかる時間よりもずっと長い。
 #[cfg(unix)]
-pub(crate) const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// `HANG_GUARD`の間に子が終わらないとき、または`wait`の前に見張りが落とされたとき (テストがpanicしたとき) に、子を
+/// SIGKILLで殺す止まりの見張り。テストの待ちはどれも子が出力を書くか終わると戻るので、止まったテストも失敗として終わる。
+#[cfg(unix)]
+pub(crate) struct HangGuard {
+    pid: libc::pid_t,
+    state: std::sync::Arc<(std::sync::Mutex<GuardState>, std::sync::Condvar)>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct GuardState {
+    ended: bool,
+    fired: bool,
+}
+
+#[cfg(unix)]
+impl HangGuard {
+    pub(crate) fn new(child: &std::process::Child) -> HangGuard {
+        let pid = libc::pid_t::try_from(child.id()).unwrap();
+        let state = std::sync::Arc::new((
+            std::sync::Mutex::new(GuardState::default()),
+            std::sync::Condvar::new(),
+        ));
+        let watched = std::sync::Arc::clone(&state);
+        let thread = std::thread::spawn(move || {
+            let (lock, changed) = &*watched;
+            let (mut guarded, _) = changed
+                .wait_timeout_while(lock.lock().unwrap(), HANG_GUARD, |guarded| !guarded.ended)
+                .unwrap();
+            if !guarded.ended {
+                guarded.fired = true;
+                eprintln!("the test hung: killed the program after {HANG_GUARD:?}");
+                // 子は`wait`が錠を取って`ended`を立てた後にしか回収されないので、子のプロセスの番号は
+                // ほかのプロセスに使い回されていない
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        });
+        HangGuard {
+            pid,
+            state,
+            thread: Some(thread),
+        }
+    }
+
+    /// 子が終わっていれば、その終了の状態。子を回収しないので、見張りと後の`wait`は子をまだ見られる。
+    pub(crate) fn exited(&self) -> Option<std::process::ExitStatus> {
+        self.wait_unreaped(libc::WNOHANG)
+    }
+
+    /// 子が終わるのを待ち、回収する。見張りが子を殺したときはテストを失敗にする。
+    pub(crate) fn wait(mut self, child: &mut std::process::Child) -> std::process::ExitStatus {
+        // 回収せずに待ち、回収の前に見張りを止める。そのため、見張りが殺すプロセスの番号はほかのプロセスに
+        // 使い回されていない
+        assert!(self.wait_unreaped(0).is_some());
+        let fired = self.stop();
+        let status = child.wait().unwrap();
+        assert!(
+            !fired,
+            "the test hung: killed the program after {HANG_GUARD:?}"
+        );
+        status
+    }
+
+    fn wait_unreaped(&self, flags: libc::c_int) -> Option<std::process::ExitStatus> {
+        use std::os::unix::process::ExitStatusExt;
+
+        loop {
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let done = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    self.pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT | flags,
+                )
+            };
+            if done == 0 {
+                // WNOHANGでは、子が動いている間は`si_pid`が0のままである
+                if unsafe { info.si_pid() } == 0 {
+                    return None;
+                }
+                let value = unsafe { info.si_status() };
+                let raw = match info.si_code {
+                    libc::CLD_EXITED => value << 8,
+                    libc::CLD_DUMPED => value | 0x80,
+                    _ => value,
+                };
+                return Some(std::process::ExitStatus::from_raw(raw));
+            }
+            let error = std::io::Error::last_os_error();
+            assert_eq!(error.kind(), std::io::ErrorKind::Interrupted, "{error}");
+        }
+    }
+
+    /// 見張りを止め、子を殺したかどうかを返す。panicしたテストの巻き戻しの中で`Drop`が呼ぶので、panicしない。
+    fn stop(&mut self) -> bool {
+        let Some(thread) = self.thread.take() else {
+            return false;
+        };
+        let (lock, changed) = &*self.state;
+        let fired = {
+            let mut guarded = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guarded.ended = true;
+            guarded.fired
+        };
+        changed.notify_one();
+        let _ = thread.join();
+        fired
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HangGuard {
+    fn drop(&mut self) {
+        if self.thread.is_some() {
+            self.stop();
+            // `wait`の前に見張りが落とされたので、子は回収されておらず、プロセスの番号も使い回されていない。
+            // ゾンビを残さないように、殺した後で回収する
+            unsafe {
+                libc::kill(self.pid, libc::SIGKILL);
+                libc::waitpid(self.pid, std::ptr::null_mut(), 0);
+            }
+        }
+    }
+}
 
 #[cfg(unix)]
 fn spawn_run(dir: &Path, stdout: std::process::Stdio) -> std::process::Child {
@@ -354,14 +485,6 @@ fn sigterm(child: &std::process::Child) {
     assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
 }
 
-/// 締め切りを過ぎたら子を殺して、テストを失敗にする。
-#[cfg(unix)]
-pub(crate) fn kill_after_deadline(child: &mut std::process::Child, what: &str) -> ! {
-    let _ = child.kill();
-    let _ = child.wait();
-    panic!("{what} within {DEADLINE:?}");
-}
-
 #[cfg(unix)]
 fn stderr_of(child: &mut std::process::Child) -> String {
     use std::io::Read;
@@ -381,11 +504,10 @@ fn stderr_of(child: &mut std::process::Child) -> String {
 #[test]
 fn an_interrupt_stops_a_running_program_with_130() {
     use std::io::Read;
-    use std::time::Instant;
 
     let dir = temp_project("cli-sigint-loop", &[("main.em", SPIN)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = spawn_run(&dir, std::process::Stdio::piped());
+    let guard = HangGuard::new(&child);
     let mut stdout = child.stdout.take().unwrap();
     let (first_output, arrived) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
@@ -394,22 +516,11 @@ fn an_interrupt_stops_a_running_program_with_130() {
             let _ = first_output.send(n);
         }
     });
-    if arrived
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .is_err()
-    {
-        kill_after_deadline(&mut child, "no output arrived");
+    if arrived.recv().is_err() {
+        panic!("the program ended before any output arrived");
     }
     sigint(&child);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not stop");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
+    let status = guard.wait(&mut child);
     reader.join().unwrap();
     let stderr = stderr_of(&mut child);
     std::fs::remove_dir_all(&dir).unwrap();
@@ -440,11 +551,10 @@ main () =
 #[test]
 fn an_interrupt_stops_a_par_program_with_130() {
     use std::io::{BufRead, BufReader};
-    use std::time::Instant;
 
     let dir = temp_project("cli-sigint-par", &[("main.em", SPIN_IN_PAR)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let guard = HangGuard::new(&child);
     let stderr = child.stderr.take().unwrap();
     let (lines, arrived) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
@@ -456,22 +566,11 @@ fn an_interrupt_stops_a_par_program_with_130() {
         }
         text
     });
-    if arrived
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .is_err()
-    {
-        kill_after_deadline(&mut child, "the program did not start");
+    if arrived.recv().is_err() {
+        panic!("the program ended before it started");
     }
     sigint(&child);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not stop");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
+    let status = guard.wait(&mut child);
     let stderr = reader.join().unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130), "{stderr}");
@@ -484,7 +583,6 @@ fn an_interrupt_stops_a_par_program_with_130() {
 #[test]
 fn an_interrupt_stops_a_sleeping_program_with_130() {
     use std::io::{BufRead, BufReader};
-    use std::time::Instant;
 
     let text = "\
 import Async
@@ -495,8 +593,8 @@ main () =
   Async.scope (fn _ -> Async.sleep_ms 100000)
 ";
     let dir = temp_project("cli-sigint-sleep", &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let guard = HangGuard::new(&child);
     let stderr = child.stderr.take().unwrap();
     let (lines, arrived) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
@@ -508,22 +606,11 @@ main () =
         }
         text
     });
-    if arrived
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .is_err()
-    {
-        kill_after_deadline(&mut child, "the program did not start");
+    if arrived.recv().is_err() {
+        panic!("the program ended before it started");
     }
     sigint(&child);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not stop");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
+    let status = guard.wait(&mut child);
     let stderr = reader.join().unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130), "{stderr}");
@@ -539,14 +626,14 @@ main () =
 fn repeated_interrupts_end_a_program_waiting_in_a_read_with_130() {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::OpenOptionsExt;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     let dir = temp_project("cli-sigint-fifo", &[("main.em", READ_FIFO)]);
     let fifo = dir.join("fifo");
     let path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let guard = HangGuard::new(&child);
     // 子の `FileIn.open` は書き手が開くまで待つ。読み手のいないパイプを書き込み用に非同期で開くと ENXIO なので、開けた
     // 時点で子は実行を始めている。何も書かずに開いたままにして、子を読みの中で待たせる
     let writer = loop {
@@ -557,27 +644,22 @@ fn repeated_interrupts_end_a_program_waiting_in_a_read_with_130() {
         {
             Ok(writer) => break writer,
             Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
-                if let Some(status) = child.try_wait().unwrap() {
+                if let Some(status) = guard.exited() {
                     panic!("the program ended before it opened the pipe: {status}");
-                }
-                if Instant::now() >= deadline {
-                    kill_after_deadline(&mut child, "the program did not open the pipe");
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(error) => panic!("{error}"),
         }
     };
-    let status = loop {
+    loop {
         sigint(&child);
         std::thread::sleep(Duration::from_millis(100));
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
+        if guard.exited().is_some() {
+            break;
         }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not end");
-        }
-    };
+    }
+    let status = guard.wait(&mut child);
     drop(writer);
     let stderr = stderr_of(&mut child);
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1030,14 +1112,12 @@ main () = println (show (Env.get \"BAD\"))
 #[test]
 fn an_interrupt_stops_a_program_waiting_for_a_child_with_130() {
     use std::io::{BufRead, BufReader, Read};
-    use std::time::{Duration, Instant};
 
     let text = "import Proc\n\
 main : Unit -> <IO, Panic> Unit
 main () = println (show (Proc.run `sh -c 'echo $$ >&2; exec sleep 30'`))
 ";
     let dir = temp_project("cli-sigint-child", &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
         .arg("main.em")
         .current_dir(&dir)
@@ -1045,6 +1125,7 @@ main () = println (show (Proc.run `sh -c 'echo $$ >&2; exec sleep 30'`))
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    let guard = HangGuard::new(&child);
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
     let mut line = String::new();
     stderr.read_line(&mut line).unwrap();
@@ -1056,15 +1137,7 @@ main () = println (show (Proc.run `sh -c 'echo $$ >&2; exec sleep 30'`))
     // 子はテストが送るまで終わらず、emlはその後でしか回収しないので、子の番号はほかのプロセスに使い回されていない
     assert_eq!(unsafe { libc::kill(eml, libc::SIGINT) }, 0);
     assert_eq!(unsafe { libc::kill(grandchild, libc::SIGINT) }, 0);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not stop");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    let status = guard.wait(&mut child);
     let mut rest = String::new();
     stderr.read_to_string(&mut rest).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1120,7 +1193,6 @@ main-worker Exec: \"\" exit 143\n",
 #[test]
 fn an_interrupt_stops_a_program_waiting_in_exec_wait_with_130() {
     use std::io::{BufRead, BufReader, Read};
-    use std::time::{Duration, Instant};
 
     let text = "\
 import Async (Async)
@@ -1131,22 +1203,14 @@ main : Unit -> <IO, Panic, Async> Unit
 main () = println (show (Async.scope (fn _ -> Exec.run `sh -c 'echo started >&2; exec sleep 30'`)))
 ";
     let dir = temp_project("cli-sigint-exec", &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let guard = HangGuard::new(&child);
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
     let mut started = String::new();
     stderr.read_line(&mut started).unwrap();
     assert_eq!(started, "started\n");
     sigint(&child);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not stop");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    let status = guard.wait(&mut child);
     let mut rest = String::new();
     stderr.read_to_string(&mut rest).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1161,7 +1225,7 @@ main () = println (show (Async.scope (fn _ -> Exec.run `sh -c 'echo started >&2;
 #[test]
 fn repeated_interrupts_end_a_program_waiting_for_the_standard_input_with_130() {
     use std::io::{BufRead, BufReader};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     let text = "import Stdin\n\
 main : Unit -> <IO, Panic> Unit
@@ -1172,7 +1236,6 @@ main () =
   println (show line)
 ";
     let dir = temp_project("cli-sigint-stdin", &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
         .arg("main.em")
         .current_dir(&dir)
@@ -1181,6 +1244,7 @@ main () =
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    let guard = HangGuard::new(&child);
     // 書き手を開いたままにして、読みを待たせる
     let writer = child.stdin.take();
     // ハンドラを入れる前の SIGINT はプロセスを殺すので、スクリプトが書いた行を読んでから送る
@@ -1189,16 +1253,14 @@ main () =
         .read_line(&mut ready)
         .unwrap();
     assert_eq!(ready, "ready\n");
-    let status = loop {
+    loop {
         sigint(&child);
         std::thread::sleep(Duration::from_millis(100));
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
+        if guard.exited().is_some() {
+            break;
         }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not end");
-        }
-    };
+    }
+    let status = guard.wait(&mut child);
     drop(writer);
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130));
@@ -1210,7 +1272,6 @@ main () =
 #[test]
 fn a_terminate_ends_an_idle_program_with_143() {
     use std::io::{BufRead, BufReader};
-    use std::time::Instant;
 
     let text = "\
 import Async
@@ -1221,8 +1282,8 @@ main () =
   Async.sleep_ms 600000
 ";
     let dir = temp_project("cli-sigterm-sleep", &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let guard = HangGuard::new(&child);
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
     // ハンドラを入れる前の SIGTERM はプロセスを殺すので、スクリプトが書いた行を読んでから送る
     let mut ready = String::new();
@@ -1237,15 +1298,7 @@ main () =
         text
     });
     sigterm(&child);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not stop");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
+    let status = guard.wait(&mut child);
     let stderr = reader.join().unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(143), "{stderr}");
@@ -1264,8 +1317,6 @@ fn an_unheard_signal_stops_a_program_with_a_task_on_worker_1(
     send: fn(&std::process::Child),
     code: i32,
 ) {
-    use std::time::Instant;
-
     let text = "\
 import Async
 
@@ -1277,7 +1328,6 @@ main () =
   Async.await t
 ";
     let dir = temp_project(name, &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
         .args(["run", "--workers", "2", "main.em"])
         .current_dir(&dir)
@@ -1285,9 +1335,10 @@ main () =
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    let guard = HangGuard::new(&child);
     let lines = read_after_ready(&mut child);
     send(&child);
-    let status = wait_for_exit(&mut child, deadline);
+    let status = guard.wait(&mut child);
     let rest: Vec<String> = lines.iter().collect();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(code), "{rest:?}");
@@ -1305,14 +1356,13 @@ fn an_unheard_interrupt_stops_a_program_with_a_task_on_worker_1_with_130() {
     an_unheard_signal_stops_a_program_with_a_task_on_worker_1("cli-sigint-worker-1", sigint, 130);
 }
 
-/// 4つの worker の `eml run` (既定の方針と本物の時計) で、16 の計算のタスクと、ループバックのリスナーのタスクが
-/// worker に散り、クライアントとの1往復を終える。各 worker が自分の driver を持つ run である (docs/spec/vm.md の
-/// 「時計と driver」)。締め切りは止まりの見張りで、時間は確かめない。
+/// 4つのworkerの`eml run` (既定の方針と本物の時計) で、16の計算のタスクと、ループバックのリスナーのタスクが
+/// workerに散り、クライアントとの1往復を終える。各workerが自分のdriverを持つrunである (docs/spec/vm.mdの
+/// 「時計と driver」)。止まりの見張りは止まったテストを終わらせるだけで、時間は確かめない。
 #[cfg(unix)]
 #[test]
 fn eml_run_spreads_tasks_over_four_workers() {
     use std::io::Read;
-    use std::time::Instant;
 
     let text = "\
 import Async (Async)
@@ -1358,7 +1408,6 @@ main () =
   println (String.decode buf)
 ";
     let dir = temp_project("cli-four-workers", &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
         .args(["run", "--workers", "4", "main.em"])
         .current_dir(&dir)
@@ -1366,7 +1415,8 @@ main () =
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let status = wait_for_exit(&mut child, deadline);
+    let guard = HangGuard::new(&child);
+    let status = guard.wait(&mut child);
     let mut stdout = String::new();
     child
         .stdout
@@ -1387,7 +1437,7 @@ main () =
 #[test]
 fn repeated_terminates_end_a_program_waiting_for_the_standard_input_with_143() {
     use std::io::{BufRead, BufReader};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     let text = "import Stdin\n\
 main : Unit -> <IO, Panic> Unit
@@ -1398,7 +1448,6 @@ main () =
   println (show line)
 ";
     let dir = temp_project("cli-sigterm-stdin", &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
         .arg("main.em")
         .current_dir(&dir)
@@ -1407,6 +1456,7 @@ main () =
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    let guard = HangGuard::new(&child);
     // 書き手を開いたままにして、読みを待たせる
     let writer = child.stdin.take();
     // ハンドラを入れる前の SIGTERM はプロセスを殺すので、スクリプトが書いた行を読んでから送る
@@ -1415,16 +1465,14 @@ main () =
         .read_line(&mut ready)
         .unwrap();
     assert_eq!(ready, "ready\n");
-    let status = loop {
+    loop {
         sigterm(&child);
         std::thread::sleep(Duration::from_millis(100));
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
+        if guard.exited().is_some() {
+            break;
         }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not end");
-        }
-    };
+    }
+    let status = guard.wait(&mut child);
     drop(writer);
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(143));
@@ -1451,31 +1499,12 @@ fn read_after_ready(child: &mut std::process::Child) -> std::sync::mpsc::Receive
     received
 }
 
-/// 子が終わるまで待つ。締め切りを過ぎたら子を殺して、テストを失敗にする。
-#[cfg(unix)]
-fn wait_for_exit(
-    child: &mut std::process::Child,
-    deadline: std::time::Instant,
-) -> std::process::ExitStatus {
-    loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            return status;
-        }
-        if std::time::Instant::now() >= deadline {
-            kill_after_deadline(child, "the program did not end");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-}
-
 /// `eml run`では、SIGTERMは`Signal.wait Terminate`で待つタスクに届き、runは続く (docs/spec/stdlib.mdの
 /// 「`Std.Signal`」)。`eml run`の普通の方針でworkerを1つに固め、`yield_now`で待ち手に順を渡すので、待ち手が
 /// 待ちに入ってから`ready`を書く。普通の方針は自分からは切り替えないので、この順は崩れない。
 #[cfg(unix)]
 #[test]
 fn a_terminate_reaches_a_waiting_task() {
-    use std::time::Instant;
-
     let text = "\
 import Async
 import Signal
@@ -1490,7 +1519,6 @@ main () =
   Async.await t
 ";
     let dir = temp_project("cli-sigterm-wait", &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
         .args(["run", "--workers", "1", "main.em"])
         .current_dir(&dir)
@@ -1498,9 +1526,10 @@ main () =
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    let guard = HangGuard::new(&child);
     let lines = read_after_ready(&mut child);
     sigterm(&child);
-    let status = wait_for_exit(&mut child, deadline);
+    let status = guard.wait(&mut child);
     let rest: Vec<String> = lines.iter().collect();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(0), "{rest:?}");
@@ -1513,8 +1542,6 @@ main () =
 #[cfg(unix)]
 #[test]
 fn an_interrupt_after_a_delivered_one_ends_the_program_with_130() {
-    use std::time::Instant;
-
     let text = "\
 import Async
 import Signal
@@ -1530,7 +1557,6 @@ main () =
   Async.sleep_ms 600000
 ";
     let dir = temp_project("cli-sigint-delivered", &[("main.em", text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
         .args(["run", "--workers", "1", "main.em"])
         .current_dir(&dir)
@@ -1538,15 +1564,14 @@ main () =
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    let guard = HangGuard::new(&child);
     let lines = read_after_ready(&mut child);
     sigint(&child);
-    let got = lines.recv_timeout(deadline.saturating_duration_since(Instant::now()));
-    if got.as_deref() != Ok("got") {
-        kill_after_deadline(&mut child, "the waiting task did not wake");
-    }
+    let got = lines.recv();
+    assert_eq!(got.as_deref(), Ok("got"), "the waiting task did not wake");
     // `got` は届けた後にしか書かれず、届けた集める地点が見張りの語も空にしている
     sigint(&child);
-    let status = wait_for_exit(&mut child, deadline);
+    let status = guard.wait(&mut child);
     let rest: Vec<String> = lines.iter().collect();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130), "{rest:?}");
@@ -1569,7 +1594,7 @@ fn a_second_signal_ends_a_program_whose_waiter_cannot_be_reached(
     send: fn(&std::process::Child),
     code: i32,
 ) {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     let text = format!(
         "\
@@ -1588,7 +1613,6 @@ main () =
 "
     );
     let dir = temp_project(name, &[("main.em", &text)]);
-    let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
         .args(["run", "--workers", "1", "main.em"])
         .current_dir(&dir)
@@ -1597,19 +1621,18 @@ main () =
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    let guard = HangGuard::new(&child);
     // 書き手を開いたままにして、読みを待たせる
     let writer = child.stdin.take();
     let lines = read_after_ready(&mut child);
-    let status = loop {
+    loop {
         send(&child);
         std::thread::sleep(Duration::from_millis(100));
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
+        if guard.exited().is_some() {
+            break;
         }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not end");
-        }
-    };
+    }
+    let status = guard.wait(&mut child);
     drop(writer);
     let rest: Vec<String> = lines.iter().collect();
     std::fs::remove_dir_all(&dir).unwrap();
@@ -2072,7 +2095,6 @@ fn native_exit_code_is_the_low_byte() {
 fn a_signal_pending_at_start_is_handled() {
     use std::io::Read;
     use std::os::unix::process::CommandExt;
-    use std::time::{Duration, Instant};
 
     let text = "\
 spin : Int -> <Panic> Int
@@ -2100,16 +2122,8 @@ main () = println (show (spin 0))
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + DEADLINE;
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            kill_after_deadline(&mut child, "the program did not stop");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    let guard = HangGuard::new(&child);
+    let status = guard.wait(&mut child);
     let mut stderr = String::new();
     child
         .stderr
