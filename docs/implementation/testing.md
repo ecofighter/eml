@@ -579,7 +579,6 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `crates/eml_cli/tests/cli.rs` は `eml` バイナリを起動し、終了コードが [コンパイラの構成](architecture.md) の「CLI と lib API」の定めに合うことを確認する。`run` のテストのうち、速いモード (`--debug-heap` なし) で走るのは、成功と実行時エラーの2本と、下の4つの worker の run である。
 
-
 引数の分け方は、`workers_flag_is_accepted_and_rejected` が1本で確かめる。終了コード 0 とスクリプトの引数を確かめるのは、値を次の引数と `=` の後に取る形、`--debug-heap` の前と後に書いた形、ファイルより後ろの値を取るフラグ (値のないものを含む) をスクリプトに渡す形、`run` を省いた起動である。2回書いたフラグ、値のないフラグ、ファイルのない `run`、`run` を省いて先頭に書いたフラグ、`check` のフラグ、`run` にしかないフラグを `repl` に書いた形、知らないフラグを `run` のファイルの前に書いた形は終了コード 2 である。起動するプロセスが多いので、スレッドで並べて起動する。`Sched` の既定の値は `crates/eml_vm/tests/api.rs` が確かめる
 
 `run` が持たないフラグも、ファイルより後ろならスクリプトに渡す。`flags_after_the_file_go_to_the_script` がこれを確かめる。`Clock` の既定の値は `crates/eml_vm/tests/api.rs` が確かめる。`eml` のバイナリを起こすテストは本物の時計で動くので、タイマーを使うプログラムは実際の時間を眠る。UI テストと REPL のトランスクリプトとプロセス内のテストは `RunConfig::default()` の仮想の時計で動く
@@ -712,10 +711,6 @@ macOSでは、プロセスで最初にOSの検証器(`SecPolicyCreateSSL`)を通
 - ラムダからラムダへの末尾の `apply` は、反復ごとにクロージャが1つ残るので、n = 2000 の `peak_objects` が n = 1000 の値 + 1000 以下であり、`peak_stack` は伸びない
 - すぐに再開しない操作は handler まで yield し、継続を組み立てるので、深さ 10 と 1000 で `yield_frames` と `peak_objects` が深さの差に比例して増える (方式の性質で、上限ではない)。すぐに再開する操作を同じ回数行うと、`evidence_steps` が深さによらず同じで、`yields` と `yield_frames` が 0 である
 - 持ち主を呼び出しをまたいで残さないこと ([LIR](../spec/lir.md) の「所有を取る時点」) は、分解した値の1つのフィールドだけを使う非末尾の再帰で、n を 1000 から 2000 にしたときの `peak_objects` の伸びが n の差の2倍以下に収まることで確かめる (`a_retained_owner_does_not_cross_a_call`)
-
-Prelude のリストには4つのテストがある。長さ 1000 と 2000 のリストの `show` の `string_bytes_copied` の比が 2.5 以下であること、要素が10000個のリストの導出した `==` と `compare` が、リストを持つだけのプログラムより `peak_stack` と `peak_objects` を 16 しか増やさないこと (末尾呼び出しで進む)、要素が10000個のリテラルを持つプログラムが通ること、文字列補間の `string_bytes_copied` が長さの 2.5 倍以下で伸びることである。
-
-ほかに、数え方そのものを確かめるテストがある。操作も文字列もなければ `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`、`rc_increments`、`rc_decrements` は 0 で、`peak_objects` はダミーの物体の 1 である。操作はどれも少なくとも1つの evidence を調べる。`"ab" ++ "cd"` は少なくとも4バイトを書く。型変数のフィールドに `Int` を入れて取り出すと `boxes` と `unboxes` が1以上になり、スカラーの位置だけのプログラムでは 0 になる。
 
 コード生成とパスがブロックの列を再帰でたどらないことも、ここで確かめる。5000 個の文の列、5000 個の `if` 文の列 (`switch` のブロックが 5000 個できる)、1000 個のリテラルの腕を持つ `match`、1000 個の共有された腕を持つ `match` である。各テストはソースをテストの中で作り、`eml_test_support::run_stats` で実行する。ふだんの実行に入る。
 
