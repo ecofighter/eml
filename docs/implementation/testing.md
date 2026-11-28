@@ -352,7 +352,7 @@ cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::
 
 ## `eml_sched`のテスト
 
-`eml_sched`のテストは、`cells.rs`と`rank.rs`の単体テストと、`tests/`の結合テストである。スケジューラのテストは、項がRustの閉包であるエンジン`Script`と`Scripts`を通してスケジューラを動かすので、エンジンのcrateを要らない ([スケジューラ](../spec/runtime.md)の「範囲」)。`tests/imports.rs`は、`cells.rs`が`std`と`eml_rt`だけをimportするように保つ。ネイティブのコードが同じ核をエントリから呼べるようにするためである。
+`eml_sched`のテストは、`cells.rs`と`rank.rs`の単体テストと、`tests/`の結合テストである。スケジューラのテストは、項がRustの閉包であるエンジン`Script`と`Scripts`を通してスケジューラを動かすので、エンジンのcrateを要らない ([スケジューラ](../spec/runtime.md)の「範囲」)。`tests/imports.rs`は、`cells.rs`が`std`と`eml_rt`だけをimportするように保つ。ネイティブのコードが同じ核をエントリから呼べるようにするためである ([VM](../spec/vm.md)の「`Async` のタスク」)。
 
 - `tests/placement.rs`、`tests/layers.rs`、`tests/trust.rs`は、crateのソースのファイルを読んで規則を確かめる。[スケジューラ](../spec/runtime.md)の置き場所の規則 (呼ぶ側の規則では`eml_nrt`のソースも読む)、[アーキテクチャ](architecture.md)の「`eml_sched`の内部」のimportの辺、`unsafe`を持ってよいファイルである。`crates/eml_cli/tests/surface.rs`はtraitのメソッドを読まないので、`Exec`と`Workers`のメソッドの`# Safety`は`trust.rs`が固定する
 - この3つの走査器`tests/scan.rs`は、わざと`crates/eml_native/tests/placement.rs`の走査器の2つ目の写しにしてある。共有の補助を置くと、このcrateのMiriのビルドにコンパイラを引き込むからである
