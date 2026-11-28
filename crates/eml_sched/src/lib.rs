@@ -3,9 +3,18 @@
 
 pub mod cells;
 pub mod config;
+pub mod core;
 pub mod doorbell;
+mod drive;
 pub mod driver;
 pub mod error;
+pub mod exec;
+pub mod job;
 pub mod park;
+pub mod policy;
+mod rank;
+pub mod run;
+pub mod script;
+pub mod sequence;
 
 pub use eml_rt::{Control, HostRef, Limits, Stop};

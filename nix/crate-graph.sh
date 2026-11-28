@@ -23,7 +23,7 @@ eml_native: eml_cabi eml_clink eml_extern eml_lir eml_nrt eml_rt
 eml_nrt: eml_extern eml_rows eml_rt eml_sched
 eml_rows: eml_cabi eml_extern eml_gui eml_rt eml_sched eml_tls
 eml_rt:
-eml_sched: eml_io eml_rt
+eml_sched: eml_io eml_rt eml_steps
 eml_steps:
 eml_syntax: eml_diagnostics
 eml_test_support: eml_cli eml_clink eml_core_ir eml_diagnostics eml_hir eml_lir eml_native eml_nrt eml_rt eml_sched eml_syntax eml_types eml_vm

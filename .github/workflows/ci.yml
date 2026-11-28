@@ -316,6 +316,10 @@ jobs:
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
           nix develop .#miri -c cargo miri test -p eml_sched --lib -- cells::a_read cells::a_write
+      - name: "cargo miri test -p eml_sched --test integration -- drive:: root:: jobs:: par:: end:: panics::"
+        if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
+        run: |
+          nix develop .#miri -c cargo miri test -p eml_sched --test integration -- drive:: root:: jobs:: par:: end:: panics::
       - name: "cargo miri test -p eml_io --lib -- driver::tests::"
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |

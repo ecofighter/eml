@@ -68,6 +68,8 @@ const SAFE: &[(&str, Reason)] = &[
     ("eml_sched/src/cells.rs: test_ctx", Allocates),
     ("eml_sched/src/driver.rs: RunClock::driver", MakesDriver),
     ("eml_sched/src/driver.rs: RunClock::now", ReadsClock),
+    ("eml_sched/src/script.rs: Script::new", Stores),
+    ("eml_sched/src/script.rs: Scripts::new", Stores),
 ];
 
 /// 型が字句を名指す、構造体の`pub`の欄と`pub enum`の変種の欄。`<パス>: 型::欄`か`<パス>: enum::変種::欄`の形で書き、
