@@ -214,11 +214,62 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 `cargo verus verify -p eml_rt`と同じく、`cargo verus verify -p eml_steps`は0 errorsのほかに警告もtriggerの注記も出さない。`verus!`の中は`verusfmt --verus-only`で、外は`cargo fmt`で整える。Verusの書き方から出るclippyの警告は、`lib.rs`の頭で理由を書いて`allow`する。
 
+`tests/explore.rs` (module `explore`) はexplorerである。出荷する`plan::next`、`idle::step`、`verdict::step`、`Open`、`Sleepers`を呼ぶスケジューラのシェルのモデルについて、すべてのインターリーブを列挙し、たどり着いたすべての状態で表明 (1) から (5) を確かめ、幅優先の実行ではグラフ全体で (6) も確かめる。モデルは、workerごとにループと空きの状態、開いた仕事の一覧、`woken`、眠った形、joinの待ち、抜けたかを持ち、runとして`running`、`sleepers`、`searching`、眠りの集合、`owed`を持つ。さらに、worker 0の判定、`holds`を持つメインのworker (境界によっては持たない)、項目が上げてよい源 (タイマー、操作、監視のスレッドの2段の中継を伴うシグナルの待ち、根を閉じること) を持ち、源はそれぞれ届けた起こしか、自分で戻った待ちが下げる。遷移は、1つのworkerの1つの効果か手順、走査が1つの欄を訪れること (どの欄から始めるものも)、publish、`Joined`を送るか送らない仕事の終わり、環境の1つの手順である。
+
+- (1) 載った仕事があり、取る側のworkerがどれも眠り、届く途中の起こしがない状態はない
+- (2) 判定がrunを終えるか時計を進めるのは、載った仕事も流れている仕事もなく、届いていない`Joined`もなく、joinで待つworkerもいないときだけである
+- (3) 動けない状態はどれもrunの終わりである
+- (4) `RootClosed`、`Deadlock`、`Advance`は、すべてのworkerが眠った形で、届く途中の起こしがないときにだけ来る。`Deadlock`では、読んだ事実だけでなくモデル自身の状態でもすべての源が静かである。届く途中の起こしは、取り出したがまだ起こしていないworker、まだ行っていない`WakeZero`、mailがまだ取られていない間の中継の起こしである
+- (5) 根が閉じてすべてのworkerが眠った状態から、worker 0の判定を単独で、`stalled`を下ろしても立てても流すと、源が何であっても`RootClosed`で終わる
+- (6) たどり着いたすべての状態から、すべてのworkerが抜けた状態にたどり着ける (ふだんのテストと`exhaustive_the_end_stays_reachable`だけ)。これは公平さを仮定しない到達の表明である。runが終われない状態は見つけるが、出口があってもシェルがそこを通らない輪は見つけない
+
+ふだんのテストは小さい境界を幅優先で流し、それぞれdevプロファイルで250 ms以内に終わり、状態の数を確かめる。`a_dropped_probe_is_found`は出す側の`Probe`を飛ばすカーネルで、`an_ignored_owed_is_found`は`owed`を読まない判定で同じ列挙を流し、それぞれ (1) と (4) で落ちることを確かめる。explorerが落ちうることを示すためである。(1) が`Probe`に頼るのは、取る側でない出す側、つまりメインのworkerのpublishだけである。ほかの出す側はどれも、眠る前に自分の仕事を取り戻す。`the_labels_are_the_kernel_alphabet`は、その小さい境界で行われたラベルを合わせたものが`Label::ALL`に等しいことを確かめる。ふだんのテストはどれも (6) も確かめる。`a_verdict_that_never_waits_is_found`は、カーネルが`WaitUntil`で待つところでループに戻る判定を流し、(6) で落ちることを確かめる。`the_main_worker_holds`は、`holds`を持つただ1つのふだんの境界である。
+
+名前が`exhaustive_`で始まるテストは`#[ignore = "exhaustive"]`を付け、CIの行 (「CI」) でreleaseで流す。digestとスタックだけを持って深さ優先で探し、時計ごとに、分けたものはpublishの種類の列ごとに状態の数を確かめるので、探す空間を狭める変更は落ちる。`exhaustive_the_end_stays_reachable`は例外で、W2 M0 P1すべての源を両方の時計で幅優先に流して (6) も確かめ、外すことはない。1つのテストは開発機で150秒と3 GB以内に収め、超えたら時計で分け、次に始めのpublishの種類で分ける。収まらない行は、`exhaustive_the_main_worker_publishes`の (c) のP2、その (b)、`exhaustive_three_workers_every_source`の (a) ((b) は残す)、`exhaustive_the_main_worker_with_every_source`の (c) の順にだけ外し、外したものをここに書く。今は外した行はない。表のWは取る側 (worker 0とpeer) の数、Mはメインのworker、Pはpublishの数で、「源なし」はどの源も上げず、「すべての源」はタイマー、操作、シグナルの待ち、`holds`、根を閉じることを1回ずつ上げる。状態の数は仮想の時計 / 本物の時計の順で、分けたものは合計である。時間は、開発機 (10コア、32 GB) のreleaseで1つずつ、分けずに流した時計ごとの値で、W3 M0 P1すべての源だけは2つに分けて続けて流した値である。分けた列は、最後のpublishより前の状態を重ねて訪れるので、分けない行より状態が多い。
+
+| テスト | 境界 | 状態の数 | 時間 |
+|---|---|---|---|
+| `exhaustive_the_end_stays_reachable` | W2 M0 P1 (すべての源)、幅優先 | 986,642 / 1,144,648 | 2.4 s (両方) |
+| `exhaustive_three_workers_three_publishes_{virtual,real}` | W3 M0 P3 (源なし) | 46,469,811 / 48,063,507 | 69 / 71 s |
+| `exhaustive_a_worker_stops_with_a_listed_job_{virtual,real}` | W3 M0 P3 (源なし)、止まるworker | 47,057,583 / 48,656,625 | 71 / 86 s |
+| `exhaustive_the_main_worker_publishes_{virtual,real}_{join,cell}_first` | (a) W2 M1 P3 (源なし) | 32,975,201 / 33,983,068 | 47 / 45 s |
+| | (b) W2 M1 P3 (源なし)、止まるworker | 34,305,055 / 35,332,379 | 46 / 47 s |
+| | (c) W3 M1 P1 (源なし) | 42,473,187 / 43,977,529 | 90 / 94 s |
+| `exhaustive_two_workers_every_source_{virtual,real}` | (a) W2 M0 P3 (すべての源) | 54,421,327 / 58,939,676 | 64 / 69 s |
+| | (b) W2 M0 P2 (すべての源)、止まるworker | 7,924,670 / 8,623,750 | 8 / 9 s |
+| `exhaustive_three_workers_every_source_{virtual,real}_{join,cell}_first` | (a) W3 M0 P1 (すべての源) | 100,944,684 / 129,907,994 | 167 / 230 s |
+| `exhaustive_the_main_worker_with_every_source_{virtual,real}` | (a) W2 M1 P0 (すべての源) | 14,054,254 / 9,419,516 | 22 / 16 s |
+| | (b) W2 M1 P2 `holds`と根 | 17,878,000 / 18,501,656 | 27 / 28 s |
+| | (c) W2 M1 P1 `holds`と根と、タイマー、操作、シグナルの待ちの1つ | 9,184,650 / 9,184,959、9,189,397 / 9,184,959、11,740,644 / 12,156,970 | 13 / 14、13 / 13、19 / 20 s |
+
+行の全体は、開発機で`-j 4`で6.8分 (user 1,582秒) かかり、1つのテストのpeak RSSは2.6 GB以下である。大きいテストでは、たどり着いた状態1つあたり40バイトほどである。
+
+次の組み合わせはどの境界も覆わず、それを要する欠陥はexplorerでは見つからない。
+
+- 源を上げた3つの取る側と、2つ以上のpublish
+- 2つの取る側の横のメインのworkerで、どれかの源と3つのpublish。タイマー、操作、シグナルの待ちのどれかと2つのpublish。その3つのうち2つ以上を合わせたものと1つのpublish
+- 3つの取る側の横のメインのworkerで、2つ以上のpublishか、どれかの源
+- 止まるworkerと源。すべての源を上げた2つの取る側と3つのpublish、メインのworkerの横でどれかの源、3つの取る側でどれかの源
+- 境界を超えるもの。4つ以上の取る側、4つ以上のpublish、2回上げる源
+
+モデル自身が外しているもの:
+
+- (6) を確かめるのはふだんのテストとW2 M0 P1すべての源だけで、ほかの網羅のテストは (1) から (5) を確かめる
+- 区間はそれぞれ1つの遷移で、ほかのlockの区間に対してもそうなので、区間の中の共有の語の読み書きの順番 (`Park`と`Own`の`owed`と`running`) は探さない。中継の最初の手順 (待つタスクを取り、mailを置き、`NOTICE`を上げる) も1つの遷移である
+- 止めるビットを上げるのは抜けるworkerだけで、すべてのworkerの起こしと一緒に上げる。外から上げ、後で監視のスレッドが起こす止めるビットは遷移にない
+- driverの待ちは`stalled`と答えない。`stalled`を立てて判定を流すのは (5) だけである
+- モデルはいつも根を開くので、根のscopeのないrun (`RootState::None`) と、その中のworker 0の`Return`は探さない
+
+たどり着く状態が飛ばされるのは、2つの状態が128ビットのdigestを共有するときだけである。digestは異なる接頭辞の上の2つのSipHashの値で、独立な乱数の関数のように振る舞うなら、10^9個の状態でその確率は10^-20を下回る。`State::digest`は`State`とworkerの構造体を`..`なしで分解するので、どちらかに足したフィールドは、ハッシュに入れるまでエラーか、clippyが拒む使わない変数の警告になる。`Open`と`Sleepers`は読むための関数を通してハッシュする。`Open`の通し番号の数え手は、publishし積んだ仕事から決まるのでハッシュしない。どちらの型に足したフィールドも、手でハッシュに足す。
+
+`idle::step`、`verdict::step`、`plan::next`、`Open`、`Sleepers`を変えたら、ふだんのテストと網羅の行を流し直す。W3 M0 P2すべての源は開発機の1時間に収まらず、テストを持たない。
+
 ```sh
 cargo verus verify -p eml_steps                                            # Verusの証明
 verusfmt --verus-only --check $(git ls-files 'crates/eml_steps/src/*.rs')   # verus!の中の書式
 cargo test -p eml_steps                                                    # 単体テストと信頼の検査
 cargo clippy -p eml_steps --all-targets -- -D warnings
+cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)'   # 網羅のexplorer
 ```
 
 ## `eml_io` の検証
@@ -727,7 +778,7 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 
 ファイルを集めて流す9つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`、`ui::run_native`、`ui::run_fail_native`、`ui::run_native_checked`、`ui::run_fail_native_checked`、`repl::transcripts`、`lowering::every_program_lowers_to_the_same_text`) は、1つのファイルが1秒以内で、テスト全体が5秒以内であればよい。この9つはテストの中でファイルを並べて流すので、`.config/nextest.toml`で単独で流し、ほかのテストとコアを取り合わないようにする。テストの中に壁時計の上限を置くのは、止まったことを見つけるためだけにする。上限は測った時間の10倍以上にする。2つの条件に当たらないテストには`#[ignore = "<理由>"]`を付ける。流すコマンドを「よく使うコマンド」に書き、流す時 (何を変えたときか) をそのテストを説明する節に書く。
 
-nextestは2秒を超えて走るテストを`SLOW`と表示し、60秒で止めて失敗にする。集めて流す9つのテストは10秒ごとに表示し、同じく60秒で止める。止めたテストの標準エラーは要約に出る。
+nextestは2秒を超えて走るテストを`SLOW`と表示し、60秒で止めて失敗にする。集めて流す9つのテストは10秒ごとに表示し、同じく60秒で止める。`eml_steps`の網羅のexplorerの行は`.config/nextest.toml`に自分のoverrideを持ち、テストを60秒ごとに`SLOW`と表示し、止まったときの備えとして行の上限の15分を過ぎてから止める。止めたテストの標準エラーは要約に出る。
 
 CIは、`.config/nextest.toml`の`timing`のprofileで、テストを1つずつ流す (`cargo nextest run --profile timing -j 1`)。このprofileは、`SLOW`と表示する時間 (2秒、集めて流す9つは10秒) を過ぎたテストを止めて失敗にする。条件を破ったテストが、誰も気づかないまま残るのを防ぐためである。時間は開発機での条件の2倍にし、runnerが開発機より遅くても、条件を守るテストは通るようにする。閾値を1つの速さのrunnerに合わせるため、流すのはx86_64のLinuxのrunnerだけにする。
 
@@ -826,7 +877,7 @@ Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-App
 
 `.github/workflows/ci.yml`は、mainへのpush、pull request、手動の起動で、次の9つのジョブを流す。
 
-- `test`: macOS (macos-15)、Linux (ubuntu-24.04と、aarch64のubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls`と`gui`を外した`tls_off::`と`gui_off::`のテスト、既定でないfeatureのclippy (「feature の組み合わせの確認」の14個) と、段「feature resolution of tls」、4つのOSで`eml_nrt`のTlsの実行時の閉包を組む段「cargo build of the Tls runtime closure」 (`cargo build -p eml_nrt --features eml_rows/tls`)、段「crate graph」、段「dependency edges of eml_gui」の検査を流す。段「crate graph」は`nix/crate-graph.sh --check`を流し、crate間の直接の辺とfeatureの表、crateの木の閉包を守る ([アーキテクチャ](architecture.md)の「crate の依存関係」)。段「dependency edges of eml_gui」は、`eml_gui`がワークスペースのどのcrateにも依存しないことと、`eml_cli`の既定の依存の木にnativeのtoolkitのcrate (`cxx`、`objc2`、`qt-build-utils`と、生成したWinUIのbindingだけが使う`windows-collections`、`windows-reference`、`windows-time`) が入らないことを`cargo tree`で守る。`gui-native`を足した木 (`--target all`) は1度書き出し、`cxx v`、`objc2 v`、WinUIの印の`windows-collections v`、`qt-build-utils v`がそれぞれ出ることを、crateごとの`grep -q`で確かめる。まとめて数えると、1つのtoolkitのcrateだけでも数が足りてしまうからである。toolchainはrustupが`rust-toolchain.toml`から入れ、`rustc -V`のバージョンが`channel`と同じことを確かめる。Windowsのtargetは`x86_64-pc-windows-msvc`だけで、ジョブはhostがそれであることを確かめる。cargo-nextestは、ワークフローに書いたバージョンを入れる。LinuxとmacOSでは、段「fast-only code has no checked symbol」が、`cargo build --release -p eml_nrt --example fast_only`で組んだ実行ファイルを`nm -C`で調べ、記号に`Checked`を含むものが1つもないことを確かめる (「`eml_nrt`の検証」)。ubuntu-24.04では、同じビルドで時間の検査 (「性能のテスト」) も流す
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04と、aarch64のubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls`と`gui`を外した`tls_off::`と`gui_off::`のテスト、既定でないfeatureのclippy (「feature の組み合わせの確認」の14個) と、段「feature resolution of tls」、4つのOSで`eml_nrt`のTlsの実行時の閉包を組む段「cargo build of the Tls runtime closure」 (`cargo build -p eml_nrt --features eml_rows/tls`)、段「crate graph」、段「dependency edges of eml_gui」の検査を流す。段「crate graph」は`nix/crate-graph.sh --check`を流し、crate間の直接の辺とfeatureの表、crateの木の閉包を守る ([アーキテクチャ](architecture.md)の「crate の依存関係」)。段「dependency edges of eml_gui」は、`eml_gui`がワークスペースのどのcrateにも依存しないことと、`eml_cli`の既定の依存の木にnativeのtoolkitのcrate (`cxx`、`objc2`、`qt-build-utils`と、生成したWinUIのbindingだけが使う`windows-collections`、`windows-reference`、`windows-time`) が入らないことを`cargo tree`で守る。`gui-native`を足した木 (`--target all`) は1度書き出し、`cxx v`、`objc2 v`、WinUIの印の`windows-collections v`、`qt-build-utils v`がそれぞれ出ることを、crateごとの`grep -q`で確かめる。まとめて数えると、1つのtoolkitのcrateだけでも数が足りてしまうからである。toolchainはrustupが`rust-toolchain.toml`から入れ、`rustc -V`のバージョンが`channel`と同じことを確かめる。Windowsのtargetは`x86_64-pc-windows-msvc`だけで、ジョブはhostがそれであることを確かめる。cargo-nextestは、ワークフローに書いたバージョンを入れる。LinuxとmacOSでは、段「fast-only code has no checked symbol」が、`cargo build --release -p eml_nrt --example fast_only`で組んだ実行ファイルを`nm -C`で調べ、記号に`Checked`を含むものが1つもないことを確かめる (「`eml_nrt`の検証」)。ubuntu-24.04では、同じビルドで時間の検査 (「性能のテスト」) も流し、続けて`eml_steps`の網羅のexplorerの行 (「`eml_steps`の検証」) を流す
 - `gui-native`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUIの手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKit、Qt、WinUIのbackendはテストの中では作れない。WindowsではWindows App SDKのファイルなしに組み、`eml_gui`のbootstrapのテストは、runnerにruntimeがなければ文言がMicrosoftの配布のページを示すことを確かめ、あれば`skipped: the Windows App SDK 2 runtime is installed`と書いて通る。Windowsでは、この行をログに出すため、別の段でこのテストだけを`--no-capture`でもう1度流す。全体の実行には`--no-capture`を付けない。nextestがテストを1つずつ流すようになるからである。Linuxでは、Qt 6の入ったdevShell `.#base`を通して流す。rustcはx86_64のLinuxで既定に自分のLLDでリンクし、nixのldのラッパーを通らないので、Qtとlibstdc++へのRUNPATHが付かない。そこでdevShellと`nix build`は`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Clinker-features=-lld`でラッパーのldに戻し、ラッパーがRUNPATHを付ける
 - `nix-build`: Linux (ubuntu-24.04) で`nix build -L`を流す。パッケージは`eml_cli`を`gui-native`を足したreleaseで組み、組み立ての中でテストを流す (「nix build の中で流さないテスト」)。10分を超えるので、ほかのジョブと並べて自分のジョブで流す。`-L`は組み立ての出力をログに出す。続けて、`result/bin/.eml-wrapped`が`libQt6Widgets.so.6`に動的にリンクすること (`readelf -d`) と、`result`に`libQt6*`、`*.dll`、`*.msix`のファイルがないことを確かめる
 - `fmt`: Linux で `cargo fmt --check` を流す
@@ -836,7 +887,7 @@ Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-App
 - `asan`: x86_64のLinux、aarch64のLinux、aarch64のmacOSのそれぞれで、`eml_io`のテスト、`eml_clink`のテスト、`fatal::`を除いた`eml_native`と`eml_nrt`のテストと`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`をAddressSanitizerの下で流す (下の「AddressSanitizer」)
 - `tsan`: x86_64のLinuxで、`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`、libの`counters::`と、`eml_io`のlibの`driver::tests::`をThreadSanitizerの下で流す (下の「ThreadSanitizer」)
 
-CIが時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件とMiriのCPU時間の予算は開発機で確かめ、runnerの速さに合わせて緩めない。ほかの手順では、nextestがテストを止める60秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]`を付けたテストと`bench/`の計測は、CIで流さない。`nix/winui-bindings.sh`はメタデータとcrateをネットワークから取るので、CIで流さない。WinUIのbackendが使うAPIかメタデータの版を変えたときに手で流し、`--check`で比べる ([コンパイラの構成](architecture.md)の「`eml_gui`の内部」)。`nix build`は`nix-build`のジョブ (x86_64のLinux) でだけ流し、aarch64-darwinの`nix build`は手で確かめる。
+CIが時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件とMiriのCPU時間の予算は開発機で確かめ、runnerの速さに合わせて緩めない。ほかの手順では、nextestがテストを止める60秒 (自分のoverrideを持つ網羅のexplorerの行のテストを除く。「性能のテスト」) が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。CIが`#[ignore]`を付けたテストを流すのは、ここに挙げる行だけである。行ごとにコマンド、ジョブ、時間を書く: `eml_steps`の網羅のexplorer (`cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)'`。ubuntu-24.04の`test`のジョブ。開発機の`-j 4`で6.8分で、CIのrunnerでの時間の上限は15分)。`bench/`の計測はCIで流さない。`nix/winui-bindings.sh`はメタデータとcrateをネットワークから取るので、CIで流さない。WinUIのbackendが使うAPIかメタデータの版を変えたときに手で流し、`--check`で比べる ([コンパイラの構成](architecture.md)の「`eml_gui`の内部」)。`nix build`は`nix-build`のジョブ (x86_64のLinux) でだけ流し、aarch64-darwinの`nix build`は手で確かめる。
 
 アクションはcommitのSHAで固定し、バージョンの名前をコメントに書く。runnerのimageは名前で固定し、上げるのは手で行う。nixのストアはキャッシュしない。devShell `.#base`は、ふだんのdevShellからVerusとverusfmtを除いたものである。Verusのreleaseのzip (約490 MB) はflakeのinputで、それを使うshellに入るときだけ取るので、Verusを使わないジョブは`.#base`を通して取得を省く。install-nix-actionには`GITHUB_TOKEN`を渡し、`github:`のinputの取得が率の制限に当たらないようにする。tokenはnix.confに入ってジョブの中で動くものから読めるが、権限は`contents: read`だけで、ジョブとともに切れるので受け入れる。cargoの依存のビルドをキャッシュするのは、`test`のジョブと、devShellを通さない`gui-native`のジョブ (macOSとWindows) だけで、保存するのはmainの実行だけである。ワークフローは`CARGO_PROFILE_DEV_DEBUG=line-tables-only`を置き、devプロファイルのdebug情報を行の表だけにする。CIは変数の単位のdebug情報を使わず、ビルドの時間と`target`の大きさが減るからである。panicのbacktraceはファイルと行を保つ。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml`で検査する。
 
@@ -877,7 +928,7 @@ claude plugin install ecoskills@ecoskills --scope user
 
 ## よく使うコマンド
 
-dev プロファイル (`cargo nextest run` と `cargo test` もこれを使う) は opt-level 1 で、debug assertions は有効である。`--release` は `bench/*.sh` と、`#[ignore]` を付けた時間のテストだけで使う。デバッガで局所変数が最適化で消えるときは、`CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...` で一度だけ opt-level 0 のビルドを作る。
+devプロファイル (`cargo nextest run`と`cargo test`もこれを使う) はopt-level 1で、debug assertionsは有効である。`--release`は`bench/*.sh`と、`#[ignore]`を付けた時間のテストと、`eml_steps`の網羅のexplorerの行だけで使う。デバッガで局所変数が最適化で消えるときは、`CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...`で一度だけopt-level 0のビルドを作る。
 
 ```sh
 cargo test --workspace -q                            # すべてのテスト (手元の全体の実行。1つのcrateの短いループではcargo test -p。性能のテスト)
@@ -922,6 +973,7 @@ cargo verus verify -p eml_rt                                                    
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')                         # eml_rt の verus! の中の書式
 cargo verus verify -p eml_steps                                                             # eml_stepsのVerusの証明
 verusfmt --verus-only --check $(git ls-files 'crates/eml_steps/src/*.rs')                      # eml_stepsのverus!の中の書式
+cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)'   # eml_stepsの網羅のexplorer (CIが流す`#[ignore]`のテストの行)
 bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でないfeature (なし、types、core、run (tlsなし)。eml_test_supportはhirも。eml_io、eml_rows、eml_vm、eml_nrtは--all-targetsでtlsなし、eml_rowsは--features tlsでも。eml_schedは--all-targetsでtestingなし)
 ```

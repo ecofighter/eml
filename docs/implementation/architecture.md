@@ -92,7 +92,7 @@ eml_clink        Cの関数をつなぐ。Craneliftの橋渡しの関数と、C�
 eml_native       ネイティブのコード生成器の土台 (emlのコード、adapter、補助の関数、thunkのCraneliftのフラグを作る唯一の関数abi::isa、シグネチャ、thunk)。eml_extern、eml_cabi、eml_clink、eml_lir、eml_nrt、eml_rt (レイアウトの定数だけ) に依存し、eml_vmには依存しない
 eml_nrt          ネイティブのコードが呼ぶエントリ (記述子の表、plainとshimの包み、利用者のCの関数の呼び出しの補助)、エントリのstub (eml_enter、eml_fatal)、実行の駆動 (Image、workerの構造体、run、census)。eml_extern、eml_rows、eml_rt、eml_schedに依存し、Cranelift、eml_lir、eml_core_ir、eml_vm、eml_nativeには依存しない
 eml_cabi         C の関数を呼ぶコードのポインタ (Bridge、Dtor、CCall、Linked)。eml_extern だけに依存する
-eml_steps        スケジューラの判断 (仕事の開いた一覧、眠っているworkerの集合、上限の表) をVerusで証明した関数。vstdだけに依存する
+eml_steps        スケジューラの判断 (仕事の開いた一覧、ループの次の手順、空きの手順、判定、眠っているworkerの集合、上限の表) をVerusで証明した関数。vstdだけに依存する
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。最適化と evidence passing のパスと、LIR への変換
 eml_lir          LIR (box、RC、末尾呼び出しを明示する基本ブロックの列)。box/unbox の挿入、構造体を葉に開くパス、縮約、dup/decref/release の挿入、reuse のパス
@@ -487,10 +487,14 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ## `eml_steps`の内部
 
-`eml_steps`は、スケジューラの判断をVerusで証明した関数として持つ。仕事の開いた一覧 (`open.rs`)、眠っているworkerの集合 (`sleepers.rs`)、上限の表 (`limit.rs`。[VM](../spec/vm.md)の「タスクの上限」の表) である。まだどのcrateもこれに依存しない。
+`eml_steps`は、スケジューラの判断をVerusで証明した関数として持つ。6つのファイルと1つの型からなる。仕事の開いた一覧 (`open.rs`)、ループの次の手順 (`plan.rs`)、出す側の`Probe`と起こしを含む空きの手順 (`idle.rs`)、worker 0の判定 (`verdict.rs`)、眠っているworkerの集合 (`sleepers.rs`)、上限の表 (`limit.rs`。[VM](../spec/vm.md)の「タスクの上限」の表)、そしてループ、空きの手順、判定の3つの字母の和である`Label` (`Label::ALL`) である。まだどのcrateもこれに依存しない。
 
 - すべての項目は`verus!`の中にある。crateは`unsafe`も信頼の項目も持たず、`src/trust.rs`が両方を固定する
-- `limit::hit`の`ensures`はspecの関数`hit_spec`に等しく、`Open`と`Sleepers`の各操作の`ensures`は、前と後の列 (`Open`では通し番号の数え手も) をすべて述べる。そのため、後でこれらの仕様の上で証明すれば、それはコードの証明になる
+- step関数の結果は、どの引数でもそのspecに等しい (`limit::hit`と`hit_spec`、`plan::next`と`next_spec`、`idle::step`と`verdict::step`とそれぞれの`step_spec`)。`Open`と`Sleepers`の各操作の`ensures`は、前と後の列 (`Open`では通し番号の数え手も) をすべて述べる。そのため、後でこれらの仕様の上で証明すれば、それはコードの証明になる
+- `idle::step`と`verdict::step`の各効果は、1回のアトミックな操作、1つのlockの区間か1回の待ちで、シェルはそこで読んだものだけを返す。カーネルを解釈する側は、カーネルが述べられない次の3つの決まりを守る
+  - `Park`の中の順番。worker 0以外のworkerは、`running`を減らす前にrunの`owed`を上げ、減らしても0にならなかったときは同じ区間で下げ直す。`WakeZero`はworker 0の欄の区間でそれを下げる。`Own`は別のlockの下で`running`、次に`owed`を読むので、減らした後に上げると、`running`が0、`owed`が0で、worker 0がまだ起こされていない瞬間が残る。`owed`と`running`、および`Park`と`Own`でのそれぞれの2回のアクセスは`SeqCst`である
+  - 自分から戻るdriverの待ち (本物の時計でのほかのworkerの`Sleep`、`WaitUntil`、`Advance`、メインのworkerの`Park`) は、起こす側がまだ終わらせていなければ自分の欄の区間で眠った形を終わらせ、カーネルの次の効果の前に、driverが満期にしたもの (その区画の期限が来たtimer、完了) を準備のできた列に、または持ち主への知らせとして集める。ループは`Look`をパスごとに1回しか出さないので、判定は過ぎた期限のためにループへ戻らず、すぐに戻る`WaitUntil`で待つ
+  - `stalled`と答えたdriverの待ちは、眠った形をそのままにする。この答えの後、判定は`WaitUntil`をもう出さない。本物の時計では`Wait`で待ち、`Advance`はtimerがあるときにだけ出す
 - 変更のゲートは`cargo verus verify -p eml_steps`、verusfmt、テスト、clippyで、benchのゲートはない ([テスト戦略](testing.md)の「`eml_steps`の検証」)
 
 ## `eml_gui`の内部

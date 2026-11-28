@@ -16,3 +16,9 @@ slow-timeout = { period = "2s", terminate-after = 1 }
 [[profile.timing.overrides]]
 filter = 'test(=ui::run) | test(=ui::run_fail) | test(=ui::check_fail) | test(=repl::transcripts) | test(=lowering::every_program_lowers_to_the_same_text) | test(=ui::run_native) | test(=ui::run_fail_native) | test(=ui::run_native_checked) | test(=ui::run_fail_native_checked)'
 slow-timeout = { period = "10s", terminate-after = 1 }
+
+# eml_stepsの網羅のexplorer。CIの自分の行でreleaseで流す。テストを止めるのは、止まったときの備えとして行の上限の15分
+# に達したときだけである (docs/implementation/testing.mdの「`eml_steps`の検証」)
+[[profile.default.overrides]]
+filter = 'package(eml_steps) & test(/^explore::exhaustive_/)'
+slow-timeout = { period = "60s", terminate-after = 15 }

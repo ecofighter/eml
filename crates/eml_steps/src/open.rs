@@ -275,6 +275,69 @@ impl<J> Open<J> {
         let nc = self.cells.len() as u64;
         nj + nc
     }
+
+    /// `i`番目のjoinの仕事と通し番号。古い順で、末尾を過ぎれば`None`。
+    pub fn nth_join(&self, i: usize) -> (r: Option<(u64, J)>) where J: Copy
+        ensures
+            r == if i < self.joins().len() {
+                Some(self.joins()[i as int])
+            } else {
+                None::<(u64, J)>
+            },
+    {
+        if i < self.joins.len() {
+            Some(self.joins[i])
+        } else {
+            None
+        }
+    }
+
+    /// `i`番目のセルの仕事と通し番号。古い順で、末尾を過ぎれば`None`。
+    pub fn nth_cell(&self, i: usize) -> (r: Option<(u64, J)>) where J: Copy
+        ensures
+            r == if i < self.cells().len() {
+                Some(self.cells()[i as int])
+            } else {
+                None::<(u64, J)>
+            },
+    {
+        if i < self.cells.len() {
+            Some(self.cells[i])
+        } else {
+            None
+        }
+    }
+}
+
+fn copy_list<J: Copy>(from: &VecDeque<(u64, J)>) -> (r: VecDeque<(u64, J)>)
+    ensures
+        r@ == from@,
+{
+    let mut to = VecDeque::new();
+    let mut i = 0;
+    while i < from.len()
+        invariant
+            0 <= i <= from@.len(),
+            to@ == from@.subrange(0, i as int),
+        decreases from@.len() - i,
+    {
+        to.push_back(from[i]);
+        i += 1;
+    }
+    assert(to@ =~= from@);
+    to
+}
+
+/// `VecDeque::clone`は各要素が複製であることしか約束しないので、viewを保つ写しをここに書く。
+impl<J: Copy> Clone for Open<J> {
+    fn clone(&self) -> (r: Self)
+        ensures
+            r.joins() == self.joins(),
+            r.cells() == self.cells(),
+            r.next() == self.next(),
+    {
+        Open { joins: copy_list(&self.joins), cells: copy_list(&self.cells), next: self.next }
+    }
 }
 
 } // verus!

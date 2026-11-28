@@ -69,6 +69,11 @@ jobs:
       - name: cargo nextest run --profile timing -j 1
         if: ${{ matrix.os == 'ubuntu-24.04' && !cancelled() && steps.test.outcome != 'skipped' }}
         run: cargo nextest run --profile timing -j 1 --failure-output immediate-final
+      # eml_stepsの網羅のexplorerは、CIが`#[ignore]`のテストを流す唯一の行で、x86_64のLinuxだけで流す
+      # (docs/implementation/testing.mdの「CI」)
+      - name: cargo nextest run of the exhaustive explorer
+        if: ${{ matrix.os == 'ubuntu-24.04' && !cancelled() && steps.test.outcome != 'skipped' }}
+        run: cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)'
       # テストが落ちても lint の結果は見たいので、前の手順が済んでいれば流す
       - name: cargo clippy --all-targets
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}

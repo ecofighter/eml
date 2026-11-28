@@ -3,10 +3,13 @@
 
 /// 調べるファイル。`src/`のこのファイル以外のすべてを載せる (`every_source_file_is_listed`が確かめる)。
 const FILES: &[(&str, &str)] = &[
+    ("idle.rs", include_str!("idle.rs")),
     ("lib.rs", include_str!("lib.rs")),
     ("limit.rs", include_str!("limit.rs")),
     ("open.rs", include_str!("open.rs")),
+    ("plan.rs", include_str!("plan.rs")),
     ("sleepers.rs", include_str!("sleepers.rs")),
+    ("verdict.rs", include_str!("verdict.rs")),
 ];
 
 /// Verusに確かめさせない項目を表す語と、`unsafe`。

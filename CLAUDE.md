@@ -58,6 +58,7 @@ nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -
 cargo verus verify -p eml_rt         # Verus proofs of eml_rt
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 cargo verus verify -p eml_steps      # Verus proofs of eml_steps (docs/implementation/testing.md の「`eml_steps`の検証」)
+cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)'   # the exhaustive explorer of eml_steps, CI's one line of #[ignore] tests (about 7 min; docs/implementation/testing.md の「`eml_steps`の検証」)
 verusfmt --verus-only --check $(git ls-files 'crates/eml_steps/src/*.rs')   # the same for eml_steps
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)
 bench/rt.sh                          # eml_rt fast-mode instruction counts (macOS)
@@ -96,7 +97,7 @@ claude plugin install natural-japanese@natural-japanese --scope user
 claude plugin install ecoskills@ecoskills --scope user
 ```
 
-The dev profile (and so `cargo nextest run` and `cargo test`) is opt-level 1 with debug assertions on; `--release` is only for `bench/*.sh` and the `#[ignore]` timing tests. For a debugger, build once with `CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...`.
+The dev profile (and so `cargo nextest run` and `cargo test`) is opt-level 1 with debug assertions on; `--release` is only for `bench/*.sh`, the `#[ignore]` timing tests and the exhaustive explorer line of `eml_steps`. For a debugger, build once with `CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...`.
 
 The full list, with the scaling tests, is in docs/implementation/testing.md の「よく使うコマンド」.
 
@@ -116,7 +117,7 @@ eml_clink        the C linker: the Cranelift bridges, `c_signature` (the Craneli
 eml_native       the native code generator: the JIT host `NativeMachine` / `execute` (jit.rs), the LIR-to-CLIF lowering (lower/: functions, calls and tail calls, unwind points and cleanups, the entry safepoint, inline RC, the audits of checked lowering in lower/audit.rs (every inline access to a heap object and every indirect call through a function value has one; docs/spec/native.md の「検査モード」), data, constants, the effect prims (inline `yielding` / `yield_status`, the rest as `eml_rt_<prim>` entry calls, effect numbers and masks from `e:` / `m:` data symbols) in lower/effects.rs, the inline and called std rows, the direct calls of non-blocking user C functions in lower/c.rs), the one list of rejected forms (`unsupported`, E0004 in `Session::compile_native`), the one Cranelift flag constructor `abi::isa` for eml code and the thunks `eml_enter` calls; memory access goes through mem.rs, the only module naming eml_rt; placement rules checked by tests/placement.rs (docs/implementation/architecture.md の「`eml_native` の内部」); depends on eml_extern, eml_cabi, eml_clink, eml_lir, eml_nrt and eml_rt, never on eml_vm or eml_sched (plus Cranelift)
 eml_nrt          the runtime native code calls: the entries (one `entries!` macro emits each function, generic over the mode, and its descriptor row with its `class`; `plain` and `shim` forms; table functions `ENTRIES`, `SERVICES`, `HEAP`, `ROWS`, `EFFECTS`, `CLOSURES`, `C`, walked by `entries::<M>()`; `mode.rs` (the trait `Engine`) is the only file naming `Fast` and `Checked`), the per-ABI entry stubs `eml_enter` / `eml_fatal` (naked asm, AAPCS64, SysV x86_64 and Win64), and the run driver (`Image`, the worker struct behind `ctx.runtime`, `run` on a worker thread with a 1 GiB stack, the census); re-exports the run-interface types (`RunConfig`, `Finished`, `RunStats`, `RuntimeError`, `RunFault`, `HostRef`) so eml_native never names eml_sched, and the modes `Fast` and `Checked` (the type arguments of `run::<M>` and `entries::<M>`); depends on eml_extern, eml_rows, eml_rt and eml_sched (no Cranelift, eml_lir, eml_core_ir, eml_vm or eml_native)
 eml_cabi         the C call boundary: Bridge, Dtor, CCall, Linked (eml_clink builds them; the VM calls through the bridges, native code calls the callee directly)
-eml_steps        the scheduler's decisions as functions proved with Verus (the open list of jobs, the sleeper set, the limit table); depends only on vstd; no crate depends on it yet; every item is inside `verus!`, with no `unsafe` and no trusted item (docs/implementation/architecture.md の「`eml_steps`の内部」)
+eml_steps        the scheduler's decisions as functions proved with Verus (the open list of jobs, the loop's next step, the idle protocol, the verdict, the sleeper set, the limit table); depends only on vstd; no crate depends on it yet; every item is inside `verus!`, with no `unsafe` and no trusted item (docs/implementation/architecture.md の「`eml_steps`の内部」)
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
 eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> borrow -> Perceus -> reuse, verifier

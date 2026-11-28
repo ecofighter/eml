@@ -18,3 +18,7 @@ verify = true
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)', 'cfg(verus_only)'] }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

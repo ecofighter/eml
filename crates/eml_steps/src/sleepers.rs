@@ -173,6 +173,22 @@ impl Sleepers {
         self.workers.len()
     }
 
+    /// `enlist`の順で`i`番目に載ったworker。末尾を過ぎれば`None`。
+    pub fn nth(&self, i: usize) -> (r: Option<u32>)
+        ensures
+            r == if i < self.workers().len() {
+                Some(self.workers()[i as int])
+            } else {
+                None::<u32>
+            },
+    {
+        if i < self.workers.len() {
+            Some(self.workers[i])
+        } else {
+            None
+        }
+    }
+
     fn position(&self, k: u32) -> (r: Option<usize>)
         requires
             self.wf(),
@@ -195,6 +211,28 @@ impl Sleepers {
             i += 1;
         }
         None
+    }
+}
+
+/// `Vec::clone`は各要素が複製であることしか約束しないので、viewを保つ写しをここに書く。
+impl Clone for Sleepers {
+    fn clone(&self) -> (r: Self)
+        ensures
+            r.workers() == self.workers(),
+    {
+        let mut workers = Vec::new();
+        let mut i = 0;
+        while i < self.workers.len()
+            invariant
+                0 <= i <= self.workers@.len(),
+                workers@ == self.workers@.subrange(0, i as int),
+            decreases self.workers@.len() - i,
+        {
+            workers.push(self.workers[i]);
+            i += 1;
+        }
+        assert(workers@ =~= self.workers@);
+        Sleepers { workers }
     }
 }
 
