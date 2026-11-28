@@ -350,7 +350,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
   - 関数全体の表 (`Fields`) は、変数ごとの RC の対象かの印、親とスロット (`Parent`)、束縛の時点の持ち主を持つ。経路ごとの状態 (`State`) は、所有の集合と、持ち主ごとのそれに属する生きている変数 (`lent`) だけである。保持は「所有していて生きていないが、`lent` が空でない」ことから決まり、別には持たない
   - `switch` の行き先の状態 (`switch_entries`) は、`switch` のブロックを前からたどり終えた後に、行き先ごとに状態を写し、case のフィールドを借りた変数として加えて作る。行き先に着いたときに取り出す
   - 文の前の命令は `stmt` が、終端の前の命令は `term` が置く。どちらも、所有を取る変数を集めて `take` に渡し、その後に消費の数の `dup` を置く。`term` は、`return`、`tail`、`jump` の実引数と、`jump` の行き先で生きている借りた変数の所有を取り、保持している変数を手放す。`take` は、持ち主がその命令で必要なら `dup` し、そうでなければ `resolve` で持ち主を解く。`resolve` は、属する変数から親をたどって道と代表を決め、`release` を作業リストで親から子の順に置く。深い入れ子で Rust のスタックを使わないためである
-  - タグの case を持つのに配置のない `switch` を見たら、その `switch` の所でパニックする (`a_tag_switch_without_a_layout_stops_perceus` が確かめる)
+  - タグのcaseを持つのに配置のない`switch`を見たら、その`switch`の所でパニックする
 - reuse (`eml_lir` の `reuse.rs`) は、関数ごとに `Planner` がブロックを番号の順に1回たどって組を決め、`Plan::apply` がまとめて書き換える ([LIR](../spec/lir.md) の「reuse」)。道ごとの状態 (`Path`) は、構築子が分かっている変数と使える token の並びで、`switch` の行き先へ写し、合流するブロックでは構築子の事実を入る道の共通部分にし、token を空にする。たどり終えてから、どの道でも使わなかった元を元の文に戻し、一部の道でだけ使う token の `drop_token` を行き先のエントリに置く。yield しうる呼び出しは `may_yield` が決め、verifier も同じ関数で、yield しうる呼び出しの後に token が生きていないことを確かめる
 - パス、verifier、`pretty`、`parse`、VM のコード生成は、ブロックと文の並びをループでたどり、IR の大きさに比例して再帰しない。生存解析は、ブロックを後ろからたどる1回のループで、ブロックごとのエントリの生存集合を側の表 (`liveness::live_in`) に返す。辺がすべて前向きなので、不動点の計算は要らない
 - 縮約 (`eml_lir` の `contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換なときだけ `tail` にする ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出しの書き換えは、translate が組み立てるときに行う。組み立てた後に別のパスで書き換えると、書き換えのたびに枝の部分木を置き換えるので、長い `else if` の連鎖で2乗の時間がかかるためである
@@ -419,7 +419,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `unsafe`は`mask.rs`、`test.rs`、`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`、`sys/iocp.rs`、`driver/tests/fake.rs`にだけ置き、`trust.rs`のテストが一覧を固定する ([テスト](testing.md)の「`unsafe` の一覧」)。核のテストが`RawBuf`を作る手助けも`fake.rs`に置く。核と`real.rs`はOSを名指さず、`RawBuf`の番地はbackendのOSを呼ぶ関数の中でだけ読み、sliceを作らない
 - 壊れる条件と壊れた後の振る舞い、`quiesce`、driver を落とすときの規則は [VM](../spec/vm.md) の「時計と driver」にある
 - 起こしが長い待ちを終わらせることは、結合テストが遠い期限と期限 `u64::MAX` の `wait` で確かめる
-- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落としても仕事を待たないこと、落とした後の起こしと、待つ前の起こしが次の待ちだけを終えること、ループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、1つのストリームで待つ読みと待つ書きが両方終わること、溜まった接続の受け、受けたソケットを別のスレッドの driver が取り込んで読み書きすることと取り込まずに落とすと閉じること、リセットで終わる待つ書き、unix でシグナルに割り込まれた待ち、名前の解決とその2つの上限と、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF、OS のソケットを取り込まないこと) を確かめる。`tests/tls.rs` は `tls` のときだけ組み、Rust の `eml_tls::Conn` のクライアントで終端器の handshake、平文の受け渡し、close_notify とその省略、半分の閉じ、証明書の拒否、閉じる順ごとの EOF とポートの解放を確かめる。`tests/tls_off.rs` は `tls` を外したときだけ組み、TLS の名前が `NotFound` で終わることを確かめる ([テスト](testing.md) の「feature の組み合わせの確認」)
+- 結合テストは`tests/main.rs`が1つのバイナリ`integration`にまとめる。`tests/tls.rs`は`tls`のときだけ組み、`tests/tls_off.rs`は`tls`を外したときだけ組む ([テスト](testing.md) の「feature の組み合わせの確認」)
 
 ## `eml_tls` の内部
 
@@ -437,7 +437,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 失敗は最初の1つだけを記録し、その後の `push_tls` は何も読まず、`write_plain` は平文を捨てる。同じ `push_tls` の中で失敗の前に復号できた平文は列に残す。それを捨てるかどうかは呼ぶ側が決める。失敗の後も rustls が積んだ alert は `pull_tls` で取り出せるので、呼ぶ側は相手に失敗を伝えてから閉じられる。close_notify を受けた後も `push_tls` は何も読まず、その後ろのレコードは捨てる
 - 文言は固定である。作るときの誤り (`Error`) はそれぞれ1つの文言を持つ。証明書の拒否 (rustls の `InvalidCertificate`) は理由によらず `the server certificate was rejected` とし、rustls の詳細を付けない。ほかの TLS の誤りと `read_tls` の誤りは rustls の文言をそのまま使う
 - `send_close_notify` は rustls のものを呼ぶだけで、2度目は何もしない。致命的な alert を送った後も何もしない。close_notify を送った後の `write_plain` も、rustls は止めずにレコードを作る。そのため、呼ぶ側がソケットの送る向きを閉じた後に書くと、そのレコードはソケットまで届いてそこで失敗する。close_notify を送った後に相手の壊れたレコードが届くと、rustls は致命的な alert を積む前の `debug_assert!` で panic する。そこで workspace の `Cargo.toml` は dev の profile で rustls の debug assertions を切り、release と同じく `FAILED` になるようにしている
-- `Conn::server`は、テストのdriverの終端器とテストのためだけにある。`fixtures`は、テストのCA`ca.pem`と、leafの`cert.pem`とその鍵 (有効期間は2026-01-01〜2026-02-01) と、拒否を期待するテストのための、何にも署名していない2つ目のCA`other-ca.pem`を持つ。handshakeの成功を期待するテストは`fixtures::NOW` (2026-01-15T00:00:00Z) の時刻で確かめるので、結果は日付に左右されない。現実の時刻では、証明書は期限切れである。作り直すには`fixtures/gen.sh`を流す。`fixtures`の鍵は公開されたテスト用の定数で、何も認証しない
+- `Conn::server`は、テストのdriverの終端器とテストのためだけにある。`fixtures`は、テストのCA`ca.pem`と、leafの`cert.pem`とその鍵と、拒否を期待するテストのための、何にも署名していない2つ目のCA`other-ca.pem`を持つ。handshakeの成功を期待するテストは`fixtures::NOW`の時刻で確かめるので、結果は日付に左右されない。現実の時刻では、証明書は期限切れである。作り直すには`fixtures/gen.sh`を流す。`fixtures`の鍵は公開されたテスト用の定数で、何も認証しない
 - `examples/https_server.rs`は`bench/scripts.sh`の行`https-get`の相手である。`Conn`を使わず、rustlsの`StreamOwned`でブロックするソケットに書く。計測の相手はI/Oを持たない形である必要がないためである。`https_server CERT_PEM_PATH KEY_PEM_PATH MIB`で呼び、証明書と鍵は`bench/scripts.sh`がrunのたびに作るPEMのファイルから読む。`fixtures`は使わない。動き方は [計測の基準](benchmarks.md) の「スクリプトの計測」にある
 
 ## `eml_native` の内部
