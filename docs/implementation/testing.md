@@ -548,7 +548,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - REPLにはGUIの`Park`がないので、`gui/not_available.repl`は`Gui.run`が`NotAvailable`で失敗し、その後もセッションが続くことを確かめる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Gui`」)。GUIのstubを置くのはUIテストの`-- gui: stub`の印だけである
 - 検査モードで流した後に速いモードでも流し、入力ごとの表示が同じことを確かめる。`close` のリークは検査モードだけが数えるので、`--- close (load) ---` も含めて比べない。セッションを使えなくする誤り (`Outcome::Broken`) が出たトランスクリプトは、速いモードで流さない (上の「2つのモードで流す」)
 - Host は標準入力を持たない `CaptureHost` (`without_stdin`) である。REPL は標準入力から入力を読むので、プログラムには渡さない ([標準ライブラリ](../spec/stdlib.md) の「`Stdin`」)
-- 上限は `eml run` と同じ `default_limits()` で、1つの `Control` をトランスクリプト全体で使う。`Repl::eval` が入力ごとに止める理由のビットを下ろすためである。確保量の上限の後に続けられることは、上限を小さくする必要があるので、`crates/eml_cli/tests/api.rs` で確かめる。`api.rs` は、空の入力、受け付けなかった入力の後にセッションが変わらないこと、import したモジュールのテキストを読み直さないこと、警告を一度だけ返すこと、割り込まれた入力の後に続けられること、割り込みで止まった入力が開いた `FileIn` が `eval` から戻った時点で閉じていること、実行の前に立った割り込みがその入力を取り消すこと (`an_interrupt_before_the_run_cancels_the_input`)、`repl_limits()` の確保量が `default_limits()` の半分であること (`repl_limits_leave_room_for_recovery`) も確かめる
+- 上限は`eml run`と同じ`default_limits()`で、1つの`Control`をトランスクリプト全体で使う。`Repl::eval`が入力ごとに止める理由のビットを下ろすためである。確保量の上限の後に続けられることは、上限を小さくする必要があるので、`crates/eml_cli/tests/api.rs`で確かめる
 - 実行時エラーの後の回復が、失敗した実行の残した物体を捨てる ([オブジェクトモデル](../spec/object-model.md) の「回復」)。そのため、検査モードの `close` はどのトランスクリプトでもリークを報告せず、スナップショットの末尾は `no leaks` になる
 - 各段の REPL の単体のテストは、セッションの入力を並べて組み立てる。`eml_types` は `#[cfg(test)]` の `test_session` で、`eml_core_ir` は `tests/common` の `session_core_text` と `session_lir_text` で組み立てる。`eml_types` は `load_session` から順に段を呼び、`eml_core_ir` は `eml_test_support::check_inputs` で `Session::load_session` を通す
 
@@ -579,20 +579,14 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `crates/eml_cli/tests/cli.rs` は `eml` バイナリを起動し、終了コードが [コンパイラの構成](architecture.md) の「CLI と lib API」の定めに合うことを確認する。`run` のテストのうち、速いモード (`--debug-heap` なし) で走るのは、成功と実行時エラーの2本と、下の4つの worker の run である。
 
-`eml FILE ARGS...` の起動 ([標準ライブラリ](../spec/stdlib.md) の「起動」) は、引数がすべて渡ること (`-` で始まるものと、ファイルの後ろの `--debug-heap` を含む)、サブコマンドの名前をファイルとして読まないこと、綴りを誤ったフラグが使い方の誤りであること、パイプで渡した標準入力と標準エラーへの書き込み、shebang で直接動かすこと (`cfg(unix)`)、UTF-8 でない引数と環境変数の実行時エラー (unix と Windows) で確かめる。
 
 引数の分け方は、`workers_flag_is_accepted_and_rejected` が1本で確かめる。終了コード 0 とスクリプトの引数を確かめるのは、値を次の引数と `=` の後に取る形、`--debug-heap` の前と後に書いた形、ファイルより後ろの値を取るフラグ (値のないものを含む) をスクリプトに渡す形、`run` を省いた起動である。2回書いたフラグ、値のないフラグ、ファイルのない `run`、`run` を省いて先頭に書いたフラグ、`check` のフラグ、`run` にしかないフラグを `repl` に書いた形、知らないフラグを `run` のファイルの前に書いた形は終了コード 2 である。起動するプロセスが多いので、スレッドで並べて起動する。`Sched` の既定の値は `crates/eml_vm/tests/api.rs` が確かめる
 
 `run` が持たないフラグも、ファイルより後ろならスクリプトに渡す。`flags_after_the_file_go_to_the_script` がこれを確かめる。`Clock` の既定の値は `crates/eml_vm/tests/api.rs` が確かめる。`eml` のバイナリを起こすテストは本物の時計で動くので、タイマーを使うプログラムは実際の時間を眠る。UI テストと REPL のトランスクリプトとプロセス内のテストは `RunConfig::default()` の仮想の時計で動く
 
-`eml run`のSIGINTのテストは`cfg(unix)`で6本ある。どれも`libc::kill`でSIGINTを送り、子が書く行か子の終わりを待つ。待ちはどれも子自身の出来事で戻り、時間は測らない。止まりの見張り (`HangGuard`) は、45秒たっても終わらない子を殺してテストを失敗にする。止まったテストが自分のメッセージで終わるためである。45秒はnextestがテストを止める60秒より短いので、メッセージはCIのログにも届く。
+`eml run`のSIGINTのテストは`cfg(unix)`で組む。どれも`libc::kill`でSIGINTを送り、子が書く行か子の終わりを待つ。待ちはどれも子自身の出来事で戻り、時間は測らない。止まりの見張り (`HangGuard`) は、45秒たっても終わらない子を殺してテストを失敗にする。止まったテストが自分のメッセージで終わるためである。45秒はnextestがテストを止める60秒より短いので、メッセージはCIのログにも届く。
 
-- 止まらない自己末尾呼び出しのループで行を出し続けるプログラムに、最初の行が届いたら SIGINT を1回送り、終了コード 130 と、標準エラーに `interrupted` が含まれることを確かめる。標準出力はパイプなので 64 KiB ごとにしか書かれない。テストは別のスレッドで標準出力を読み続ける。パイプが詰まると子が `write` の中で止まり、安全点に来なくなるためである
 - 既定の方針で、`par` を1回動かして監視のスレッドを始めてから標準エラーに1行を書き、回り続ける2つの子の `par` に入るプログラムに、その行が届いたら SIGINT を1回送り、終了コード 130 で終わることを確かめる。監視のスレッドは SIGINT と SIGTERM を塞いで始まるので、SIGINT は VM のスレッドに届く
-- 本物の時計で `Async.sleep_ms 100000` だけをするタスクの run に、標準エラーの `sleeping` の行が届いたら SIGINT を1回送り、終了コード 130 と、標準エラーの `interrupted` を確かめる。すべてのタスクが眠る worker は、空きのループの上限付きの眠りの後に割り込みを読む。同じことを `crates/eml_vm/tests/api.rs` の `an_interrupt_wakes_a_sleeping_worker` が、プロセスの中で `Sequential` の方針について確かめる
-- `mkfifo` で作った名前付きのパイプを `FileIn.read_all` で読むプログラムに、100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。読みは1回目の SIGINT で `EINTR` で戻って止まる。読みに入る直前に届いた SIGINT は読みを止めないので、2回目の SIGINT でハンドラが終わらせることもある。どちらも 130 である。送り続けるのは、続けて届いた2つの SIGINT が1つにまとまることがあるためである
-- 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、同じく 100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。プログラムが標準エラーに書いた行を読んでから送る。ハンドラを入れる前の SIGINT は、既定の動作でプロセスを終わらせるためである
-- `Proc.run`で`sh -c 'echo $$ >&2; exec sleep 30'`を待つプログラムを起動し、子が標準エラーに書いた行から子のプロセスの番号を読んで、emlにSIGINTを1回送り、続けて子に1回送る。子が終わり、終了コード130と、標準エラーの`interrupted`を確かめる。子より先にemlに送るのは、OSが端末のCtrl-Cをグループのプロセスごとに別々に届けるためである。emlが受け取る前に子が終わると、runは自分の終了コードで終わることがある。子はテストが送るまで終わらないので、番号はほかのプロセスに使い回されていない
 
 `eml run` の SIGTERM のテストも `cfg(unix)` で2本あり、`libc::kill` で SIGTERM を送るほかは SIGINT のテストと同じ形である。
 
@@ -615,13 +609,13 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `default_limits()` のテストは `crates/eml_cli/tests/api.rs` にある。`max_depth` が 2^27 であることと、`max_bytes` の既定の値を確かめる。既定の上限まで実際に再帰するテストは、1 GiB を使うので置かない。
 
-`eml repl`のテスト (`crates/eml_cli/tests/terminal.rs`) は、標準入力をパイプにして流す。パイプからの読みではプロンプトを書かないので、標準出力は値だけになる。標準出力がパイプなので、結果は80列で整形される。結果の行を待ってから次の入力を送るテストは、結果を書いた後の書き出しを確かめる。入力を書き終えて標準入力を閉じ、EOFで終わらせる。SIGINTのテストは`cfg(unix)`で3本ある。どれも標準入力を開いたままにし、最初の入力の表示が出てからSIGINTを送る。ハンドラを入れる前のSIGINTは、既定の動作でプロセスを終わらせるためである。止めるテストは、標準エラーに`interrupted`が出るまで100 msごとに送り続ける。REPLはSIGINTで終わらないので、何回送ってもよい。先に送ったSIGINTのハンドラが次の入力の始めの`clear`の後で動くと、その入力を止める。そのためテストは、次の入力が止まるたびに送り直し、送り直しはまだ届きうるSIGINTの数までにする。SIGINTは1つで高々1つの入力しか止めないので、それより多く止まればテストは失敗する。決まった時間は待たない。
+`eml repl`のテスト (`crates/eml_cli/tests/terminal.rs`) は、標準入力をパイプにして流す。パイプからの読みではプロンプトを書かないので、標準出力は値だけになる。標準出力がパイプなので、結果は80列で整形される。結果の行を待ってから次の入力を送るテストは、結果を書いた後の書き出しを確かめる。入力を書き終えて標準入力を閉じ、EOFで終わらせる。SIGINTのテストは`cfg(unix)`で3本ある。どれも標準入力を開いたままにし、最初の入力の表示が出てからSIGINTを送る。ハンドラを入れる前のSIGINTは、既定の動作でプロセスを終わらせるためである。止めるテストは、標準エラーに`interrupted`が出るまで100 msごとに送り続ける。REPLはSIGINTで終わらないので、何回送ってもよい。決まった時間は待たない。
 
 `:load` と `:reload` のテストは、カレントディレクトリを選んで `eml repl` を起動し、相対パスのファイルと、そのディレクトリを import の根にする様子を確かめる。
 
 行のまとめ方 (`eml_cli::lines`) は、端末に依存しない状態機械なので、`crates/eml_cli/tests/lines.rs` が行の並びを渡して確かめる。
 
-結果の整形 (`eml_cli::pretty`) も端末に依存しない純粋な関数なので、`crates/eml_cli/tests/pretty.rs` が文字列と幅を渡して確かめる。整形の規則の各項目、10,000 文字で切ること、5,000 段の入れ子の括弧を再帰なしで整えることを確かめる。
+結果の整形 (`eml_cli::pretty`) も端末に依存しない純粋な関数なので、`crates/eml_cli/tests/pretty.rs`が文字列と幅を渡して確かめる。
 
 `crates/eml_cli/tests/tls.rs`は、本物のdriverの上で`Std.Tls`を動かす唯一のテストである。テストのスレッドがループバックに`eml_tls::Conn`のサーバーを立て (クライアントは`127.0.0.1`に接続し、証明書のIPの名前で照合する)、`Clock::Real`のrunで`ca.pem`を渡した`Tls.connect_with_ca`が、証明書の拒否の固定の文言で失敗することを確かめる。このrunは本番の検証器で現実の時刻に確かめ、その時刻ではテスト用の証明書は期限切れなので、拒否はこれから先のどの日付でも成り立つ。本物のdriverのrunがテストの世界の信頼を使えば、このテストは失敗する。`cfg(feature = "tls")`の下で組む。`eml_tls`には、dev-dependencyでなくfeature `tls`が足す依存として届く (「OS ごとのテスト」)。
 
