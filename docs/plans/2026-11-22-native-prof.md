@@ -25,7 +25,7 @@
 ## 3. Received from earlier stages
 
 - `ir-origins`: origins, roles (for every lowering, those of the task layer and the REPL included) and the encoded tables; `NativeMachine::points`; the `origins` option.
-- `sched-core`: `Slot.current` (H-2), `Slot.phase` (H-8: `Run`, `Idle`, `Io`, `Join`, `Park`), `Policy::at` (H-6), the monitor thread, docs/spec/runtime.md 「信頼の一覧」 with a group for memory-safety assumptions.
+- `sched-core`: `Slot.current` (H-2) and `Slot.phase` (H-8: `Run`, `Idle`, `Io`, `Join`, `Park`; `Io` is declared by `sched-core` and first written by this stage's guard), read through `Signs`; `Policy::at(worker, Point)` (H-6; `Point` is `Kernel(eml_steps::Label)` or one of four shell points); the monitor thread (it runs when N >= 2, the seat is separate or the clock is not virtual, and `--prof` adds a fourth condition here; its loop has one wait that takes a deadline, where the tick goes); docs/spec/runtime.md 「信頼の一覧」 with a group for memory-safety assumptions (SM-5..SM-9; this stage adds SM-1, SM-3, SM-4).
 - `jit-tasks`: every program runs natively at any worker count; the worker thread bodies; the frame chain test (H-1); the stack headroom of a worker.
 - `jit-repl`: the REPL's session thread and `NativeMachine::extend`, whose loads write their own tables.
 - `vm-retire`: one engine; the rows in `eml_nrt`; `Options.stack`.

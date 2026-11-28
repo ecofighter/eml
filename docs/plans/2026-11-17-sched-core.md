@@ -1,94 +1,685 @@
-# Stage sched-core: the new scheduler in `eml_sched`, complete and tested without an engine
+# Stage sched-core: the scheduler native code keeps, in `eml_sched`, complete and tested without an engine
 
-- Created: 2026-11-17 (design-level plan).
-- Base: the `Close native-checked` commit. Facts and line numbers in 01 describe main @ 4a2954c1; the refresh re-checks them.
-- Status: design-level. `Start sched-core` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md` (deleted at its Close; read it with `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`). The `cells.rs` list of D-SC-3 is part of that plan and is approved with it (01 §22 U-1).
-- Appendices: `docs/plans/2026-11-17-runtime/`; 00 wins; the design is 01 §10 (D-SC-1..D-SC-10), with 01 §2 (the model, types, loop, publishing and the verdict, `fork_join`), §13.3 (the crate change), §14.1 P-1..P-4a, P-6, §14.3 ST-1..ST-3, §15.2 H-2, H-6, §16 S-1..S-8, S-12, S-23, S-25, §18 G-8, G-9, G-11, G-12, G-22 (H-2, H-6), G-23, G-24 (D-SC-3a). 00 §D D-6 moves `Finished.claims` / `join_waits` to `jit-tasks`. 00 §D D-15 fixes the shape of `counters.rs` and the budget list's atomic rows.
+- Created: 2026-11-17 (design-level plan); refreshed into this executable plan 2026-11-28; final text after the Architect's reviews and ruling and the Critic's three rounds of the same day (records under `.git/nc-keep/sc-plan/`).
+- Base: main @ 6497624f (`Reorder the stages after native-checked`). Line numbers are hints; code is addressed by item names, docs by section names.
+- Status: executable plan. Approving it is the agreement for section 5.2 (the changes to 01, recorded as 00 §D D-22), for the test changes of 7.4 and for the user decisions of section 11 (N-1 (c), N-2 (b), N-5 (a), decided 2026-11-28).
+- Design documents: `docs/plans/2026-11-17-runtime/00-decisions.md` (00, wins), `01-design.md` (01) §2, §13.3, §14.1, §14.3, §15.2, §16, §18 as changed by 5.2; the rule ledger `02-ledger.md` (added by SC-1). This file stands alone where it differs from 01.
+- Roles: the Architect owns direction (DIR-n of the program direction, carried here as SG-n); the Steward owns this plan and its execution; the Critic is a fresh adversarial examiner. The execution orchestrator follows section 9.
+- Language: this plan is English. `docs/`, code comments and CLAUDE.md prose are Japanese, drafted in English and translated with PLaMo (`plamo-translate` MCP `translate`, `form: plain`, identifiers and section names in `glossary`, earlier parts of the same document as `history`), reviewed, with no space between Japanese and Latin characters or inline code. Text marked `EN:` is such a draft. Implementers of units that write Japanese are Opus; a unit's report states the PLaMo call it made.
+- Tags: [V: how], [R1] / [R2] / [R3] / [C1] (the planning dossiers and the Critic's round, kept under `.git/nc-keep/sc-plan/`), [I].
 
-## 1. Goal and completion conditions
+## 1. Goal and success criteria
 
-- Goal: `eml_sched` holds the scheduler native code will run on, written new against 01 §2 and tested through the closure-driven `Exec` `Script`; its decision kernels live in the new crate `eml_steps`, all inside `verus!`, proved where 01 §14.1 says, with an exhaustive explorer. The VM is not touched beyond the adapter the `cells.rs` list names.
-- Completion conditions:
-  - G-8: `cargo verus verify -p eml_steps` passes; `crates/eml_steps/src/trust.rs` pins "no `external_body`, no `assume_specification`, no `unsafe`"; placement tests: `Open`'s operations, `plan::next`, `idle::step`, `verdict::step`, `limit::hit` each have one caller module in `eml_sched`.
-  - G-9: an unstarted job exists only in an `Open`: no `Notice` variant carries a `Job`, and `grep -n 'in_flight' crates/eml_sched/src/run.rs crates/eml_sched/src/job.rs crates/eml_sched/src/fork.rs crates/eml_sched/src/drive.rs` → empty (`Registry::in_flight(k)` in `cells.rs` is not this). The refresh fixes the exact grep.
-  - G-11: `grep -rn 'fn drive' crates/eml_sched crates/eml_nrt` → one hit (`crates/eml_sched/src/drive.rs`).
-  - G-12 / D-SC-10: `git diff --stat <stage base> -- crates/eml_vm` lists only the adapter files the `cells.rs` list names; no UI output or snapshot changes (`git diff --stat <stage base> -- tests/ui 'crates/*/tests/snapshots' crates/eml_cli/tests/repl` → empty).
-  - G-22 (this stage's hooks): H-2's test reads `Slot.current` from another thread; H-6 has its test as 01 §15.2 states.
-  - G-24: `cargo nextest run -p eml_cli --test integration -E 'test(/^surface::/)'` passes at every commit; new public items follow docs/implementation/architecture.md 「公開の面と`unsafe`」 (D-SC-3a): `fork`, `join`, `drive` are `unsafe fn`, `Exec`'s methods `unsafe`, `Marked` unforgeable, `Script` safe; a new safe function or `pub` field that names a `surface.rs` token (whole identifiers, including the driver's `Op`) (`take_own`, `wait_join`, `WorkerCore::schedule`, ...) gets its `SAFE` entry in the unit that adds it; the `cells.rs` items the new files call are the `unsafe fn` of `engine-trust`'s ET-R1, so D-SC-3's "additions only" holds.
-  - G-23: a placement test pins the readers of `listed` and that a scan reads a list only under its slot lock.
-  - D-SC-6's tests pass; Miri `drive::` in both borrow models; TSan `claims::`, `par::`, `workers::`, `counters::`; the explorer (D-SC-7) passes as an `#[ignore = "exhaustive"]` test with its CI line in release.
-  - D-15: `grep -n 'unsafe' crates/eml_sched/src/counters.rs` → empty; `surface::` needs no entry for the module.
-  - `nix/crate-graph.sh --check` passes with the new crate and the edge `eml_sched -> eml_steps` in its tables.
+- Goal: `eml_sched` holds the scheduler native code runs on for good: per-worker open lists, one loop, the idle protocol and the verdict, `fork` / `join`, I/O hosting, the clock, signals and the monitor, the pool, both seats, one run sequence that owns the end of a run on every path. Its decisions live in the new crate `eml_steps`, proved with Verus and explored exhaustively. Every rule is tested through `Script`, a closure-driven `Exec`, with no engine. docs/spec/runtime.md is born and is true at every commit. The VM does not change.
+- Success criteria (commands from the repository root; `<base>` = 6497624f):
+  - S-1 (SG-2): `git --no-pager diff --no-ext-diff --stat <base> -- crates/eml_vm crates/eml_rows crates/eml_nrt crates/eml_native tests/ui 'crates/*/tests/snapshots' crates/eml_cli/tests/repl` prints nothing.
+  - S-2 (U-1): `git --no-pager diff --no-ext-diff --stat <base> -- crates/eml_sched/src/cells.rs crates/eml_sched/src/config.rs crates/eml_sched/src/error.rs crates/eml_sched/src/park.rs crates/eml_sched/tests/imports.rs` prints nothing.
+  - S-3 (SG-5): `cargo verus verify -p eml_steps` (from the repository root, as CI runs it) -> `<V> verified, 0 errors`, V recorded by SC-3 in the unit's message; `cargo test -p eml_steps -q` passes (it includes `trust::`); `verusfmt --verus-only --check $(git ls-files 'crates/eml_steps/src/*.rs')` exit 0.
+  - S-4 (SG-3): `grep -rn 'eml_fatal' crates/eml_sched/src`, `grep -rn 'extern "C" fn\|asm!' crates/eml_sched/src`, `grep -n 'argv\|\*mut u64' crates/eml_sched/src/exec.rs crates/eml_sched/src/drive.rs` all print nothing; `bash nix/crate-graph.sh --check` exit 0 with `eml_sched: eml_io eml_rt eml_steps` and `eml_steps:` in EDGES.
+  - S-5 (SG-4): `grep -rn 'fn drive[<(]' crates/eml_sched crates/eml_nrt` -> one line, in `crates/eml_sched/src/drive.rs`; `placement::enter_has_one_caller` and `placement::clear_end_has_one_caller` pass.
+  - S-6 (SG-7): `placement::the_new_files_have_no_test_only_item` and `explore::the_labels_are_the_kernel_alphabet` pass; `[features]` of `crates/eml_sched/Cargo.toml` is `testing = []` only; `crates/eml_steps/Cargo.toml` has no `[features]`.
+  - S-7 (SG-8): `grep -rn 'thread::sleep' crates/eml_sched/tests crates/eml_steps/tests` prints nothing; `grep -rn 'test_ctx\|stream_on\|task_on\|set_hook' crates/eml_sched/tests` prints nothing; `cargo nextest run --profile timing -j 1 -p eml_sched -p eml_steps` passes (the profile fails a test over its limit; CI's timing job decides the 1 s rule).
+  - S-8 (SG-9): the table of 5.6 has no empty cell and each test it names exists (`cargo nextest list -p eml_sched -p eml_steps`).
+  - S-9 (SG-10, SG-11): `placement::no_crossing_type_has_a_word_field`, `placement::the_post_implementer_is_private`, `placement::share_follows_reclaim_if_due`, `owners::every_heap_of_a_run_counts_in_one_table` pass; `grep -n 'Ctx::new(\|Ctx::for_worker(\|Heap::with_control(' <new files other than script.rs>` prints nothing, and `script.rs` has `Ctx::for_worker(` only.
+  - S-10 (SG-6): `cargo nextest run -p eml_cli --test integration -E 'test(/^surface::/)'` passes at every commit; `trust::` of `eml_sched` passes; `placement::no_safe_function_is_bounded_by_exec` passes.
+  - S-11 (D-SC-8): `end::an_open_list_left_at_a_successful_end_is_an_error` and `end::a_joined_notice_left_at_a_successful_end_is_an_error` pass, and `placement::the_end_checks_are_not_debug_assertions` pins that neither check is a `debug_assert` or under `cfg(debug_assertions)`.
+  - S-12 (SG-12): `cargo test -p eml_sched --lib rank::` passes (five tests: four in which a violation panics, one for the nested mark); `placement::locks_are_taken_only_through_rank` and `placement::cells_is_entered_only_through_rank` pass.
+  - S-13 (SG-13): `cargo nextest run -p eml_cli --test integration -E 'test(/^citations::/)'` passes; `git grep -n 'sched-core' -- docs CLAUDE.md crates ':!docs/plans' ':!docs/reports'` prints nothing after SC-17 (SC-17 rewrites the five places that name the stage today, section 8); the ledger has no row whose fate is empty.
+  - S-14: Miri (both borrow models), TSan and ASan lines of 7.3.3 pass locally and in CI; the two explorer lines pass in CI.
+  - S-15: CI `success` on every job for the Close commit.
 
 ## 2. Scope
 
-- In: D-SC-1..D-SC-10; the crate `eml_steps` and its CI lines (Verus, verusfmt, tests, clippy); the new files of `eml_sched` (D-SC-2); the claim and join-wait counts inside `WorkerCore`, read by this stage's tests (the `Finished` fields come at `jit-tasks` JT-5, 00 §D D-6); docs/spec/runtime.md (new) and object-model.md's isolation invariant.
-- Out: any engine using the new scheduler (`jit-tasks`); P-4b for every N (`sched-proofs`); moving or reshaping VM code (UJ-17).
+- In: the crate `eml_steps` with its gate; the 15 new files of `eml_sched` (5.4); docs/spec/runtime.md (new), object-model.md's isolation invariant, architecture.md, testing.md, CLAUDE.md pointers; CI lines; the ledger; 00 §D D-22; the edits to later plans of section 12 (committed by SC-1).
+- Out: any change to `cells.rs`; any engine using the scheduler (`jit-tasks`); `Slot.stack` (JT-3); the `Io` phase's writer, the sampler (`native-prof`); `Finished` fields (`jit-tasks` JT-5); session recovery (`jit-repl` JR-4); P-4b (`sched-proofs`); any edit under `crates/eml_vm`; deleting the `testing` feature or the `Token` family of `cells.rs` (`vm-retire`).
 
-## 3. Received from earlier stages
+## 3. Background (code at the base)
 
-- `async-root`: one root task per run; no nested root (the new `run.rs` has none). The root is started by the row `root_start`, called on the worker's own ID before `drive(Until::Root)`, and its result is taken by the row `root_result` after the root scope has closed (00 §D D-10 (b)); `cells.rs` keeps `Take::Run` for it.
-- `par-total`: total children; a child's error ends the run; no join error record.
-- `task-limits`: three limit classes; no soft limit; the limit table that `eml_steps::limit::hit` restates (P-3 keeps three example rows from the VM's table).
+- `eml_sched` has `cells.rs` (10,083 lines; imports only `std` and `eml_rt`, pinned by `tests/imports.rs`), `config.rs`, `doorbell.rs`, `driver.rs`, `error.rs`, `park.rs`; one feature `testing`; edges `eml_io`, `eml_rt` [R1 §1]. No `eml_steps` crate exists.
+- The VM's scheduler is `crates/eml_vm/src/{workers,sched,monitor,jobs,counters}.rs` (2,042 / 1,744 / 266 / 295 / 164 lines; 2,706 non-test) plus the task arms of `vm.rs` [R2 §0]. It is read for behaviour, never moved or extracted (SG-14).
+- `cells`: `Runnable { Start, Resume, ResumeIo, Token }`; `Post` with six methods, called under the registry lock; `Here { me, host, mail, post }` with public fields; `Registry::start` is `unsafe fn` and shares the closure before `Post::place`; `sweep_all(shared, ctx, depth_offset)` releases what a successful run left; `depth_offset` is a parameter of 29 signatures; `Registry::closed(&mut self, scope)` answers whether a scope is closed [R1 §1; V: read].
+- `eml_rt`: `Ctx::for_worker(control, &Owners, host, k)` (`k` is the index of the stop word; a fresh heap's logical worker ID is 0 [V: ctx.rs:1125-1153]), `Owners::new`, `Owners::check(&[&Heap])`, `Heap::fork_worker`, `retire_worker`, `share` (unsafe), `transfer_back` (unsafe), `Ctx::reclaim_if_due`, `Ctx::switch_task(l, worker, depth_offset)`; `Control` has one stop word per worker (`limits.workers + 1`), bits INTERRUPT, MEMORY, END, TERMINATE, NOTICE, and `begin_run`, `end_run`, `clear_end`, `exit`, `exit_code`, `notice`, `take_notice`, `claim_signals` [V: grep control.rs, ctx.rs].
+- Native code runs one worker with no tasks: `eml_nrt::run::run` spawns `eml-worker-0`, makes `Ctx::new`, enters once, and has no `clear_end` [R3 a.1]. It does not change in this stage.
+- CI: jobs `test` (4 OS), `verus` (`eml_rt` only), `miri` (2 borrow models x 2 parts), `asan` (3 targets), `tsan` (x86_64 Linux); `#[ignore]` tests never run in CI; durations in [R3 b.4].
 
-## 4. Decisions (01 §10, §2)
+## 4. Prerequisites
 
-- D-SC-1: `eml_steps`: `open.rs`, `plan.rs`, `limit.rs`, `idle.rs`, `verdict.rs`, `sleepers.rs`; vstd only; no `unsafe`, no trust item.
-- D-SC-2: `eml_sched` gains `job.rs`, `run.rs` (`Run`, `Slot`, `WorkerCore`, inbox, `Notice`; implements `cells::Post`), `fork.rs`, `drive.rs`, `exec.rs` (`Exec`, `Script`), `policy.rs`, `io.rs`, `clock.rs`, `signals.rs`, `limits.rs`, `monitor.rs`, `pool.rs`, `main_loop.rs`, `threads.rs`, `recover.rs`, `counters.rs`; the VM's files with the same logic are read, not moved. `counters.rs` is written to 00 §D D-15, not read from the VM's file: a private `Table` (`const fn new`, `push(&self, n) -> Result<&AtomicI64, RunFault>`, `find(&self, word) -> Option<&AtomicI64>`), one `static TABLE: Table`, and the public `Counter`, `new`, `find` over it. No engine uses the module before `jit-tasks` JT-6; until then its tests are its only callers.
-- D-SC-3: the `cells.rs` list (additions only, `pub(crate)` where not public; `Discards::run`'s `depth_offset` is passed 0; an item that must change shape gets a thin adapter in `eml_vm`, listed).
-- D-SC-4: across `enter`, `drive` holds no reference or pointer derived from `this` other than `this`; `Exec::with` makes a borrow unable to leave an item boundary; the rule for engines (a shim calls `eml_fatal` only after every guard it holds is dropped) is written in native.md.
-- D-SC-5: `Policy::at(Point)` is the one hook mechanism; `eml_sched`'s feature `testing` gets no new item.
-- D-SC-6: the tests listed in 01 §10 (`claims::`, `par::`, `jobs::`, `workers::`, `pinned::`, `io::`, `clock::`, `signals::`, `counters::`), Miri `drive::`, TSan lines. `counters::` is, on a `Table` local to each test (so no other test's `new` interferes): `push_hands_out_distinct_slots`; `find_accepts_only_handed_out_words` (accepts each pushed slot's word; rejects 0, -1, `i64::MAX`, a slot's word + 1 and + 4, the word of the slot at index `len` in an initialised bucket, the address of a local `AtomicI64`); `add_wraps_around`; `a_slot_keeps_its_value_while_buckets_grow` (at most 300 pushes); `concurrent_pushes_and_adds_agree` (4 scoped threads). On the static: `the_static_table_hands_out_counters` (two `new`, distinct words, each reads back its own value, `find(word)` returns it); it asserts nothing about other slots. Also `policy::seeded_picks_an_entry_other_than_the_head`, `policy::a_short_budget_yields_before_128_operations`, `policy::the_same_seed_gives_the_same_order` (through `Script`), and the count of reorders in `WorkerCore` beside the claim and join-wait counts (00 §D D-15 (d)).
-- D-SC-7: the explorer over `idle::step`, `verdict::step` and the publish steps for 3 workers (worker 0 among them) and 3 publishes, and for "a worker stops for good while it has a listed job", with the three assertions of 01 §10.
-- D-SC-8: end-of-run checks in every build: every `open` empty, no `Joined` in an inbox.
-- D-SC-9: object-model.md gains the isolation invariant; runtime.md is created with 「workerのループ」「仕事の一覧」「眠りと起こし」「`par` の fork と join」「操作の予算」「信頼の一覧」; vm.md keeps describing the VM until `vm-retire`.
-- D-SC-10: no change under `crates/eml_vm` but the listed adapter; no UI output or snapshot change.
-- The model of 01 §2 is normative: the four rules, `running` and waking, the verdict's four steps as a loop, the lock order, `wait_join`'s predicate and wake sources, `Seeded`'s permutation and budgets. §2.3's budget list is as 00 §D D-15 (d) states: the rows that read or write a registry cell or a channel spend; no `Std.Atomic` row does.
+- The pinned Verus (0.2026.10.26) and vstd (0.0.0-2026-10-25-0158) verify `Open` over `VecDeque` and a step function with a full functional `ensures` [V: probe; 8 verified, 0 errors].
+- One cargo, test, Verus, Miri or bench process on the machine at a time (`ps` before starting). `.em` programs are not run in this stage.
+- `command ls` (bare `ls` can hang), `git --no-pager`, `--no-ext-diff`, GNU `sed`; quote every glob.
+- Durable notes: `/Users/arakaki/Projects/eml/.git/nc-keep/sc/` (created by SC-1): `log.md` (one line per unit and checkpoint), `SC-<n>-brief.md`, `SC-<n>-review.md`, `cp-<x>.md`, `proto/` (the consumer prototype's patch). Nothing the stage needs later lives only in a scratchpad.
+- Known item of the base: the three load-dependent `eml_cli` interrupt tests of 7.3.1 item 2; reported to the user at SC-1.
 
-## 5. Units (in order)
+## 5. Decisions
 
-1. SC-1 `Start sched-core`: plan; the `cells.rs` list (U-1) and any adapter; the module skeleton; baseline.
-2. SC-2: `eml_steps`: the crate, CI lines (Verus, verusfmt), `open.rs` (P-1), `plan.rs` (P-2); `nix/crate-graph.sh` tables.
-3. SC-3: `eml_steps`: `limit.rs` (P-3), `sleepers.rs` (P-6), `idle.rs`, `verdict.rs`, the explorer (P-4a).
-4. SC-4: `run.rs`, `job.rs`, `Marked`, the four rules, `running` and waking.
-5. SC-5: `exec.rs`, `drive.rs`, `Script`, item open / close, `Slot.current` (H-2).
-6. SC-6: `fork.rs`, `wait_join`, taken jobs, D-SC-8.
-7. SC-7: `io.rs`.
-8. SC-8: `clock.rs` and the verdict's shell.
-9. SC-9: `signals.rs`.
-10. SC-10: `limits.rs`.
-11. SC-11: `monitor.rs`, `pool.rs`.
-12. SC-12: `main_loop.rs`, `threads.rs`, `recover.rs`.
-13. SC-13: `policy.rs` (`Seeded`, budget points), `counters.rs` (00 §D D-15) with its tests and its Miri and TSan lines; the claim and join-wait counts and the reorder count in `WorkerCore` with their tests (not in `Finished`: 00 §D D-6).
-14. SC-14: Miri and TSan lines for the rest; runtime.md; object-model.md.
-15. SC-15 `Close sched-core`.
+### 5.1 Long-term guidelines (conformance criteria)
 
-## 6. Test changes by kind (scope)
+Each binds every unit. "New files" = the files of 5.4.
 
-- None to existing tests (01 §10). Every test is new: D-SC-6's list, the `eml_steps` unit tests and the explorer, placement tests (G-8, G-11, G-23), the H-2 test that reads `Slot.current` from another thread, H-6's test. No `Finished` literal changes (00 §D D-6).
-- A kind 1 or kind 2 change found during execution that the executable plan does not list stops the unit for a plan amendment approved by the user.
+| ID | Rule | Why | Applies to | How to check |
+|---|---|---|---|---|
+| SG-1 (DIR-1) | MUST NOT: a type, variant, parameter or branch that exists for the VM. `Runnable::Token` is matched in one arm that returns `Internal("a token wait reached the native scheduler")`; every `depth_offset` argument is the literal `0` | a VM-shaped seam outlives the VM | new files | `placement::the_new_files_name_no_token_wait` |
+| SG-2 (DIR-2, K1) | MUST NOT: change a file under `crates/eml_vm`, `eml_rows`, `eml_nrt`, `eml_native`, a UI output, a snapshot or a transcript | the VM is frozen; no engine uses the scheduler yet | every unit | S-1 |
+| SG-3 (DIR-3) | MUST NOT: `eml_sched` names `eml_fatal`, an entry, a stub, `Extern`, `extern "C" fn`, `asm!`, an `argv` pointer or an engine fatal code. `eml_steps` depends on vstd only | no scheduler frame under the fatal longjmp; Miri and the sanitizers run the whole crate | every unit | S-4 |
+| SG-4 (DIR-4) | MUST: `drive` is the only loop over ready items and the only caller of `Exec::enter`; it is `pub(crate)` and `sequence::run` is its only caller; `sequence::run` is the only sequencing of a run and holds the only `Control::clear_end`; every test that runs an item calls `sequence::run` | a second composition is the one the tests do not run | SC-4 on | S-5 |
+| SG-5 (DIR-5) | MUST: exactly the six decisions (open list, loop step, idle protocol with the publisher's probe and the wake, verdict, sleeper set, limit table) are functions of `eml_steps`; the shell performs each returned effect as one atomic operation or one lock section and feeds back only what it read there; one interpreter module per kernel. MUST NOT in `eml_steps`: `unsafe`, `external_body`, `assume_specification`, `assume`, `admit`. A step function's `ensures` is `r == spec(args)` | the proof is about the code that runs; `sched-proofs` builds on the specs | SC-2 on | S-3; `placement::each_kernel_function_has_one_caller_module`; a change to a step function re-runs both explorer bounds in the same unit |
+| SG-6 (DIR-6) | MUST: every new public item has the class of 5.5; every `unsafe` block names the contract or trust row (runtime.md 「信頼の一覧」) it rests on; `Exec` and `Workers` are taken only by `unsafe fn` | CLAUDE.md's safe-function rule | SC-4 on | S-10 |
+| SG-7 (DIR-7) | MUST: `Slot.current`, `Slot.phase` and `Policy::at` are read by no scheduling decision; `at` is called before the point is performed, with no lock held; no point is reported from inside a lock section, so `Mailer`, which runs under the registry lock, calls no `at`. MUST NOT: a `cfg(test)` item other than `mod tests`, a feature-gated item, `allow(dead_code)` / `expect(dead_code)` in new files; a new item behind `testing` | no test-only back door; hooks and explorer speak one alphabet | SC-3 on | S-6; `placement::the_hooks_decide_nothing` |
+| SG-8 (DIR-8) | MUST: a scheduler rule is tested in `crates/eml_sched/tests/` through public items; interleavings are forced by `Policy::at` and the virtual clock. MUST NOT: `thread::sleep` or a `testing` helper in those tests. A real-clock test is listed in 7.4 with its reason | deterministic tests within 1 s | SC-4 on | S-7 |
+| SG-9 (DIR-9) | MUST: every new public item has a test here and a named consumer at most one stage away, or fixes the shape of such an item; no module that only forwards | no code without a near consumer | every unit | S-8 |
+| SG-10 (DIR-10) | MUST: outside `cells`, a word crosses threads only as `Marked` (inside `cells` a continuation, a task's result and a job's end cross as the registry's own words, by its contract); `Job` and `Notice` have no `Word` field; the `Post` implementer is `pub(crate)`; a `Here` is obtained only through `unsafe fn WorkerCore::here`, and no new file reads a `Here`'s `post`; every run-time `Heap::share` in new files is preceded by `reclaim_if_due` on the same `Ctx` | `Word` is `Send`; `Post::place` is a safe method with a bare word | SC-4 on | S-9 |
+| SG-11 (DIR-11) | MUST: no new file but `script.rs` calls a `Ctx` constructor; `script.rs` calls only `Ctx::for_worker` with the `Owners` of `Env`; every retired value reaches the caller of `sequence::run`. MUST NOT: `eml_sched` drops a `Ctx` or a heap of a run on any path, a panic included; a step of `eml_sched` between a worker's start and the return of `sequence::run` runs outside a catch; a `Retired` in `eml_sched`'s hands is held outside `ManuallyDrop` | R1..R3 of 00 D-19 (l); `Heap::share`'s contract | SC-4 on | S-9; `panics::a_peer_keeps_reading_a_shared_object_of_the_panicked_worker` and `panics::a_driver_that_panics_at_quiesce_still_returns_its_retired` under Miri; `placement::the_callback_is_one_catch`, `placement::a_retired_is_held_in_manually_drop` |
+| SG-12 (DIR-12) | MUST: every lock of a new file is taken through `rank.rs`; rank 1 is the registry, rank 2 is every other lock; a rank-2 lock is taken with no other rank-2 lock held and never before the registry; the registry counts whether a new file locks it or calls a `cells` function that locks it inside: every such call goes through `rank::cells`; `Mailer`'s methods mark rank 1 as held; a debug-build assertion enforces all of it and that `Policy::at` runs with none held. `Mail`'s and `HostBin`'s locks, internal to `cells` and calling nothing back, are outside the ranks | TSan does not see mutex order | SC-4 on | S-12 |
+| SG-13 (DIR-13) | MUST: a rule is written in runtime.md in the commit that implements it; runtime.md says which code runs the scheduler today; docs name no stage and cite no `docs/plans/` path; vm.md is untouched | docs state what is true now | every unit | S-13 |
+| SG-14 (DIR-14) | MUST: every behaviour that exists in the VM and in the new code is a ledger row naming `vm-retire` as the deletion of the VM's copy. MUST NOT: a helper extracted from VM code, a third copy | a duplicate has a deletion date | every unit | the ledger at CP-A, CP-B, Close |
+| SG-15 (G-9) | MUST: an unstarted job exists only in an `Open`; no `Notice` variant carries a `Job`; no field `in_flight` in `run.rs`, `core.rs`, `job.rs`, `fork.rs`, `drive.rs`, `idle.rs` | a job is taken, never sent | SC-7 on | `placement::no_notice_carries_a_job` (it also scans for the field) |
+| SG-16 (G-23, S-25) | MUST: a scan reads a list only under that slot's lock; `listed` is read without the lock only by the verdict's interpreter, after `running` | ST-2 | SC-6 on | `placement::listed_is_read_only_by_the_verdict_and_under_its_lock` |
+| SG-17 (G-24) | MUST: `surface::` passes at every commit; a new safe `pub fn` or `pub` field that names a `surface.rs` token gets its `SAFE` / `FIELDS` entry with a reason that fits, in the same unit; a new `Reason` variant is an escalation | S-26 | every unit | S-10 |
+| SG-18 (G-18) | MUST: every commit passes `cargo test --workspace -q`; the full `cargo nextest run` passes at CP-0, CP-A, CP-B and Close | every commit runnable | every unit | 7.3.1 |
 
-## 7. docs/spec sections written
+One check per rule: where a placement test pins a rule, no grep repeats it; the greps that remain (S-4, S-5, S-7) have no placement test.
 
-docs/spec/runtime.md (new; D-SC-9's sections and 「信頼の一覧」 with ST-1..ST-3); object-model.md (the isolation invariant of 01 §2.1); native.md (the shim rule of D-SC-4, if not already stated); docs/implementation/architecture.md (`eml_steps` in 「crate の依存関係」 and its section); testing.md (the explorer line, the Miri / TSan lines, `eml_steps`' gate); CLAUDE.md (the crate table row of `eml_steps`; the `eml_sched` row, whose "depends only on eml_io and eml_rt" gains `eml_steps` and whose list of contents gains the scheduler; the runtime-closure list of the strata invariant gains `eml_steps`; the Verus, verusfmt and explorer command lines; pointer and rule changes, so they are allowed); crates/eml_rt/CLAUDE.md (a pointer to `eml_steps`' rule, A-35's second half). runtime.md 「操作の予算」 follows 00 §D D-15 (d) and says that an atomic operation is not a switch point; runtime.md gets 「`Std.Atomic`の数の表」 (the process-wide table, buckets, the two parts of `find`).
+Account of 01 §18 for this stage: G-8 -> SG-5; G-9 -> SG-15; G-11, G-17 -> SG-4; G-12 -> SG-2; G-21 -> SG-3; G-22 -> 5.3 H-12; G-23 -> SG-16; G-24 -> SG-17; G-18 -> SG-18.
 
-## 8. Acceptance checks
+### 5.2 Changes to 01 (recorded as 00 §D D-22 by SC-1; text in SC-1)
 
-- CLAUDE.md's gates; `cargo verus verify -p eml_steps`; `verusfmt --verus-only --check` over `crates/eml_steps/src`; the explorer in release (`cargo nextest run -p eml_steps --release --run-ignored only -E 'test(explore)'`) passes.
-- G-8, G-9, G-11, G-12, G-23 as section 1 states.
-- Miri `drive::` (two settings) and the TSan lines pass.
-- `nix/crate-graph.sh --check` with the new tables; `expect_tree`: `eml_steps` reaches no workspace crate.
-- Roadmap: the `sched-core` item and 「`eml_sched`のcrate」 are deleted.
+| # | 01 | New |
+|---|---|---|
+| X-1 | §2.2 `Exec::enter(this, call: Call, argv) -> Result<(), Fatal>`; `drive(this, until)`, `Until` | `enter(this, item: Item) -> Result<(), Halt>`; `Item = Root(Root) \| Entry(Entry) \| Job(Job)`; `Halt` says only that this worker stops (`Stopped`) or that its loop panicked (`Panicked`); `drive(this)` is `pub(crate)`; there is no `Until`: the loop kernel reads the seat (RA-3) |
+| X-2 | §10 D-SC-2 `threads.rs`, `main_loop.rs`; §11.6 the run's four steps in `eml_nrt`; G-17 | one `pub unsafe fn eml_sched::sequence::run` over the factory `Workers`; `eml_nrt` supplies the factory and the mode's end checks, spawns no thread and has no `clear_end` (RA-4) |
+| X-3 | §10 D-SC-2 `recover.rs`; §12.1 D-JR-2; 00 §B A-17 | scheduler state (`Run`, `WorkerCore`, the registry) lives for one run; `eml_sched` has no reset; recovery is session-side at JR-4 (N-1 (c)) |
+| X-4 | §10 D-SC-2 `limits.rs` | none; `eml_steps::limit` is called by `eml_nrt`'s safepoint; edge `eml_nrt -> eml_steps` at JT-3 (N-2 (b)); `Hit::Raise` has no payload |
+| X-5 | §10 D-SC-5, §15.2 H-6 `Policy::at(Point)` with a free-form `Point` | `Policy::at(worker, Point)`; `Point = Kernel(eml_steps::Label) \| Shell(ShellPoint)`, four shell points (5.3 H-5) (RA-5) |
+| X-6 | §2.2 `Policy { pick, wake, budget, at }`, `Normal`, `Sequential`, `Seeded` | `Policy { pick, budget, at }`; `InOrder` and `Seeded`; `Sched::Normal` and `Sched::Sequential` both select `InOrder`; `config.rs` is not touched (RA-6) |
+| X-7 | §14.1 the effect list of `idle::step` | gains the publisher's `Probe` and the wake's `Wake` (5.3 H-6) |
+| X-8 | §15.2 (no H-8) | H-8 `Slot.phase` with `Run`, `Idle`, `Io`, `Join`, `Park`; this stage writes four; `Slot.stack` is not declared here (RA-7) |
+| X-9 | §14.3 ST-1..ST-3 in one list | 「信頼の一覧」 has group A (ST-1..ST-3) and group B (SM-5..SM-9) |
+| X-10 | §2.3 the root: `root_start` called before `drive(Until::Root)` | `main` is `Item::Root(Main)`; with a root scope, `Item::Root(Result)` runs after the verdict reads it closed with `Registry::closed`; a closed root wins over timers, operations, signal waiters and `holds` (5.3 H-2) |
+| X-11 | §2.5 "the MEMORY setter's `wake_all`" | false; the wake paths are those of 5.3 H-4 |
+| X-12 | §10 D-SC-7 one `#[ignore]` explorer | a reduced bound in the ordinary run and two listed `#[ignore]` lines (N-5 (a)) |
+| X-13 | §10 the file list and the 15 units | 5.4 and 7.1 |
+| X-14 | §2.4 lock order "slot locks never nested; idle and slot never together" | two ranks (SG-12), which implies both |
+| X-15 | §10 D-SC-3a `drive`, `Script` public; `WorkerCore::schedule` safe | 5.5: `drive` is `pub(crate)`; `WorkerCore::here` and `Scripts::lending` are `unsafe fn` |
+| X-16 | - | the rule ledger `02-ledger.md` (RA-9) |
+| X-17 | §11.3 a panic in a worker's base is caught by `on_own` | every step inside the `run` callback is under a catch and a panic there is returned as `Halt::Panicked`; the factory holds its `Ctx` so that an unwind leaks it; a panic of the factory outside `run` prints one line and aborts the process (5.3 H-9; `A3-ruling.md`) |
+| X-18 | (the VM's rule, vm.md 「タスクとスケジュール」: a peer that cannot be spawned shrinks the run) | a thread of the run that cannot start (a peer, worker 0 in the separate seat, the monitor) ends the run before any item runs (5.3 H-13) |
+| X-19 | §2.5 "`mark` the value" with no receiver named; §2.1 "a worker's own ID" | the IDs of 5.3 H-1: a worker returns to its home ID (the heap's worker at the start of its loop); a taken child's result is marked with the child's ID as receiver |
+| X-20 | (the VM's rules, vm.md 「メインのworker」「タスクとスケジュール」) the main worker's `Ctx` is made before worker 0 is spawned; a session with roots starts no peer; the separate run sweeps on worker 0's heap | every worker's `Ctx` exists before any item runs (a start barrier, H-15: kept, generalised); a run whose factory says `session()` has one worker in the merged seat, else it does not start (kept, H-16); the sweep runs on the calling thread's worker's heap, which in the separate seat is the main worker's (changed: which heap sweeps) |
+| X-21 | §2.4 a notice send: push, then wake | one target-slot section: push the notice and, if the target is in the sleeping form, set `woken`, count it in `running`, ring; no point lies between (5.3 H-5) |
 
-## 9. Risks with defaults
+Known consequence, recorded in D-22 for JT-8 (not a change): marking a taken child's result (01 §2.2, 00 D-18 (c)) leaves an object with count 2 or more shared, so `RunStats.shared_objects` and `reuses` differ between a child run in place and a taken one, and between the VM (which sends the result unmarked) and native code. JT-8 lists the two fields among the schedule-dependent ones before restating `par` tests; it is not a fault of native code under K2's stop rule.
 
-| Item | Default |
+### 5.3 Hard problems: decision, mechanism, test
+
+- **H-1 Logical IDs.** A worker number `k` (the slot, the stop word, a notice's destination) is not a logical ID. Logical IDs come from the run's owner table. The table below is the rule [V: ctx.rs:1125-1153, object-model.md 「`share`」「`transfer_back`」, vm.md 「子の終わりと join」「`compute` の仕事」, vm.rs `AsyncForkJob` / `AsyncTakeJob` / `job_done`].
+
+  | What | Runs under | Returns to | `mark` (receiver) | `transfer_back` (`from`), `retire_worker` |
+  |---|---|---|---|---|
+  | a worker between items | its home ID `H`: `ctx.heap().worker()` read once at the start of its loop (0 on a fresh heap, the session's current ID on a lent `Ctx`) | - | - | - |
+  | a task item (`Entry`) | the task's ID, `Entry.worker` (from the `Runnable`) | `H` | by `cells` (`Registry::start` shares the closure with the task's ID) | by `cells` |
+  | `fork`, called under the parent's current ID `P` (a task's ID, a child's ID, or `H`) | - | - | `c = fork_worker()`; `share(g, c)` after `reclaim_if_due` | - |
+  | the right child run in place | `c` (the engine switches) | `P` | none | `join`, under `P`: `transfer_back(r, c)`, `retire_worker(c)` |
+  | a taken `Done::Join` job | `c` on the taker | the taker's `H` | at job close, after the switch to `H` and `reclaim_if_due`: `share(r, c)` (the receiver is the child's own ID, so ownership does not move and only shared marks are added), then `Notice::Joined` to the parent's worker number | the parent's `join`, under `P`: `transfer_back(r, c)`, `retire_worker(c)` |
+  | a `Done::Cell` job (`compute`) | `c = fork_worker()` by `fork_cell` under the submitting task's ID, `share(g, c)`, `Registry::new_job(c, submitter)` | the runner's `H` | none: the end is a move (the runner keeps no reference), stored by `cells::finish_job` (00 D-18 (c)) | the submitter's take row (JT-6), under the task's ID: `Registry::take_job` gives `(c, end)`; `transfer_back(end, c)`, `retire_worker(c)` |
+
+  `Done::Join { worker }` is the parent's worker number and is used only as the notice's destination. An ID leaves the table only without counted objects (R3): a failed `retire_worker` is the run's error. Tests (checked mode): `par::a_join_retires_the_childs_id`, `par::a_fork_inside_a_task_joins_a_taken_child` (the parent's ID is a task's, not its worker's number; the taken right child returns a value holding a `lin` object and an object of count 1), `par::a_nested_fork_joins_a_taken_child` (the same one level down, the parent under a child's ID), `owners::`.
+- **H-2 The root.** `plan::Facts.root` is `Main` (run `Item::Root(Main)` first), then `None` (no root scope was set: worker 0's loop returns), or `Open(scope)` set by `WorkerCore::set_root(scope)` during the main item, then `Closed` when the verdict's registry section reads `Registry::closed(scope)` (it exists), then `Result` run as `Item::Root(Result)`, then return. Precedence, fixed here: with no other worker counted in `running`, nothing listed, and the own-slot facts quiet (inbox, `woken`, mail, NOTICE, the stop word), a closed root is decided first; `timer`, `ops`, `signal_waiters` and `holds` are not consulted. A closed root does not win over a non-quiet own-slot fact (those restart the verdict) or over a stop bit. Tests: `root::`, `verdict::tests::a_closed_root_wins_over_timers_operations_waiters_and_holds`, `root::a_closed_root_ends_the_run_under_a_holding_park` (SC-8), `root::a_closed_root_ends_the_run_with_an_operation_left_in_a_driver` (SC-11), `root::a_closed_root_ends_the_run_with_a_later_signal_scheduled` (SC-12).
+- **H-3 Teardown, on every path** (success, `exit`, a halt from any worker, a stop bit, a panic), in `sequence::run`:
+  1. The event that ends a run is "a worker's loop returned, or its `on_worker` returned without having called `run`", for any reason: the loop returned, the factory never called `run`, or a step panicked. The run sequence then records why (below, unless a stop is already recorded), calls `Control::end_run` and `wake_all` once. A factory that returns without having called `run` records `Fault(Internal("a worker left without running"))`.
+  2. A worker that sees END leaves its loop; before it returns it takes its inbox once (a notice that would run counts as "left"), quiesces its own driver with the job budget, puts returned completions into their records (record fields only), notes "kept pending", drops the driver on its own thread, and returns to the factory, which retires its `Ctx`. When one worker hosts the operations of others (the virtual clock), the host starts this step only after every other worker's loop has returned: each worker counts itself out under the run's stop record when its loop returns and wakes the host, and the host waits on its slot's condvar until the count of other workers still in their loops is zero. On the real clock every worker hosts only itself and the step has no order between workers.
+  3. The calling thread's worker (worker 0 in the merged seat, the main worker in the separate seat) joins every other thread, then settles: the first recorded stop wins; the exit code is `Control::exit_code`; a successful run with nothing left and no driver kept pending checks D-SC-8 (every `open` empty, no `Joined` in an inbox; a failure is `Internal`) and calls `cells::sweep_all(shared, ctx, 0)` on its own `Ctx`; any other run sweeps nothing and the registry is dropped with its words untouched (as the VM's is). Then `Control::clear_end`, then it returns to the factory. The settle, the checks, the sweep and `clear_end` are one private function `finish` of `sequence.rs`, which holds the only `clear_end`; it runs at the end of the calling thread's callback, or, when that callback never ran (the calling thread's factory never called `run`, or a thread could not start), from `sequence::run` after the joins, without a sweep (there is no `Ctx` to sweep on, and such a run is not a success).
+     - The sweep's `Ctx` is the calling thread's worker's: worker 0's in the merged seat, the main worker's in the separate seat, at any N. The words it drops belong to tasks whose objects lie in other workers' heaps; `Discards::run` drops each under its ID, and a free of an object in another heap's page is the ordinary remote free (docs/spec/object-model.md 「別のスレッドからの解放」): every other worker thread has been joined and its heap is alive inside its `Retired`. The VM also sweeps after both joins, but on worker 0's heap; here it is the calling thread's worker's (X-20).
+     - Consequence for the engine, part of `Workers`' and `Outcome`'s documentation: after `sequence::run` returns and before any end check, the caller takes in the remote frees on every retired heap (`Ctx::reclaim`), the calling thread's heap last; `Owners::check` on a heap that has not taken in returns `NotQuiescent`.
+  4. `sequence::run` returns `Outcome { stop, exit, counts, retired }` with every worker's `Retired` and its `driver_kept` flag; the registry and every `WorkerCore` are dropped before it returns, and the joined `Retired` values live in `sequence::run`'s own frame, in `ManuallyDrop`, until then (H-9). The hook atomics (`Slot.current`, `Slot.phase`) live in a separate `Arc<Signs>`, so a reader that keeps it after the run reaches two atomics per worker and no heap word. A `WorkerCore` is `!Send` (it owns its driver and a marker) and `Workers::Retired: Send`, so a `Retired` cannot hold one; the factory drops the core on the worker's own thread before it returns, the driver first. `eml_sched` drops no `Ctx`.
+  - What is recorded: `Stopped { worker, cause }`, `cause = Halt` (the engine holds the error in that worker's `Retired`) or `Fault(RunFault)` (the scheduler's own: deadlock, a `CellFault`, a driver or `Park` failure, a thread that could not start, an internal check, "a worker thread panicked"). First writer wins (a rank-2 lock).
+  - Tests: `end::merged::*`, `end::separate::*` (eight paths each), `end::a_start_failure_clears_end`, `end::a_driver_left_pending_is_dropped_before_the_heaps`, `end::end_is_cleared_once_on_every_path`, `end::the_registry_is_swept_only_after_a_success`, and S-11's two.
+- **H-4 Every stop-bit writer has a wake path to every wait.** Every park (`Park` effect, `wait_join`, the main worker's `Park`) re-reads the stop word in the section that decides to wait. Writers: (a) END: step 1 above, `end_run` then `wake_all`; (b) `exit`: the engine calls `cells::end_with_exit` and returns `Halt`, which is (a); (c) MEMORY: `Control::charge` raises the bit on a running worker, whose next poll returns `Halt`, which is (a); a blocked worker cannot charge; (d) INTERRUPT / TERMINATE: set by a signal handler; the monitor thread (woken by the doorbell, or by its 10 ms tick without one) sees a stop bit and calls `wake_all`. The monitor runs when `N >= 2`, or the seat is separate, or the clock is not virtual; a merged N = 1 run on the virtual clock never blocks while a stop bit could arrive from outside. A run that needs a monitor and cannot start it does not start (H-13), so no run sleeps without one; the VM's 10 ms cap on a driver wait without a monitor has no native counterpart (ledger: changed, X-18). Tests: `par::a_join_wait_sees_memory` and `par::a_join_wait_sees_end` (SC-9: paths (c) and (a), no monitor needed), `par::a_join_wait_sees_interrupt` and `par::a_join_wait_sees_terminate` (SC-13, where the monitor exists: path (d), with every other worker asleep so that only the monitor can wake the waiter), each over the three seats (worker 0, a peer, the main worker); `signals::an_interrupt_wakes_a_parked_worker_without_a_doorbell`.
+- **H-5 The hook alphabet.** `Policy::at(&self, worker: u32, point: Point)`. `Point::Kernel(Label)` for every effect and step the interpreters perform, reported by the one statement at the head of each interpreter's `perform`. `Point::Shell(ShellPoint)`, four points: `JoinWait` (before `wait_join` waits), `Submit` (before a host submits to its driver), `HandBack` (before the host calls `cells` to hand a completion to its owner), `Leave` (before a worker's final `wake_all`). A notice send has no point: whether it comes from `Mailer` under the registry lock (six of the seven kinds) or from a job's close (`Joined`), it is one section of the target's slot lock that pushes the notice and performs the wake's decision (set `woken`, count the target in `running`), as the VM does inside the registry section [V: eml_vm workers.rs `Run::send`]. The ring (the condvar, the driver's waker, the `Park`'s waker) and the NOTICE bit come after the slot lock is released, as in the VM; a waker may therefore be called under the registry lock, and its contract is that it takes no lock of the run and does not block (true of `IoWaker` today). Nothing is deferred, so an engine row that calls `cells` directly needs no step after the call. The wake's kernel label `Wake` is reported by the idle interpreter for a pass-on only. A test makes "a wake in flight" by pausing the woken worker at its first point after it wakes (it is counted in `running` and has not run), never the sender; the explorer's state has the same thing (a worker that is `woken`, counted, and has taken no step). Threads without a `WorkerCore` (monitor, pool) have no hook; tests steer them through inputs (a raised stop bit, a job closure that waits on a channel the test holds).
+- **H-6 The kernels' alphabets** (drafts; SC-3 may rename, the sets are frozen when SC-3's explorer passes):
+  - `idle::Effect`: `Push` (publisher: own slot section, push, `listed += 1`), `Probe` (publisher: read `sleepers > 0 && searching == 0`), `PassOn` (sleeper-set section: pop one), `Wake` (target slot section: if in the sleeping form set `woken`, count it in `running`; the ring follows the section), `IncSleepers`, `DecSleepers`, `IncSearching`, `DecSearching`, `Enlist`, `Delist`, `Scan`, `Park` (own slot section: re-read inbox, `woken`, stop word; if quiet take the sleeping form and `LeaveRunning`; reports whether it made `running` zero), `WakeZero` (wake worker 0), `Sleep`, `Work`.
+  - `verdict::Facts`, one abstract fact per shell source: `others_running`, `listed`, from one registry section `timer: None | Due | Later`, `ops` (operations in drivers and pool jobs), `signal_waiters`, `root: None | Open | Closed`; from the own-slot section `inbox`, `woken`, `mail`, `notice`, `stop`; `holds` (the `Park`'s flag); `virtual_clock`. `verdict::Effect`: `Restart`, `Wait` (until woken), `WaitUntil` (real clock: the driver or the condvar until the deadline), `Advance` (virtual clock: to the next deadline), `RootClosed`, `Deadlock`, `Stop`.
+  - `plan::Step`: `Stop`, `Inbox`, `Root(Main | Result)`, `Ready`, `Detached`, `Foreign`, `Look`, `Idle`, `Return`. `plan::Facts`: the seat (`Worker0`: returns when the root is done; `Peer`: returns on a stop bit; `Main`: returns to its `Park` when nothing is ready), stop, inbox, the ready count left in the pass, ready empty, detached offered, root. There is no `Until`.
+  - `Label` is the sum of the three, with `Label::ALL`.
+- **H-7 I/O hosting.** On the virtual clock one driver, on worker 0, hosts every worker's operations through `Notice::Submit` / `CancelIo` / `Completion`. On the real clock each worker (the main worker included) makes its driver with `RunClock::driver` on its own thread when it first needs one; a listener or connected socket stays with its maker; an accepted socket and a pipe end are adopted by the first submitter; a file is bound at open. A driver is a field of its `WorkerCore`, never sent. `eml_io` is named only in `driver.rs`. An injected driver (`Start.driver`) is worker 0's, and such a run has one worker in the merged seat: with N >= 2 or the separate seat `sequence::run` starts nothing and returns `stop = Fault(Internal("an injected driver runs one worker"))`, because the driver answers the time itself and only worker 0 holds it. Tests: `io::`.
+- **H-8 `Notice::Place`.** `cells` calls `Post::place` under the registry lock with a word `Registry::start` shared. The implementer `Mailer` (`pub(crate)`, in `run.rs`) wraps it with `unsafe fn Marked::placed`, whose `SAFETY` comment names SM-7: the only callers of a `Here`'s `post` are `cells` functions, because `WorkerCore::here` is `unsafe fn` whose `# Safety` is exactly "the result is passed only to `cells` functions", and `placement::no_new_file_reads_a_heres_post` pins that no new file names `.post` of a `Here`.
+- **H-9 Panics** (the Architect's ruling of 2026-11-28). No unwind drops a `Ctx` or a heap while another worker runs (`Heap::share`'s contract: a heap is not dropped while another thread holds its shared objects). A `WorkerCore` or a driver may be dropped by an unwinding factory: before the first item nothing is lent to a driver, after `run` the driver is already dropped in phase 2, and a core's words are dropped untouched.
+  - `Halt` is defined by what its receiver may do: `Stopped`: the worker stops and its heap is between operations; `Panicked`: the worker stops and its heap may be mid-operation, so the receiver detaches it and walks or checks nothing. `Exec::enter` may return either (an engine whose entry caught a Rust panic returns `Panicked`); `drive` passes it through unchanged and records `Fault(Internal("a worker thread panicked"))`; the callback returns the same value to the factory. No third variant.
+  - The `run` callback is one function whose whole body is under catches: phase 1 the loop (`drive`), phase 2 the end-of-loop steps of H-3 step 2 (the inbox pass, the quiesce, the driver's drop, each in its own catch so that a panicking quiesce still gets its driver dropped and a panicking drop is recorded and its remains forgotten, not re-dropped), phase 3 on the calling thread the joins, `finish` (settle, D-SC-8, the sweep, `clear_end`). A panic in any phase is recorded as above, the later phases still run (the sweep is skipped after any recorded panic), and the callback returns `Err(Halt::Panicked)`. The callback's captured state lives in `sequence::run`'s frame. `placement::the_callback_is_one_catch` pins that the callback's body has no statement outside a catch.
+  - After a factory returns, its `Retired` is in `eml_sched`'s hands while peers may still run. Rule: every `Retired` `eml_sched` holds is in `ManuallyDrop` from the expression that receives it until it is moved into `Outcome`. On a spawned thread the base closure is `let retired = ManuallyDrop::new(on_worker(..))`, then its remaining steps (the "left without running" record, `end_run`, `wake_all`) inside a catch whose closure does not own `retired`, then the value is returned through the join. On the calling thread the same holds for its own `Retired` and for the joined ones, and the path on which the callback never ran (the joins and `finish` called from `sequence::run`) runs under a catch in a frame that owns none of them. So an unwind of a base frame, which the rank assertion can cause by design, leaks the heap instead of dropping it, and the base catch's abort is a defined end there too. `placement::a_retired_is_held_in_manually_drop` pins the base closures and the no-callback path (every statement after the factory's return is under a catch, and the factory's result is wrapped in the same expression).
+  - The factory's frame therefore sees only a returned value. It does its work after the loop as on any halt, except that for `Halt::Panicked` it only detaches and wraps the `Ctx`, and it still returns a `Retired`: `Outcome.retired` has every worker, and the caller decides what to do with a panicked worker's heap after every thread has been joined.
+  - A panic of the factory itself outside `run` (its set-up or its work after) is forbidden by `Workers::on_worker`'s `# Safety` ("does not panic outside `run`; if its frame unwinds all the same, the unwind drops no `Ctx` and no heap: the factory holds them so that unwinding leaks them, for example in `ManuallyDrop` until its normal return"). `sequence::run` catches such an unwind at the thread's base, prints one line to stderr (`eml: a worker's set-up panicked outside its loop; aborting`) and calls `std::process::abort`, the one call site in `eml_sched` (`placement::abort_has_one_site`). Because the unwind leaked the `Ctx`, no peer reads freed memory between the panic and the abort: the abort is a defined end. `Scripts` holds each `Ctx` it makes in `ManuallyDrop`. There is no test of the abort (ruled); SC-4's review reads the path and this claim.
+  - A panic of `Park::wait` or of the `Park`'s drop is caught in the main worker's loop and recorded as `RunFault::Park`.
+  - Every lock is taken through `rank.rs` with `PoisonError::into_inner`. No panic leaves `sequence::run`.
+  - Tests: `panics::` (`a_panic_in_an_item_is_reported_as_a_value`, `a_panicked_halt_from_enter_is_passed_to_the_factory`, `a_panic_on_a_peer_ends_the_run`, `a_panicking_policy_hook_ends_the_run`), and under Miri `panics::a_peer_keeps_reading_a_shared_object_of_the_panicked_worker` (SC-6) and `panics::a_driver_that_panics_at_quiesce_still_returns_its_retired` (SC-11: N = 1, an injected driver written in the test panics in `quiesce`: the run reports the panic, the `Retired` comes back with `driver_kept` true, the driver's drop still ran). That a phase-2 panic leaves the heap to running peers is held by `placement::the_callback_is_one_catch` and SC-11's review, not by a test.
+- **H-10 The explorer's model of the shell** (a second statement of ST-1). State: per worker its idle `pc`, its count of listed jobs, `woken`, the sleeping form, "in `wait_join`", "stopped for good"; `running`, `sleepers`, `searching`, the sleeper set; worker 0's verdict `pc`; an optional main worker (`Running` / `Parked`, `holds`); one boolean per shell source of `verdict::Facts` that an environment transition may raise while a worker is counted in `running` and lower by delivering a wake. Transitions: one kernel effect of one worker, a publish, a job end (with or without a `Joined` send), an environment transition. Assertions: the three of 01 D-SC-7, plus (4) `RootClosed` and `Deadlock` are reached only with every worker in the sleeping form and no wake in flight, and (5) with the root closed and every worker asleep the verdict reaches `RootClosed` whatever the values of `timer`, `ops`, `signal_waiters` and `holds` (the model raises each of them, and `holds` with the main worker parked, before and after the root closes).
+- **H-11 `Seeded` across workers.** Worker `k`'s stream is `splitmix64(seed ^ k)`; `pick(len) = r % len`; `budget() = 1 + r % 128` drawn at each entry's open; `InOrder` picks 0 and its budget never runs out. `WorkerCore::spend() -> bool` (true: the entry should yield) is what a budget row calls; the rows are listed in runtime.md 「操作の予算」 as 00 D-15 (d) has them (rows that read or write a registry cell or a channel; no `Std.Atomic` row). `reorders` counts picks other than the head plus yields at a budget below 128.
+- **H-12 Hooks H-2 and H-8.** `Slot.current: AtomicU64` (`NO_CELL`, a task cell's code, or a job tag with the forking worker; `NO_CELL` is defined in `run.rs`) and `Slot.phase: AtomicU8` are written through one function each, by `drive` at item open and close, by the idle interpreter (`Idle` for the condvar and for a driver wait in the loop), by `wait_join` (`Join`), by the main worker's loop (`Park`). `Io` is declared and not written. Readers: `Signs::current(k)`, `Signs::phase(k)`, called by nothing in `src`. Tests: `hooks::`.
+- **H-13 Threads that cannot start.** One private function of `sequence.rs` starts every thread of a run (workers 1..N-1, worker 0 in the separate seat, the monitor), each behind the gate and before any `on_worker` call. If a spawn fails, the gate is opened with "do not start": every thread already spawned returns at once without calling the factory, is joined, the calling thread's mask is restored, and `sequence::run` returns `Outcome` with `stop = Fault(RunFault::Driver("cannot start a thread: <os error>"))`, no exit code and no `Retired` (no `Ctx` was made). The VM's rule (use the workers that started) is not kept (X-18). Tests, without a hook: `Workers::stack` returning `usize::MAX` for one place makes that spawn fail (A-9): `workers::a_peer_that_cannot_start_ends_the_run_before_it_begins`, `seat::worker_0_that_cannot_start_ends_the_run_before_it_begins`. The monitor's failure takes the same code path and is a review obligation of SC-13.
+- **H-14 Signal masks.** SIGINT and SIGTERM are delivered to one thread of the process, worker 0's (`eml_io`'s mask module). Merged seat: the calling thread is worker 0 and is not masked; peers and the monitor are started with the masked spawn. Separate seat: worker 0 is spawned unmasked behind the gate, then the calling thread (the main worker) masks itself with a guard that restores the mask on every exit of `sequence::run`, then the gate opens; peers and the monitor are started with the masked spawn. `driver.rs` gets the two functions that name `eml_io` for this (the masked spawn at SC-6, the guard at SC-8).
+- **H-15 Every `Ctx` exists before any item runs.** In checked mode making a `Ctx` charges a page, so the charge must not race with the program's allocations (vm.md 「メインのworker」: the VM makes the main worker's `Ctx` before it spawns worker 0). Mechanism: after every thread is spawned (H-13), the spawn gate opens and every worker, the calling thread's included, calls its factory; the first thing each `run` callback does is to arrive at a start barrier, which opens when every worker of the run has arrived or has returned from its factory without calling `run` (that worker's end event of H-3 step 1 is then already recorded, and the others pass the barrier, see END and return). No `drive` step runs before the barrier opens. H-13's "no `Ctx` was made" holds because a failed spawn is known before the spawn gate opens. Tests: `workers::every_ctx_exists_before_the_first_item` (merged, N = 2) and `seat::every_ctx_exists_before_the_first_item` (separate, N = 1): each factory sets a flag after it made its `Ctx`, and the main item asserts every flag.
+- **H-16 A session's `Ctx`.** `Workers::session(&self) -> bool` says that worker 0's `Ctx` outlives the run (a lent `Ctx`). Then the run has one worker in the merged seat: with N >= 2 or the separate seat `sequence::run` starts nothing and returns `stop = Fault(Internal("a session run has one worker"))`. Reason: after a run with peers, objects of the surviving heap can lie in other workers' pages (vm.md 「タスクとスケジュール」: the VM starts no peer for a session with roots), and `Ctx::recover` reads other heaps' pages. `sequence::run`'s `# Safety` adds: `Start.owners` is the table of every `Ctx` of the run, a lent one included (`ctx.heap().owners()`). Test: `root::a_session_run_with_two_workers_does_not_start`.
+
+### 5.4 The file map
+
+`crates/eml_steps/` (new; all code inside `verus!`; `[package.metadata.verus] verify = true`; vstd at `eml_rt`'s pin; no feature; `doctest = false`; `autotests = false` with `tests/main.rs`):
+
+| File | Holds | Proof |
+|---|---|---|
+| `src/lib.rs` | modules; `Label`, `Label::ALL` | - |
+| `src/open.rs` | `Open<J>`: `new`, `push_join`, `push_cell`, `take_own`, `newest_join`, `take_detached`, `take_oldest`, `len` | P-1 |
+| `src/sleepers.rs` | `Sleepers`: `new`, `enlist`, `delist`, `pop`, `len` | P-6 |
+| `src/limit.rs` | `Limit`, `Site`, `Probe`, `Hit`, `hit` | P-3 |
+| `src/plan.rs` | `Facts`, `Step`, `next` | P-2 |
+| `src/idle.rs` | `Pc`, `Seen`, `Effect`, `step` | `ensures r == step_spec(..)` |
+| `src/verdict.rs` | `Pc`, `Facts`, `Effect`, `step` | `ensures r == step_spec(..)` |
+| `src/trust.rs` | `#[cfg(test)]`: the file list; no trust item, no `unsafe`, everything inside `verus!` | - |
+| `tests/main.rs`, `tests/explore.rs` | the explorer (P-4a) | - |
+
+`crates/eml_sched/src/` (new files; none over about 800 non-test lines). The layer numbers are the intended reading order; `layers::` pins only the edges that matter: `cells`, `config`, `error`, `park`, `doorbell`, `driver`, `counters` import no new file; `rank` imports only `cells`; nothing imports `sequence` or `script`; `exec` does not import `drive`; `eml_steps::plan` is named only in `drive.rs`, `eml_steps::{idle, verdict}` only in `idle.rs`; the import graph of the new files is acyclic.
+
+| Layer | File | Holds |
+|---|---|---|
+| 1 | `counters.rs` | 00 D-15 (a): private `Table`, `static TABLE`, `Counter`, `new`, `find`; no `unsafe`; imports only `error` |
+| 1 | `rank.rs` | `Ranked<T>` (a rank-2 mutex); `registry(&Shared)` (the registry locked directly); `cells(f)` (the wrapper around every call of a `cells` function that takes `&Shared`: asserts no rank-2 lock is held and marks rank 1 for the call); `under_registry()` (the mark `Mailer`'s methods set, since `cells` holds the registry when it calls them); the rank-1 mark is a depth, raised and lowered by a guard, because a new file's call nests (`rank::cells` -> `cells` -> `Mailer`) while an engine row's call marks once (in `Mailer`); the debug-build thread-local and its assertions |
+| 2 | `job.rs` | `Marked`, `Done`, `Job`, `Entry`, `EntryKind`, `Root`, `Item` |
+| 2 | `policy.rs` | `Policy`, `Point`, `ShellPoint`, `InOrder`, `Seeded`, `Standard` (`Standard::of(sched, k)`) |
+| 3 | `run.rs` | `Run`, `Slot`, `SlotState`, `Notice`, `Signs` (the hook atomics, in their own `Arc`), `Phase`, `NO_CELL`, the stop record, `Mailer` (the `Post` implementer), the notice send (one slot section), `wake_all` |
+| 4 | `core.rs` | `WorkerCore<P>`: the ready queue, `schedule`, `here`, `set_root`, the inbox pass, counts, `spend`, the gate operations, the clock reads |
+| 5 | `idle.rs` | the one interpreter of `eml_steps::idle` and `verdict`: publish, scan, pass-on, wake, park, the verdict's facts |
+| 5 | `hosting.rs` | a worker's driver, hosting notices, adoption, quiescence and the job budget |
+| 5 | `pool.rs` | blocking jobs: submit with a `JobSource`, the answer, the take |
+| 6 | `exec.rs` | `Exec`, `Halt`, `Workers`, `Env`, `Place` |
+| 7 | `drive.rs` | `drive`: the one interpreter of `eml_steps::plan`; item open and close |
+| 8 | `fork.rs` | `fork`, `fork_cell`, `take_own`, `wait_join`, `join`; the interpreter of `Open`'s owner-side operations |
+| 9 | `monitor.rs` | the monitor thread: relay of claimed signals to the mail, `wake_all` on a stop bit, one wait with a deadline |
+| 10 | `script.rs` | `Script<M, P>` (an `Exec` whose `enter` is a closure), `Scripts` (a `Workers` over a closure per worker) |
+| 11 | `sequence.rs` | `run`, `Start`, `Outcome`, `Stopped`, `Counts`; private: thread spawn and masking, the gate, the main worker's loop and its `Pending`, joins, settle, teardown |
+
+`cells`, `config`, `error`, `park`, `doorbell`, `driver` are layer 0 and import no new file. `Open`'s operations are called from `idle.rs` (push, scan's `take_oldest`, `take_detached`) and `fork.rs` (`take_own`, `newest_join`): the placement test pins that split as the "one interpreter" of `Open` per operation. If `sequence.rs` passes about 800 non-test lines, the main worker's loop becomes the private module `sequence/main_worker.rs`; that is the one file change allowed without escalation.
+
+### 5.5 The public surface and its classes
+
+| Item | Class | Contract or reason |
+|---|---|---|
+| `sequence::run<W: Workers>(workers: &W, start: Start<'_>) -> Outcome<W::Retired>` | `pub unsafe fn` | the principle below; C1..C4 of `cells`; `Start.owners` is the table of every `Ctx` of the run; `W` keeps the `Exec` and `Workers` contracts; an injected driver keeps `Machine::with_driver`'s promise |
+| `Exec` (`with`, `enter`) | trait with `unsafe fn` methods | D-SC-4: across `enter` the caller holds nothing derived from `this`; `with` lends the core and the `Ctx` of this worker's thread for the closure only |
+| `Workers` (`policy`, `stack`, `session`, `on_worker`; `type Retired: Send`) | trait; `on_worker` is `unsafe fn` | called on worker `k`'s own thread, once; it calls `run` at most once; it does not panic outside `run`, and holds its `Ctx` so that an unwind of its frame leaks it; nothing between making the `Ctx` and returning `Retired` panics except through `run`; everything it allocates against the `Control` before the first item is allocated before it calls `run`; it drops the `WorkerCore` on that thread and returns a `Retired` that holds the `Ctx`, detached and not dropped; a `Ctx` the `Retired` does not hold (one that outlives the run) is given only to worker 0 and only when `session()` returns true |
+| `fork`, `fork_cell`, `join` | `pub unsafe fn` | C1, C2 for the words; the `Ctx` is the calling worker's |
+| `take_own`, `wait_join` | safe | they touch no heap; `wait_join` returns a `Marked` |
+| `WorkerCore::schedule(Runnable)`, `set_root`, `spend`, the gate operations, counts | safe (`Stores` where the scanner asks) | the store is not the release |
+| `WorkerCore::here(&self) -> Here<'_>` | `pub unsafe fn` | the result is passed only to `cells` functions (SM-7; DIR-10) |
+| `Script::new`, `Scripts::new` | safe (`Stores`) | they store closures; running them is the `unsafe` call |
+| `Scripts::lending(ctx)` | `pub unsafe fn` | the `Ctx` is the calling thread's, outlives the run and is used by nothing else during it |
+| `Marked` | private field; `fork::mark` private `unsafe fn`, `Marked::placed` `pub(crate) unsafe fn`; `into_word` safe | each constructor names the `share` that made the word crossable |
+| `Mailer` | `pub(crate)`, in no public signature | SG-10 |
+| `drive` | `pub(crate) unsafe fn` | `sequence::run` is the only caller (DIR-4) |
+| `Signs::current`, `Signs::phase`, `WorkerCore::signs`, `Phase`, `NO_CELL` | safe | hooks |
+| `counters::{Counter, new, find}` | safe | no `unsafe` in the module |
+
+The principle every row derives from: a `WorkerCore` is reachable only inside `Workers::on_worker` (through `Env`) and inside an `Exec::with` closure, and both run only under `sequence::run`. So the caller of `sequence::run` vouches, as C3 of `cells` does for a `Registry`, for every word stored through a `WorkerCore` of the run (`schedule`, `fork`, a `Here` given to `cells`, the `Shared` it lends) and for every safe function called on it: each word satisfies C2 and the calls keep the scheduler's invariants. No safe path hands out a `WorkerCore` or runs an item: `placement::a_worker_core_is_reached_only_under_the_run` pins that `WorkerCore` has no public constructor and that `Env` and `Exec::with` are its only public sources. Under this principle a store is safe (`Stores`) and the release is the `unsafe` call. `here` is `unsafe fn` beyond what the principle forces, by DIR-10. An engine row that locks the registry through `WorkerCore::shared` is outside the rank assertion; that is sound because slot locks and every other rank-2 lock are private to `eml_sched`, so a row can hold none.
+
+`Start { control: &Arc<Control>, owners: &Owners, host: HostRef, config: &RunConfig, driver: Option<Box<dyn IoDriver>> }` (the run reads `sched`, `clock`, `doorbell`, `signals`, `job_budget`, `seat`, `main_park` of `RunConfig`; N is `control.limits().workers`). `Env` gives `place()`, `control()`, `owners()`, `host()` and takes the worker's `WorkerCore` out once (`take_core`). `Outcome<R> { stop: Option<Stopped>, exit: Option<i64>, counts: Counts, retired: Vec<Retiree<R>> }`, `Retiree<R> { place: Place, retired: R, driver_kept: bool }`. `driver_kept` is true when that worker's driver kept an operation pending after the quiesce or its drop panicked: pool or kernel threads may still write memory lent from that heap, so the caller leaks that `Retired` and neither drops nor recovers its heap (stated in `Outcome`'s and `Workers`' documentation). `Counts { workers, claims, join_waits, reorders, placed_tasks, pinned_tasks, holds_raised, holds_lowered }`.
+
+### 5.6 Public item -> test -> consumer (SG-9; complete at Close)
+
+| Public item | Test (this stage) | Consumer (stage, unit) |
+|---|---|---|
+| `sequence::run`, `Start`, `Outcome`, `Retiree`, `Stopped`, `Counts`, `Place` | `drive::`, `end::` | jit-tasks JT-2, JT-5, JT-11; jit-repl (merged seat) |
+| `Exec`, `Halt`, `Item`, `Root`, `Entry`, `EntryKind` | `drive::`, `root::` | JT-2 `NativeExec` |
+| `Workers`, `Env` | every `Script` test (through `Scripts`) | JT-5 |
+| `Script`, `Scripts` | every test | JT-2, JT-6 (Miri row scripts in `eml_nrt`) |
+| `WorkerCore`: `index`, `schedule`, `here`, `set_root`, `shared`, `control` | `root::`, `workers::` | JT-6 task rows; JT-5 `root_start` |
+| `WorkerCore::spend`, `Policy`, `Point`, `ShellPoint`, `InOrder`, `Seeded`, `Standard` | `policy::`, `hooks::`, `claims::` | JT-2, JT-6; native-prof and the tracer item (`at`) |
+| `fork`, `take_own`, `wait_join`, `join`, `Marked`, `Job`, `Done::Join` | `par::` | JT-8 |
+| `fork_cell`, `Done::Cell` | `jobs::` | JT-6 (`compute`) |
+| `WorkerCore`: `own_driver`, `now_floor`, `now_ceil`, `host` | `io::`, `clock::` | JT-6 I/O and time rows |
+| `WorkerCore`: `open_gate`, `release_gate`, `swap_holds`, `holds`, `wake` | `gates::` (SC-8) | JT-6 `GateHost`'s implementer in `eml_nrt` |
+| `pool::{submit, answer types}` | `pool::` | JT-10 |
+| `Signs`, `WorkerCore::signs`, `Phase`, `NO_CELL` | `hooks::` | native-prof |
+| the monitor's start rule and its wait with a deadline (private; stated in runtime.md) | `signals::` | native-prof (the tick) |
+| `Counts` | `policy::the_counts_report_claims_join_waits_and_reorders` | JT-5 (`Finished`) |
+| `counters::{Counter, new, find}` | `counters::tests` | JT-6 |
+| `eml_steps::limit::{Limit, Site, Probe, Hit, hit}` | `limit::tests` | JT-3 |
+| `eml_steps::{open, sleepers, plan, idle, verdict, Label}` | their unit tests, `explore::`; called by `eml_sched` from SC-4 on | this stage; sched-proofs (the specs); par-direct (`Open`, the idle kernel) |
+
+### 5.7 Short-term decisions
+
+- ST-D1: `Scripts` makes each worker's `Ctx` with `Ctx::for_worker(control, owners, host, k)` on that worker's thread, or, built with `Scripts::lending(ctx)`, lends the caller's `Ctx` to worker 0 in the merged seat. Its `Retired` is the detached `Ctx<M>` (for the lent one, nothing). Its `on_worker` keeps each `Ctx` it makes in `ManuallyDrop` until its normal return and catches nothing; `Scripts::lending` makes `session()` true.
+- ST-D2: tests run checked mode (`Ctx<Checked>`) unless they are named `*_fast`; the Miri and TSan lines run the same tests.
+- ST-D3: the words tests pass are allocated by the test on the calling worker's `Ctx` inside the script closure (a boxed integer or a closure-shaped object from `eml_rt`'s public constructors); each test file starts with one `// SAFETY:` comment stating the promise for its `unsafe` calls, as `cells.rs`'s tests do.
+- ST-D4: the workers' thread names are `eml-worker-<k>` and the monitor's `eml-monitor`; a spawned worker's stack size is `Workers::stack(place)` (`None`: the platform default); masks are as H-14.
+- ST-D5: no `eml_rt` change. A need for one is an escalation, and then crates/eml_rt/CLAUDE.md's gate applies.
+
+## 6. Constraints and conventions
+
+- One unit = one commit on the branch `plan/sched-core`; each passes G (7.3.1) and the standing checks in force (7.3.2). A pushed commit is never amended; a review fix after a push is a follow-up commit named `Fix <what> (SC-n review)`.
+- Test-first: a unit's tests are written first and fail (they do not compile or they fail) before the code; the implementer's report shows the red step.
+- Code comments are Japanese, say why, cite `docs/spec/` or `docs/implementation/` sections, name no stage and no `docs/plans/` path. Every `unsafe` block has a `// SAFETY:` comment naming a contract clause (C1..C4, the `# Safety` of its caller) or a trust row (SM-n).
+- `docs/spec/runtime.md` text is written in the unit that implements the rule; the unit lists the section and an `EN:` outline; the implementer writes the English draft from this plan's decisions, translates it with PLaMo and removes spaces between Japanese and Latin text in every paragraph it touches.
+- A `.snap.new` file or a changed snapshot is a finding (SG-2).
+- Stop every Bash call moved to the background before finishing a unit.
+- A soundness question goes to a Fable advisor before the fix is settled (CLAUDE.md); section 9.6 says who.
+
+## 7. Implementation tasks
+
+### 7.1 Task table
+
+| ID | Commit title | Phase | Implementer | Review before the commit |
+|---|---|---|---|---|
+| SC-1 | `Start sched-core` | A | orchestrator; Opus for the ledger | Steward (ledger, the `cells.rs` list) |
+| SC-2 | `Add eml_steps with the open list, the sleeper set and the limit table` | A | Opus | Opus (code), Steward (the specs are full functional specs) |
+| SC-3 | `Add the loop, idle and verdict kernels and their explorer` | A | Opus | fresh Fable (soundness of the protocol) |
+| CP-0 | push; CI; the Verus and explorer lines on Linux | | orchestrator | - |
+| SC-4 | `Run one worker through the run sequence` | B | Opus | fresh Fable (code and runtime.md) |
+| SC-4b | `Describe eml_sched's new layout` | B | Opus | Steward (docs only) |
+| SC-5 | `Run the root task to its end` | B | Opus | fresh Fable |
+| SC-6 | `Start the peers and put idle workers to sleep` | B | Opus | fresh Fable |
+| CP-0b | push; CI (the first threaded tests on Linux and Windows, TSan, ASan, Miri) | | orchestrator | - |
+| SC-7 | `List jobs and let idle workers take them` | B | Opus | fresh Fable |
+| SC-8 | `Run the main worker on the calling thread` | B | Opus | fresh Fable |
+| SC-9 | `Fork and join` | B | Opus | fresh Fable |
+| SC-10 | `End a run on every path` | B | Opus | fresh Fable |
+| CP-A | prototype, the Critic's review, full nextest and CI, the Architect's check, freeze | | orchestrator | Critic, then Architect |
+| SC-11 | `Host I/O on the workers' drivers` | C | Opus | fresh Fable |
+| SC-12 | `Keep the clock and the verdict's facts` | C | Opus | fresh Fable |
+| SC-13 | `Relay signals from the monitor thread` | C | Opus | fresh Fable |
+| SC-14 | `Run blocking jobs on the pool` | C | Opus | fresh Fable |
+| SC-15 | `Add the seeded policy, the counts and the counter table` | C | Opus | Opus (code), Steward |
+| CP-B | as CP-A without the prototype; second freeze | | orchestrator | Critic, then Architect |
+| SC-16 | `Describe the scheduler across the docs` | C | Opus | Opus, Steward |
+| SC-17 | `Close sched-core` | | orchestrator | Critic (whole branch), then Architect |
+| CP-Z | CI of SC-17; ask the user; merge | | orchestrator | user |
+
+### 7.2 Units
+
+Every unit ends with: G; the standing checks in force; `git --no-pager diff --no-ext-diff --name-only HEAD~1 HEAD` listing only the files the unit names; the unit's test names present in `cargo nextest list -p eml_sched -p eml_steps`. The listed names are the required minimum: a test an implementer or a review adds is named in the unit's commit message and needs no amendment. "Left" = left to the implementer.
+
+#### SC-1: `Start sched-core`
+
+1. `git switch -c plan/sched-core` at the base. `mkdir -p .git/nc-keep/sc`.
+2. Replace `docs/plans/2026-11-17-sched-core.md` with this plan.
+3. Append D-22 to 00 §D (after D-21): "D-22 (2026-11-28; the refresh of `sched-core`; user decisions N-1 (c), N-2 (b), N-5 (a) of 2026-11-28): 01 §2.1..§2.5, §10 (D-SC-2, D-SC-3a, D-SC-5, D-SC-7 and the unit list), §11.3, §11.5 (`Hit::Raise` has no payload), §11.6, §12.1 (D-JR-2), §13.1 (the edge `eml_nrt -> eml_steps`, a change to UJ-17 (3)'s end-state graph), §14.1, §14.3, §15.2 and §18, and §B A-17, are restated by the `sched-core` plan's section 5.2, items X-1..X-21", followed by one sentence per item of 5.2 and the known consequence for JT-8 stated under that table (exact text in `.git/nc-keep/sc-plan/other-plan-edits.md`).
+4. Apply the edits to the other plans (section 12; exact text in `.git/nc-keep/sc-plan/other-plan-edits.md`) to `2026-11-17-jit-tasks.md`, `2026-11-17-jit-repl.md`, `2026-11-22-native-prof.md`. 01 and the profiler design are not edited (00 wins).
+5. Write `docs/plans/2026-11-17-runtime/02-ledger.md` (rows that must be present: the take-in on every heap after the joins, kept, `owners::`; the root's end read by the verdict, changed, X-10; a peer that cannot be spawned and the 10 ms cap without a monitor, changed, X-18; the main worker's `Ctx` before worker 0, kept, H-15; no peer for a session with roots, kept, H-16; which heap sweeps, changed, X-20; a notice's push and wake in one section, kept, X-21): one row per scheduler rule of the vm.md sections 「誤り、止めること、終わり」, 「上限と割り込み」, 「タスクとスケジュール」, 「メインのworker」, 「メインのworkerの待ち」, 「GUIのPark」, 「時計と driver」, 「`par` の fork と join」, 「`compute` の仕事」, 「`Async` のタスク」 (プールの仕事, 終わり, タスクの上限, 取り消しの届け方), 「並列化への備え」; at most 120 rows; columns: `#`, section, the rule in one sentence, fate (`kept` / `changed` / `VM-only`), where (a test name of 7.4 with its unit, or a later unit such as `JT-6`; for `changed` the clause X-n or the 01 / 00 clause; for `VM-only` why native code has no such thing), "VM copy deleted at" (`vm-retire` for every `kept` and `changed` row). No row per test.
+6. The `cells.rs` list (U-1) is empty: the stage does not change the file (A-1, checked at planning). SC-1 records that in the commit message; a need found later stops the unit (9.6).
+7. Baseline, on the clean tree, into `.git/nc-keep/sc/log.md`: `cargo nextest run` totals (N0, skipped); `cargo verus verify -p eml_rt` count; `cargo test --workspace -q` wall time; the `user` time of the two existing `eml_sched` Miri runs.
+- Docs: none (the roadmap's `sched-core` item stays true until Close, except the word 回復, which SC-1 removes from it, since X-3 makes it false: `docs/future/roadmap.md` the `sched-core` item).
+- Completion: `git diff --name-status HEAD~1 HEAD` -> `M` this plan, `M` `00-decisions.md`, `A` `02-ledger.md`, `M` the three other plans, `M` `docs/future/roadmap.md`; `citations::` passes; the ledger has at most 120 rows (`grep -c '^| [0-9]' docs/plans/2026-11-17-runtime/02-ledger.md` -> at most 120) and every row's fate is one of `kept`, `changed`, `VM-only` (`grep '^| [0-9]' docs/plans/2026-11-17-runtime/02-ledger.md | grep -vc '| kept |\|| changed |\|| VM-only |'` -> `0`).
+- Left: the ledger's wording.
+
+#### SC-2: `Add eml_steps with the open list, the sleeper set and the limit table`
+
+Work: the crate (`Cargo.toml` as 5.4; the workspace's `[workspace.dependencies]` entry; `src/lib.rs` with the vstd prelude as `eml_rt` has it); `open.rs`, `sleepers.rs`, `limit.rs`, `trust.rs`. `Label` is not written yet. `nix/crate-graph.sh`: EDGES gains the line `eml_steps:`; an `expect_tree` that `eml_steps` reaches no workspace crate. CI (`.github/workflows/ci.yml`): the `verus` job gains the step `cargo verus verify -p eml_steps` and its verusfmt list becomes `git ls-files 'crates/eml_rt/src/*.rs' 'crates/eml_steps/src/*.rs'`.
+- P-1 as 01 §14.1 states it; `push_*` return `Option<u64>` (`None` when the serial counter is at `u64::MAX`; the shell turns it into `Internal`). The probe of the planning phase is the starting point (`.git/nc-keep/sc-plan/steps_probe.rs`; `8 verified, 0 errors` at the pin).
+- P-6: no duplicates; `enlist`, `delist`, `pop` are set operations on a `Seq`-viewed vector of worker numbers.
+- P-3: `hit` is total; `Stops` over `real` stops; no `Raise` while yielding or `Aborting`; a `Defers` site never gets `Raise`. The table is docs/spec/vm.md 「タスクの上限」 restated on `Probe { class, yielding, site, beyond_grace, over_real }`.
+- Tests (in `#[cfg(test)] mod tests` after the `verus!` block of each file): `open::tests::{a_join_job_comes_back_by_its_serial, an_older_join_is_not_taken_behind_a_newer_one, detached_jobs_leave_oldest_first, the_oldest_of_both_lists_is_taken_first, len_counts_both_lists}`; `sleepers::tests::{a_worker_is_listed_once, pop_takes_a_listed_worker, delist_of_an_unlisted_worker_changes_nothing}`; `limit::tests::the_three_rows_of_the_spec_table` (three example rows from the spec's table, so a drift between the VM's copy and this one shows; totality and P-3's clauses are the proof's, not a test's); `trust::{every_source_file_is_listed, the_crate_is_inside_verus, no_trust_item_and_no_unsafe}`.
+- Docs: architecture.md 「crate の依存関係」 (the `eml_steps` row; the runtime-closure list; the crate-graph bullet) and a new section 「`eml_steps`の内部」 (EN: "Every item is inside `verus!`. The crate has no `unsafe` and no trusted item; `src/trust.rs` pins both. A step function's `ensures` equals its spec function, so a later proof over the specs is a proof over the code. Its gate is `cargo verus verify -p eml_steps`, verusfmt, the tests and clippy; it has no bench gate."); testing.md 「`eml_rt` の検証」 gains a sibling section 「`eml_steps`の検証」 with the same content as commands, and 「CI」's `verus` bullet names both crates; CLAUDE.md: the crate table row, the strata list, the two Verus command lines; crates/eml_rt/CLAUDE.md line 3's second half (a pointer: "`eml_steps` has its own rule in docs/implementation/architecture.md の「`eml_steps`の内部」"; the words "under the VM" stay until vm-retire).
+- Completion: `cargo verus verify -p eml_steps` -> `0 errors`, the count recorded; `cargo test -p eml_steps -q` -> 12 passed; verusfmt check exit 0; `bash nix/crate-graph.sh --check` exit 0; `nix develop -c nix/third-party-licenses.sh --check` exit 0 (no new third-party crate).
+- Left: the proof scripts; the spec functions' names.
+
+#### SC-3: `Add the loop, idle and verdict kernels and their explorer`
+
+Work: `plan.rs` (P-2), `idle.rs`, `verdict.rs`, `Label`; `tests/explore.rs`; the two CI lines; testing.md's amended sentence.
+- The alphabets of 5.3 H-6 and the model of H-10. The unit may rename effects; it may not leave the publisher's probe or the wake's decision to the shell. After the explorer's full bounds pass, the sets are frozen (a later change is an escalation).
+- The explorer is a breadth-first enumeration over a hashed state set, calling the shipped `idle::step`, `verdict::step`, `plan::next`, `Open` and `Sleepers`. A state holds `Open<u8>` and `Sleepers` values: both get `Clone` inside `verus!` (over `VecDeque::clone` / `Vec::clone`, specified at the pin [R1 §8]) and a verified read-only accessor the explorer hashes through (`Open::nth_join(i)`, `nth_cell(i)` over `index`; `Sleepers::nth(i)`). If `clone`'s specification does not carry the view, the state keeps each list's history of pushes and takes as plain data and replays it into a fresh `Open` before each transition; either way no trusted item is added.
+- Tests (examples that pin a rule's reading; totality is the proof's): `plan::tests::{the_main_worker_is_never_offered_a_job, a_ready_pass_is_bounded_by_its_start, the_result_item_follows_a_closed_root}`; `verdict::tests::{a_deadlock_needs_every_source_quiet, a_closed_root_wins_over_timers_operations_waiters_and_holds}`; `explore::two_workers_two_publishes` (ordinary; the largest bound within 250 ms in the dev profile on the dev machine; the state count is asserted); `explore::a_stopped_worker_with_a_listed_job` (ordinary, reduced the same way); `explore::the_labels_are_the_kernel_alphabet` (the labels taken over the reduced runs equal `Label::ALL`); `explore::a_dropped_probe_is_found` (the same enumeration over a kernel wrapper that skips the publisher's `Probe` reports a state with a listed job and every taker asleep: the explorer can fail); `explore::exhaustive_three_workers_three_publishes` and `explore::exhaustive_a_worker_stops_with_a_listed_job` (`#[ignore = "exhaustive"]`; 3 workers with worker 0 among them, 3 publishes, with and without the main worker).
+- CI: in the `test` job, on `ubuntu-24.04` only, after the timing step: `cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)'`.
+- Docs: testing.md 「CI」: replace the clause that says `#[ignore]` tests are not run in CI by (EN) "CI runs a test marked `#[ignore]` only on a line listed here, each with its command, its job and its time: the exhaustive explorer of `eml_steps` (`cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)'`; the `test` job on ubuntu-24.04; <measured> s). `bench/` measurements do not run in CI."; 「`eml_steps`の検証」 gains the explorer's model (H-10 as four sentences), the two bounds with their state counts and times, and the rule that a change to a step function re-runs both; 「よく使うコマンド」 and CLAUDE.md Commands gain the explorer line.
+- Completion: Verus count recorded (this is S-3's V); `cargo test -p eml_steps -q` -> 12 + 9 passed, 2 ignored; the exhaustive line passes locally, its wall time and state counts recorded (over 5 minutes for one test: split it by "with / without the main worker" into two tests and list both). If the full environment of H-10 does not finish in the budget even split, the unit stops: lowering the exhaustive bound below 3 workers and 3 publishes changes D-SC-7 and the line N-5 (a) lists, so the Architect rules and the user is told; the floor the Steward proposes then is both "3 workers, 2 publishes" and "2 workers, 3 publishes" with the full environment.
+- Left: the transition tables; the proof scripts; the reduced bounds.
+- Review: fresh Fable, on the staged diff, with 01 §2.4 and 5.3 H-6 / H-10; asked specifically whether the model's environment transitions cover every shell source, whether assertions (4) and (5) are strong enough, and whether H-2's precedence is what `verdict::step` computes.
+
+#### CP-0
+
+Push the branch (ask the user first, 9.7); `gh workflow run CI --ref plan/sched-core`; all jobs `success`; record the `verus` job's and the explorer step's times in `.git/nc-keep/sc/cp-0.md` and in testing.md's line (a follow-up docs commit if the number differs from the local one by more than a factor of 3). Full `cargo nextest run` -> N0 + 21 passed. No review and no freeze at CP-0.
+
+#### SC-4: `Run one worker through the run sequence`
+
+Work: `rank.rs`, `job.rs` (`Item`, `Root`, `Halt`'s neighbours as needed), `policy.rs` (`Policy`, `Point`, `ShellPoint`, `InOrder`), `run.rs` (one slot, the stop record), `core.rs` (the core's identity and its policy), `exec.rs`, `drive.rs` (the interpreter of `plan::next` with the steps reachable at N = 1 without tasks: `Stop`, `Root(Main)`, `Return`), `script.rs`, `sequence.rs` (N = 1, merged seat: `begin_run`, the core, `on_worker` with the `run` callback of H-9, "`on_worker` returned" as the end event, settle, `clear_end`); the edge `eml_sched -> eml_steps` (`Cargo.toml`, crate-graph EDGES and, if `Label` appears in a public signature, the REEXPORTS decision: `eml_sched` does not re-export it; tests name `eml_steps` through a dev-dependency).
+- Tests (`crates/eml_sched/tests/`, each a module of `main.rs`): `drive::{a_synchronous_main_runs_once, enter_gets_the_only_borrow, a_halt_from_main_ends_the_run, the_outcome_carries_the_retired_ctx, a_factory_that_never_runs_ends_the_run}`; `panics::{a_panic_in_an_item_is_reported_as_a_value, a_panicked_halt_from_enter_is_passed_to_the_factory}` (the `Retired` still comes back); `placement::{the_callback_is_one_catch, a_retired_is_held_in_manually_drop, abort_has_one_site}`; `rank::tests::{an_inversion_panics_in_a_debug_build, two_inner_locks_panic, at_under_a_lock_panics, a_cells_call_under_an_inner_lock_panics, a_nested_mark_stays_until_the_outer_call_ends}` (in `src/rank.rs`, `#[cfg(debug_assertions)]`-conditional bodies are not allowed: the tests carry `#[cfg_attr(not(debug_assertions), ignore = "debug-build assertion")]`); `placement::{enter_has_one_caller, clear_end_has_one_caller, each_kernel_function_has_one_caller_module, no_safe_function_is_bounded_by_exec, a_worker_core_is_reached_only_under_the_run, locks_are_taken_only_through_rank, the_new_files_have_no_test_only_item, code_cites_only_spec_and_implementation, the_scanner_sees_only_code}` (a placement test lands in the unit that first gives it a subject; the others are listed in their units) (model: `crates/eml_native/tests/placement.rs`; it reads `crates/eml_sched/src` and, for the caller rules, `crates/eml_nrt/src`); `layers::the_modules_import_downwards`; `trust::{the_files_with_unsafe_are_listed, every_unsafe_block_has_its_reason, every_unsafe_trait_method_states_its_promise}` (`surface.rs` does not read trait methods, so `# Safety` on `Exec`'s and `Workers`' methods is pinned here).
+- Miri line (added here): `cargo miri test -p eml_sched --test integration -- drive:: root:: jobs:: par:: end:: panics::` under both settings; CI's `miri` job, part `rest`. TSan and ASan lines come at SC-6.
+- Docs (this commit: runtime.md only, so the review reads code and its spec; 「もの」 may be an outline of rows whose things do not exist yet; 「runの手順」 states the panic rule of H-9 and its reason, `Halt`'s two meanings, and the abort): `docs/spec/runtime.md` is created with: 「範囲」 (EN: "This document specifies the scheduler in `eml_sched`. Today no engine runs it: its tests drive it through `Script`, an `Exec` whose items are Rust closures. The VM runs its own scheduler, specified in vm.md."), 「もの」 (01 §2.1's table with 5.2's changes), 「workerのループ」 (the steps implemented so far), 「runの手順」 (N = 1), 「lockの順位」 (SG-12 and the rank table), 「フック」 (`Policy::at`, `Point`), 「信頼の一覧」 (group A: ST-1..ST-3 as 01 §14.3; group B: SM-5 the `Exec` contract (D-SC-4); SM-6 `Marked`'s constructors; SM-7 the extended `cells` contract and `here`; SM-8 `doorbell.rs`'s `libc` calls; SM-9 `Workers::on_worker` runs on the worker's own thread and returns a detached `Ctx`. A row is listed when its first user lands; SM-5, SM-8, SM-9 here).
+- Completion: `cargo test -p eml_sched -q` passes; the Miri line passes in both settings, `user` time recorded (budget: at most 120 s per setting for the whole line at Close; a unit that passes it narrows nothing and reports to the Steward); `surface::` passes with the entries the scanner asks for.
+- Left: private field layouts; helper names; the scanner helpers of `placement.rs`.
+- Review: fresh Fable, on 5.5's principle and classes, D-SC-4 (what `drive` holds across `enter`), H-9 (which frames can unwind and what they own; that every statement of the callback is under a catch; the abort path and the claim it rests on, that an unwinding factory leaks its `Ctx`), the rank assertion and `rank::cells`.
+
+#### SC-4b: `Describe eml_sched's new layout`
+
+Docs only: docs/README.md's reading map gains runtime.md; architecture.md 「`eml_sched`の内部」 (new; the file map of 5.4 as it stands, the pinned edges) and 「公開の面と`unsafe`」's `eml_sched` sentences (the principle of 5.5 and the classes that exist); testing.md: the existing section 「`eml_sched`のテスト」 is edited (the `Script` seam; the placement, layers and trust tests; that the scanner helpers of `tests/placement.rs` are a second copy of `eml_native`'s on purpose, since a shared helper would pull the compiler into this crate's Miri build; that the `rank::tests` are ignored outside debug builds and are not on the listed `#[ignore]` lines because CI runs no release tests), and 「Miri」's list of runs; spaces between Japanese and Latin text go from every paragraph touched. Completion: `citations::` passes; K-5.
+
+#### SC-5: `Run the root task to its end`
+
+Work: the registry and `Mail` in `Run`; `Mailer` and `Notice` (variants used at N = 1 are none; the type lands at SC-6: here `Mailer`'s methods for another worker are `Internal` faults recorded in the stop record, since N = 1 has no other worker); `WorkerCore::{schedule, here, set_root, shared}`; `Entry`; `drive`: `Inbox` (mail), `Ready`, `Root(Result)`, item open (the every-build assert `evv == ()`, no yield in flight, no parked fault; `Slot.current`, `Slot.phase = Run`; `switch_task((), worker, 0)`) and close (`NO_CELL`; back to the worker's own ID; `reclaim_if_due`); the verdict at N = 1 with the root fact (`RootClosed`, `Deadlock`); the worker's home ID (H-1), read once at the start of the loop.
+- Tests: `root::{the_run_ends_when_the_root_scope_closes, the_result_item_runs_after_the_scope_closes, a_task_started_by_main_runs_before_the_end, a_resumed_task_gets_its_wake, a_token_runnable_is_an_internal_error, an_item_opens_with_an_empty_evidence_vector, every_task_waiting_is_a_deadlock, two_runs_on_one_ctx_with_a_failure_between}` (the last: `Scripts::lending`; a successful run, a run that halts, `Ctx::recover` by the test, a successful run; brief 2.2); `hooks::{current_names_the_running_item_from_another_thread, phase_shows_run_and_idle_from_another_thread, every_effect_an_interpreter_performs_passes_through_at}` (a notice's in-place wake is not an interpreter's effect and passes through no `at`; the explorer models a send as one atomic transition) (the reading thread is handed the `Arc<Signs>` over a channel and the item waits on the reader's reply: no sleep); `drive::the_ready_pass_runs_only_what_was_queued_at_its_start`; `root::{a_lent_ctx_returns_to_the_sessions_id, a_session_run_with_two_workers_does_not_start}`; `placement::{the_post_implementer_is_private, no_crossing_type_has_a_word_field, the_hooks_decide_nothing, the_new_files_name_no_token_wait, no_new_file_reads_a_heres_post, cells_is_entered_only_through_rank}`.
+- Docs: runtime.md 「workerのループ」 (item open and close, the asserts), 「根」 (H-2), 「判定」 (the facts that exist), 「フック」 (H-2, H-8 with the four phases this code writes), 「信頼の一覧」 SM-6 (declared; first constructor at SC-6), SM-7.
+- Completion: S-2 prints nothing.
+- Review: fresh Fable: the words an `Entry` owns on every exit of `drive` (run, halted, never run and dropped with the registry), `here`'s contract, the `switch_task` precondition in fast mode.
+
+#### SC-6: `Start the peers and put idle workers to sleep`
+
+Work: `sequence.rs` starts workers 1..N-1 (merged seat) through the one thread-starting function of H-13, with the gate, the masked spawn of H-14 (`driver.rs` gains the function that names `eml_io` for it), ST-D4's names and stack sizes, and the start barrier of H-15; `Run` gets N slots, `running`, `sleepers`, `searching`, the sleeper set; `Notice` (`Place`, `Wake`, `Cancel`) and `Mailer`'s real methods; `Marked::placed`; `idle.rs`: the interpreter of `idle::step` and `verdict::step` (with `listed` always zero until SC-7); `wake_all`; the `Peer` seat of `plan::Facts`; the round-robin placement count the registry already keeps is read into `Counts`.
+- Tests: `workers::{peers_start_asleep_and_end_on_end, a_task_placed_on_a_peer_runs_there, a_wake_for_a_task_on_a_peer_is_forwarded, a_cancel_reaches_its_owner, the_first_halt_is_the_one_reported, the_run_counts_its_workers}`; `root::the_run_ends_when_the_last_task_ends_on_a_peer`; `claims::{a_notice_woken_worker_passes_the_wake_on, the_verdict_waits_for_a_wake_in_flight, the_last_sleeper_wakes_worker_0}` (the wake in flight is held by pausing the woken worker at its first point, H-5); `workers::{a_peer_that_cannot_start_ends_the_run_before_it_begins, a_peer_factory_that_never_runs_ends_the_run, every_ctx_exists_before_the_first_item}`; `end::a_start_failure_clears_end`; `panics::{a_panic_on_a_peer_ends_the_run, a_peer_keeps_reading_a_shared_object_of_the_panicked_worker}` (the second: worker 0 holds an object a peer's task shared, the peer's next item panics, worker 0 reads the object after the panic and before the run ends; in the Miri line); `placement::{listed_is_read_only_by_the_verdict_and_under_its_lock, share_follows_reclaim_if_due, eml_io_is_named_only_in_driver}`.
+- TSan line (added here): `cargo test -Zbuild-std --target <host> -p eml_sched --test integration` under `-Zsanitizer=thread` (the whole binary; no filter); ASan line: `-p eml_sched` (lib and integration) on the three targets. CI: one step in each job.
+- Docs: runtime.md 「眠りと起こし」 (the four rules, `running`, the wake), 「判定」 (the loop), 「runの手順」 (threads, the gate, masks); testing.md 「ThreadSanitizer」, 「AddressSanitizer」.
+- Completion: the cross-target clippy of 7.3.1 item 9 passes (from this unit on); the TSan line passes locally (macOS host) with `TSAN_OPTIONS=halt_on_error=1`; every new test passes 20 times in a row under `cargo nextest run -p eml_sched -E 'test(/^(workers|claims)::/)' --stress-count 20` (a flaky test is a finding, not a retry).
+- Review: fresh Fable: each `Effect` is one section; the facts fed back are read in it; the target-side wake; a notice's push and wake in one slot section under the registry, with no `at` inside; the start barrier; `Send` / `Sync` of `Run` (const assertions, no `unsafe impl` other than `Marked`'s).
+
+#### CP-0b
+
+Push (ask the user); CI dispatched; all jobs `success`: this is the first run of the threaded tests on Linux and Windows and of the new Miri, TSan (x86_64 Linux) and ASan lines. A test that needs a Windows mark (testing.md 「OS ごとのテスト」) is found here and listed in 7.4 by a follow-up commit; none is expected (the tests use no unix-only API). Recorded in `.git/nc-keep/sc/cp-0b.md`.
+
+#### SC-7: `List jobs and let idle workers take them`
+
+Work: `SlotState.open: Open<Job>`, `Slot.listed`; `job.rs`: `Job`, `Done`; `fork.rs`: `mark`, `fork_cell`; `idle.rs`: `Push`, `Probe`, `Scan` with a rotating victim; `drive`: `Detached`, `Foreign`, job open (`switch_task((), job.id, 0)`, `Slot.current` = the job tag) and close (own ID, `reclaim_if_due`, then `Done::Cell` -> `cells::finish_job`); `claims` count.
+- Tests: `claims::{a_publish_between_scan_and_sleep_wakes, a_take_before_sleep_passes_the_wake_on, a_searcher_that_gives_up_rescans, the_verdict_waits_for_a_listed_job}`; `jobs::{a_job_is_not_starved_by_two_ready_tasks, a_detached_job_runs_on_its_own_worker_when_nobody_takes_it, a_taken_cell_job_finishes_its_cell}`; `workers::a_busy_worker_takes_no_foreign_job`; `placement::no_notice_carries_a_job`.
+- Docs: runtime.md 「仕事の一覧」 (lists, serials, publish, taking, the scan).
+- Review: fresh Fable: SG-15; the publish section against the scan section; H-1's row for a cell job, traced against `Registry::new_job`, `finish_job` and `take_job`.
+
+#### SC-8: `Run the main worker on the calling thread`
+
+Work: the separate seat: worker 0 on a spawned thread behind the gate, the main worker (slot N) on the calling thread, whose loop returns to its `Park` when nothing is ready (the `Main` seat of `plan::Facts`); the main worker's loop with `Park`, `Pending` (`run`, `default_wait`, `set_holds`, `io`, `poke`, `release_gate`) and `Guard`; the main worker's `LeaveRunning`; `holds` in the verdict's facts; `WorkerCore::{swap_holds, holds, wake, open_gate, release_gate}` and `Pending::{poke, release_gate}` over the registry's gate functions; pinned placement; `Phase::Park`; the calling thread's mask guard (H-14; one function in `driver.rs`); worker 0 started through H-13's function.
+- Tests: `seat::{worker_0_is_a_spawned_thread_in_a_separate_run, the_main_worker_runs_only_pinned_tasks, a_pinned_compute_runs_off_the_main_worker, the_park_is_entered_only_when_the_main_queue_is_empty, a_wake_before_the_main_worker_parks_keeps_it_awake, the_main_worker_parking_last_wakes_worker_0, a_holding_park_defers_the_verdict, every_ctx_exists_before_the_first_item, an_error_of_the_park_ends_the_run, a_panicking_park_ends_the_run, pending_run_outside_a_wait_is_busy, placement_never_picks_the_main_worker, worker_0_that_cannot_start_ends_the_run_before_it_begins}`; `gates::{a_poke_wakes_the_task_at_a_gate, a_released_gate_ignores_a_poke, lowering_holds_wakes_worker_0}`; `root::a_closed_root_ends_the_run_under_a_holding_park`; `hooks::phase_shows_park_from_another_thread`.
+- Docs: runtime.md 「メインのworker」, 「メインのworkerの待ち」, 「ゲート」 (the rules of vm.md's sections 「メインのworker」「メインのworkerの待ち」「GUIのPark」 that the ledger marks `kept`, restated for this scheduler), 「runの手順」 (the masks per seat).
+- Review: fresh Fable: no panic crosses `Park` frames; the `Park` is entered only from the idle loop (G-15's precondition); the join order of the two seats; lowering `holds` wakes the verdict; which thread receives the two signals in each seat.
+
+#### SC-9: `Fork and join`
+
+Work: `fork.rs`: `fork` (`reclaim_if_due`, `fork_worker`, `mark`, publish a `Done::Join` job), `take_own` with the every-build nesting assert, `wait_join` (`Phase::Join`, `ShellPoint::JoinWait`, the predicate of 01 §2.5), `join` (`transfer_back`, `retire_worker`); `Notice::Joined`; job close for `Done::Join` (own ID, `reclaim_if_due`, `mark` the value, send); `join_waits` count.
+- Tests: `par::{both_children_run_in_the_parents_frames_when_nobody_takes, a_taken_child_sends_its_value_back, a_join_wait_sees_memory, a_join_wait_sees_end, a_taken_childs_error_ends_the_run, a_none_behind_a_newer_join_is_an_internal_error, nested_forks_join_in_order, a_join_retires_the_childs_id, a_join_wait_leaves_other_notices_in_the_inbox, a_fork_inside_a_task_joins_a_taken_child, a_nested_fork_joins_a_taken_child}`; `jobs::a_cell_job_behind_a_join_job_is_found`; `hooks::phase_shows_join_from_another_thread`; `owners::a_retired_id_leaves_no_count` (checked, N = 2).
+- Docs: runtime.md 「`par`のforkとjoin」; object-model.md 「論理的な worker ID」 gains the isolation invariant (EN: "A task's or a child's local objects (positive count) are reached only by that task or child. A `par` left child runs under its parent's ID. Every crossing marks or moves the value on the sender's thread before it is published: a fork marks the right child's closure, a taken child marks its result, a join moves the result back and retires the child's ID.").
+- Review: fresh Fable: S-1, S-2, S-7; `Marked`'s two constructors; H-1's table row by row (receivers and `from`), and the order "switch, reclaim, mark, send" (00 D-18 (c); A-10).
+
+#### SC-10: `End a run on every path`
+
+Work: H-3 in full for both seats and N >= 1 (drivers do not exist yet: the quiesce step is written at SC-11 and its place is marked by the step's absence, not by a stub); D-SC-8; the settle; `Outcome`.
+- Tests: `end::merged::{success, exit_from_main, exit_from_a_peer, a_halt_on_worker_0, a_halt_on_a_peer, a_stop_bit, a_panic, a_factory_that_never_runs}`; `end::separate::{success, exit_from_main, exit_from_a_pinned_task, a_halt_on_worker_0, a_halt_on_the_main_worker, a_stop_bit, a_panic, a_factory_that_never_runs}`; `end::{an_open_list_left_at_a_successful_end_is_an_error, a_joined_notice_left_at_a_successful_end_is_an_error, end_is_cleared_once_on_every_path, the_registry_is_swept_only_after_a_success, a_notice_left_after_the_last_pass_is_counted}`; `panics::a_panicking_policy_hook_ends_the_run`; `placement::the_end_checks_are_not_debug_assertions`; `owners::every_heap_of_a_run_counts_in_one_table` (checked, N = 2, both seats: a successful run that ends with a taken job's result still live and with swept words owned by a peer; `Owners::check` over every retired heap is `NotQuiescent` before the test calls `Ctx::reclaim` on each heap, the calling thread's last, and `Ok` after).
+- Docs: runtime.md 「runの終わり」 (H-3's four steps, what is recorded, which run sweeps).
+- Review: fresh Fable: C4 (no heap dropped or swept while an operation could write it), the sweep's `Ctx` and the take-in it leaves to the caller, the words of unrun entries on a failed run, END's single clear, every exit of `on_worker` as the end event.
+
+#### CP-A
+
+1. The consumer prototype (brief 2.5c), by an Opus implementer in a scratch worktree at the branch tip, not committed, its patch kept in `.git/nc-keep/sc/proto/`: in `eml_nrt`, a `NativeExec` whose `enter` calls `eml_enter` for `Item::Root(Main)`, a `Workers` implementation, one task row over `WorkerCore::here` and `schedule`, the three `par` shims over `fork`, `take_own`, `wait_join`, `join`. It must compile and run a synchronous `main` and one `par` at N = 1 and N = 2. Every API change it forces is made in a follow-up commit before the freeze.
+   The prototype reaches the loop only through `sequence::run`; a prototype that wants to call `drive` is a finding against the prototype, escalated.
+2. The Critic's soundness review of the whole diff since the base; it also reads the findings the Steward rejected in `SC-<n>-review.md` since the last checkpoint. Fix commits.
+3. G in full: `cargo nextest run` (N recorded), the Miri lines (both settings), the TSan and ASan lines, Verus, both explorer lines.
+4. Push (ask the user); CI dispatched; all jobs `success`.
+5. The ledger: every `kept` row whose test is in SC-4..SC-10 names an existing test.
+6. The Architect's direction check of DIR-3, 4, 5, 7, 10, 11, 12 on that tip.
+7. Freeze, recorded in `.git/nc-keep/sc/cp-a.md` with the signatures: `Exec`, `Item`, `Root`, `Entry`, `Halt`, `Workers`, `Env`, `sequence::run`, `Start`, `Outcome`, `WorkerCore::{schedule, here, set_root}`, `fork`, `fork_cell`, `take_own`, `wait_join`, `join`, `Marked`, `Job`, `Done`, `Point::Kernel`. `drive` is `pub(crate)` and there is no `Until`, so neither is in the list (the brief's list had both). A later change to a frozen item is an escalation.
+
+#### SC-11: `Host I/O on the workers' drivers`
+
+Work: `hosting.rs` (H-7); `Notice::{Submit, CancelIo, Completion}`; `drive`'s `Look`; the idle wait in a driver (`Phase::Idle`); `WorkerCore::{own_driver, host}`; teardown step 2's quiesce, completions, "kept pending", the driver dropped on its thread before the `Ctx` is retired; `Start.driver`.
+- Tests: `io::{a_hosted_operation_completes_on_its_owner, a_forwarded_cancel_reaches_the_host, the_virtual_driver_lives_on_worker_0, quiescence_waits_for_the_job_budget, a_driver_failure_ends_the_run, an_injected_driver_hosts_on_worker_0, each_worker_makes_its_driver_on_first_need, an_accepted_stream_is_adopted_by_its_first_user, the_host_quiesces_after_every_forwarder_has_stopped, an_injected_driver_with_two_workers_does_not_start}` (`the_host_quiesces_after_every_forwarder_has_stopped`: virtual clock, N = 2: a peer forwards an operation in its last item; the host's driver sees the submit before its quiesce); `end::a_driver_left_pending_is_dropped_before_the_heaps`; `root::a_closed_root_ends_the_run_with_an_operation_left_in_a_driver`; `panics::a_driver_that_panics_at_quiesce_still_returns_its_retired`. Drivers: `io::quiescence_waits_for_the_job_budget`, `end::a_driver_left_pending_is_dropped_before_the_heaps`, the `root::` test and the `panics::` test use an injected driver written in the test (it keeps an operation pending, records the budget `quiesce` was given, or panics in `quiesce`), because the virtual driver runs jobs inline and never keeps one; they run under Miri and depend on no real time. Real clock (reason: the per-worker real driver has no virtual counterpart): the last two of `io::`; they wait on a loopback connection's completion, never on a duration, and are excluded from the Miri line by module.
+- Docs: runtime.md 「I/Oの受け持ち」.
+- Review: fresh Fable: C4 and `RawBuf` lifetimes at teardown; a `!Send` driver never leaves its thread.
+
+#### SC-12: `Keep the clock and the verdict's facts`
+
+Work: timers (`expire`, the deadlines, `now_floor` / `now_ceil`), the virtual clock's advance in the verdict (`Advance`), the real clock's `WaitUntil`, virtual signals scheduled by time; the remaining facts of `verdict::Facts` supplied (`timer`, `ops`, `signal_waiters`, `mail`, `notice`). The kernel does not change.
+- Tests: `clock::{a_timer_fires_on_the_virtual_clock, the_clock_does_not_advance_while_a_job_runs, a_timer_on_a_peer_advances_the_virtual_clock, timers_with_one_deadline_fire_in_registration_order, every_task_waiting_without_a_timer_is_a_deadlock, mail_pending_at_the_verdict_defers_it, a_real_timer_fires_on_a_peer}` (the last on the real clock with a 5 ms timer; reason: `WaitUntil` exists only there; it asserts order, not duration); `signals::a_virtual_signal_reaches_its_waiter`; `root::a_closed_root_ends_the_run_with_a_later_signal_scheduled` (the clock is not advanced to the signal and the run does not fail with an unheard signal).
+- Docs: runtime.md 「時計」, 「判定」 (complete).
+- Review: fresh Fable (S-6).
+
+#### SC-13: `Relay signals from the monitor thread`
+
+Work: `monitor.rs` (start rule of H-4; `claim_signals` -> `MailItem::Signal` and NOTICE on every word; a stop bit -> `wake_all`; one wait: the doorbell, or a 10 ms tick without one, written as a single wait that takes a deadline; started through H-13's function, so a monitor that cannot start ends the run before it begins; stopped and joined in teardown before the heaps are retired); the workers' handling of a relayed signal and of an unheard one; `signals::end_sets_the_exit_code`'s path.
+- Tests: `par::{a_join_wait_sees_interrupt, a_join_wait_sees_terminate}` (H-4 (d)); `signals::{end_sets_the_exit_code, an_unheard_signal_stops_every_worker, a_relayed_signal_wakes_a_waiter_on_another_worker, an_interrupt_wakes_a_parked_worker_without_a_doorbell, the_monitor_stops_with_the_run, a_run_without_peers_on_the_virtual_clock_has_no_monitor}`.
+- Docs: runtime.md 「シグナルと監視のスレッド」 (the start rule; the wait and its deadline).
+- Review: fresh Fable (H-4's matrix closes here; the reviewer reads the monitor's start-failure path, which no test reaches).
+
+#### SC-14: `Run blocking jobs on the pool`
+
+Work: `pool.rs`: submit a closure as `Op::Job` on the submitting worker's host with a `JobSource`, the answer caught (`catch_unwind` to the panic's text), the take compared with the source; abandonment at `exit`.
+- Tests: `pool::{a_finished_job_wakes_with_its_value, a_panicking_job_fails_with_the_panic_text, a_cancelled_take_drops_the_value, a_job_of_another_source_is_an_internal_error, exit_abandons_a_queued_job}` (job closures wait on channels the test holds).
+- Docs: runtime.md 「プールの仕事」.
+- Review: fresh Fable (a job's result crosses threads as `Box<dyn Any + Send>`, never a word; abandonment against C4).
+
+#### SC-15: `Add the seeded policy, the counts and the counter table`
+
+Work: `Seeded`, `Standard`, `spend` and the budget at entry open; `Counts` complete; `counters.rs` as 00 D-15 (a).
+- Tests: `policy::{seeded_picks_an_entry_other_than_the_head, a_short_budget_yields_before_128_operations, the_same_seed_gives_the_same_order, each_worker_has_its_own_stream, both_plain_sched_variants_run_in_order, the_counts_report_claims_join_waits_and_reorders}`; `counters::tests::{push_hands_out_distinct_slots, find_accepts_only_handed_out_words, add_wraps_around, a_slot_keeps_its_value_while_buckets_grow, concurrent_pushes_and_adds_agree, the_static_table_hands_out_counters}` (00 D-15's list, on a `Table` local to each test but the last).
+- Lines: Miri `cargo miri test -p eml_sched --lib -- counters::` (both settings); the TSan line gains `-p eml_sched --lib -- counters::`.
+- Docs: runtime.md 「操作の予算」 (the rows that spend; an atomic operation is not a switch point), 「`Std.Atomic`の数の表」.
+- Completion: `grep -n 'unsafe' crates/eml_sched/src/counters.rs` prints nothing.
+
+#### CP-B
+
+As CP-A's steps 2-6 in the same order (the Critic, G, the push and CI, the ledger, then the Architect), without the prototype. The ledger and 5.6's table are complete. Second freeze (every remaining row of 5.6), recorded in `.git/nc-keep/sc/cp-b.md`.
+
+#### SC-16: `Describe the scheduler across the docs`
+
+Docs only (section 8): runtime.md read end to end against the code and the ledger; architecture.md; testing.md; CLAUDE.md; docs/future/multicore.md and roadmap.md sentences this stage made false. Completion: `citations::` passes; the check for spaces (7.3.2 K-5); the Steward reads runtime.md against 5.3.
+
+#### SC-17: `Close sched-core`
+
+1. The Critic's whole-branch review; findings closed by follow-up commits or recorded as roadmap items with the user's agreement.
+2. The Architect's direction check (all SG-n; 5.6 complete; the ledger).
+3. docs/future/roadmap.md: delete the `sched-core` item and 「`eml_sched`のcrate」, and rewrite the other places that name the stage (section 8's last table); delete `docs/plans/2026-11-17-sched-core.md` (the shared appendix `2026-11-17-runtime/` stays, with `02-ledger.md`).
+4. Benchmarks: this stage touches none of `eml_vm`, `eml_rt`, `eml_lir`, `eml_core_ir`, `std/`, `bench/`; the tables of benchmarks.md are not re-measured (stated in the commit message).
+5. Commit message: the recorded numbers (N, Verus counts, explorer state counts and times, Miri `user` times, CI run id), the frozen API, the ledger's counts by fate.
+- Completion: S-1..S-15.
+
+### 7.3 Gates and standing checks
+
+#### 7.3.1 G (every unit, after `git add -A`)
+
+1. `cargo test -p eml_sched -p eml_steps -q` -> exit 0.
+2. `cargo test --workspace -q` -> exit 0 (every unit: each adds a module to an existing `lib.rs` or `tests/main.rs`). Known item of the base: under this command the three `eml_cli` tests `cli::an_interrupt_stops_a_sleeping_program_with_130`, `cli::repeated_interrupts_end_a_program_waiting_in_a_read_with_130`, `terminal::interrupts::an_interrupt_stops_a_repl_input_and_the_session_continues` can fail with `the program did not start within 10s` while the directory tests load the machine. If the run's only failures are among these three with that message, run `cargo nextest run -p eml_cli --test integration -E 'test(/^cli::/) | test(/^terminal::interrupts::/)'` once, alone on the machine: all passing meets this item, and the unit's log line records which test failed under load. Any other failure, another message, or a failure of the nextest run stops the unit. This is not a retry of a test of this stage: no test of `eml_sched` or `eml_steps` may be re-run to pass.
+3. `cargo clippy --all-targets -- -D warnings` and `cargo clippy -p eml_sched --all-targets -- -D warnings` -> exit 0; `cargo fmt --check` -> exit 0.
+4. `bash nix/crate-graph.sh --check` -> exit 0.
+5. `cargo nextest run -p eml_cli --test integration -E 'test(/^surface::/) | test(/^citations::/)'` passes.
+6. When `crates/eml_steps` changed: `cargo verus verify -p eml_steps` (0 errors, count recorded), the verusfmt check, and both explorer bounds.
+7. `git status --porcelain | grep -c '\.snap'` -> `0`.
+8. `cargo nextest run --profile timing -j 1 -p eml_sched -p eml_steps` -> exit 0 (the dev machine's reading; CI's timing job on x86_64 Linux decides the 1 s rule at each checkpoint).
+9. From SC-6 on: `nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc -p eml_sched -p eml_steps --all-targets -- -D warnings` -> exit 0 (masks, the doorbell and thread code have per-OS parts).
+
+#### 7.3.2 Standing checks
+
+- K-1 (always): S-1's diff is empty.
+- K-2 (always): S-2.
+- K-3 (SC-4 on): S-4's three greps; S-5's grep.
+- K-4 (SC-4 on): S-7's two greps.
+- K-5 (always, on the staged diff): no added line of `docs/` or added comment line of `crates/` has a space between Japanese and Latin text or inline code (the command of SC-8 in section 7.3.2 of the previous stage's plan, `git show a5ba8136:docs/plans/2026-11-17-native-checked.md`, saved by SC-1 as `.git/nc-keep/sc/ja-space.sh`).
+The rule that code and docs cite no `docs/plans/` path is held by `citations::` (G item 5) alone.
+
+#### 7.3.3 Sanitizer and Miri lines (run in the unit that adds or widens them, and at every checkpoint)
+
+| Line | Added | Local command |
+|---|---|---|
+| Miri, `eml_sched` integration | SC-4 | `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_sched --test integration -- drive:: root:: jobs:: par:: end:: panics::`, and once more with `-Zmiri-tree-borrows` |
+| Miri, `counters::` | SC-15 | the same with `-p eml_sched --lib -- counters::` |
+| TSan, `eml_sched` | SC-6 | CLAUDE.md's TSan command with `-p eml_sched --test integration`; from SC-15 also `-p eml_sched --lib -- counters::` |
+| ASan, `eml_sched` | SC-6 | CLAUDE.md's ASan command with `-p eml_sched` |
+| explorer, exhaustive | SC-3 | `cargo nextest run -p eml_steps --release --run-ignored only -E 'test(/^explore::exhaustive_/)'` |
+
+Not run: `bench/rt-gate.sh` (no `eml_rt` change; one would be an escalation, then the gate applies); the VM gate (no file the VM builds from changes: `cells.rs` is untouched); the native gate (starts at jit-tasks).
+
+### 7.4 Test changes by kind
+
+- Kind 1 and kind 2: none. No existing test changes outcome or expected value, and no existing test file changes.
+- New tests: the names in 7.2, in `crates/eml_steps/src/*` (`mod tests`), `crates/eml_steps/tests/explore.rs`, `crates/eml_sched/src/{rank,counters}.rs` (`mod tests`; they test private items), and `crates/eml_sched/tests/{drive,root,hooks,workers,claims,jobs,seat,par,end,panics,owners,io,clock,signals,pool,gates,policy,placement,layers,trust}.rs`. Placement follows testing.md 「テストの置き場所」: a rule of the scheduler is checked once, in `eml_sched/tests`; a kernel's table in `eml_steps`; `jit-tasks` restates VM tests on native code and does not repeat these.
+- Tests that depend on real time (four): `io::each_worker_makes_its_driver_on_first_need`, `io::an_accepted_stream_is_adopted_by_its_first_user`, `clock::a_real_timer_fires_on_a_peer`, each with the reason in 7.2, and `signals::an_interrupt_wakes_a_parked_worker_without_a_doorbell` (the monitor's 10 ms tick is the thing under test; it waits for the wake, so it takes one tick and its outcome does not depend on speed).
+- Unix-only tests: none by design; CP-0b's Windows job decides.
+- Tests on an injected driver written in the test: listed in SC-11; none depends on real time.
+- `#[ignore]`: the two `explore::exhaustive_*` tests (listed in testing.md 「CI」); the five `rank::tests` are ignored only outside debug builds (they are not on a listed line: CI runs no release tests).
+- A kind 1 or kind 2 change found during execution stops the unit for a plan amendment the user approves.
+
+### 7.5 Soundness points and what holds each
+
+| # | Invariant | Held by | Test |
+|---|---|---|---|
+| P-S1 | A job is consumed exactly once; a word crosses only marked | `Job` not `Clone`; P-1; `Marked` | `claims::`, `jobs::`, TSan, `placement::no_crossing_type_has_a_word_field` |
+| P-S2 | A join takes only its own job or value | P-1's completeness clause; the nesting assert; serials | `par::a_none_behind_a_newer_join_is_an_internal_error` |
+| P-S3 | No taker sleeps while a job it may take is listed | the idle kernel; P-4a; ST-1, ST-2 | `claims::`; the explorer |
+| P-S4 | The verdict, the root's end and the virtual clock fire only with nothing running, listed, in flight or waiting at a join | H-6, H-10 | `claims::the_verdict_waits_*`, `clock::`, `root::` |
+| P-S5 | `wait_join` leaves only with its value or a stop, and every stop reaches it | H-4 | `par::a_join_wait_sees_*` |
+| P-S6 | Across `enter`, `drive` holds nothing derived from `this` | `Exec::with`; SM-5 | Miri `drive::enter_gets_the_only_borrow`, both models |
+| P-S7 | No heap is dropped, recovered or swept while a driver operation could write it | H-3 step 2; C4 | `end::a_driver_left_pending_is_dropped_before_the_heaps` |
+| P-S8 | Words stored in the scheduler are released only under the run's contract, once | 5.5; the sweep only after a success | `end::the_registry_is_swept_only_after_a_success`; Miri `end::` |
+| P-S9 | Every heap of a run counts in one owner table; an ID retires without counted objects; a crossing names the right receiver and `from` | SG-11; H-1 | `owners::`, `par::a_fork_inside_a_task_joins_a_taken_child`, `par::a_nested_fork_joins_a_taken_child` |
+| P-S14 | A run whose threads did not all start runs nothing and leaves no thread, mask or END behind | H-13, H-14 | the two start-failure tests; review for the monitor |
+| P-S10 | No lock inversion among the registry and the scheduler's own locks, whether the registry is taken by a new file or inside a `cells` call. Not covered by the assertion and held by review: locks an engine row takes through `WorkerCore::shared` (sound because a row can hold no scheduler lock), and `cells`' internal `Mail` / `HostBin` locks (leaves that call nothing back) | SG-12 | `rank::tests`, `placement::cells_is_entered_only_through_rank` |
+| P-S11 | No panic leaves `sequence::run` or crosses `Park` frames; no frame that owns a `Ctx`, heap or driver unwinds while a peer runs; `eml_sched` drops no heap | for `eml_sched`'s own steps: every statement of the callback, of the base closures and of the no-callback path is under a catch, and every `Retired` it holds is in `ManuallyDrop` (H-9, `placement::the_callback_is_one_catch`, `placement::a_retired_is_held_in_manually_drop`); for the factory's steps: its contract (no panic outside `run`; an unwind leaks the `Ctx`) and the abort; that a phase-2 panic leaves the heap to running peers is held by `placement::the_callback_is_one_catch` and SC-11's review, not by a test | `panics::` (under Miri: `a_peer_keeps_reading_a_shared_object_of_the_panicked_worker`, with a shared object held across the panic, and `a_driver_that_panics_at_quiesce_still_returns_its_retired`), `seat::a_panicking_park_ends_the_run`; the abort path by review (SC-4) |
+| P-S15 | The charge of a worker's `Ctx` never races with the program's allocations; a `Ctx` that outlives a run shares no page with a heap that does not | H-15; H-16 | the two `every_ctx_exists_before_the_first_item` tests; `root::a_session_run_with_two_workers_does_not_start` |
+| P-S12 | A `Ctx` is used only on its worker's thread and leaves it detached | `Workers::on_worker`'s contract (SM-9); the driver is a field of the core | TSan; `drive::the_outcome_carries_the_retired_ctx` |
+| P-S13 | No safe function reaches undefined behaviour | 5.5 | `surface::`, `trust::`, `placement::no_safe_function_is_bounded_by_exec` |
+
+What Verus proves and why it pays: P-1 (S-1, S-2 rest on it; about 250 lines), P-2 (who may take what; finite), P-3 (the limit table has one copy natively; finite), P-6 (set operations), and the step functions' functional specs (they cost nothing beyond `ensures r == spec` and are what `sched-proofs` needs). P-4a is the explorer: it is the only check of the protocol as a whole until `sched-proofs`. P-5 is done (`native-checked`). No proof of counter arithmetic.
+
+## 8. Docs: file by file
+
+| File | Section | Unit |
+|---|---|---|
+| docs/spec/runtime.md (new) | 範囲, もの, workerのループ, runの手順, lockの順位, フック, 信頼の一覧 | SC-4 |
+| | 根, 判定 | SC-5, SC-6, SC-12 |
+| | 眠りと起こし | SC-6 |
+| | 仕事の一覧 | SC-7 |
+| | メインのworker, メインのworkerの待ち, ゲート | SC-8 |
+| | `par`のforkとjoin | SC-9 |
+| | runの終わり | SC-10 |
+| | I/Oの受け持ち, 時計, シグナルと監視のスレッド, プールの仕事 | SC-11..SC-14 |
+| | 操作の予算, `Std.Atomic`の数の表 | SC-15 |
+| docs/spec/object-model.md | 論理的な worker ID (the isolation invariant) | SC-9 |
+| docs/spec/native.md | none: the shim rule is already stated in 「エントリ」 (borrows and destructors across `eml_fatal`) [R3 c.2]; its guard wording is jit-tasks' | - |
+| docs/README.md | the reading map | SC-4b |
+| docs/implementation/architecture.md | crate の依存関係, `eml_steps`の内部 | SC-2 |
+| | `eml_sched`の内部 (new), 公開の面と`unsafe` | SC-4b, completed SC-16 |
+| docs/implementation/testing.md | `eml_steps`の検証 (new), CI, よく使うコマンド | SC-2, SC-3 |
+| | `eml_sched`のテスト (existing section, edited), Miri, ThreadSanitizer, AddressSanitizer | SC-4b, SC-6, SC-15 |
+| CLAUDE.md | the `eml_steps` row, the strata list, Verus lines | SC-2 |
+| | the `eml_sched` row (the scheduler, the edge `eml_steps`; the `testing` sentence becomes "goes away at `vm-retire`" without naming a stage: "goes away with the VM"), the topic table row for runtime.md, the Miri / TSan / ASan / explorer command lines | SC-16 |
+| crates/eml_rt/CLAUDE.md | the pointer to `eml_steps`' rule | SC-2 |
+| docs/future/multicore.md, roadmap.md | sentences made false (the layer text that says the scheduler is only in `eml_vm`); the two roadmap deletions | SC-16, SC-17 |
+
+vm.md is not edited. No doc names a stage.
+
+Places outside `docs/plans` that name `sched-core` today, and what SC-17 does [V: git grep]:
+
+| Place | Change |
 |---|---|
-| U-1: `cells.rs` needs a change of shape | a thin adapter in `eml_vm`, listed in the plan before approval (D-SC-3) |
-| A proof of P-1..P-3 or P-6 does not close in Verus | stop; a strong advisor reviews before any weakening; never `external_body` (G-8) |
-| The explorer exceeds CI time in release | keep the bound of D-SC-7; split its two cases into two tests, each `#[ignore]` with its CI line |
-| A Miri or TSan line is slow | follow testing.md 「Miri」 / 「ThreadSanitizer」 budgets; narrow the filter, never drop the borrow model |
+| docs/future/roadmap.md, the `sched-core` item | deleted |
+| docs/future/roadmap.md, the `jit-tasks` item ("`sched-core`のスケジューラの上") | "`eml_sched`のスケジューラの上"; its 前提 loses `sched-core` |
+| docs/future/roadmap.md, the `sched-proofs` item (前提: `sched-core`) | 前提: なし |
+| docs/implementation/status.md, the `compute` limitation bullet (a link to the roadmap's `sched-core` item) | the link points at runtime.md 「仕事の一覧」; the sentence says the scheduler in `eml_sched` lets an idle worker take an open job and that no engine runs it yet |
+| docs/implementation/benchmarks.md, the claim on the per-worker ready queue (a link to the roadmap's item) | the link points at runtime.md 「仕事の一覧」 |
 
-## 10. Refresh at the stage's first commit
+## 9. Execution flow (for the execution orchestrator)
 
-Write the `cells.rs` list (01 §27 item 1) and any adapter; confirm the pinned vstd still specifies `VecDeque`'s `push_back`, `pop_back`, `pop_front`, `len`, `index`; re-read the VM's scheduler files named in D-SC-2 for behaviour the new files must match (I/O hosting, the clock, signals, the monitor, the pool, the main loop, recovery); record the baseline.
+### 9.1 Per unit
+
+1. Write `.git/nc-keep/sc/SC-<n>-brief.md` from 7.2 (work, tests, docs, completion, the SG-n in force, 6's conventions). Check `ps` for cargo; start one implementer (7.1's model) in the main working tree.
+2. The implementer works test-first, runs G items 1, 3 and the unit's own lines, stages, and reports: the red step, commands with results, the PLaMo calls, open questions. It does not commit.
+3. The orchestrator re-runs G in full and the standing checks itself.
+4. Review on the staged diff (7.1's reviewer; a fresh agent each time; its brief names the unit's soundness points of 7.5 and asks for findings with file and line). Findings go to `.git/nc-keep/sc/SC-<n>-review.md`; the Steward judges each (accepted / rejected with a reason); accepted ones are fixed by the implementer and the review is repeated on the fix only. A soundness finding the Steward rejects is not closed by that: it stays in the file marked `rejected`, and the Critic reads every such entry at the next checkpoint.
+5. Commit; one line in `log.md` (hash, N, counts).
+
+### 9.2 Checkpoints
+
+- CP-0 after SC-3, CP-0b after SC-6, CP-A after SC-10, CP-B after SC-15, CP-Z after SC-17, as 7.2 states. At CP-A, CP-B and SC-17 the order is: fixes, the Critic, fixes, G and CI, then the Architect on that tip. Each writes `.git/nc-keep/sc/cp-<x>.md`: commands, results, the CI run id, review verdicts.
+- The full `cargo nextest run` (about 24 minutes, alone on the machine) runs at CP-0, CP-A, CP-B and before SC-17's commit.
+- CI is dispatched with `gh workflow run CI --ref plan/sched-core` after each push; a red job is fixed by a follow-up commit, never by a retry.
+
+### 9.3 Review cadence
+
+- Fresh Fable on the staged diff: SC-3..SC-14 except as 7.1 says (the protocol, the run sequence, `drive`, fork and join, teardown, hosting, the main worker, the monitor, the pool).
+- Opus on the staged diff, then the Steward on design conformance: SC-2, SC-15, SC-16. The Steward alone: SC-1, SC-4b.
+- The Critic: this plan (before SC-1), CP-A and CP-B (whole diff, soundness), SC-17 (whole branch).
+- The Architect: this plan (direction), CP-A, CP-B, SC-17.
+
+### 9.4 Mid-stage re-examination
+
+At CP-A the Steward re-reads Phase C's units against what Phase B built and against the prototype, and amends 7.2 for SC-11..SC-16 (an amendment that changes a decision of section 5 goes to the Architect, and to the user if it changes 7.4 or section 11). The same at CP-B for SC-16 and SC-17.
+
+### 9.5 Artefacts
+
+Briefs, reviews, checkpoint records, the prototype patch, gate outputs: `.git/nc-keep/sc/`. An implementer's edits exist only in the working tree until staged; the orchestrator runs `git stash list` and `git status` before starting the next agent, and never starts two agents that build.
+
+### 9.6 Escalate to the Architect (stop the unit; write the question to `.git/nc-keep/sc/`)
+
+An SG-n or S-n cannot be met as written; a frozen item changes; the consumer prototype wants `drive` or any item that is not public; the kernels' effect sets change after SC-3, or a sixth shell point is needed; `eml_vm` needs an adapter; a new trust row, crate edge, feature, lock rank or `unsafe impl`; a file enters or leaves 5.4 (other than `sequence/main_worker.rs`); `cells.rs` needs any change; a ledger row would become "dropped"; a proof does not close (never `external_body`); a need to change `eml_rt`; a new `surface.rs` `Reason`.
+
+### 9.7 Stop for the user
+
+A push to `main` and the merge (pushes of `plan/sched-core` need no stop; the user's standing rule covers only `main`); a kind 1 or kind 2 test change; a major soundness problem (a Fable advisor first, CLAUDE.md); a disagreement between the Architect and the Steward; more than 20 unit commits (7.1's rows; fix commits after a review or a push and the checkpoints' follow-ups do not count).
+
+## 10. Risks and open items
+
+| # | Item | Default | Decides |
+|---|---|---|---|
+| U-1 | `cells.rs` needs a change | none is planned; a need escalates | Architect |
+| U-2 | (closed) Where a panic is caught and `Halt`'s two variants: ruled in `A3-ruling.md`, conditions in H-9 | - | - |
+| U-3 | A thread that cannot start ends the run (H-13), against the VM's shrinking | as written; ledger row "changed" | settled with the plan; re-read by the Architect at CP-A |
+| U-4 | The reduced explorer bound | the largest within 250 ms on the dev machine, state count asserted | SC-3; Steward |
+| U-5 | The exhaustive explorer exceeds 5 minutes in CI | split by "with / without the main worker"; both lines listed. A lower bound than 3 x 3 is the Architect's ruling, reported to the user (SC-3) | Steward; Architect for the bound |
+| U-6 | Miri on threaded tests is too slow or unsupported | narrow the Miri line to `drive:: root::`; TSan keeps the threaded modules; testing.md says so | Steward |
+| U-7 | A proof of P-1, P-2, P-3, P-6 does not close | stop; a Fable advisor; never weaken the statement silently | Architect |
+| U-8 | The injected driver (A-7) | in, at SC-11; removed at CP-B if jit-tasks' test list does not need it | Steward |
+| U-9 | The consumer prototype forces an API change | made before the freeze of CP-A; if it touches section 5.5's classes, the Architect rules | Architect |
+| U-10 | A threaded test is flaky | a finding: the interleaving is forced through `Policy::at` or the test is redesigned; never a retry or a sleep | Steward |
+| U-11 | `sequence.rs` grows past about 800 lines | `sequence/main_worker.rs` (5.4) | implementer |
+| U-12 | The stage grows beyond 20 unit commits (follow-up fix commits not counted) | ask the user | user |
+| U-13 | `share` rejects objects of another ID than the current one (A-10) | the mark of a taken child's result moves before the switch back; D-22 notes the order against D-18 (c) | Steward, at SC-9's review |
+| U-14 | The spawn with `usize::MAX` stack does not fail on some platform (A-9) | the two tests are dropped and the path is a review obligation | Steward |
+
+### 10.1 Assumptions the plan rests on
+
+| # | Assumption | If false |
+|---|---|---|
+| A-1 | `cells.rs` needs no change. Every `cells` item the VM's scheduler uses is `pub` (the VM is another crate; items used by `workers.rs`, `sched.rs`, `monitor.rs`, `jobs.rs`, `lib.rs`: `Here`, `HostBin`, `Discards`, `Outcome`, `WOKE`, `CANCELLED`, `complete`, `drain`, `run_io`, `submit_job`, `take_job`, `sweep_all`, `with_worker`, `in_flight`, `next_generations`, `open_gate`, `release_gate`, `quiesced`, `set_bin` [V: grep]); `Registry::closed`, `Shared::{new, lock}`, `Shared.mail` are `pub` [V: read] | a need found in a unit stops for the Architect (U-1) |
+| A-2 | A `Ctx<M>` that is detached is `Send` (the VM returns worker `Ctx`s through joins [R2 §2.13]) | `Workers::Retired` is the engine's own wrapper anyway; only `Scripts`' `Retired` changes |
+| A-3 | The reduced explorer bound "2 workers, 2 publishes, optional main worker" runs in at most 250 ms in the dev profile, and the full bound in under 5 minutes in release [I: 01 quotes 13.2 M states for the four rules alone] | SC-3 picks the bound by measurement (Q-6); a full bound over 5 minutes is split into two tests (brief 2.10) |
+| A-4 | Miri runs the threaded `Script` tests on the virtual clock (std threads, mutexes and condvars are supported; the real driver is not) [I] | the Miri filter is narrowed to the N = 1 modules and the threaded ones stay with TSan; recorded in testing.md |
+| A-5 | After the root scope closes no task is left, so every worker reaches the sleeping form and the last `LeaveRunning` wakes worker 0. Timers of scheduled signals, `holds` and driver operations may remain; the verdict ignores them once the root is closed (H-2) [I from S-21] | `root::the_run_ends_when_the_last_task_ends_on_a_peer` and the three `root::a_closed_root_ends_the_run_*` tests show it; a failure is an escalation |
+| A-9 | A spawn with an unsatisfiable stack size (`Workers::stack` = `usize::MAX`) fails deterministically on every CI platform [I] | the two start-failure tests become a review obligation of SC-6 / SC-8, stated in runtime.md's review notes of the unit |
+| A-10 | `Heap::share` accepts objects owned by another logical ID than the heap's current one (`share.rs` has no `WrongOwner`) [V: grep], so a taken child's result can be marked after the switch back, in 00 D-18 (c)'s order | the mark moves before the switch; a D-22 note amends D-18 (c)'s order |
+| A-6 | `Hit::Raise` needs no message payload in `eml_steps` (the text lives with its user in `eml_nrt`) | `Hit::Raise { message: Message }` with a one-variant enum |
+| A-7 | An injected driver (`Machine::with_driver`'s kind) is still needed natively: the VM tests jit-tasks restates use it [R2 §2.7, §2.14] | `Start.driver` and its test leave at CP-B |
+| A-8 | The baseline test count is 5287 passed, 23 skipped; `cargo verus verify -p eml_rt` 1276 verified [recorded by SC-1 at 6497624f] | - |
+
+### 10.2 Items left to the units, with defaults
+
+| # | Item | Default | Decides |
+|---|---|---|---|
+| 3 | The exact transition tables of `idle::step` and `verdict::step` are not fixed by the plan; their alphabets, the model and the root's precedence are | SC-3 writes them; the explorer and a fresh Fable review hold them | Steward |
+| 4 | Whether a signal waiter on the real clock always defers the deadlock verdict, and how virtual signals enter the timer fact | as vm.md 「時計と driver」 states it; the ledger row decides the test | SC-1 (ledger), SC-12 |
+| 5 | Whether `share` under the home ID accepts the child's objects (A-10) | yes [V: no owner check in `share.rs`]; SC-9's checked tests decide | Steward |
+| 6 | The Miri budget of the threaded line | 120 s `user` per setting; A-4 | Steward |
+| 7 | English drafts of runtime.md are outlines, not full paragraphs, in this plan | each unit's Opus implementer drafts from section 5; the Steward reads the whole file at SC-16 | Steward |
+| 8 | The baseline numbers (A-8); the spawn that must fail (A-9) | SC-1 records; SC-6 tries | orchestrator |
+| 9 | How a test builds a `lin` object for `par::a_fork_inside_a_task_joins_a_taken_child` | as `cells.rs`'s and `eml_rt`'s tests build one, through public `eml_rt` constructors; if none is public, the test uses the count-1 object only and says so in the unit's message | implementer, Steward |
+| 10 | A handle a session value keeps to a driver across runs names a dropped driver, since a driver lives for one run (the VM's `Machine` keeps its driver) | out of this stage; `jit-repl` JR-4 states what the next run does with such a handle | `jit-repl` plan |
+
+## 11. User decisions
+
+Decided 2026-11-28 and built into this plan: N-1 (c) per-run scheduler state, no `recover.rs`; N-2 (b) `eml_steps::limit` here, no `limits.rs`, the edge `eml_nrt -> eml_steps` at JT-3; N-5 (a) CI runs `#[ignore]` tests only on lines listed in testing.md. Needed during the stage: permission for the merge into `main` (CP-Z); pushes of `plan/sched-core` at the checkpoints need none.
+
+## 12. Changes to other plans
+
+SC-1 commits these edits; their exact text is `.git/nc-keep/sc-plan/other-plan-edits.md` (00 wins over 01 and the profiler design, which are not edited).
+
+| File | Section | New text |
+|---|---|---|
+| `2026-11-17-jit-tasks.md` | §2 Scope, "The crate change" | add: "edge `eml_nrt -> eml_steps` (JT-3: the safepoint calls `eml_steps::limit::hit` directly; `nix/crate-graph.sh` EDGES)" |
+| | §3 "`sched-core`:" | "`sched-core`: `sequence::run` with the factory `Workers`, `Exec` (`with`, `enter(item)`), `Script` and `Scripts`, `WorkerCore`, `fork`, `fork_cell`, `take_own`, `wait_join`, `join`, the policies (`InOrder`, `Seeded`, `Standard`), hosting, the clock, the monitor, the pool, the gate operations, `counters.rs` (00 §D D-15's shape), `eml_steps::limit::hit`. There is no `limits.rs`, `threads.rs`, `main_loop.rs` or `recover.rs` in `eml_sched` (00 §D D-22)" |
+| | §4 11.2 | "the loop is `eml_sched::drive`, reached only through `sequence::run`; `NativeExec::enter(this, item)` is the one caller of `eml_enter`: it builds `argv` and sets the limit class from the item's kind; `eml_nrt` has no loop" |
+| | §4 11.5 | "`Hit::Raise` has no payload; the message text is `eml_nrt`'s" |
+| | §4 11.6 | "the run: `eml_nrt::run` builds `Start` and calls `eml_sched::sequence::run` with its `Workers` implementation; on each worker's own thread `on_worker` measures the stack, makes the `Ctx` with `Ctx::for_worker` on the run's `Owners`, sets the stack limit, fills the data slots, makes the `Worker` (which takes the `WorkerCore` from `Env`), calls `run` once, then clears `runtime`, asserts the `Ctx` detached, converts a recorded fatal into a `RuntimeError` and returns `Retired`; nothing between making the `Ctx` and returning `Retired` may panic except through `run`, and `on_worker` holds the `Ctx` so that an unwind of its frame leaks it (a panic there aborts the process); `NativeExec::enter` returns `Halt::Panicked` when an entry caught a Rust panic and `Halt::Stopped` otherwise; on `Err(Halt::Panicked)` `on_worker` only detaches and wraps the `Ctx`; no item runs before every worker's `on_worker` has made its `Ctx` and called `run` (the start barrier), so the calling thread's `Ctx` is charged before `main` allocates; after `sequence::run` returns, `eml_nrt` first takes in the remote frees on every retired heap (`Ctx::reclaim`, the calling thread's heap last), then runs the mode's end checks over every `Retired` and builds `Finished`; a heap of a panicked worker is checked by nothing and is dropped only after every thread of the run has been joined. `eml_nrt` spawns no thread and has no `clear_end` (G-17 restated: the one `clear_end` is in `eml_sched::sequence`). `Options.masked` is deleted" |
+| | §1 G-15..G-17 | "...; the end of a native run is `eml_sched::sequence::run`'s, on the calling thread after every join; `grep -rn 'thread::Builder\|thread::scope\|thread::spawn\|clear_end' crates/eml_nrt/src` is empty" |
+| | §5 JT-5 | "the root entry: `Item::Root(Main)` is the start function `root$main`, the row `root_start` calls `WorkerCore::set_root`, and `Item::Root(Result)` is `entry$main`; `Finished.claims` / `join_waits` / `reorders` are filled from `Outcome.counts`; the literals that gain the fields are six today: `crates/eml_vm/src/lib.rs:683`, `crates/eml_nrt/src/run.rs:239`, `crates/eml_cli/tests/ui.rs:580, 630, 1893`, `crates/eml_sched/src/config.rs:124` (`Finished::not_run`)" |
+| | §5 JT-3 | add: "`Slot.stack` is declared and written here (it is not declared by `sched-core`)" |
+| | §5 JT-2 | "`Worker<M>`, `split`, `NativeExec` (`with`, `enter(item)`), reached through `eml_sched::sequence::run` at N = 1 with `InOrder` and `Seeded` (`drive` is not public); Miri `drive::` with a `Script` that calls the shipped entries" |
+| | §5 JT-8 | add: "marking a taken child's result leaves objects of count 2 or more shared, so `RunStats.shared_objects` and `reuses` depend on whether the child was taken and differ from the VM's (00 §D D-22); the restated `par` tests and the checked comparison treat the two fields as schedule-dependent, listed by JT-1" |
+| | §5 JT-6 | add: "the row that takes a `compute` job's end calls `transfer_back(end, id)` and `retire_worker(id)` under the task's ID, as the VM's `AsyncTakeJob` does" |
+| | §5 JT-6 | "`GateHost`'s native implementer is a type of `eml_nrt` over `WorkerCore::{own_driver, open_gate, release_gate, swap_holds, holds, wake}`; the task rows get their `Here` from `unsafe fn WorkerCore::here`" |
+| `2026-11-17-jit-repl.md` | line 14 | "Recovery is session-side: the scheduler's state lives for one run (00 §D D-22), so after a failed run the session quiesces or drops its driver, calls `Ctx::recover` on the session heap and takes a fresh `Owners` handle from the surviving heap (R4); `children` is empty because the `Worker` is rebuilt per run" |
+| | line 28 | "`jit-tasks`: native tasks, the main worker, the merged seat on a caller's `Ctx` (`eml_sched::sequence::run`; a factory whose `session()` is true runs one worker, and `Start.owners` is the session heap's table), `rows/blocking.rs`" |
+| | line 33 (D-JR-2) | "D-JR-2: recovery after a fatal error is written in `eml_nrt` (session-side, JR-4); `eml_sched` has no reset and no `recover.rs`; `c_links` and `renumbered` are written in `eml_nrt/src/rows/blocking.rs`" |
+| | the risk row "Recovery after a fatal error in a taken job" | "the run's teardown drops every `open` with the `Run` (`sched-core`'s `end::` tests); JR-4 tests the session's next run after such a failure" |
+| | line 78 | "...and the session-side recovery of JR-4" in place of "`recover.rs`"; add: "a driver lives for one run, so JR-4 states what a later run does with a handle a session value kept to an earlier run's driver" |
+| `2026-11-22-native-prof.md` | §3 "`sched-core`:" | "...`Policy::at(worker, Point)` (H-6; `Point` is `Kernel(eml_steps::Label)` or one of four shell points), the monitor thread (it runs when N >= 2, the seat is separate or the clock is not virtual; `--prof` adds a fourth condition here; its loop has one wait that takes a deadline, where the tick goes), ...; `Slot.phase`'s `Io` is declared by `sched-core` and first written by this stage's guard" |
+| `2026-11-22-profiler/design.md` 8.2 | not edited; superseded by 00 §D D-22: H-6's argument is `Point`; H-8 lands with the unit that writes each phase (SC-5, SC-8, SC-9), not "SC-5" | |
+| docs/future/roadmap.md | the `sched-core` item | remove 回復 from the list (SC-1); the item is deleted at Close |
+| 00 §B A-17 | not edited (§B is never edited); D-22 restates it: recovery is not written in `eml_sched` | |
+| `2026-11-17-vm-retire.md` | no text change; note for VR-1 in D-22: RA-12's list (`depth_offset`, the `Token` family, `testing`, the unused `Sched` variant) stands | |
