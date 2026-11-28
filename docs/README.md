@@ -77,6 +77,8 @@ eml を実装するエージェントとプログラマのための文書群で�
 - 規則の理由と、採らなかった案は、その規則を定める文書の隣に書く。時期は書かず、「〜にすると〜になるため採らない」のように今の形の理由として書く。
 - 制限の置き場所は、診断で検査するか意味を定めた制限なら `spec/`、まだ作っていないことと遅いことなら `implementation/status.md` である。未対応の構文は、どの段階が E0004 を出すかを `spec/` に書き、`status.md` の「まだないもの」は機能を1行で挙げて `future/roadmap.md` の項目を引く。`status.md` は `spec/` の制限を1行で挙げてリンクする。
 - 計測の数値は `implementation/benchmarks.md` だけが持つ。ほかの文書は定性的に書き、根拠が要る所で `benchmarks.md` の「所見」を引く。
+- 事実は種類ごとに1つの持ち主を持ち、ほかの文書は事実を書き直さずに持ち主の見出しを引く。コードが満たす規則は`spec/`、どのcrate、ファイル、moduleが何を持ち、なぜそこに置くかは`implementation/architecture.md`、テストの方法 (方法、置き場所、印、時間の規則、テストを飛ばす理由と`#[ignore]`の理由) は`implementation/testing.md`が持ち、セッションの作業の規則は`CLAUDE.md`が1、2行と引用で持つ。
+- 文書は、テストが確かめることも、補助の関数やAPIがすることも書かない。それはテストの名前とmoduleのコメント、項目のrustdocが書く。文書がテストや項目を名指すのは、それについての規則を書くときだけである。検査のあるファイルが固定する一覧 (`nix/crate-graph.sh`の表、`Cargo.toml`、`Cargo.lock`、`.github/workflows/ci.yml`、`trust.rs`の一覧) は写さず、文書は規則を書いてそのファイルを引く。
 - `implementation/status.md` と `implementation/architecture.md` と `benchmarks.md` の表は、段の途中では直さず、段を閉じるときに直す ([ロードマップ](future/roadmap.md) の「進め方」)。
 - `future/` の内容はまだ実装しない。実装に進むときは、決まった部分を `spec/` に移す。今後の項目の一覧は [future/roadmap.md](future/roadmap.md) を正とする。非同期、ネイティブ化、FFI、マルチコア、標準ライブラリの詳細は、`future/` のそれぞれの設計文書にある。
 - 段の設計と計画は`docs/plans/`に置き、段の最初のコミットで入れ、段を閉じるときにその段の計画のファイルだけを消す。まとめて計画した段の共有の付録のディレクトリは、最初の段の計画と一緒に入れ、それらの段の最後の段を閉じるときに消す ([ロードマップ](future/roadmap.md)の「進め方」)。コードと`docs/`から`plans/`と`reports/`の見出しを引かない。
