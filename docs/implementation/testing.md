@@ -44,7 +44,7 @@
 
 1つの事実は、上の表で選んだ1か所だけで確かめる。UIテストは機能ごとの代表的な筋書きを確かめ、段階の端のケースを繰り返さない。例えば診断なら、端のケースは段階のcrateのテストに置き、代表的な表示を`check-fail/`に1つ置く。
 
-文書は、テストが確かめることを書かない。テストの名前とmoduleのコメントがそれを書き、文書がテストを名指すのは、置き場所、それについての規則、置く理由を書くときだけである。検査のあるファイルが固定する一覧は、写さずに引く ([文書の地図](../README.md)の「文書の扱い」)。
+文書がテストについて書くことは、[文書の地図](../README.md)の「文書の扱い」の規則に従う。
 
 次の組は同じことを確かめているように見えるが、確かめる事実が違うので両方を置く。
 
@@ -248,7 +248,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 `eml_native` は本物の JIT のコードを動かし、`eml_clink` は OS のローダーを呼ぶ。そのため Miri ではこの2つの crate を流さず、CI の各 OS の普通のテストで確かめる。橋渡しとリンカーのテストは `eml_clink` の `tests/` にあり、下の `tests/bridge.rs` と `tests/linker.rs` と `unsafe` の一覧のテストがそれである。
 
-- `unsafe`を書いてよいファイルは、`crates/eml_native/src/trust.rs`の`UNSAFE_FILES` (`jit.rs`) と、`crates/eml_clink/src/trust.rs`の`UNSAFE_FILES` (`bridge.rs`、`library.rs`、`linker.rs`) が決める。どちらの`lib.rs`も`#![deny(unsafe_code)]`を持ち、一覧のファイルだけが先頭に`#![allow(unsafe_code)]`を置く。走査と3つのテスト (`unsafe_stays_in_the_listed_files`、`every_source_file_is_listed`、`the_scanner_skips_comments_and_strings`) は「`unsafe` の一覧」と同じである
+- `unsafe`を書いてよいファイルは、`crates/eml_native/src/trust.rs`の`UNSAFE_FILES`と、`crates/eml_clink/src/trust.rs`の`UNSAFE_FILES`が決める。どちらの`lib.rs`も`#![deny(unsafe_code)]`を持ち、一覧のファイルだけが先頭に`#![allow(unsafe_code)]`を置く。走査と3つのテスト (`unsafe_stays_in_the_listed_files`、`every_source_file_is_listed`、`the_scanner_skips_comments_and_strings`) は「`unsafe` の一覧」と同じである
 - `tests/placement.rs`は、コード生成器と`eml_nrt`の置き場所の規則 ([コンパイラの構成](architecture.md)の「`eml_native` の内部」「`eml_nrt`の内部」) を、規則ごとに1つのテストで確かめる。`trust.rs`と同じく、走査の前にコメントと文字列のリテラルを空白にするので、規則が見るのはコードだけである。Craneliftの設定の名前を探す規則は文字列も見て、3つのcrateの全文を読むのは引用の規則だけである。何も見つからないことを確かめる規則は、探す形が持ってよい所 (`mem.rs`のロード、`eml_rt`の`CTX_*`の定義など) で実際に見つかることも確かめる。探す名前が変わって、規則が何も探さなくなるのを防ぐためである
 - `eml_clink`の`tests/bridge.rs`は、Craneliftで作った橋渡しをRustの関数に向けて呼ぶ
 - `eml_clink` の `tests/linker.rs` は、`Linker::with_symbols` で登録した Rust の関数と、何も入れずにどの機械にもある C の標準ライブラリ (Linux の `libc.so.6`、macOS の `libSystem.dylib`、Windows の `ucrtbase`) で、解決の順、上書き、誤りと文言を確かめる
@@ -256,7 +256,6 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `tests/machine.rs`は、手書きのLIRを`NativeMachine`に読み込み、`call`で関数を呼ぶ。領域についての2つの約束 (領域が尽きれば読み込みの誤りになり、その後は何もfinalizeしないことと、マシンのどの終わり方でも領域を返すこと) は、128 MiBのコードか確保への差し込み口を要するので、テストでなく`jit.rs`を読んで確かめる
 - `tests/rows.rs`、`tests/abort.rs`、`tests/clif.rs`は、呼ぶ行とfaultの道を確かめる。補助の`agree`は、プログラムを検査モードのVMとネイティブで流し、標準出力、誤りの文、終了コードを比べる。`agree_on`は、テストが作るHost (書けない出力など) で同じことをし、標準出力は比べない。`clif::`のテストは、関数1つのコンパイルの前のCLIFをinlineのスナップショットで固定する。ヒープの物体をインラインで読み書きする関数の固定には、どれも検査モードの双子が`clif::` (新しいプログラム) か`clif::checked::` (前からの固定の双子) にある。補助の`twin`は検査モードのCLIFを固定し、監査のエントリと`eml_rt_into_token`、`eml_rt_reuse_in_place`の呼び出しを除けば、そのロード、ストア、分岐、呼び出し、戻り、trapが速いCLIFのものと同じ順に並ぶことを確かめる。マシンが残すCLIFは呼ぶ関数とデータの記号を記号の名前で書き、補助の`clif`はCの既定の呼び出し規約の名前を`c`に書き換えるので、文はどの対象でも同じで、プログラムのほかの部分によらない。致命的な誤りで終わる`panic`、算術の失敗、書けない出力のテストは、それぞれのファイルのmodule `fatal`に置く
 - `tests/checked.rs`は、手書きのLIRを検査モードのネイティブのコードで流す ([ネイティブの実行系](../spec/native.md)の「検査モード」)。補助の`native_checked`はverifierが受け入れるLIRを流し、`native_unverified`はverifierが拒むLIRを、補助の`unverified`で`Trusted::unverified`に包んで流す。featureは使わない。どのテストも、その誤りか数をリテラルで固定する。監査の失敗は`checked::fatal::`のテストで、AddressSanitizerのジョブはこれを飛ばす
-- `tests/calls.rs`は、直接の呼び出し、複数の値を返す呼び出し、スタック渡しの引数の多い関数への末尾呼び出し、`float`の引数と結果を確かめ、呼ばれた側の`exit`が1つと2つのフレームを抜けることと、末尾呼び出しの下の`exit`を呼び手が見ることを`agree`で確かめる
 - `tests/rc.rs`は、インラインの参照の数え方を確かめる。物体を要するテストは、runのworkerで動く入口の代役のthunkから関数を呼ぶ (`tests/common/native.rs`の補助`visit`と`call_visited`)。代役はrunのヒープに物体を作り、`NativeMachine::entry_of`が返すthunkとコードのアドレスを通して関数を呼び、見たものを記録に書く。テストはrunが戻った後に確かめる。代役の中のpanicは`extern "C"`から巻き戻れないためである。張り付いた数に届くには2^31 - 2回の`dup`が要るので、テストはヘッダに数を直接書く
 - `tests/data.rs`は、構築子、欄、タグと文字列の`switch`、箱、読み込み時の値を確かめる。verifierは同じ文字列のcaseを2回書かせないので、`data::a_string_switch_compares_in_order`は、比べる順をCLIFのデータの記号の宣言の順で確かめる
 - `tests/evidence.rs`は、evidence passingの基本操作と節の呼び出しを、EPの出力の形の手書きのLIRで確かめる。補助の`run_lir`、`run_lir_stats`、`run_source_stats`は、検査モードのネイティブのコードで流し、通ったときは速いネイティブのコードでも流して、出力が同じことを確かめる。`run_unverified`は、verifierが拒むLIRを検査モードだけで流す。致命的な誤りの道で終わるテストは`evidence::fatal`にある
@@ -272,8 +271,8 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 `eml_nrt`のエントリのstubは、手で書いたasmで呼ばれる側が保存するレジスタを保存し、戻らない移動 (longjmp) をする。Miriはasmを動かせないので、stubのテストはCIの4つの対象の普通のテストで確かめる。
 
-- `unsafe`を書いてよいファイルは、`crates/eml_nrt/src/trust.rs`の`UNSAFE_FILES` (`enter.rs`、`entries.rs`、`services.rs`、`heap.rs`、`effects.rs`、`rows.rs`、`closures.rs`、`c.rs`、実行の駆動の5つのファイルと`arch/`のstubのファイル) が決める。走査と3つのテストは「`unsafe` の一覧」と同じである。走査器は生の文字列を扱わないので、`naked_asm!`の文字列も生の文字列にしない
-- `src/entries.rs`の単体テスト`entries::tests`のうち、module `release`のテストは`eml_rt_release`をRustから呼ぶ。走査する語が256個で数の語を持つ物体では、2つの道のそれぞれで、最初の語を残して最後の語を残さない並びと、その逆の並びを確かめる。エントリが走査する語の番号でなくペイロードの位置で読むと、これが落ちる。workerの構造体を使うテストは、`run`と同じworkerの構造体を`ctx.runtime`の後ろに置き、`enter`を通らずに呼ぶ。語は`Word`のまま渡すので、provenanceを失わずにMiriで流せる。これらはstubを通らないので、`eml_rt`と同じ2つの`MIRIFLAGS`でMiriでも流す (`cargo miri test -p eml_nrt --lib -- entries::`)。どれも1秒もかからないので、予算は置かない。Miriの下では関数のアドレスがキャストのたびに変わるので、`(entry.address)()`を`f as *const u8`と比べるテストは書かない
+- `unsafe`を書いてよいファイルは、`crates/eml_nrt/src/trust.rs`の`UNSAFE_FILES`が決める。走査と3つのテストは「`unsafe` の一覧」と同じである。走査器は生の文字列を扱わないので、`naked_asm!`の文字列も生の文字列にしない
+- `src/entries.rs`の単体テスト`entries::tests`のうち、module `release`のテストは`eml_rt_release`をRustから呼ぶ。走査する語が256個で数の語を持つ物体では、2つの道のそれぞれで、最初の語を残して最後の語を残さない並びと、その逆の並びを確かめる。エントリが走査する語の番号でなくペイロードの位置で読むと、これが落ちる。workerの構造体を使うテストは、`run`と同じworkerの構造体を`ctx.runtime`の後ろに置き、`enter`を通らずに呼ぶ。語は`Word`のまま渡すので、provenanceを失わずにMiriで流せる。`entries::tests`はstubを通らないので、`eml_rt`と同じ2つの`MIRIFLAGS`でMiriでも流す (`cargo miri test -p eml_nrt --lib -- entries::`)。どれも1秒もかからないので、予算は置かない。Miriの下では関数のアドレスがキャストのたびに変わるので、`(entry.address)()`を`f as *const u8`と比べるテストは書かない
 - `src/rows.rs`のmodule `fatal`の`a_row_error_of_the_internal_class_is_recorded`は、内部の類の誤りを返すテストだけの行を、展開の`@table`の形で接頭辞`eml_t_`の表`TEST_ROWS`のエントリにし、`enter`がそれを`FATAL_RECORDED`で終えて、誤りがworkerの構造体に記録されることを確かめる。`enter`を通るので、Miriでは流さない
 - `src/census.rs`の単体テスト`census::tests`と`src/constants.rs`の単体テスト`constants::tests`もstubを通らないので、`entries::`と一緒にMiriで流す (`cargo miri test -p eml_nrt --lib -- entries:: census:: constants::`)
 - `tests/run.rs` (module `run`) は、実行の駆動を流す ([ネイティブの実行系](../spec/native.md)の「実行の始めと終わり」)。thunkとエントリの代役はRustの`extern "C"`の関数で、`eml_enter`を通るので、Miriでは流さない。深く再帰する`the_worker_stack_is_reserved`は64 MiBのworkerのスタックを明示して流し、32 MiBのフレームを再帰して戻る。ほかのテストは既定の1 GiBを予約するだけである
@@ -302,12 +301,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - コード生成 (`codegen.rs`): 手書きのLIRを`CodeBase`に変換し、逆アセンブラの出力をインラインスナップショットで固定する。番号65535のエフェクトをコード生成がpanicで断ることは、`src/compile/emit.rs`の単体テストで確かめる。そのエフェクトを持つプログラムは65536個のエフェクトを宣言するので、統合テストでは遅いためである
 - 実行 (`run.rs`、`calls.rs`、`data.rs`): 手書きのLIRを`eml_lir::verify`に通してから、検査モードで実行する。期待どおりに通ったときだけ、速いモードでも実行して出力が同じことを確かめる。速いモードは前提を確かめないので、検査モードが通らなかったIRでは走らせない
 - エンジンは`Trusted`だけを読み込む。verifierが拒むLIRの上でVM自身の見張り (内部の誤り、検査モードのヒープの誤りとリーク) を確かめるテストは、テストの補助の関数`unverified`でLIRを`Trusted::unverified`に包む。`unverified`は、まずverifierがプログラムを拒むことを確かめる。`run_unverified`はそれを検査モードだけで走らせる。確かめることが規則の違反を要らないテストは、LIRを直してverifierを通す。verifierがテストのLIRを思いがけず拒んだら、verifierでなくテストのLIRを直す
-- `tags.rs` は、`Bool`、`Ordering`、`IOErrorKind` のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを確かめる
-- `api.rs` は、`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)。`RunConfig` の組み立て (`with_debug_heap`、`with_control`) と、割り込みの扱いも確かめる。本物の driver を VM から通すことも、`Clock::Real` の検査モードの `Machine` で確かめる。本物の接続をまたぐタスクの読み書き、本物の受けで待つ run が割り込みで止まることなどである。経過は下限だけを比べる。3 秒で割り込む見張りのスレッドは、止まったテストが待ち続けないためだけにあり、上限としては比べない。割り込みのテストは、受けるタスクが本物の受けで待ってから本体が書く行を見て割り込む
-- `apply.rs` は、一様な `apply` と、捕まえた値の並べ方と数を確かめる。`apply` は引数の数だけを比べて語を写し、部分適用と `ApplyRest` も一様な語を写す ([VM](../spec/vm.md) の「呼び出しと戻り」)
-- `machine.rs` は、入力をまたいで `CodeBase` と `Ctx` を持つ `Machine` を確かめる。手書きの LIR のプログラムを1つの `Machine` に続けて読み込み、名前で照らした関数の番号、定数、エフェクト、位置のファイルの引き直しを見る ([VM](../spec/vm.md) の「追記」)
-- `roots.rs` は、セッションの根を読み書きする基本操作を確かめる。根に置いた値は実行の終わりに VM が手放すので、検査モードのリークの検査も通る ([LIR](../spec/lir.md) の「基本操作」)
-- `structs.rs` は、複数の値の呼び出しと戻り、構造体を箱で渡す `apply` を確かめる。構造体を持つ手書きの LIR をパスに通して実行し、ダミーを受ける命令はパスの後の形の LIR を手で書いて確かめる ([VM](../spec/vm.md) の「呼び出しと戻り」と「データとクロージャ」)。`miri.rs` の2つのテストは Miri の時間を抑えるためにパスの後の LIR を持つ。そのテキストがパスの前の LIR をパスに通した出力と同じことも、ここで確かめる
+- `api.rs`は、`CodeBase<M>: Sync`と`Task: Send`を型のassertで固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)。本物のdriverをVMから通すことも、`Clock::Real`の検査モードの`Machine`で確かめる。経過は下限だけを比べる。3秒で割り込む見張りのスレッドは、止まったテストが待ち続けないためだけにあり、上限としては比べない。割り込みのテストは、受けるタスクが本物の受けで待ってから本体が書く行を見て割り込む
 - `bench.rs` は、基準のプログラムの VM の `RunStats` を固定する。`scaling.rs` は、仕事の回数と物体とスタックの語の数を上限と比べる (どちらも下の「性能のテスト」)
 - `par.rs`は、`par`のforkとjoinを手書きのLIRで確かめる ([VM](../spec/vm.md)の「`par`のforkとjoin」)。子の関数は、evidence passingの後の形で手で書く。実行は検査モードの逐次、seed 1と2026、普通の方針で流して出力、結果、スケジュールによらない`RunStats`を比べ、速いモードの逐次でも流す。子の誤りの規則のうち、左の子の`Panic`が右の子の誤りを救わないことは、ソースから作ったコードでも確かめる (`par::source`)。既定の深さの上限の`DepthLimit`はUIテストで起こすには大きすぎるので、`max_depth`を1000にして流す
 - `workers.rs`は、workerを作る時と止める手順と、`par`の子と`Async`のタスクをほかのworkerに置くことを確かめる。置く順 (worker 1から回ること) は`workers.rs`の単体テストが、転送した操作の記録がworker 0の`sweep_all`で放されることと、channelの起こしと取り消しがどちらの順で持ち主に届いても誤りにならないことは、`sched.rs`の単体テストが確かめる
@@ -579,26 +573,17 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `crates/eml_cli/tests/cli.rs` は `eml` バイナリを起動し、終了コードが [コンパイラの構成](architecture.md) の「CLI と lib API」の定めに合うことを確認する。`run` のテストのうち、速いモード (`--debug-heap` なし) で走るのは、成功と実行時エラーの2本と、下の4つの worker の run である。
 
-引数の分け方は、`workers_flag_is_accepted_and_rejected` が1本で確かめる。終了コード 0 とスクリプトの引数を確かめるのは、値を次の引数と `=` の後に取る形、`--debug-heap` の前と後に書いた形、ファイルより後ろの値を取るフラグ (値のないものを含む) をスクリプトに渡す形、`run` を省いた起動である。2回書いたフラグ、値のないフラグ、ファイルのない `run`、`run` を省いて先頭に書いたフラグ、`check` のフラグ、`run` にしかないフラグを `repl` に書いた形、知らないフラグを `run` のファイルの前に書いた形は終了コード 2 である。起動するプロセスが多いので、スレッドで並べて起動する。`Sched` の既定の値は `crates/eml_vm/tests/api.rs` が確かめる
+引数の分け方は、`workers_flag_is_accepted_and_rejected`が1本で確かめる。起動するプロセスが多いので、スレッドで並べて起動する。`Sched`の既定の値は`crates/eml_vm/tests/api.rs`が確かめる。
 
 `run` が持たないフラグも、ファイルより後ろならスクリプトに渡す。`flags_after_the_file_go_to_the_script` がこれを確かめる。`Clock` の既定の値は `crates/eml_vm/tests/api.rs` が確かめる。`eml` のバイナリを起こすテストは本物の時計で動くので、タイマーを使うプログラムは実際の時間を眠る。UI テストと REPL のトランスクリプトとプロセス内のテストは `RunConfig::default()` の仮想の時計で動く
 
-`eml run`のSIGINTのテストは`cfg(unix)`で組む。どれも`libc::kill`でSIGINTを送り、子が書く行か子の終わりを待つ。待ちはどれも子自身の出来事で戻り、時間は測らない。止まりの見張り (`HangGuard`) は、45秒たっても終わらない子を殺してテストを失敗にする。止まったテストが自分のメッセージで終わるためである。45秒はnextestがテストを止める60秒より短いので、メッセージはCIのログにも届く。
+`eml run`のSIGINTのテストは`cfg(unix)`で組む。どれも`libc::kill`でSIGINTを送り、子が書く行か子の終わりを待つ。待ちはどれも子自身の出来事で戻り、時間は測らない。止まりの見張り (`HangGuard`) は、45秒たっても終わらない子を殺してテストを失敗にする。止まったテストが自分のメッセージで終わるためである。45秒はnextestがテストを止める60秒より短いので、メッセージはCIのログにも届く。各テストが何を送って何を確かめるかと、その理由は、`cli.rs`のdocコメントにある。監視のスレッドはSIGINTとSIGTERMを塞いで始まるので、SIGINTはVMのスレッドに届く。
 
-- 既定の方針で、`par` を1回動かして監視のスレッドを始めてから標準エラーに1行を書き、回り続ける2つの子の `par` に入るプログラムに、その行が届いたら SIGINT を1回送り、終了コード 130 で終わることを確かめる。監視のスレッドは SIGINT と SIGTERM を塞いで始まるので、SIGINT は VM のスレッドに届く
-
-`eml run` の SIGTERM のテストも `cfg(unix)` で2本あり、`libc::kill` で SIGTERM を送るほかは SIGINT のテストと同じ形である。
+`eml run`のSIGTERMのテストも`cfg(unix)`で組み、`libc::kill`でSIGTERMを送るほかはSIGINTのテストと同じ形である。
 
 どのスレッドが2つのシグナルを塞ぐかは、外からシグナルを送らずに確かめる。`eml_vm`の`spawns::every_thread_but_worker_0_is_masked`は、スレッドを作る所と、呼んだスレッドの塞ぎを変える所を固定する。`crates/eml_io/tests/real.rs`の`pool_threads_block_interrupt_and_terminate`は、プールのスレッドが塞ぎ、呼んだスレッドが塞がないことを確かめる。Appleでは、`eml_io`の`mask.rs`の単体テストが、塞いだスレッドの保留に残ったシグナルを送り直すとほかのスレッドに届くことを確かめる。UIテスト`tests/ui/run/async/exec_child_signals_unblocked.em`は、`Async.start`と`Async.start_on_main`のタスクが始めた子が、自分に送ったSIGTERMで終わることを確かめる。2つ以上のworkerではそれぞれworker 1とメインのworkerが始める。worker 0を作ってから呼んだスレッドが塞ぐまでの隙間を突く決定的なテストは書けない。
 
-- rowに`Async`を持つ`main`で標準エラーに`ready`を書いてから眠るプログラムに、その行が届いたらSIGTERMを1回送り、終了コード143と、標準エラーが`runtime error: terminated in`で始まることを確かめる。待つタスクがないので、1回目のSIGTERMがrunを止める
-- 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、100 ms ごとに SIGTERM を送り続け、終了コード 143 で終わることを確かめる。SIGINT の同じテストと同じく、2回目の SIGTERM でハンドラが終わらせることもある
-
-`Signal.wait`で待つタスクへ届くことを確かめる`eml run`のテストは`cfg(unix)`で4本ある。どれもworkerを1つに固めて (`--workers 1`) 流し、待つタスクが`yield_now`で待ちに入ってから本体が標準エラーに`ready`を書き、その行が届いてからシグナルを送る。複数のworkerでは`yield_now`が待つタスクに順を渡さないためである。`eml run`の普通の方針は自分からは切り替えないので、この順は崩れない。
-
-- SIGTERM を1回送り、待つタスクが起きて終了コード 0 で終わることを確かめる
-- Ctrl-C を待つタスクに SIGINT を送って届けた後にもう1回送り、待つタスクがもういないので run が止まり、終了コード 130 で終わることを確かめる
-- 待つタスクがいる間に本体が書き手を開いたままの標準入力を読むプログラムに、100 ms ごとに SIGINT か SIGTERM を送り続け、終了コード 130 か 143 で終わることを確かめる。worker が読みで止まっていて届けられないので、届けていない間の2回目のシグナルでハンドラが終わらせる
+`Signal.wait`で待つタスクへ届くことを確かめる`eml run`のテストは`cfg(unix)`で組む。どれもworkerを1つに固めて (`--workers 1`) 流し、待つタスクが`yield_now`で待ちに入ってから本体が標準エラーに`ready`を書き、その行が届いてからシグナルを送る。複数のworkerでは`yield_now`が待つタスクに順を渡さないためである。`eml run`の普通の方針は自分からは切り替えないので、この順は崩れない。待つタスクがいる間に本体が標準入力を読むと、workerが読みで止まっていて届けられないので、届けていない間の2回目のシグナルでハンドラが終わらせる。
 
 `--workers 2` の `eml run` で、worker 1 に置いたタスクが眠る間に待つタスクのない SIGTERM と SIGINT を送り、終了コード 143 と 130 で終わることも、`cfg(unix)` の2本で確かめる。待つタスクがいないので、結果は置き方によらない。
 
