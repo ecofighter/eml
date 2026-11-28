@@ -298,7 +298,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - 同じファイルのmodule `fatal`は、致命的な誤りの道を確かめる5つのテストを持つ。深いフレームからの`eml_fatal`が`enter`に符号とsiteを返し、その後も入り直せること (`a_fatal_from_a_deep_frame_returns_from_enter`)。入れ子の`eml_enter`が`prev`でつながり、内側の致命的な誤りの後もつなぎが戻り、外側へ投げ直せること (`enters_nest_and_unlink`)。呼ばれる側が保存するレジスタが致命的な誤りの後も残ること (`callee_saved_registers_survive_a_fatal`)。`shim`が`Err`とpanicで`enter`まで切ること (`a_shim_cuts_to_enter_on_an_error_and_on_a_panic`)。`HeapError`が切る前に`Fault::Heap`として置かれること (`a_heap_error_is_parked_before_the_cut`)
 - `tests/regs.rs`は、ABIごとに4つのnakedの補助を持つ。`enter_with_patterns`は呼ばれる側が保存するレジスタのすべてに決まった値を入れて`eml_enter`を呼び、戻った後に違っていたレジスタのビットを返す。`clobber_thunk`はそのレジスタをすべて壊してから`eml_fatal(ctx, 7, 9)`へ飛ぶ。`enter_noting_fp`はフレームポインタのレジスタを書いてから`eml_enter`へ飛び、`fp_thunk`は自分のフレームポインタを`walk_frames`に渡す。Rustの局所変数が残るかではなく、レジスタの値そのものを比べる。ただしWin64では、xmm6〜xmm15の下位64ビットだけを比べる。上位の半分だけを壊す保存のずれは、このテストでは見つからない
 - 同じファイルの`stack_pointer`と`deepest_frame`は、スタックの深さをスタックポインタで測る。`run.rs`と`stub.rs`の深さのテストが使う。局所変数のアドレスは、AddressSanitizerの`detect_stack_use_after_return`の下で偽のスタックに移りうるので、深さを測るのに使わない
-- 例`examples/fast_only.rs`は、速いモードのエントリすべてと速いモードの実行の駆動を名指し、検査モードのものは何も名指さない。CIはそのreleaseの実行ファイルを`nm`で調べ、検査モードの記号がないことを確かめる (「CI」)。
+- 例`examples/fast_only.rs`は、速いモードのエントリすべてと速いモードの実行の駆動を名指し、検査モードのものは何も名指さない。CIはそのreleaseの実行ファイルを`nm`で調べ、検査モードの記号がないことを確かめる (「CI」)
 - `tests/main.rs`は、Miriのほかではどの対象でも`regs`、`run`、`stub`を組む。stubのない対象 (`SUPPORTED`が偽の対象) ではこのテストは組めないが、CIの4つの対象はどれもstubを持つ
 - 致命的な誤りの道のテストは`fatal`という名のmoduleに置く。AddressSanitizerのジョブは`-- --skip fatal::`でこれを飛ばし、ほかのテストを流す。longjmpが飛び越えたフレームには、AddressSanitizerのスタックの印が残るためである
 

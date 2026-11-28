@@ -17,7 +17,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 - 副作用は `IO` エフェクトとして管理する。
 - 線形型と代数的エフェクトを持つ。
 - 構文は Haskell 流を基本にし、F# からいくつかの書き方を借りる。構文で迷ったときは Haskell の慣習に寄せる。
-- ネイティブコンパイルする。CraneliftのJITのコード生成器が、LIRのうちタスク、`par`、`blocking`のCの関数を使わない部分を`eml run --native`で動かす。ネイティブのコードにも検査モードがある。将来はAOTのコードも出す。VMは、ネイティブのコードがすべてのプログラムとREPLを動かすまで残す ([ネイティブの実行系](spec/native.md)、[ネイティブ化の設計](future/native.md))。
+- ネイティブコンパイルする。CraneliftのJITのコード生成器が、LIRのうちタスク、`par`、`blocking`のCの関数を使わない部分を`eml run --native`で動かす。ネイティブのコードにも検査モードがある。将来はAOTのコードも出す。VMは、ネイティブのコードがすべてのプログラムとREPLを動かすまで残す ([ネイティブの実行系](spec/native.md)、[ネイティブ化の設計](future/native.md)、[ロードマップ](future/roadmap.md))。
 - rowan (Red-Green Tree) の上に、リッチな診断と LSP を整える。
 
 ## 確定した設計判断

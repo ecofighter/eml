@@ -107,11 +107,12 @@ jobs:
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
         run: cargo build -p eml_nrt --features eml_rows/tls
       # 速いモードのエントリと速いモードの実行の駆動だけを名指すプログラムのreleaseの実行ファイルに、検査モードの記号がない
-      # (docs/implementation/testing.mdの「`eml_nrt`の検証」)
+      # (docs/implementation/testing.mdの「`eml_nrt`の検証」)。`Fast`の記号も数えて、`nm`が動いてファイルを読んだことを確かめる
       - name: fast-only code has no checked symbol
         if: ${{ runner.os != 'Windows' && !cancelled() && steps.test.outcome != 'skipped' }}
         run: |
           cargo build --release -p eml_nrt --example fast_only
+          test "$(nm -C target/release/examples/fast_only | grep -c 'Fast')" -gt 0
           test "$(nm -C target/release/examples/fast_only | grep -c 'Checked')" -eq 0
       # crateの依存の辺とfeature、crateの木の閉包を、nix/crate-graph.shの表と検査に照らす
       # (docs/implementation/architecture.md の「crate の依存関係」)
