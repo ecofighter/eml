@@ -1,4 +1,4 @@
-//! エントリのマクロと記述子の行 (docs/spec/native.md の「記述子の表」、「包みの本体」)。
+//! エントリのマクロと記述子の行 (docs/spec/native.mdの「記述子の表」、「包みの本体」)。
 #![allow(unsafe_code)]
 
 /// エントリの引数と結果の種類。
@@ -20,7 +20,7 @@ pub struct Entry {
     pub class: Class,
 }
 
-/// エントリの仕事の種類。番号と名前は、ツールが書くファイルが持つので変えない (docs/spec/native.md の「記述子の表」)。
+/// エントリの仕事の種類。番号と名前は、ツールが書くファイルが持つので変えない (docs/spec/native.mdの「記述子の表」)。
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Class {
@@ -109,7 +109,7 @@ macro_rules! __kind {
 /// バイト)。Rustの型は`*const Word`なので、それを通して読む語はprovenanceを保ち、ほかのものを読むエントリはキャストする。
 /// 引数の`dtor`は
 /// ハンドルの型のdtorかなしで、Rustの型は`Option<eml_rows::ffi::Dtor>`である。関数ポインタの`Option`はポインタと同じ
-/// ABIを持ち、nullが`None`なので、語はキャストなしにABIだけで関数ポインタになる (docs/spec/native.md の「エントリのABI」)。
+/// ABIを持ち、nullが`None`なので、語はキャストなしにABIだけで関数ポインタになる (docs/spec/native.mdの「エントリのABI」)。
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __ty {
@@ -189,7 +189,7 @@ macro_rules! __result {
     };
 }
 
-/// 1つのエントリの関数。`shim`の本体の規則はここにだけ書く (docs/spec/native.md の「包みの本体」)。
+/// 1つのエントリの関数。`shim`の本体の規則はここにだけ書く (docs/spec/native.mdの「包みの本体」)。
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __entry {
@@ -218,7 +218,7 @@ macro_rules! __entry {
                 Ok(Err(error)) => {
                     // SAFETY: 上と同じ。借用は`park`の間だけである
                     let fatal = $crate::Raise::park(error, unsafe { &mut *ctx });
-                    // SAFETY: この枠は落とすものを持たない (docs/spec/native.md の「`eml_fatal`」)
+                    // SAFETY: この枠は落とすものを持たない (docs/spec/native.mdの「`eml_fatal`」)
                     unsafe { $crate::eml_fatal(ctx, fatal.code as i64, fatal.site as i64) }
                 }
                 Err(payload) => {
@@ -232,7 +232,7 @@ macro_rules! __entry {
 }
 
 /// エントリの関数と記述子の表を一緒に宣言する。宣言が1つなので、関数と、生成したコードが作る呼び出しの型が食い違わない
-/// (docs/spec/native.md の「記述子の表」)。結果の`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、
+/// (docs/spec/native.mdの「記述子の表」)。結果の`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、
 /// 安定版のRustでは`R`に`!`を書けないためである。`const NAME = "接頭辞";`の形では、記号は接頭辞に関数の識別子を
 /// 続けたものになり、`const NAME;`の形では識別子そのものになる。
 /// 関数はモード`M`について総称で、本体は型引数`M`を名指してよい。表は関数`NAME::<M>()`である。どのエントリも`shim[Alloc]`の
@@ -786,7 +786,7 @@ mod tests {
 
     /// `run`がエントリの間に置くのと同じ、関数のないworkerの構造体を`ctx.runtime`の後ろに置いて`f`を呼ぶ。workerは`f`の
     /// 間ずっと生きていて、置いている間は`f`に渡すポインタからだけ触れるので、workerの構造体を使うエントリの前提を満たす
-    /// (docs/spec/native.md の「実行の始めと終わり」)。`enter`を通らないのでMiriでも流せる。
+    /// (docs/spec/native.mdの「実行の始めと終わり」)。`enter`を通らないのでMiriでも流せる。
     fn with_worker<R>(ctx: *mut Ctx<Fast>, f: impl FnOnce(*mut crate::worker::Worker) -> R) -> R {
         with_paps(ctx, &[], f)
     }
@@ -826,7 +826,7 @@ mod tests {
     /// エントリのコードの代わり。中身は読まず、アドレスだけを使う。
     static CODE: [u8; 2] = [0; 2];
 
-    /// 引数を`arity`個待つクロージャ。コードの語は`CODE`である (docs/spec/native.md の「関数の値」)。
+    /// 引数を`arity`個待つクロージャ。コードの語は`CODE`である (docs/spec/native.mdの「関数の値」)。
     ///
     /// # Safety
     /// `c`は生きている`Ctx`である。
@@ -955,7 +955,7 @@ mod tests {
         }
     }
 
-    /// 致命的な誤りの道を通るので、Miriでは流さない (docs/implementation/testing.md の「`eml_nrt`の検証」)。
+    /// 致命的な誤りの道を通るので、Miriでは流さない (docs/implementation/testing.mdの「`eml_nrt`の検証」)。
     #[cfg(not(miri))]
     mod fatal {
         use eml_rt::{
@@ -1744,7 +1744,7 @@ mod tests {
         assert_eq!(names.len(), all);
     }
 
-    /// `eml_rt_release`の状態ごとのテスト (docs/spec/native.md の「ヒープのエントリ」)。
+    /// `eml_rt_release`の状態ごとのテスト (docs/spec/native.mdの「ヒープのエントリ」)。
     mod release {
         use std::sync::Mutex;
 

@@ -165,7 +165,7 @@ workerの構造体 (`eml_nrt::worker::Worker`) は、runが`Ctx`の外に持つ�
 - workerの構造体を使うエントリ (`eml_nrt_*`のサービスと、`worker::of`、`worker::record`、`worker::park_panic`のどれかを呼ぶ行) は、この前提が成り立つ間だけ呼べる。runの中では、それはちょうど`run`が`enter`で入ったコードである。致命的な誤りの道を通りうるエントリは、さらに`ctx.jmp`が置いてあること、つまり`eml_enter`の中で呼ぶことを要する (「`eml_fatal`」)。テストは、自分の`Worker`を`ctx.runtime`の後ろに置いて、そうしたエントリを呼んでよい。呼び出しが致命的な誤りの道を通りえなければ直接呼び、通りうるなら`enter`を通して呼ぶ。`runtime`にほかのものを置くテストは、これらのエントリに届いてはならない
 - `worker::park_panic(ctx, message)`は、メッセージの語をworkerの構造体に置き、`Fault::Engine`を`set_fault`で`ctx`に置く。だから中身が`Fault`でもエンジンの持つものでも、`ctx.native.fault`が0でないのは、ちょうど失敗を置いている間である。呼ぶ側は次を約束する。`message`は、この`ctx`のヒープか、それに付けた塊の生きている文字列である。呼ぶ側の持つ参照1つがworkerの構造体へ移り、呼ぶ側はその後この語を使わず手放さない。失敗を置いていない (破ると前の語が漏れるが、未定義の動作にはならない)。語を取り出したサービスがその参照を持ち、手放す。runの終わりに置いたままの語は手放さない。ヒープはrunとともに終わるためである
 
-censusは、速いモードのrunの、参照の数の安全網である。検査モードのrunには、代わりに漏れの検査がある。`Census::Check`のrunが成功したら、ほかのスレッドから受けた解放を取り込み (`reclaim`)、workerのヒープの生きている物体を列挙し (`Heap::live_objects`)、不死でない物体 (`Heap::is_immortal`) を種類の名前ごとに数える。ダミーや定数のような不死の物体は数えない。数が空でなければ`RuntimeError::Leak`で、`memory leak: objects were not freed: 1 Data`と表示する。テストのネイティブのrunは、どれもcensusで終わる。
+censusは、速いモードのrunの、参照の数の安全網である。検査モードのrunには、代わりに漏れの検査がある。`Census::Check`のrunが成功したら、ほかのスレッドから受けた解放を取り込み (`reclaim`)、workerのヒープの生きている物体を列挙し (`Heap::live_objects`)、不死でない物体 (`Heap::is_immortal`) を種類の名前ごとに数える。ダミーや定数のような不死の物体は数えない。数が空でなければ`RuntimeError::Leak`で、`memory leak: objects were not freed: 1 Data`と表示する。テストのネイティブのrunは、速いモードならcensusで、検査モードなら検査モードの終わりの検査で終わる。
 
 ## 関数の形
 

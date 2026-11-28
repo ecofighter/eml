@@ -1,4 +1,4 @@
-//! 実行の駆動がモードごとに変えること。runの終わりの検査と`RunStats`の数である (docs/spec/native.md の「実行の始めと終わり」)。
+//! 実行の駆動がモードごとに変えること。runの終わりの検査と`RunStats`の数である (docs/spec/native.mdの「実行の始めと終わり」)。
 //! `Fast`と`Checked`を名指すのは、このcrateでこのmoduleだけである。
 pub use eml_rt::{Checked, Fast};
 use eml_rt::{Ctx, Mode};

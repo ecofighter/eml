@@ -192,7 +192,7 @@ bench/scripts.sh
 ```
 
 - 表は3つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ)、`https-get` (600 MiB の本文を https で取る) の6行である。数値計算の表は、VMのnbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行と、同じプログラムの`(native)`の5行である。3つ目の表は、大きい入力で Rust の実装と比べる (下の「C/Rust との比べ方」)
-- 数値計算の表には、`(native)`とラベルを付けた5行 (nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるい) が続く。同じプログラムを`EML_WORKERS=1`の`--native`で動かし、同じPythonの実装と比べる。大きさは同名のVMの行と同じにする。約300 msに合わせる決め方と下の大きさの決め直しの規則は、VMの行にだけ当てはまる。測る前の一致の確かめは、`compare.sh`が`EML_RUN_FLAGS=--native`を`run`の直後に足して行う
+- 数値計算の表には、`(native)`とラベルを付けた5行 (nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるい) が続く。同じプログラムを`EML_WORKERS=1`の`--native`で動かし、同じPythonの実装と比べる。大きさは同名のVMの行と同じにする。約250 msに合わせる決め方と下の大きさの決め直しの規則は、VMの行にだけ当てはまる。測る前の一致の確かめは、`compare.sh`が`EML_RUN_FLAGS=--native`を`run`の直後に足して行う
 - スクリプトの入力は、`bench/scripts/gen.py` が種類 (アクセスログか CSV) と大きさごとに、種を固定して1つずつ作る。`target/bench-scripts/` に大きさを名前に入れて置き、すでにあれば作り直さない
 - 比べる Python の実装は、スクリプトが `bench/scripts/<名前>.py`、数値計算が `bench/numeric/<名前>.py` で、Python の標準ライブラリで普通に書いたものである。速さのために手で凝ったものにはしない。数値計算の実装は、浮動小数の演算を eml の実装と同じ順で行い、ビットまで同じ結果を出す
 - `https-get`の相手は`crates/eml_tls/examples/https_server.rs`で、`127.0.0.1`で待ち受け、`bench/scripts.sh`がrunのたびに作る証明書とTLS 1.3の`TLS13_AES_256_GCM_SHA384`だけで応える。両方のクライアントが同じ暗号を使うためである。本文は番号を振った16バイトの行の列で、`Content-Length`を付け、close_notifyの後に書く側を閉じる。chunkedにしないのは、chunkの解析でなく`Net`と`Tls`の読みの道を測るためである。名前の解決を測らないよう、URLは`https://127.0.0.1:PORT/`にする。`https_server CERT_PEM_PATH KEY_PEM_PATH MIB`で呼ぶとMIB MiBの本文を返すserverになり、ポートを標準出力の1行目に出し、`bench/scripts.sh`がsignalで止めるまで動く。`eml_tls`のfixturesは固定した時刻でしか有効でなく、現実の時刻では期限切れなので、使わない。`bench/scripts.sh`は、この行のrunのたびに、`/usr/bin/openssl` (LibreSSL)で2日有効のCAとleafを一時ディレクトリに作る。leafはSANに`IP:127.0.0.1`を持ち、CAとleafにsubject key identifierを、leafにauthority key identifierを付ける (なければPython 3.14の既定のcontextが鎖を拒む)。CAはemlとPythonのCAに、leafと鍵はserverに渡す。`bench/scripts.sh`はserverを組んで裏で起こし、比べと6回の計測で使い、最後に止めて一時ディレクトリを消す。serverのCPU時間を標準エラーに出す。両方の実装は状態、本文の長さ、最後の行を出す。emlの実装は`bench/scripts/https_get.em`にある。UIテストはテストのdriverで動き、本物のソケットに届かないためである。`bench/scripts/`には、stdのモジュールと大文字小文字を除いて同じ名前の`.em`を置かない。置くと`import Http`などがそのファイルを見つけてE1026になる (上の`bench/list.em`と同じ)。目標はほかの行と同じくPythonの1.5倍以下で、CIに上限は置かない
@@ -204,11 +204,11 @@ bench/scripts.sh
 
 行ごとの大きさ (入力の KiB か、プログラムに渡す大きさ) は `bench/scripts.sh` が持ち、次の規則で決める。
 
-- 記録する機種で、eml の実時間 (3回の中央値) がおよそ 300 ms になる大きさにする。Python の実時間はその大きさでの値をそのまま記録する
-- 段を閉じる計測で、eml の実時間が 150 ms より短いか 600 ms より長い行は、`bench/scripts.sh` の大きさを変えて、閉じるコミットの前の別のコミットにし、その後で3つの表を測り直す。表に載せるのは新しい大きさの値だけで、変えた行と前後の値は閉じるコミットのメッセージに書く
+- 記録する機種で、eml の実時間 (3回の中央値) が、空のプログラムの eml の実時間 (「C/Rust との比」の表の「eml の空」の列) よりおよそ 250 ms 長くなる大きさにする。Python の実時間はその大きさでの値をそのまま記録する
+- 段を閉じる計測で、eml の実時間と空のプログラムの差が 100 ms より短いか 400 ms より長い行は、`bench/scripts.sh` の大きさを変えて、閉じるコミットの前の別のコミットにし、その後で3つの表を測り直す。表に載せるのは新しい大きさの値だけで、変えた行と前後の値は閉じるコミットのメッセージに書く
 - 表の「大きさ」の欄に、どの大きさで測ったかを残す
-- 実時間は 0.01 秒の単位で出るので、300 ms では約 3% の刻みになる。小さな差は `instructions retired` で確かめる。Python の実時間が数十 ms の行 (`wc`) では、比が刻みの分だけ大きく揺れる
-- fannkuch-redux の大きさは順列の長さ n で、n が1つ増えると実時間が約9倍になる。300 ms に近い n がないので、300 ms との比が最も小さい n にし、実時間が 150 ms から 600 ms の範囲を外れても決め直さない
+- 実時間は 0.01 秒の単位で出るので、250 ms では約 4% の刻みになる。小さな差は `instructions retired` で確かめる。Python の実時間が数十 ms の行 (`wc`) では、比が刻みの分だけ大きく揺れる
+- fannkuch-redux の大きさは順列の長さ n で、n が1つ増えると実時間が約9倍になる。空のプログラムとの差が 250 ms に近い n がないので、250 ms との比が最も小さい n にし、差が 100 ms から 400 ms の範囲を外れても決め直さない
 
 `bench/scripts/compare.sh` は3つの形で使う。環境変数 `EML_RUN_FLAGS` (既定は空) は空白で分け、`eml` の `run` の直後に足す。`--paths <eml の実装> <Python の実装> [引数...]` は、パスで渡した2つの実装を比べる。`<名前> [引数...]` は、`tests/ui/run/scripts/<名前>/main.em` と `bench/scripts/<名前>.py` を比べる。`--fixture <名前>` は、UI テストの付属のファイルで出力を確かめる ([テスト戦略](testing.md) の「分類」)。どちらかのファイルがなければ、比べずに止まる。先頭に `--rust` を置くと、相手を Python の実装から `bench/scripts/rust/<名前>.rs` に替える。`rustc --edition 2024 -C opt-level=3` で `target/bench-scripts/rust/<名前>` に build してから動かす。
 
@@ -225,7 +225,7 @@ bench/scripts.sh
   - 確保と借用のやり方は自由である。eml の実装が手順を変えたら、Rust の実装も書き直す
 - 等しさ: 標準出力、終了コード、書いたファイルが eml と同じことを `bench/scripts/compare.sh --rust` で確かめる。`bench/scripts.sh` は各行を測る前にこれを流し、違えば止まる
 - 入力: `bench/scripts/gen.py` が作る log (約 102 MB) と CSV (約 51 MB) を `target/bench-scripts/access-100000k.log` と `target/bench-scripts/data-50000k.csv` に置く。Rust の実装は bench の大きさの入力では 5 から 40 ms で、揺れが大きいためである
-- 測り方: 実時間の5回の中央値を、ほかの表と同じ機種で測る。(最大 - 最小) / 中央値 が 10% を超えたら、1回だけ測り直してその値を使う。比 = (t_eml - t_eml_empty) / (t_rust - t_rust_empty) で、`_empty` はそれぞれの空のプログラムの実時間である。起動の時間は比から引くので、ネイティブの eml が AOT か JIT かに比が左右されない。今の空のプログラムは `time -l` の分解能 (10 ms) より短く、表では 0.00 になる
+- 測り方: 実時間の5回の中央値を、ほかの表と同じ機種で測る。(最大 - 最小) / 中央値 が 10% を超えたら、1回だけ測り直してその値を使う。比 = (t_eml - t_eml_empty) / (t_rust - t_rust_empty) で、`_empty` はそれぞれの空のプログラムの実時間である。起動の時間は比から引くので、ネイティブの eml が AOT か JIT かに比が左右されない。今の空のプログラムは約 0.27 秒で、ほとんどがプロセスの起動の分である。表の「eml の空」と「Rust の空」の列は 0.27 と 0.26 になる
 - 2倍を超えた行は、主な原因を所見に書く。原因の候補は、1バイトずつの呼び出し、RC、確保、写し、境界と桁あふれの確かめ、ベクトル化の有無、読み込みである
 
 比べる相手は、同じ1回の走査を書いた Rust のループである。2回の走査にした慣用の Rust は、書き方で結果が変わり、eml の側にベクトル化が要るので基準にしない。SIMD の crate や GNU と BSD の道具は、SIMD があるかを測ることになるので基準にしない。C の実装は、道具が1つ増え、std の順序つきの写像がないので作らない。
@@ -442,7 +442,7 @@ C/Rust との比
 
 ### `bench/native.sh`
 
-`bench/native.sh`は`bench/`のすべてのプログラムを、VM (`eml run`) とネイティブ (`eml run --native`) の両方で、release ビルドの`EML_WORKERS=1`で、プロセス全体と`--load-only` (プログラムを実行系にロードして、`main`を実行せずに終わる) を3回ずつ走らせ、`instructions retired`と実時間の中央値を出す。測り方は`bench/run.sh`と同じである。測る前に2つの標準出力を比べ、違えば数値の代わりに`differs`と出す。`--native`がE0004で断るプログラムは`rejected`と出す。表は、プロセス全体の命令の数 (「VM 命令」「native 命令」) と、2つのロードの命令の数 (「VM ロード」「native ロード」) を持つ。ネイティブのロードは、フロントエンド、コンパイラ、機械語の生成とその書き込みのすべてを含み、`--load-only`もエントリのthunkまでコンパイルする。比は「native / VM (実行)」の1つで、(native 命令 - native ロード) / (VM 命令 - VM ロード)、つまりそのプログラム自身のロードを引いた実行の分どうしの比である。ネイティブのコードはリリースのための実行系で、その物差しはロードを除いた実行である。JITのコンパイルを実行に混ぜた比は、この比べに答えない。全体の命令の数とロードは表に残るので、全体の比は行から計算できる。実時間の列はプロセス全体の値である。数は記録で、門ではない。実時間を Python と比べる数値計算の行は、`bench/scripts.sh`の数値計算の表の`(native)`の行にある (上の「スクリプトの計測」)。
+`bench/native.sh`は`bench/`のすべてのプログラムを、VM (`eml run`) とネイティブ (`eml run --native`) の両方で、release ビルドの`EML_WORKERS=1`で、プロセス全体と`--load-only` (プログラムを実行系にロードして、`main`を実行せずに終わる) を3回ずつ走らせ、`instructions retired`と実時間の中央値を出す。測り方は`bench/run.sh`と同じである。測る前に2つの標準出力を比べ、違えば数値の代わりに`differs`と出す。`--native`がE0004で断るプログラムは`rejected`と出す。表は、プロセス全体の命令の数 (「VM 命令」「native 命令」) と、2つのロードの命令の数 (「VM ロード」「native ロード」) を持つ。ネイティブのロードは、フロントエンド、コンパイラ、機械語の生成とその書き込みのすべてを含み、`--load-only`もエントリのthunkまでコンパイルする。比は「native / VM (実行)」の1つで、(native 命令 - native ロード) / (VM 命令 - VM ロード)、つまりそのプログラム自身のロードを引いた実行の分どうしの比である。ネイティブのコードはリリースのための実行系で、その物差しはロードを除いた実行である。ただし、ネイティブの行の実行の分は、ロードとその実行ごとの揺れに比べて小さい。そのため、ネイティブのコードの変更はプロセス全体の命令で判断し、実行の分は記録にとどめる。JITのコンパイルを実行に混ぜた比は、この比べに答えない。全体の命令の数とロードは表に残るので、全体の比は行から計算できる。実時間の列はプロセス全体の値である。数は記録で、門ではない。実時間を Python と比べる数値計算の行は、`bench/scripts.sh`の数値計算の表の`(native)`の行にある (上の「スクリプトの計測」)。
 
 速いモードのネイティブのコードは仕事の数を数えず、この表のために生成するコードに数える命令を足すこともしない。検査モードのネイティブのコードは検査モードのVMと同じ`RunStats`を数えるが、この表は速いモードを測る。そこで、最後の4列には同じプログラムのVMの`RunStats` (`--stats`。`rc_increments`、`rc_decrements`、`allocations`、`reuses`) を置く。列の名前に`(VM)`と付けたとおり、これはプログラムがヒープに対してする仕事の多さを表すもので、ネイティブのコードが実際にした仕事ではない。`RunStats`には解放の数がない。`--stats`は検査モードなので、命令の数を測る速いモードと数が少し違うことがある。
 
