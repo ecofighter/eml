@@ -1,7 +1,7 @@
 # Stage sched-proofs: the wake-up protocol and the verdict for every number of workers
 
 - Created: 2026-11-17 (design-level plan).
-- Base: the `Close vm-retire` commit (the stage needs only `sched-core`; it runs last in the listed order). Facts in 01 describe main @ 4a2954c1; the refresh re-checks them.
+- Base: the `Close native-prof` commit (the stage needs only `sched-core`; it runs last in the listed order, 00 UJ-19 (3)). Facts in 01 describe main @ 4a2954c1; the refresh re-checks them.
 - Status: design-level. `Start sched-proofs` replaces this file with an executable plan in the model of `2026-11-17-engine-trust.md` (deleted at its Close; read it with `git show 97cd579c:docs/plans/2026-11-17-engine-trust.md`).
 - Appendices: `docs/plans/2026-11-17-runtime/`; 00 wins; the design is 01 §12.3 and §14.1 P-4b, with 01 §10 D-SC-7 (the three assertions), §14.3, §22 U-4. This is the group's last stage: its Close deletes `docs/plans/2026-11-17-runtime/` (00 §D D-2; roadmap 「進め方」 step 8).
 
@@ -23,6 +23,7 @@
 
 - `sched-core`: `eml_steps` with `idle::step`, `verdict::step`, `Sleepers`, `Open` and their specs; the explorer.
 - `vm-retire`: one engine; no change to the kernels is expected.
+- `ir-origins`, `native-prof`: no change to the kernels is expected; `native-prof` adds the sampler, the monitor's tick and the `Io` phase guard, none of them in `eml_steps`.
 
 ## 4. Decisions
 
@@ -58,4 +59,4 @@ runtime.md 「信頼の一覧」 (what P-4b proves and what stays trusted); docs
 
 ## 10. Refresh at the stage's first commit
 
-Re-read `sched-core`'s kernels and specs as they are after `vm-retire`; record the Verus count.
+Re-read `sched-core`'s kernels and specs as they are after `native-prof` (the base); record the Verus count.

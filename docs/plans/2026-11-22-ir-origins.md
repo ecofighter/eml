@@ -1,7 +1,7 @@
 # Stage ir-origins: every statement carries where it came from
 
 - Created: 2026-11-22 (design-level plan).
-- Base: the `Close native-checked` commit. Facts and line numbers in the design describe main @ 0f04d6a2; the refresh re-checks them.
+- Base: the `Close vm-retire` commit (00 UJ-19 (2)). Facts and line numbers in the design describe main @ 0f04d6a2; the refresh re-checks them.
 - Status: design-level. `Start ir-origins` replaces this file with an executable plan in the model of the executable plans of earlier stages (for example `git show 6177715b:docs/plans/2026-11-21-remote-reclaim.md`).
 - Appendix: `docs/plans/2026-11-22-profiler/` (`design.md`, `prototype.patch`), shared with `native-prof` and deleted at the Close of `native-prof`. The design is `design.md` sections 3 to 5, with sections 8.1, 8.2, 9, 10 and Appendix A. Decisions: `docs/plans/2026-11-17-runtime/00-decisions.md` §D D-20, which replaces D-MT-1 of 01 §15.1.
 
@@ -18,12 +18,16 @@
 
 ## 2. Scope
 
-- In: the types `At`, `Scope`, `Source`, `Stmt { at, kind }`, `term_at`, `scopes`, `sources` in `eml_lir` and `eml_core_ir` (design 5.1); the second printer mode and `parse`; the verifier rules; the rule of every pass (design 5.3: translate, every sub-pass of optimize, evidence passing, `to_lir`, the six LIR passes with the copy forms of `$uniform` and `$owned`); `lower/origin.rs`, roles, the encoded tables in `Image`, the machine option `origins`, `NativeMachine::points` (design 5.4); the mechanical adaptation of `eml_vm`, `eml_native`, `eml_cli`, `eml_test_support` and the tests.
-- Out: any sampler or CLI flag (`native-prof`); backtraces in runtime errors and merging `Extern.at` into the statement's origin (`native-backtrace`, after `vm-retire`); anything for the VM beyond the adaptation; DWARF.
+- In: the types `At`, `Scope`, `Source`, `Stmt { at, kind }`, `term_at`, `scopes`, `sources` in `eml_lir` and `eml_core_ir` (design 5.1); the second printer mode and `parse`; the verifier rules; the rule of every pass (design 5.3: translate, every sub-pass of optimize, evidence passing, `to_lir`, the six LIR passes with the copy forms of `$uniform` and `$owned`); `lower/origin.rs`, roles, the encoded tables in `Image`, the machine option `origins`, `NativeMachine::points` (design 5.4); the mechanical adaptation of `eml_native`, `eml_cli`, `eml_test_support` and the tests.
+- In, because the stage runs after `jit-tasks`, `jit-repl` and `vm-retire`: roles for the lowerings `jit-tasks` adds (the `par` sequence, `ACTION_RAISE`, the atomic rows, the task rows, the blocking C calls); rules, in the per-pass table of design 5.3, for the statement-creating sites JT-5 adds (`root$main`, the split `entry$main`, `Program.root`) and JR-5 adds (the split `entry$input$N`); for the REPL, the re-keyed comparison of same-name code (D-IO-4) and the session's machine keeping each load's tables (`NativeMachine::extend`).
+- Out: any sampler or CLI flag (`native-prof`); backtraces in runtime errors and merging `Extern.at` into the statement's origin (`native-backtrace`, after this stage); DWARF.
 
 ## 3. Received from earlier stages
 
 - `native-checked`: the entry descriptor's `class` as a `#[repr(u8)]` enum with fixed discriminants and a `name()`; `lower/audit.rs` emitting through the `FnLower`'s builder, so the audit calls fall under the statement's point; the twin CLIF pins, which stay byte-identical through this stage.
+- `jit-tasks`: the task layer's lowerings (the `par` sequence, `ACTION_RAISE`, `Lowering::Atomic`, the task rows, the blocking C calls) and the root entry of JT-5 (`Program.root`, `root$main`, the split `entry$main`).
+- `jit-repl`: the REPL's machine on the session thread, `NativeMachine::extend`, the debug-build comparison of appended code, and the root entry of inputs (JR-5: the split `entry$input$N`).
+- `vm-retire`: one engine; the rows in `eml_nrt`; `Options.stack`; `bench/run.sh` on native code; `bench/native.sh` native-only, with the native whole-process and `--load-only` rows this stage's load condition reads (00 §D D-21 (g)).
 - The invariant "a function's name fixes its code and ABI" and the name-keyed decisions of optimize, on which "a function's origins are fixed by its name up to the numbering of files and sources" rests.
 
 ## 4. Decisions (design sections 4 and 5)
@@ -36,7 +40,6 @@
 - D-IO-6: the default text form prints no origin; a second printer mode prints a scopes header and a trailing origin, and `parse` reads both.
 - D-IO-7: roles are decided in the lowering (design 4.2). `lower/origin.rs` owns `set_srcloc`; one point per statement part and one per call instruction with its callee.
 - D-IO-8: tables are built only when the machine is created with `origins: true`. Rows and points are varint-encoded; every index of a load's tables refers to that load.
-- D-IO-9: the VM adapts to the new statement type and ignores origins.
 
 ## 5. Units (in order)
 
@@ -47,7 +50,7 @@
 5. IO-5: optimize: `handlers` (path copies, clause expansion, continuation and join-block functions, clause copies, the `return` clause, state threading).
 6. IO-6: evidence passing (`split.rs`, `handlers.rs`, `helpers.rs`).
 7. IO-7: the LIR passes (boxing and `variants.rs`, flatten, contract, borrow with `$owned`, Perceus, reuse).
-8. IO-8: `lower/origin.rs`, roles, the encoded tables, `origins`, `NativeMachine::points`, O-5, the placement test, the size and load measurements.
+8. IO-8: `lower/origin.rs`, roles, the encoded tables, `origins`, `NativeMachine::points`, O-5, the placement test, the size and load measurements. It is the largest unit, and with the roles of the task layer and the REPL it may split (IO-1 decides).
 9. IO-9 `Close ir-origins`.
 
 Units 4 to 7 each start by listing the statement-creating sites of their files against the rule table; a site without a rule stops the unit for a plan amendment.
@@ -67,7 +70,7 @@ docs/spec/lir.md 「出どころ」 (new: the types, O-1..O-6, the general rules
 
 - CLAUDE.md's gates (tests, clippy with the feature combinations, fmt, the crate graph check).
 - The completion conditions of section 1.
-- `bench/run.sh`, `bench/rt.sh` and `bench/scripts.sh` re-measured at Close (`eml_lir` and `eml_core_ir` change); the VM's rows within noise, because no code changes.
+- `bench/run.sh`, `bench/rt.sh` and `bench/scripts.sh` re-measured at Close (`eml_lir` and `eml_core_ir` change).
 - Roadmap: the `ir-origins` entry is deleted.
 
 ## 9. Risks with defaults
@@ -82,4 +85,4 @@ docs/spec/lir.md 「出どころ」 (new: the types, O-1..O-6, the general rules
 
 ## 10. Refresh at the stage's first commit
 
-Re-read `optimize/mod.rs`'s pass order and the file headers named in design F-2, F-3 and F-20 against the base; re-count the `Stmt::` and `Term::` sites; confirm that `native-checked` delivered the two items of section 3; record the baseline (IR and CLIF snapshot hashes, `bench/native.sh` load rows).
+Re-read `optimize/mod.rs`'s pass order and the file headers named in design F-2, F-3 and F-20 against the base; re-count the `Stmt::` and `Term::` sites (the design counted 370 in the IR crates, 36 in `eml_native` and 14 in `eml_vm`; the 14 are gone with the crate, and the sites `jit-tasks` and `jit-repl` added are counted); confirm that the earlier stages delivered what section 3 lists; record the baseline (IR and CLIF snapshot hashes, `bench/native.sh` load rows).

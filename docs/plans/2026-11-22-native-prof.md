@@ -1,7 +1,7 @@
 # Stage native-prof: a time profiler for native runs on Linux and macOS
 
 - Created: 2026-11-22 (design-level plan).
-- Base: the `Close jit-tasks` commit. Facts and line numbers in the design describe main @ 0f04d6a2; the refresh re-checks them.
+- Base: the `Close ir-origins` commit (00 UJ-19 (2)). Facts and line numbers in the design describe main @ 0f04d6a2; the refresh re-checks them.
 - Status: design-level. `Start native-prof` replaces this file with an executable plan.
 - Appendix: `docs/plans/2026-11-22-profiler/` (`design.md`, `prototype.patch`), shared with `ir-origins`; this stage is the last planned with it, and its Close deletes the directory. The design is `design.md` sections 2, 4 and 6, with sections 8.2, 8.3, 9, 10 and Appendix B (the soundness review of the sampler). Decisions: `docs/plans/2026-11-17-runtime/00-decisions.md` §D D-20.
 
@@ -13,20 +13,22 @@
   - On macOS arm64 and x86_64 Linux a profile of each `bench/` program and of a deep-recursion probe has at least 98 % rooted and trusted samples.
   - Overhead at 1 kHz is at most 2 % wall on `bench/fib.em` and `bench/rbtree.em` sized to 2 s, and at most 7 % on the deep probe (`#[ignore]` measurements, recorded in benchmarks.md).
   - The fast CLIF pins are unchanged; no runtime entry gains an instruction.
-  - `grep -rn 'thread_local' crates/eml_sched/src/prof*` is empty; `unsafe` appears under `crates/eml_sched/src/prof/` only in `sys.rs`, pinned by a test.
-  - `--prof` is a usage error with the VM, on Windows, with `--debug-heap` or `--stats`, and is refused when the process already has a SIGPROF handler.
+  - `grep -rn 'thread_local' crates/eml_sched/src/prof*` is empty; `unsafe` appears under `crates/eml_sched/src/prof/` only in `sys.rs`, pinned by a test; `grep -rn 'extern "C" fn\|asm!' crates/eml_sched/src` hits only `crates/eml_sched/src/prof/sys.rs` (its signal handler and its one `asm!` load).
+  - `--prof` is a usage error on Windows, with `--debug-heap` or `--stats`, and is refused when the process already has a SIGPROF handler.
   - A file left by a second Ctrl-C, `exit`, a fatal error or a kill is read up to its last complete record.
 
 ## 2. Scope
 
 - In: `eml_sched::prof` (the registry and `prof::registered`, the handler and its installation, the walk over `Words`, `Live` with one assembly load, the rings, the governor, the monitor's tick, state samples, the file); the `Io` phase guard around the rows that block synchronously; `--prof` and `--prof-hz`; the `Load` records written by `eml_cli`; `eml prof report` (function, line, role, worker, `--user`, `--split`), `eml prof folded`, `eml prof export` (Firefox Profiler JSON); the frame-pointer flag on x86_64 Linux; the trust rows SM-1, SM-3, SM-4; the user's guide.
-- Out: Windows (`prof-windows`, its own design and soundness review); the count profile (`prof-counts`); task events, waits, per-task views and the sampling of pool threads (`prof-tasks`); the heap profile (`prof-heap`); built apps (`prof-aot`); backtraces (`native-backtrace`); the exit anchor at C calls (not taken without the user, section 9); `eml_rt` (no change).
+- Out: Windows (`prof-windows`, its own design and soundness review); the count profile (`prof-counts`); task events, waits, per-task views and the sampling of pool threads (`prof-tasks`); the heap profile (`prof-heap`); built apps (`prof-aot`); backtraces (`native-backtrace`); profiling the REPL (`:prof <input>`, a later item of design 8.2; the REPL's loads still write their tables); the exit anchor at C calls (not taken without the user, section 9); `eml_rt` (no change).
 
 ## 3. Received from earlier stages
 
-- `ir-origins`: origins, roles and the encoded tables; `NativeMachine::points`; the `origins` option.
+- `ir-origins`: origins, roles (for every lowering, those of the task layer and the REPL included) and the encoded tables; `NativeMachine::points`; the `origins` option.
 - `sched-core`: `Slot.current` (H-2), `Slot.phase` (H-8: `Run`, `Idle`, `Io`, `Join`, `Park`), `Policy::at` (H-6), the monitor thread, docs/spec/runtime.md 「信頼の一覧」 with a group for memory-safety assumptions.
-- `jit-tasks`: every program runs natively at any worker count; the worker thread bodies; the frame chain test (H-1); the stack headroom of a worker; roles set by every lowering it added.
+- `jit-tasks`: every program runs natively at any worker count; the worker thread bodies; the frame chain test (H-1); the stack headroom of a worker.
+- `jit-repl`: the REPL's session thread and `NativeMachine::extend`, whose loads write their own tables.
+- `vm-retire`: one engine; the rows in `eml_nrt`; `Options.stack`.
 - `native-checked`: the entry descriptor's `class` with fixed discriminants and names.
 
 ## 4. Decisions (design sections 2, 4 and 6)

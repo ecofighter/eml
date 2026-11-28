@@ -402,9 +402,8 @@ A form is accepted natively only when everything its files need at one worker is
 
 | File | Lines | Fate |
 |---|---|---|
-| `evidence.rs`, `reuse.rs` | 533, 241 | both engines at NC-10; moved to `crates/eml_native/tests` at VR-2 |
 | `run.rs`, `api.rs`, `spawns.rs` | 422, 1,104, 134 | both engines at JT-5; moved at VR-2 (`spawns.rs`'s crate list becomes `eml_sched`, `eml_nrt`, `eml_test_support`) |
-| `tasks.rs`, `chan.rs`, `roots.rs`, `memory.rs` | 724, 600, 260, 292 | both engines at JT-7 (they run programs, so they need the lowering); moved at VR-2 |
+| `tasks.rs`, `chan.rs`, `roots.rs` | 724, 600, 260 | both engines at JT-7 (they run programs, so they need the lowering); moved at VR-2 |
 | `par.rs` | 973 | both engines at JT-9; placement asserts VM-only, deleted at VR-2 |
 | `ffi.rs`, `ffi_abandon.rs` | 1,171, 431 | both engines at JT-10; moved at VR-2 |
 | `workers.rs`, `seat.rs`, `signal.rs`, `io.rs`, `pinned.rs` | 949, 331, 438, 2,015, 1,460 | both engines at JT-11; `workers.rs`'s tests of `placed` / `preemptions` / `Seeded` preemption VM-only, deleted at VR-2 |
