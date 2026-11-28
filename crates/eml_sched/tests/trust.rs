@@ -6,6 +6,7 @@ use crate::scan::{NEW, closing, count, sources};
 /// コードが`unsafe`を持つファイル。
 const UNSAFE_FILES: &[&str] = &[
     "cells.rs",
+    "core.rs",
     "doorbell.rs",
     "drive.rs",
     "exec.rs",

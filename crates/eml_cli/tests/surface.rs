@@ -68,6 +68,7 @@ const SAFE: &[(&str, Reason)] = &[
     ("eml_sched/src/cells.rs: test_ctx", Allocates),
     ("eml_sched/src/driver.rs: RunClock::driver", MakesDriver),
     ("eml_sched/src/driver.rs: RunClock::now", ReadsClock),
+    ("eml_sched/src/job.rs: Marked::into_word", Stores),
     ("eml_sched/src/script.rs: Script::new", Stores),
     ("eml_sched/src/script.rs: Scripts::new", Stores),
 ];
@@ -102,6 +103,7 @@ const FIELDS: &[(&str, Reason)] = &[
     ("eml_sched/src/cells.rs: Runnable::Start::closure", Stores),
     ("eml_sched/src/cells.rs: Taken::buf", Stores),
     ("eml_sched/src/cells.rs: Taken::made", Stores),
+    ("eml_sched/src/job.rs: Entry::word", Stores),
 ];
 
 /// 識別子全体として照らすので、`CommandWord`や`words`は当たらない。このほかに`*mut`と`*const`を照らす。

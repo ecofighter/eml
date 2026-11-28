@@ -12,10 +12,11 @@ use eml_rt::{Control, HostRef, Owners};
 use crate::config::{RunConfig, Seat};
 use crate::core::WorkerCore;
 use crate::drive::drive;
+use crate::driver::Clock;
 use crate::error::RunFault;
 use crate::exec::{Env, Exec, Halt, Place, Workers};
 use crate::rank::Ranked;
-use crate::run::{Cause, PANICKED, Run, Stopped};
+use crate::run::{Cause, PANICKED, Run, Signs, Stopped};
 
 /// runを始めるときに渡すもの。runは`config`の`control`と`seat`を読む。workerの数は`config.control.limits().workers`
 /// である。hostは借りるので、それを落とすのはrunの中ではない。
@@ -51,6 +52,7 @@ struct Settled {
 struct Shell<'s> {
     control: &'s Arc<Control>,
     run: Arc<Run>,
+    signs: Arc<Signs>,
     /// 呼ぶスレッドのcallbackが始まったか。
     entered: AtomicBool,
     settled: Ranked<Option<Settled>>,
@@ -61,9 +63,10 @@ struct Shell<'s> {
 ///
 /// # Safety
 /// `W`は`Exec`と`Workers`の約束を守る (docs/spec/runtime.mdの「信頼の一覧」のSM-5とSM-9)。runのエンジンが`WorkerCore`
-/// を通して置く語はどれも`cells`のC2を守り、`WorkerCore`に対するどの呼び出しもスケジューラの不変条件を守る。
-/// `start.owners`は、runのすべての`Ctx`の所有者の表である。このrunが動く間、ほかのrunは`start.config.control`を使わな
-/// い。
+/// を通して行うことはどれも`cells`の「呼ぶ側の約束」を守る (SM-7)。置く語と、`Here`とともに`cells`の関数に渡す語は
+/// C2を、それを渡す`Ctx`はC1を守り、runの登録表はC3を守る呼ぶ側だけが動かし、渡すdriverはC4を守る。`WorkerCore`に
+/// 対するどの呼び出しもスケジューラの不変条件を守る。`start.owners`は、runのすべての`Ctx`の所有者の表で、貸す`Ctx`の
+/// 表も含む。このrunが動く間、ほかのrunは`start.config.control`を使わない。
 pub unsafe fn run<W: Workers>(workers: &W, start: Start<'_>) -> Outcome<W::Retired> {
     let Start {
         owners,
@@ -71,22 +74,19 @@ pub unsafe fn run<W: Workers>(workers: &W, start: Start<'_>) -> Outcome<W::Retir
         config,
     } = start;
     let control = &config.control;
-    if control.limits().workers != 1 || config.seat != Seat::Merged {
-        return Outcome {
-            stop: Some(Stopped {
-                worker: 0,
-                cause: Cause::Fault(RunFault::Internal(
-                    "this run sequence runs one worker in the merged seat",
-                )),
-            }),
-            exit: None,
-            retired: Vec::new(),
-        };
+    let one = control.limits().workers == 1 && config.seat == Seat::Merged;
+    // 生き残るヒープの物体がほかのworkerのページにあると、後の回復がほかのヒープのページを読むことになる
+    if workers.session() && !one {
+        return refused("a session run has one worker");
+    }
+    if !one {
+        return refused("this run sequence runs one worker in the merged seat");
     }
     control.begin_run();
     let shell = Shell {
         control,
-        run: Arc::new(Run::new()),
+        run: Arc::new(Run::new(1, config.clock == Clock::Virtual)),
+        signs: Arc::new(Signs::new(1)),
         entered: AtomicBool::new(false),
         settled: Ranked::new(None),
     };
@@ -105,6 +105,18 @@ pub unsafe fn run<W: Workers>(workers: &W, start: Start<'_>) -> Outcome<W::Retir
             retired: ManuallyDrop::into_inner(retired),
         }],
     )
+}
+
+/// 何も始めずに、`what`で終わるrun。
+fn refused<R>(what: &'static str) -> Outcome<R> {
+    Outcome {
+        stop: Some(Stopped {
+            worker: 0,
+            cause: Cause::Fault(RunFault::Internal(what)),
+        }),
+        exit: None,
+        retired: Vec::new(),
+    }
 }
 
 /// worker `k`のfactoryをこのスレッドで動かす。その`Retired`は受け取る式から`ManuallyDrop`の中にあるので、巻き戻しはそ
@@ -128,6 +140,7 @@ unsafe fn own_worker<'s, W: Workers>(
             workers.policy(place),
             shell.control.clone(),
             shell.run.clone(),
+            shell.signs.clone(),
         )
     };
     match catch(|| {

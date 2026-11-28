@@ -9,9 +9,10 @@ use std::sync::Mutex;
 
 use eml_sched::error::RunFault;
 use eml_sched::exec::{Env, Exec, Halt, Place, Workers};
+use eml_sched::job::{Item, Root};
 use eml_sched::run::{Cause, Stopped};
 
-use crate::support::{control, one, run};
+use crate::support::{control, one, open_root, run, spawn};
 
 fn panicked() -> Option<Stopped> {
     Some(Stopped {
@@ -75,4 +76,28 @@ fn a_panicked_halt_from_enter_is_passed_to_the_factory() {
     assert_eq!(outcome.stop, panicked());
     assert_eq!(*scripts.seen.lock().unwrap(), [Err(Halt::Panicked)]);
     assert_eq!(outcome.retired.len(), 1);
+}
+
+/// タスクの項が`Halt::Panicked`を返すと、ループは`Ctx`に触れない。戻ってきた`Ctx`はタスクのIDの下にある。
+#[test]
+fn a_panicked_halt_inside_a_task_leaves_the_ctx_under_the_tasks_id() {
+    let task = Mutex::new(None::<u32>);
+    let scripts = one(|core, ctx, item| {
+        match item {
+            Item::Root(Root::Main) => {
+                let scope = open_root(core);
+                spawn(core, ctx, scope);
+            }
+            Item::Entry(entry) => {
+                *task.lock().unwrap() = Some(entry.worker);
+                return Err(Halt::Panicked);
+            }
+            Item::Root(Root::Result) => unreachable!("the task never finishes"),
+        }
+        Ok(())
+    });
+    let outcome = run(&scripts, &control(1));
+    assert_eq!(outcome.stop, panicked());
+    let ctx = outcome.retired.into_iter().next().unwrap().retired.unwrap();
+    assert_eq!(Some(ctx.heap().worker()), *task.lock().unwrap());
 }

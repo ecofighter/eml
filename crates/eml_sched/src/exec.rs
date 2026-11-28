@@ -104,10 +104,14 @@ pub trait Exec {
 ///
 /// 実装する側の約束 (docs/spec/runtime.mdの「信頼の一覧」のSM-9)。`on_worker`は`run`を多くても1回呼ぶ。渡すポインタの
 /// 先の`Exec`は、`env`から取った核と、このスレッドで`env.owners()`の上に止める語`k`で`Ctx::for_worker`が作った`Ctx`を
-/// 持つ。最初の項の前に`Control`に対して確保するものは、どれも`run`を呼ぶ前に確保する。`run`の外でpanicせず (`policy`
-/// も)、フレームの巻き戻しが`Ctx`を落とさずにリークするように、たとえば普通に戻るまで`ManuallyDrop`に入れて持つ。核を
-/// このスレッドで落とし、`Ctx`を切り離して落とさずに持つ`Retired`を返す。`run`が`Err(Halt::Panicked)`を返したときは、
-/// `Ctx`を切り離して包むだけにする。それでも`on_worker`が巻き戻ったら、`sequence::run`はプロセスを中止する。
+/// 持つ。ただし`session()`が真なら、worker 0の`Exec`は、runより長く生きる呼ぶスレッドの`Ctx`を持ってよい。最初の項の
+/// 前に`Control`に対して確保するものは、どれも`run`を呼ぶ前に確保する。`run`の外でpanicせず (`policy`と`session`も)、フレームの
+/// 巻き戻しが`Ctx`を落とさずにリークするように、たとえば普通に戻るまで`ManuallyDrop`に入れて持つ。核をこのスレッドで
+/// 落とし、`Ctx`を切り離して落とさずに持つ`Retired`を返す。`Retired`が持たない`Ctx`は、runより長く生きるworker 0の
+/// `Ctx`だけである。止まったrunの後、貸す側は、もう一度貸す前にその`Ctx`を回復するか落とす。worker 0で
+/// `Halt::Panicked`があった後の貸した`Ctx`は、貸す側が落とさず、たどらず、回復しないものである。`run`が
+/// `Err(Halt::Panicked)`を返したときは、`Ctx`を切り離して包むだけにする。それでも
+/// `on_worker`が巻き戻ったら、`sequence::run`はプロセスを中止する。
 pub trait Workers: Sync {
     type Exec: Exec;
     /// workerのスレッドが終わるときに残すもの。切り離した`Ctx`である。`Send`で、核を持たない。
@@ -115,6 +119,12 @@ pub trait Workers: Sync {
 
     /// `place`のworkerの方針。そのworkerのスレッドで作る。
     fn policy(&self, place: Place) -> <Self::Exec as Exec>::P;
+
+    /// worker 0の`Ctx`がrunより長く生きるか。セッションの`Ctx`を貸すfactoryが真を返す。そのrunは、合わせた席でworker
+    /// を1つだけ持つ (docs/spec/runtime.mdの「runの手順」)。
+    fn session(&self) -> bool {
+        false
+    }
 
     /// `env`のworkerを用意し、その`Exec`で`run`を呼び、退かせるものを返す。
     ///

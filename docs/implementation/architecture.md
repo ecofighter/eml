@@ -139,7 +139,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 
 実行系が記憶の安全をその実装に任せるtraitは、ほかのcrateからは`unsafe fn` (`Machine::with_driver`) を通してだけ受け取るか、`unsafe trait`にする。`eml_sched`では、`Ctx`を取る公開の関数は`unsafe fn`である。例外はfeature `testing`の`test_ctx`と`stream_on`で、物体を作るだけなので安全である。登録表に語を置くか返すだけの関数は安全なままにし、それを読む関数が、登録表の中身を自分の約束に書く。`Ctx`、`Heap`、`Word`、`RawBuf`、driverの`Op`、`IoDriver`、生のポインタを名指す安全な公開の関数と公開の欄は、理由とともに`crates/eml_cli/tests/surface.rs`に並べる ([テスト戦略](testing.md)の「公開の面の検査」)。`eml_rt`はこのテストの外にあり、Verusと自分の信頼の一覧が確かめる (docs/spec/object-model.md の「`unsafe` の核」)。
 
-`eml_sched`のスケジューラでは、どの分け方も1つの原則から出る。`WorkerCore`に届くのは`Workers::on_worker`の中 (`Env`を通して) と`Exec::with`の閉包の中だけで、どちらも`pub unsafe fn`の`sequence::run`の下でだけ動く。`WorkerCore`は公開の構築子を持たない (`crates/eml_sched/tests/placement.rs`)。そのため`sequence::run`を呼ぶ側は、`cells`のC3が登録表について請け合うように、runの`WorkerCore`を通して置くどの語も、それに対して呼ぶどの安全な関数も請け合う。この原則の下では、置くことは安全で、放すことが`unsafe`の呼び出しである。`Script::new`と`Scripts::new`は閉包を置くだけで、それを動かすのは`sequence::run`である。runは記憶の安全を`Exec`と`Workers`の実装に任せるので、そのメソッドの`with`、`enter`、`on_worker`は`unsafe fn`である ([スケジューラ](../spec/runtime.md)の「信頼の一覧」のSM-5とSM-9)。`drive`を呼ぶのは`sequence::run`だけなので、`pub(crate) unsafe fn`である。
+`eml_sched`のスケジューラでは、どの分け方も1つの原則から出る。`WorkerCore`に届くのは`Workers::on_worker`の中 (`Env`を通して) と`Exec::with`の閉包の中だけで、どちらも`pub unsafe fn`の`sequence::run`の下でだけ動く。`WorkerCore`は公開の構築子を持たない (`crates/eml_sched/tests/placement.rs`)。そのため`sequence::run`を呼ぶ側は、`cells`のC3が登録表について請け合うように、runの`WorkerCore`を通して置くどの語も、それに対して呼ぶどの安全な関数も請け合う。この原則の下では、置くことは安全で、放すことが`unsafe`の呼び出しである。`Script::new`と`Scripts::new`は閉包を置くだけで、それを動かすのは`sequence::run`である。`WorkerCore::here`と`Scripts::lending`は`unsafe fn`である。前者は`cells`だけが呼んでよい`Post`を渡し (SM-7)、後者は、runが呼ぶスレッドで使う`Ctx`を貸す。runは記憶の安全を`Exec`と`Workers`の実装に任せるので、そのメソッドの`with`、`enter`、`on_worker`は`unsafe fn`である ([スケジューラ](../spec/runtime.md)の「信頼の一覧」のSM-5とSM-9)。`drive`を呼ぶのは`sequence::run`だけなので、`pub(crate) unsafe fn`である。
 
 `eml_rt`の構築子 (`Word::from_bits`、`Ctx::new`、`Heap::new`など) は安全なままにする。種類の違う語や放された語は安全な確保と`Copy`からどのみち作れるので、語を偽造できないようにしても役に立たず、語を通して読む`eml_rt`の関数はどれもすでに`unsafe fn`である。`unsafe fn Ctx::new`にすると、ほかのcrateについての約束を検証した核に持ち込むことになる。`IoDriver`は`unsafe trait`でなく、`IoDriver::submit`も`unsafe`でない。そうすると、すべての呼ぶ側、14の実装、`eml_io`の`deny(unsafe_code)`が変わり、代わりに`eml_io`のdriverの構築子を`unsafe`にすると、`Box<dyn IoDriver>`を返すどの関数にも広がる。偽のbufferは`RawBuf`を偽造できないようにして閉じ、VMの外で作ったdriverは`unsafe fn Machine::with_driver`を通してだけ入る。
 
@@ -509,11 +509,12 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `run.rs`: 1つのrunのworkerが分け合うもの。`Stopped`と`Cause`を持つ止まりの記録などである。この2つを`sequence.rs`でなくここに置くのは、`Run`がそれを記録し、`sequence`をimportするものはないからである
 - `core.rs`: `WorkerCore`。workerが自分で持つスケジューラの部分である
 - `exec.rs`: エンジンがrunの手順に渡すもの (`Exec`、`Workers`、`Env`、`Halt`、`Place`)
+- `idle.rs`: 空きのworkerのインタプリタ。判定 (`eml_steps::verdict`) を動かす
 - `drive.rs`: workerのループ
 - `script.rs`: `Script`と`Scripts`。項がRustの閉包であるエンジンで、テストはこれを通してスケジューラを動かす
 - `sequence.rs`: runの手順`sequence::run`と、その型`Start`、`Outcome`、`Retiree`
 
-`tests/layers.rs`が、意味のあるimportの辺を固定する。スケジューラに属さないファイル (`cells`、`config`、`error`、`park`、`doorbell`、`driver`) はスケジューラのファイルをimportしないので、VMはスケジューラなしにそれらを使う。`rank`は`cells`だけをimportする。順位1のlockは登録表だからである。`sequence`と`script`をimportするものはない。runの手順はただ1つの入口で、`Script`はテストのエンジンだからである。`exec`は`drive`をimportしないので、エンジンの約束はループに依らない。スケジューラのファイルのimportの図に輪はない。`eml_steps::plan`を名指すのは`drive.rs`だけである (`tests/placement.rs`)。`Point`は`eml_steps::Label`を持つが、`eml_sched`はそれを再公開せず、呼ぶ側は`eml_steps`から名指す。
+`tests/layers.rs`が、意味のあるimportの辺を固定する。スケジューラに属さないファイル (`cells`、`config`、`error`、`park`、`doorbell`、`driver`) はスケジューラのファイルをimportしないので、VMはスケジューラなしにそれらを使う。`rank`は`cells`だけをimportする。順位1のlockは登録表だからである。`sequence`と`script`をimportするものはない。runの手順はただ1つの入口で、`Script`はテストのエンジンだからである。`exec`は`drive`をimportしないので、エンジンの約束はループに依らない。スケジューラのファイルのimportの図に輪はない。`eml_steps::plan`を名指すのは`drive.rs`だけで、`eml_steps::verdict`を名指すのは`idle.rs`だけである (`tests/placement.rs`)。`Point`は`eml_steps::Label`を持つが、`eml_sched`はそれを再公開せず、呼ぶ側は`eml_steps`から名指す。
 
 ## `eml_gui`の内部
 

@@ -428,3 +428,314 @@ fn abort_has_one_site() {
         "the abort of a factory that panicked outside its loop has one site ({RUNTIME})"
     );
 }
+
+/// `cells::Post`を実装するのは`run.rs`の`Mailer`だけで、それは`pub(crate)`で、どの公開のシグネチャも欄も名指さない
+/// (docs/spec/runtime.mdの「信頼の一覧」のSM-7)。
+#[test]
+fn the_post_implementer_is_private() {
+    let mut implementers = Vec::new();
+    for source in sources("eml_sched") {
+        if source.path == "cells.rs" {
+            continue;
+        }
+        for (at, pattern) in source.code.match_indices("Post for ") {
+            if source.code[..at]
+                .chars()
+                .next_back()
+                .is_some_and(crate::scan::is_ident)
+            {
+                continue;
+            }
+            let name: String = source.code[at + pattern.len()..]
+                .chars()
+                .take_while(|&c| crate::scan::is_ident(c))
+                .collect();
+            implementers.push((source.path.clone(), name));
+        }
+    }
+    assert_eq!(implementers, [("run.rs".to_string(), "Mailer".to_string())]);
+    let run = code_of(&new_files(), "run.rs");
+    assert_eq!(count(&run, "pub(crate)struct Mailer", false), 1);
+    for source in new_files() {
+        for line in source.blanked.lines() {
+            let line = line.trim_start();
+            assert!(
+                !(line.starts_with("pub ") && count(line, "Mailer", true) > 0),
+                "{}: a public item names Mailer: {line}",
+                source.path
+            );
+        }
+    }
+}
+
+/// runのworkerの間を移る型は語の欄を持たない。語が移るのは`Marked`としてだけで、その欄は公開しない
+/// (docs/spec/runtime.mdの「信頼の一覧」のSM-6)。
+#[test]
+fn no_crossing_type_has_a_word_field() {
+    let files = new_files();
+    let mut found = Vec::new();
+    for name in ["Job", "Notice", "Stopped", "Cause", "Signs", "Sign"] {
+        for source in &files {
+            let code = outside_tests(&source.code);
+            for kind in ["struct ", "enum "] {
+                let head = format!("{kind}{name}");
+                let Some(at) = code
+                    .match_indices(&head)
+                    .find(|&(at, _)| {
+                        !code[at + head.len()..]
+                            .chars()
+                            .next()
+                            .is_some_and(crate::scan::is_ident)
+                    })
+                    .map(|(at, _)| at)
+                else {
+                    continue;
+                };
+                let open = at + code[at..].find(['{', '(', ';']).unwrap();
+                let body = match code.as_bytes()[open] {
+                    b';' => "",
+                    _ => &code[open..open + crate::scan::closing(&code[open..])],
+                };
+                assert_eq!(
+                    count(body, "Word", true),
+                    0,
+                    "{}: {name} crosses threads with a word field ({RUNTIME})",
+                    source.path
+                );
+                found.push(name);
+            }
+        }
+    }
+    assert!(found.contains(&"Stopped") && found.contains(&"Signs"));
+    let job = code_of(&files, "job.rs");
+    assert_eq!(count(&job, "pub struct Marked(Word)", false), 1);
+}
+
+/// フックの値と`Policy::at`は、どのスケジュールの判断も読まない (docs/spec/runtime.mdの「フック」)。
+#[test]
+fn the_hooks_decide_nothing() {
+    let run = code_of(&new_files(), "run.rs");
+    for reader in ["fn current(", "fn phase("] {
+        assert_eq!(count(&run, reader, false), 1);
+    }
+    for source in sources("eml_sched") {
+        for read in [".current(", ".phase("] {
+            assert_eq!(
+                count(&outside_tests(&source.code), read, false),
+                0,
+                "{}: the scheduler reads a hook value ({RUNTIME})",
+                source.path
+            );
+        }
+    }
+    let policy = code_of(&new_files(), "policy.rs");
+    let at = policy.find("fn at(").expect("Policy::at");
+    let signature = &policy[at..at + policy[at..].find(['{', ';']).unwrap()];
+    assert!(!signature.contains("->"), "Policy::at returns {signature}");
+    // `Mailer`のメソッドは登録表の下で動くので、地点を知らせず、どれも順位1の印を付ける
+    let block = |head: &str| {
+        let at = run.find(head).unwrap_or_else(|| panic!("no {head}"));
+        let open = at + run[at..].find('{').unwrap();
+        run[open..open + crate::scan::closing(&run[open..])].to_string()
+    };
+    let (own, post) = (block("impl Mailer{"), block("Post for Mailer{"));
+    for body in [&own, &post] {
+        assert_eq!(count(body, ".at(", false), 0, "Mailer reports a point");
+    }
+    assert_eq!(
+        count(body_of(&own, "unsent"), "rank::under_registry(", false),
+        1
+    );
+    let methods: Vec<&str> = post
+        .match_indices("fn ")
+        .map(|(at, _)| &post[at..])
+        .collect();
+    assert_eq!(methods.len(), 6);
+    for method in methods {
+        let body = body_of(method, method[3..].split('(').next().unwrap());
+        assert_eq!(
+            body, "self.unsent();",
+            "a method of Mailer does not mark the registry"
+        );
+    }
+}
+
+/// tokenの待ちを扱うのは、内部の誤りを返す1つの腕だけで、`depth_offset`の引数はどれも`0`である
+/// (docs/spec/runtime.mdの「workerのループ」)。
+#[test]
+fn the_new_files_name_no_token_wait() {
+    let files = new_files();
+    let tokens: Vec<(String, usize)> = files
+        .iter()
+        .map(|source| (source.path.clone(), count(&source.code, "Token", true)))
+        .filter(|&(_, n)| n > 0)
+        .collect();
+    assert_eq!(tokens, [("core.rs".to_string(), 1)]);
+    let core = files
+        .iter()
+        .find(|source| source.path == "core.rs")
+        .unwrap();
+    assert!(
+        core.text
+            .contains("a token wait reached the native scheduler")
+    );
+    // `depth_offset`を取る関数と、`self`を除いたその引数の位置
+    let mut takes = Vec::new();
+    for crate_ in ["eml_sched", "eml_rt"] {
+        for source in sources(crate_) {
+            let code = &source.code;
+            for (at, _) in code.match_indices("fn ") {
+                let name: String = code[at + 3..]
+                    .chars()
+                    .take_while(|&c| crate::scan::is_ident(c))
+                    .collect();
+                let rest = &code[at + 3 + name.len()..];
+                let rest = match rest.strip_prefix('<') {
+                    Some(_) => &rest[rest.find('(').unwrap()..],
+                    None => rest,
+                };
+                if !rest.starts_with('(') {
+                    continue;
+                }
+                let params = &rest[1..crate::scan::closing(rest) - 1];
+                let params: Vec<&str> = arguments(params)
+                    .into_iter()
+                    .filter(|p| !p.ends_with("self"))
+                    .collect();
+                if let Some(k) = params.iter().position(|p| p.starts_with("depth_offset:")) {
+                    takes.push((name, k, params.len()));
+                }
+            }
+        }
+    }
+    assert!(takes.iter().any(|(name, _, _)| name == "switch_task"));
+    let mut checked = 0;
+    for source in &files {
+        let code = outside_tests(&source.code);
+        for (name, k, n) in &takes {
+            for (at, _) in code.match_indices(&format!("{name}(")) {
+                let before = code[..at].chars().next_back();
+                if !matches!(before, Some('.' | ':')) {
+                    continue;
+                }
+                let call = &code[at + name.len()..];
+                let args = arguments(&call[1..crate::scan::closing(call) - 1]);
+                // 同じ名前でほかの数の引数を取る関数は、別の関数である
+                if args.len() != *n {
+                    continue;
+                }
+                assert_eq!(
+                    args.get(*k).copied(),
+                    Some("0"),
+                    "{}: {name} is passed a depth offset other than 0 ({RUNTIME})",
+                    source.path
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 2);
+}
+
+/// 括弧の中の、深さ0の`,`で分けた引数。`->`の`>`は括弧に数えない。
+fn arguments(list: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0, 0);
+    for (k, c) in list.char_indices() {
+        match c {
+            '(' | '[' | '{' | '<' => depth += 1,
+            '>' if list[..k].ends_with('-') => {}
+            ')' | ']' | '}' | '>' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(&list[start..k]);
+                start = k + 1;
+            }
+            _ => {}
+        }
+    }
+    if !list[start..].is_empty() {
+        out.push(&list[start..]);
+    }
+    out
+}
+
+/// `Here`を作るのは`core.rs`だけで、スケジューラのファイルはその`post`を読まない。読むのは`Here`を渡された`cells`の
+/// 関数だけである (docs/spec/runtime.mdの「信頼の一覧」のSM-7)。
+#[test]
+fn no_new_file_reads_a_heres_post() {
+    let files = new_files();
+    for source in &files {
+        let code = outside_tests(&source.code);
+        let reads = code
+            .match_indices(".post")
+            .filter(|&(at, p)| {
+                !code[at + p.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(crate::scan::is_ident)
+            })
+            .count();
+        assert_eq!(
+            reads, 0,
+            "{}: reads the post of a Here ({RUNTIME})",
+            source.path
+        );
+    }
+    let made: Vec<(String, usize)> = files
+        .iter()
+        .map(|source| (source.path.clone(), count(&source.code, "Here{", false)))
+        .filter(|&(_, n)| n > 0)
+        .collect();
+    assert_eq!(made, [("core.rs".to_string(), 1)]);
+}
+
+/// 登録表をlockする`cells`の関数を、スケジューラのファイルは`rank::cells`の中でだけ呼ぶ (docs/spec/runtime.mdの
+/// 「lockの順位」)。
+#[test]
+fn cells_is_entered_only_through_rank() {
+    let mut calls = 0;
+    for source in new_files() {
+        let code = outside_tests(&source.code);
+        // `cells`から関数の名前をimportすると、呼び出しが`cells::`の形を取らない
+        for (at, _) in code.match_indices("cells::{") {
+            let group = &code[at + "cells::".len()..];
+            let group = &group[1..crate::scan::closing(group) - 1];
+            for name in arguments(group) {
+                assert!(
+                    name == "self" || name.starts_with(char::is_uppercase),
+                    "{}: imports the function {name} of cells",
+                    source.path
+                );
+            }
+        }
+        let wrappers: Vec<(usize, usize)> = code
+            .match_indices("rank::cells(")
+            .map(|(at, p)| {
+                let open = at + p.len() - 1;
+                (open, open + crate::scan::closing(&code[open..]))
+            })
+            .collect();
+        for (at, p) in code.match_indices("cells::") {
+            let rest = &code[at + p.len()..];
+            if code[..at].ends_with("rank::") || !rest.starts_with(char::is_lowercase) {
+                continue;
+            }
+            let name: String = rest
+                .chars()
+                .take_while(|&c| crate::scan::is_ident(c))
+                .collect();
+            if !rest[name.len()..].starts_with('(') {
+                continue;
+            }
+            calls += 1;
+            assert!(
+                wrappers
+                    .iter()
+                    .any(|&(open, close)| open < at && at < close),
+                "{}: cells::{name} is called outside rank::cells ({RUNTIME})",
+                source.path
+            );
+        }
+    }
+    assert!(calls > 0);
+}

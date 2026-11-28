@@ -1,8 +1,10 @@
 mod drive;
+mod hooks;
 mod imports;
 mod layers;
 mod panics;
 mod placement;
+mod root;
 mod scan;
 mod support;
 mod trust;

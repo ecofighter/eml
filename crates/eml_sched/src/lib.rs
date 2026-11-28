@@ -9,6 +9,7 @@ mod drive;
 pub mod driver;
 pub mod error;
 pub mod exec;
+mod idle;
 pub mod job;
 pub mod park;
 pub mod policy;
